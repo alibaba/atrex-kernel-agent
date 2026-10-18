@@ -19,6 +19,7 @@ from typing import Optional
 
 
 from aka.contracts.problem import LoadedProblem
+from aka.contracts.evaluation import EvaluationUnavailable
 from aka.legacy.agent.runtime import auth_hint
 
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, DEPENDENCY_REVIEW_SCHEMA_VERSION, DEPENDENCY_REVIEW_TIMEOUT_S, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
@@ -28,6 +29,9 @@ from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FIL
 from aka.legacy.execution.recovery import EnvironmentUnavailable, environment_state_file
 from .framework_baseline_progress import (
     capture_unexpected_exit as capture_framework_baseline_exit,
+)
+from .framework_baseline_progress import (
+    capture_terminal_rejection as capture_framework_baseline_rejection,
 )
 from .framework_baseline_progress import (
     load_progress as load_framework_baseline_progress,
@@ -895,7 +899,7 @@ class Campaign:
             )
         result: Optional[dict] = None
         if not problem:
-            result, problem = self.evaluation.framework_baseline_external_gates(n)
+            result, problem = self._framework_baseline_external_gates(n)
         numerical_repairs = 0
         while (
             problem
@@ -922,7 +926,7 @@ class Campaign:
                 v0_blob, baseline_commit, include_policy_review=False
             )
             if not problem:
-                result, problem = self.evaluation.framework_baseline_external_gates(n)
+                result, problem = self._framework_baseline_external_gates(n)
         if problem:
             # Undo any session-authored commits while retaining every worktree file.  A hard reset
             # here used to erase the exact candidate and debugging experience needed by a restart.
@@ -935,6 +939,7 @@ class Campaign:
                     stderr=subprocess.DEVNULL,
                 )
             self._warn_restored_baseline_paths(baseline_commit)
+            self._capture_framework_baseline_rejection(problem)
             self._record_framework_baseline_failure(problem)
             self._sync_framework_baseline_live(
                 phase="failed",
@@ -982,6 +987,54 @@ class Campaign:
             f"@ {commit[:8]} ({latency} us geomean)",
             flush=True,
         )
+
+    def _framework_baseline_external_gates(self, n: int):
+        try:
+            return self.evaluation.framework_baseline_external_gates(n)
+        except EvaluationUnavailable as exc:
+            status = "rejected" if exc.failure.candidate_repairable else "validation_blocked"
+            self._capture_framework_baseline_rejection(
+                exc.failure.message, status=status
+            )
+            raise
+
+    def _capture_framework_baseline_rejection(
+        self, problem: str, *, status: str | None = None
+    ) -> None:
+        if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX):
+            reason = "supplemental-validation-pending"
+            status = status or "validation_blocked"
+        elif problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
+            reason = "supplemental-candidate-failure"
+            status = status or "rejected"
+        elif "self-contained" in problem:
+            reason = "production-policy-rejected"
+            status = status or "rejected"
+        elif "combined validation" in problem:
+            reason = "combined-validation-failed"
+            status = status or "rejected"
+        elif "candidate request rejected" in problem:
+            reason = "candidate-request-rejected"
+            status = status or "rejected"
+        else:
+            reason = "framework-baseline-rejected"
+            status = status or "rejected"
+        try:
+            capture_framework_baseline_rejection(
+                self.workspace,
+                version=FRAMEWORK_BASELINE_VERSION,
+                status=status,
+                reason=reason,
+                diagnostic=self.evaluation.framework_baseline_rejection_diagnostic(
+                    problem
+                ),
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            print(
+                "[orchestrator] WARNING: could not retain terminal framework-baseline "
+                f"diagnostic: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
 
     def _sync_framework_baseline_live(
         self,

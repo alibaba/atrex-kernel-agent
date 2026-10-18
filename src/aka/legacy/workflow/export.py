@@ -136,12 +136,17 @@ def _numerical_supplement_artifact(workspace):
         value = json.loads(content)
     except (OSError, UnicodeError, ValueError) as exc:
         raise ValueError('public numerical supplement is corrupt') from exc
-    keys = {
+    base_keys = {
         'schema_version', 'status', 'reason', 'attempts',
         'expected_probes', 'observed_probes', 'failed_probes',
     }
-    if not isinstance(value, dict) or set(value) != keys or value.get('schema_version') != 1:
+    if not isinstance(value, dict) or value.get('schema_version') not in {1, 2}:
         raise ValueError('public numerical supplement has an invalid schema')
+    expected_keys = set(base_keys)
+    if value['schema_version'] == 2:
+        expected_keys.update({'transport_retry_count', 'transport_attempts'})
+    if set(value) != expected_keys:
+        raise ValueError('public numerical supplement has unexpected fields')
     statuses = {
         'needs_validation', 'needs_repair', 'passed', 'advisory',
         'skipped_planner_timeout',
@@ -160,10 +165,136 @@ def _numerical_supplement_artifact(workspace):
         'attempts', 'expected_probes', 'observed_probes', 'failed_probes'
     )):
         raise ValueError('public numerical supplement has invalid counts')
+    if value['schema_version'] == 2:
+        if type(value.get('transport_retry_count')) is not int or value['transport_retry_count'] < 0:
+            raise ValueError('public numerical supplement has invalid retry count')
+        attempts = value.get('transport_attempts')
+        allowed_transport = {
+            'return_code', 'receipt_status', 'failure_class', 'failure_reason',
+            'http_status', 'job_id',
+        }
+        if not isinstance(attempts, list) or len(attempts) > 32:
+            raise ValueError('public numerical supplement has invalid transport attempts')
+        for attempt in attempts:
+            if (
+                not isinstance(attempt, dict)
+                or not set(attempt).issubset(allowed_transport)
+                or type(attempt.get('return_code')) is not int
+                or attempt.get('receipt_status') not in {
+                    'valid', 'missing', 'invalid_json', 'invalid_schema'
+                }
+                or any(
+                    key in attempt
+                    and (
+                        not isinstance(attempt[key], str)
+                        or not attempt[key]
+                        or len(attempt[key]) > 128
+                    )
+                    for key in ('failure_class', 'failure_reason', 'job_id')
+                )
+                or (
+                    'http_status' in attempt
+                    and (
+                        type(attempt['http_status']) is not int
+                        or not 100 <= attempt['http_status'] <= 599
+                    )
+                )
+                or (
+                    'job_id' in attempt
+                    and re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9._:-]{0,127}', attempt['job_id']) is None
+                )
+            ):
+                raise ValueError('public numerical supplement has an invalid transport fact')
     return _artifact(
         'numerical_supplement', 'numerical-supplement.json',
         'supplemental-numerical-diagnostic', content,
     )
+
+
+def _framework_baseline_rejection_artifacts(workspace):
+    """Return exact public files from the latest terminal V1 rejection."""
+    from .framework_baseline_progress import (
+        REJECTION_SCHEMA_VERSION,
+        _public_diagnostic,
+        rejection_path,
+    )
+
+    workspace = Path(workspace).resolve()
+    path = rejection_path(workspace)
+    if not path.is_file():
+        return ()
+    try:
+        value = json.loads(path.read_text(encoding='utf-8'))
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError('framework-baseline rejection diagnostic is corrupt') from exc
+    required = {
+        'schema_version', 'version', 'status', 'reason', 'captured_at',
+        'snapshot_root', 'files', 'diagnostic',
+    }
+    if not isinstance(value, dict) or set(value) != required:
+        raise ValueError('framework-baseline rejection diagnostic has an invalid schema')
+    if value.get('schema_version') != REJECTION_SCHEMA_VERSION:
+        raise ValueError('unsupported framework-baseline rejection diagnostic')
+    if type(value.get('version')) is not int or value['version'] < 1:
+        raise ValueError('framework-baseline rejection has an invalid version')
+    if value.get('status') not in {'rejected', 'validation_blocked'}:
+        raise ValueError('framework-baseline rejection has an invalid status')
+    if (
+        not isinstance(value.get('reason'), str)
+        or re.fullmatch(r'[a-z0-9][a-z0-9-]{0,63}', value['reason']) is None
+        or not isinstance(value.get('captured_at'), str)
+        or not isinstance(value.get('snapshot_root'), str)
+        or _public_diagnostic(value.get('diagnostic')) != value.get('diagnostic')
+    ):
+        raise ValueError('framework-baseline rejection contains unsafe public fields')
+    root = (workspace / value['snapshot_root']).resolve()
+    try:
+        root.relative_to(workspace)
+    except ValueError as exc:
+        raise ValueError('framework-baseline rejection escaped the workspace') from exc
+    files = value.get('files')
+    if not isinstance(files, dict):
+        raise ValueError('framework-baseline rejection has invalid files')
+    artifacts = []
+    version = value['version']
+    for filename, role, mime in (
+        ('kernel.py', 'rejected-candidate-source', 'text/x-python'),
+        ('solution.json', 'rejected-candidate-manifest', 'application/json'),
+    ):
+        metadata = files.get(filename)
+        source = root / filename
+        if metadata is None:
+            continue
+        if (
+            not isinstance(metadata, dict)
+            or set(metadata) != {'bytes', 'sha256'}
+            or type(metadata.get('bytes')) is not int
+            or metadata['bytes'] < 0
+            or not isinstance(metadata.get('sha256'), str)
+            or re.fullmatch(r'[0-9a-f]{64}', metadata['sha256']) is None
+            or not source.is_file()
+            or source.is_symlink()
+        ):
+            raise ValueError(f'framework-baseline rejected {filename} is invalid')
+        content = source.read_bytes()
+        if len(content) != metadata['bytes'] or hashlib.sha256(content).hexdigest() != metadata['sha256']:
+            raise ValueError(f'framework-baseline rejected {filename} identity changed')
+        artifacts.append(_artifact(
+            f'framework_baseline_rejected_v{version}_{filename.replace(".", "_")}',
+            f'framework-baseline/rejected-v{version}/{filename}', role, content, mime,
+        ))
+    diagnostic_path = root / 'diagnostic.json'
+    if not diagnostic_path.is_file() or diagnostic_path.is_symlink():
+        raise ValueError('framework-baseline rejection diagnostic is missing')
+    content = diagnostic_path.read_bytes()
+    if json.loads(content) != value:
+        raise ValueError('framework-baseline rejection diagnostic identity changed')
+    artifacts.append(_artifact(
+        f'framework_baseline_rejected_v{version}_diagnostic',
+        f'framework-baseline/rejected-v{version}/diagnostic.json',
+        'framework-baseline-rejection-diagnostic', content,
+    ))
+    return tuple(artifacts)
 
 
 def _warning_records(path):
@@ -311,6 +442,7 @@ class RetainedWorkflowExport:
                 ResultFact('running',None,None,False,None,{},expected,None,None,None)))
         candidates.sort(key=lambda candidate:candidate.version)
         artifacts = []
+        artifacts.extend(_framework_baseline_rejection_artifacts(workspace))
         numerical_supplement = _numerical_supplement_artifact(workspace)
         if numerical_supplement is not None:
             artifacts.append(numerical_supplement)

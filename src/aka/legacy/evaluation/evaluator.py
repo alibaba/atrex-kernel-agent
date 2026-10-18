@@ -403,6 +403,7 @@ class LegacyEvaluator:
                 None,
                 None,
                 None,
+                runs=[run],
                 error=f"combined validation command failed (exit={observation.transport_returncode})",
             )
         if request.mode == "v0":

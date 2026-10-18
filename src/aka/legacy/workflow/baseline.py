@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 import json
+import re
 import shlex
 import subprocess
 import sys
@@ -25,6 +26,7 @@ class WorkflowBaseline:
         self.experiment = experiment
         self.acceptance = acceptance
         self.command = command
+        self._last_framework_verification = None
 
     def evaluator_directive(self):
         return self.preparation(True).evaluator_directive()
@@ -108,6 +110,7 @@ class WorkflowBaseline:
             raise cause if cause is not None else exc
         except (OSError, subprocess.SubprocessError) as exc:
             return None, f"combined validation failed to run: {exc}"
+        self._last_framework_verification = verification
         if not verification.passed:
             if verification.failure is not None:
                 repair_enabled = (
@@ -118,6 +121,56 @@ class WorkflowBaseline:
                     raise EvaluationUnavailable(verification.failure)
             return None, verification.error
         return verification.runs[0].result, ""
+
+    def framework_baseline_rejection_diagnostic(self, problem: str) -> dict:
+        """Return bounded public facts for the latest authoritative V1 gate."""
+        workspace = str(self.campaign.workspace.resolve())
+
+        def public_text(value) -> str:
+            text = str(value or "").replace(workspace, "<workspace>")
+            text = re.sub(r'File "[^"]+"', 'File "<path>"', text)
+            return text[:4_000]
+
+        diagnostic = {"message": public_text(problem)}
+        verification = self._last_framework_verification
+        if verification is None:
+            return diagnostic
+        diagnostic["gate"] = verification.gate
+        if verification.failure is not None:
+            diagnostic["failure"] = {
+                "category": verification.failure.category,
+                "code": verification.failure.code,
+                "message": public_text(verification.failure.message),
+                "candidate_repairable": verification.failure.candidate_repairable,
+            }
+        runs = []
+        for run in verification.runs[:4]:
+            result = run.result if isinstance(run.result, dict) else {}
+            public_run = {"exit_code": run.exit_code}
+            if type(result.get("all_pass")) is bool:
+                public_run["all_pass"] = result["all_pass"]
+            if isinstance(result.get("eval_id"), str):
+                public_run["evaluation_id"] = result["eval_id"][:128]
+            actionable = []
+            actionable_rows = result.get("actionable_diagnostics")
+            if not isinstance(actionable_rows, list):
+                actionable_rows = []
+            for row in actionable_rows[:8]:
+                if not isinstance(row, dict):
+                    continue
+                item = {}
+                if isinstance(row.get("stage"), str):
+                    item["stage"] = row["stage"][:128]
+                if isinstance(row.get("message"), str):
+                    item["message"] = public_text(row["message"])
+                if item:
+                    actionable.append(item)
+            if actionable:
+                public_run["actionable_diagnostics"] = actionable
+            runs.append(public_run)
+        if runs:
+            diagnostic["runs"] = runs
+        return diagnostic
 
     def framework_baseline_problem(
         self, v0_blob, baseline_commit, *, include_policy_review=True

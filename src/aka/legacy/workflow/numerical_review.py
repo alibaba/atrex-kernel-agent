@@ -22,6 +22,7 @@ from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMEN
 from aka.legacy.task.durable import durable_write_json
 from aka.legacy.agent.availability import check_review_service
 from aka.legacy.execution.transport import check_transport
+from aka.legacy.execution.gateway.protocol import classify_gateway_outcome
 from aka.legacy.experiment.retry import retry_infrastructure
 
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
@@ -141,6 +142,8 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
             "max_rel_l2": _fp4_correctness_max_rel_l2(Path(campaign.private_reference_dir or workspace)) or MAX_REL_L2,
         })
 
+        transport_attempts = []
+
         def probe_once():
             from aka.contracts.execution import CommandSpec
             if execute is None:
@@ -150,24 +153,29 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
             process = execute_command(CommandSpec(workspace,
                 ("python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))),
                 timeout=600, operation="dev"))
-            check_transport(process)
+            receipt_status = "missing"
+            batch = {"runs": []}
             for line in process.stdout.splitlines():
                 if line.startswith(PREFIX):
                     try:
                         batch = json.loads(line[len(PREFIX):])
                     except json.JSONDecodeError:
-                        return {"runs": "invalid"}
-                    if not isinstance(batch, dict):
-                        return {"runs": "invalid"}
-                    if process.returncode:
-                        batch["error"] = f"probe transport exited {process.returncode}"
-                    return batch
+                        receipt_status = "invalid_json"
+                        batch = {"runs": "invalid"}
+                    else:
+                        if isinstance(batch, dict):
+                            receipt_status = "valid"
+                        else:
+                            receipt_status = "invalid_schema"
+                            batch = {"runs": "invalid"}
+                    break
+            transport_attempts.append(
+                _probe_transport_fact(process, receipt_status=receipt_status)
+            )
+            check_transport(process)
             if process.returncode:
-                return {
-                    "runs": [],
-                    "error": f"probe transport exited {process.returncode}",
-                }
-            return {"runs": []}
+                batch["error"] = f"probe transport exited {process.returncode}"
+            return batch
 
         batch = retry_infrastructure(workspace, f"numerical-probe:{digest}:{plan['case_id']}", probe_once)
         verdict = _probe_status(batch, plan, suite, shapes)
@@ -184,6 +192,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
             "expected_probes": verdict["expected_probes"],
             "observed_probes": verdict["observed_probes"],
             "failed_probes": verdict["failed_probes"],
+            "transport_attempts": transport_attempts,
             "exit_code": rows[0].get("exit_code") if rows else None,
             "diagnosis": (
                 "non-finite output diagnostic has unknown roles; repair or verify the probe evaluator"
@@ -218,6 +227,28 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
     }
 
 
+def _probe_transport_fact(process, *, receipt_status):
+    """Keep bounded gateway/receipt facts without retaining raw transport output."""
+    if receipt_status not in {"valid", "missing", "invalid_json", "invalid_schema"}:
+        raise ValueError("unsupported numerical receipt status")
+    fact = {
+        "return_code": int(process.returncode),
+        "receipt_status": receipt_status,
+    }
+    diagnostic = classify_gateway_outcome(process).failure_record() or {}
+    mapping = {
+        "failure_class": "failure_class",
+        "reason": "failure_reason",
+        "http_status": "http_status",
+        "job_id": "job_id",
+    }
+    for source, destination in mapping.items():
+        value = diagnostic.get(source)
+        if isinstance(value, str) or (source == "http_status" and type(value) is int):
+            fact[destination] = value
+    return fact
+
+
 def _public_numerical_supplement(record):
     """Project private numerical feedback into one bounded public diagnostic."""
     evaluations = record.get("evaluations") if isinstance(record, dict) else None
@@ -242,14 +273,29 @@ def _public_numerical_supplement(record):
     reason = latest.get("reason") or record.get("reason")
     if not isinstance(reason, str) or not reason:
         reason = "passed" if status in {"passed", "advisory", "skipped_planner_timeout"} else "probe_exception"
+    transport_attempts = []
+    retry_count = 0
+    for probe in probes:
+        attempts = (
+            probe.get("transport_attempts", [])
+            if isinstance(probe, dict)
+            and isinstance(probe.get("transport_attempts"), list)
+            else []
+        )
+        retry_count += max(0, len(attempts) - 1)
+        for attempt in attempts:
+            if isinstance(attempt, dict) and len(transport_attempts) < 32:
+                transport_attempts.append(dict(attempt))
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": status,
         "reason": reason,
         "attempts": len(evaluations),
         "expected_probes": count("expected_probes"),
         "observed_probes": count("observed_probes"),
         "failed_probes": count("failed_probes"),
+        "transport_retry_count": retry_count,
+        "transport_attempts": transport_attempts,
     }
 
 

@@ -19,10 +19,13 @@ from typing import Any, Iterable
 
 SCHEMA_VERSION = "atrex_framework_baseline_crash_v1"
 RECOVERY_SCHEMA_VERSION = "atrex_framework_baseline_recovery_v1"
+REJECTION_SCHEMA_VERSION = "atrex_framework_baseline_rejection_v1"
 RUNTIME_RELATIVE_DIR = Path(".atrex_long_horizon/framework_baseline")
 PROGRESS_RELATIVE_PATH = RUNTIME_RELATIVE_DIR / "progress.json"
+LATEST_REJECTION_RELATIVE_PATH = RUNTIME_RELATIVE_DIR / "latest-rejection.json"
 _MAX_CAPTURE_BYTES = 16 * 1024 * 1024
 _MAX_TERMINAL_CHARS = 32_000
+_MAX_PUBLIC_MESSAGE_CHARS = 4_000
 
 
 def _utc_now() -> str:
@@ -81,6 +84,116 @@ def _capture_paths(workspace: Path) -> Iterable[Path]:
     yield from sorted((workspace / "plans").glob("v1_*.md"))
     for pattern in ("debug*.py", "probe*.py", "smoke*.py"):
         yield from sorted(workspace.glob(pattern))
+
+
+def _public_diagnostic(value: object) -> dict[str, Any]:
+    """Project evaluator details without private inputs, paths, or raw streams."""
+    if not isinstance(value, dict):
+        return {}
+
+    def text(item: object) -> str:
+        return str(item or "")[:_MAX_PUBLIC_MESSAGE_CHARS]
+
+    result: dict[str, Any] = {}
+    if isinstance(value.get("gate"), str):
+        result["gate"] = text(value["gate"])
+    if isinstance(value.get("message"), str):
+        result["message"] = text(value["message"])
+    failure = value.get("failure")
+    if isinstance(failure, dict):
+        public_failure = {
+            key: failure[key]
+            for key in ("category", "code", "candidate_repairable")
+            if isinstance(failure.get(key), (str, bool))
+        }
+        if isinstance(failure.get("message"), str):
+            public_failure["message"] = text(failure["message"])
+        if public_failure:
+            result["failure"] = public_failure
+    public_runs = []
+    for run in value.get("runs", []) if isinstance(value.get("runs"), list) else []:
+        if not isinstance(run, dict):
+            continue
+        public_run = {
+            key: run[key]
+            for key in ("exit_code", "all_pass", "evaluation_id")
+            if isinstance(run.get(key), (str, int, bool))
+        }
+        diagnostics = []
+        for diagnostic in (
+            run.get("actionable_diagnostics", [])
+            if isinstance(run.get("actionable_diagnostics"), list)
+            else []
+        )[:8]:
+            if not isinstance(diagnostic, dict):
+                continue
+            item = {}
+            if isinstance(diagnostic.get("stage"), str):
+                item["stage"] = text(diagnostic["stage"])
+            if isinstance(diagnostic.get("message"), str):
+                item["message"] = text(diagnostic["message"])
+            if item:
+                diagnostics.append(item)
+        if diagnostics:
+            public_run["actionable_diagnostics"] = diagnostics
+        if public_run:
+            public_runs.append(public_run)
+    if public_runs:
+        result["runs"] = public_runs[:4]
+    return result
+
+
+def rejection_path(workspace: Path) -> Path:
+    return workspace.resolve() / LATEST_REJECTION_RELATIVE_PATH
+
+
+def capture_terminal_rejection(
+    workspace: Path,
+    *,
+    version: int,
+    status: str,
+    reason: str,
+    diagnostic: object = None,
+) -> dict[str, Any]:
+    """Persist the exact public candidate whenever the supervisor rejects V1."""
+    if type(version) is not int or version < 1:
+        raise ValueError("framework-baseline rejection requires a positive version")
+    if status not in {"rejected", "validation_blocked"}:
+        raise ValueError("unsupported framework-baseline rejection status")
+    if not reason or len(reason) > 64 or any(
+        character not in "abcdefghijklmnopqrstuvwxyz0123456789-" for character in reason
+    ):
+        raise ValueError("invalid framework-baseline rejection reason")
+
+    workspace = workspace.resolve()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+    root = workspace / RUNTIME_RELATIVE_DIR / "rejections" / f"v{version}-{stamp}"
+    files: dict[str, dict[str, object]] = {}
+    for filename in ("kernel.py", "solution.json"):
+        source = workspace / filename
+        if not source.is_file() or source.is_symlink():
+            continue
+        data = source.read_bytes()
+        if len(data) > _MAX_CAPTURE_BYTES:
+            continue
+        _atomic_write_bytes(root / filename, data)
+        files[filename] = {
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+        }
+    record = {
+        "schema_version": REJECTION_SCHEMA_VERSION,
+        "version": version,
+        "status": status,
+        "reason": reason,
+        "captured_at": _utc_now(),
+        "snapshot_root": str(root.relative_to(workspace)),
+        "files": files,
+        "diagnostic": _public_diagnostic(diagnostic),
+    }
+    _atomic_write_json(root / "diagnostic.json", record)
+    _atomic_write_json(rejection_path(workspace), record)
+    return record
 
 
 def _snapshot_after_exit(
