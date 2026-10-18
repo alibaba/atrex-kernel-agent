@@ -1045,12 +1045,50 @@ def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None
     return value
 
 
-def _runtime_requirements(path: str) -> list[str]:
-    """Read an explicit runtime pin with actionable, platform-independent errors."""
+REQUIREMENTS_LANGUAGES_PREFIX = "# aka-candidate-languages:"
+
+
+def _candidate_languages(
+    solution: dict[str, Any], *, candidate_sources: Iterable[str] = ()
+) -> list[str]:
+    """Return the candidate languages declared by current or legacy manifests."""
+    spec = solution.get("spec")
+    languages = spec.get("languages") if isinstance(spec, dict) else None
+    if not isinstance(languages, list):
+        languages = solution.get("languages")
+    if isinstance(languages, list):
+        return [str(value) for value in languages]
+    # Preserve the pre-refactor fallback for legacy manifests that omitted the
+    # language declaration while importing the internal pinned framework.
+    if any("flydsl" in source.casefold() for source in candidate_sources):
+        return ["flydsl"]
+    return []
+
+
+def _runtime_requirements(
+    path: str, *, candidate_languages: Iterable[str] = ()
+) -> list[str]:
+    """Read runtime pins selected for the candidate's declared languages."""
     try:
         contents = Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         raise ValueError(f"cannot read runtime requirements file {path}: {exc}") from exc
+    selected_languages: set[str] | None = None
+    for line in contents.splitlines():
+        if line.casefold().startswith(REQUIREMENTS_LANGUAGES_PREFIX):
+            selected_languages = {
+                value.casefold()
+                for value in re.split(r"[\s,]+", line.split(":", 1)[1].strip())
+                if value
+            }
+            if not selected_languages:
+                raise ValueError(
+                    f"runtime requirements selector in {path} declares no languages"
+                )
+            break
+    declared = {str(value).casefold() for value in candidate_languages}
+    if selected_languages is not None and selected_languages.isdisjoint(declared):
+        return []
     return [
         line.strip() for line in contents.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
@@ -1375,9 +1413,8 @@ def _typed_request(
         )
 
     solution = _json_object(workspace / "solution.json") or {}
-    languages = solution.get("languages")
-    if not isinstance(languages, list):
-        languages = []
+    candidate = (workspace / "kernel.py").read_text(encoding="utf-8")
+    languages = _candidate_languages(solution, candidate_sources=(candidate,))
     reference: dict[str, Any] = {
         "operator": workspace.name,
         "reference_py": (workspace / "reference.py").read_text(encoding="utf-8"),
@@ -1411,7 +1448,7 @@ def _typed_request(
     request: dict[str, Any] = {
         "name": f"{workspace.name}_{kind}",
         "spec": spec,
-        "candidate": (workspace / "kernel.py").read_text(encoding="utf-8"),
+        "candidate": candidate,
         "reference": reference,
         "options": {
             "num_correctness_cases": 1 + multi_seed,
@@ -1433,7 +1470,11 @@ def _typed_request(
         request["atrex_bench_version"] = runtime_version
     requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if requirements_file:
-        request["requirements"] = _runtime_requirements(requirements_file)
+        requirements = _runtime_requirements(
+            requirements_file, candidate_languages=languages
+        )
+        if requirements:
+            request["requirements"] = requirements
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
@@ -3171,14 +3212,19 @@ def _typed_agate_command(
         command += ["--atrex-bench-version", request["atrex_bench_version"]]
     requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if requirements_file:
+        requirements = _runtime_requirements(
+            requirements_file,
+            candidate_languages=request.get("spec", {}).get("languages", ()),
+        )
         # CLI submission reloads this file; refuse to silently change the runtime
         # captured in a persisted typed request (the direct API uses that snapshot).
-        if _runtime_requirements(requirements_file) != request.get("requirements"):
+        if requirements != request.get("requirements", []):
             raise ValueError(
                 f"runtime requirements file {requirements_file} differs from the typed request"
             )
-        command += ["--requirements", requirements_file]
-    elif "requirements" in request:
+        if requirements:
+            command += ["--requirements", requirements_file]
+    elif request.get("requirements"):
         raise ValueError(
             "ATREX_SANDBOX_REQUIREMENTS_FILE is required to replay the typed request's runtime pins"
         )

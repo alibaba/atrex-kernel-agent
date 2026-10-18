@@ -48,8 +48,32 @@ def _patch_dev_command_script(command_path: Path, workspace: Path | None) -> Non
     import os, shlex
     requirements = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE")
     if requirements:
-        dependencies = [line.strip() for line in Path(requirements).read_text(encoding="utf-8").splitlines()
-                        if line.strip() and not line.lstrip().startswith("#")]
+        from .sandbox import (
+            _candidate_languages,
+            _json_object,
+            _runtime_requirements,
+        )
+
+        solution = (
+            _json_object(workspace / "solution.json") or {}
+            if workspace is not None
+            else {}
+        )
+        candidate_sources = (
+            tuple(
+                path.read_text(encoding="utf-8")
+                for path in (workspace / "kernel.py", workspace / "test_kernel.py")
+                if path.is_file()
+            )
+            if workspace is not None
+            else ()
+        )
+        dependencies = _runtime_requirements(
+            requirements,
+            candidate_languages=_candidate_languages(
+                solution, candidate_sources=candidate_sources
+            ),
+        )
     else:
         dependencies = json.loads(os.environ.get("AKA_GATEWAY_DEV_DEPENDENCIES", "[]"))
     if not dependencies:
