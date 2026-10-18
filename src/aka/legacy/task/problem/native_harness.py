@@ -155,7 +155,50 @@ def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]
     return failures
 
 
-def _metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
+def _evaluation_failure(payload: dict[str, Any]) -> dict[str, str] | None:
+    """Classify evaluator startup failures that precede all candidate imports."""
+    error = str(payload.get("error") or "")
+    if (
+        "import torch" in error
+        and "typing._ClassVar" in error
+        and "module 'typing' has no attribute '_ClassVar'" in error
+    ):
+        return {
+            "category": "infrastructure",
+            "code": "worker_bootstrap_failed",
+            "message": (
+                "GPU worker bootstrap failed before candidate import: the worker "
+                "Python typing/dataclasses runtime is incompatible with torch"
+            ),
+        }
+    return None
+
+
+def _hardware_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _matches_hardware(name: str, record: dict, hardware: str) -> bool:
+    target = _hardware_key(hardware)
+    if not target:
+        return False
+    labels = [name]
+    labels.extend(
+        str(record.get(field) or "")
+        for field in ("hardware", "platform", "measured_on")
+    )
+    for label in labels:
+        label_key = _hardware_key(label)
+        if label_key and (
+            target == label_key or target in label_key or label_key in target
+        ):
+            return True
+    return False
+
+
+def _metadata_shape_latency_us(
+    metadata: object, shape_id: str, hardware: str = ""
+) -> float | None:
     """Read one authoritative production latency from Atrex-Bench metadata."""
     if not isinstance(metadata, dict):
         return None
@@ -169,27 +212,35 @@ def _metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
     direct = _finite_number(production.get("performance_us"))
     if direct is not None and direct > 0.0:
         return direct
-    nested = [
-        value
-        for entry in production.values()
+    candidates = [
+        (str(name), value, entry)
+        for name, entry in production.items()
         if isinstance(entry, dict)
         if (value := _finite_number(entry.get("performance_us"))) is not None
         and value > 0.0
     ]
-    return nested[0] if len(nested) == 1 else None
+    matching = [
+        value
+        for name, value, entry in candidates
+        if _matches_hardware(name, entry, hardware)
+    ]
+    if len(matching) == 1:
+        return matching[0]
+    return candidates[0][1] if not matching and len(candidates) == 1 else None
 
 
 def _metadata_speedup_mean(
     metadata: object,
     shape_ids: list[str],
     latency_by_shape: dict[str, float],
+    hardware: str = "",
 ) -> tuple[float | None, list[str]]:
     if any(shape_id not in latency_by_shape for shape_id in shape_ids):
         return None, []
     speedups: list[float] = []
     failures: list[str] = []
     for shape_id in shape_ids:
-        reference_us = _metadata_shape_latency_us(metadata, shape_id)
+        reference_us = _metadata_shape_latency_us(metadata, shape_id, hardware)
         if reference_us is None:
             failures.append(
                 f"sid={shape_id}: metadata has no unambiguous positive "
@@ -208,12 +259,18 @@ def result_from_eval(
     metadata: object,
     *,
     require_performance: bool = True,
+    hardware: str = "",
 ) -> dict[str, Any]:
     """Convert one official Atrex-Bench result into optimizer metrics."""
     failures: list[str] = []
+    evaluation_failure = _evaluation_failure(payload)
     evaluation_error = payload.get("error")
     if evaluation_error:
-        failures.append("evaluation: " + str(evaluation_error))
+        failures.append(
+            evaluation_failure["message"]
+            if evaluation_failure is not None
+            else "evaluation: " + str(evaluation_error)
+        )
     passed = payload.get("passed")
     passed = passed if isinstance(passed, dict) else {}
     failures.extend(_compile_failures(passed.get("compile"), shape_ids))
@@ -316,13 +373,13 @@ def result_from_eval(
         sum(latencies) / len(latencies) if complete_performance and latencies else 0.0
     )
     speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape, hardware)
         if require_performance
         else (None, [])
     )
     failures.extend(metadata_failures)
 
-    return {
+    result = {
         "all_pass": not failures,
         "numerical_metrics": numerical_metrics,
         "nonfinite_outputs": sorted(nonfinite_outputs),
@@ -339,6 +396,9 @@ def result_from_eval(
         "evaluator": "atrex-bench/run_eval",
         "eval_id": payload.get("eval_id"),
     }
+    if evaluation_failure is not None:
+        result["evaluation_failure"] = evaluation_failure
+    return result
 
 
 def _mask_generalized_result(workspace: Path, result: dict[str, Any]) -> dict[str, Any]:
@@ -347,9 +407,14 @@ def _mask_generalized_result(workspace: Path, result: dict[str, Any]) -> dict[st
         return result
     masked = dict(result)
     if result.get("failures"):
-        masked["failures"] = [
-            "one or more hidden evaluator cases failed; reproduce within the public shape_domain"
-        ]
+        evaluation_failure = result.get("evaluation_failure")
+        masked["failures"] = (
+            [str(evaluation_failure.get("message") or "evaluation unavailable")]
+            if isinstance(evaluation_failure, dict)
+            else [
+                "one or more hidden evaluator cases failed; reproduce within the public shape_domain"
+            ]
+        )
     masked["hidden_case_details"] = "shape inputs and failure details withheld"
     return masked
 
@@ -506,6 +571,7 @@ def main(argv: list[str] | None = None) -> int:
                 shape_ids,
                 metadata,
                 require_performance=not correctness_only,
+                hardware=os.environ.get("AKA_TARGET_HARDWARE", ""),
             )
             if completed.returncode != 0 and result["all_pass"]:
                 result["all_pass"] = False

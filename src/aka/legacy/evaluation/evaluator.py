@@ -313,14 +313,55 @@ class LegacyEvaluator:
         if observation.transport_returncode != 0 and failure_path.is_file():
             details = json.loads(failure_path.read_text())
             category = details.get("failure_class", "protocol")
-            repairable = category == "request" and not details.get("reference_rejected") and bool(
-                details.get("candidate_rejected") or details.get("io_contract_rejected"))
-            message = ("candidate request rejected; repair source-policy violations and make "
-                       "Model.forward accept exactly the trusted input keys"
-                       if repairable else f"gateway validation pending: failure_class={category}; "
-                       "no correctness result was produced")
-            failure = EvaluationFailure(category, f"gateway-http-{details.get('http_status', 'unknown')}",
-                                        message, candidate_repairable=repairable)
+            explicit_repairable = details.get("candidate_repairable")
+            repairable = (
+                explicit_repairable
+                if isinstance(explicit_repairable, bool)
+                else category == "request"
+                and not details.get("reference_rejected")
+                and bool(
+                    details.get("candidate_rejected")
+                    or details.get("io_contract_rejected")
+                )
+            )
+            secondary_classes = [
+                str(item.get("failure_class") or "protocol")
+                for item in details.get("secondary_diagnostics", [])
+                if isinstance(item, dict)
+            ]
+            secondary_context = (
+                "; subsequent diagnostics=" + ",".join(secondary_classes)
+                if secondary_classes
+                else ""
+            )
+            if details.get("metadata_invalid"):
+                message = (
+                    "invalid performance metadata before GPU submission: "
+                    f"hardware={details.get('hardware', 'unknown')}; "
+                    f"sid={details.get('shape_id', 'unknown')}; "
+                    f"reason={details.get('metadata_reason', 'invalid')}"
+                    + secondary_context
+                )
+                failure_code = "invalid-performance-baseline"
+            else:
+                message = (
+                    "candidate request rejected; repair source-policy violations "
+                    "and make Model.forward accept exactly the trusted input keys"
+                    + secondary_context
+                    if repairable
+                    else f"gateway validation pending: failure_class={category}; "
+                    "no correctness result was produced"
+                    + secondary_context
+                )
+                failure_code = (
+                    f"gateway-http-{details.get('http_status', 'unknown')}"
+                )
+            failure = EvaluationFailure(
+                category,
+                failure_code,
+                message,
+                candidate_repairable=repairable,
+            )
             return VerificationResult("FAIL" if repairable else "ERROR", None, None, None,
                                       error=message, failure=failure)
         if request.mode == "framework" and observation.transport_returncode != 0:
@@ -333,6 +374,23 @@ class LegacyEvaluator:
             )
         result = result_from_stdout(observation.stdout)
         run = VerificationRun("candidate", 0, observation.transport_returncode, result)
+        evaluation_failure = result.get("evaluation_failure")
+        if isinstance(evaluation_failure, dict):
+            category = str(evaluation_failure.get("category") or "infrastructure")
+            code = str(evaluation_failure.get("code") or "evaluation-unavailable")
+            message = str(
+                evaluation_failure.get("message") or "evaluation unavailable"
+            )
+            failure = EvaluationFailure(category, code, message)
+            return VerificationResult(
+                "ERROR",
+                None,
+                None,
+                None,
+                runs=[run],
+                error=message,
+                failure=failure,
+            )
         if request.mode == "v0":
             error = (
                 ""

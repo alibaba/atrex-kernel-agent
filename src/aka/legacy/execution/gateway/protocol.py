@@ -1,6 +1,7 @@
 """Gateway response classification."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 
 import re
@@ -14,8 +15,80 @@ from pathlib import Path
 from typing import Callable
 
 PROTOCOL_FAILURE_SCHEMA = "optimization.gateway-protocol-failure/v1"
+FAILURE_PREFIX = "[sandbox] gateway_protocol_failure="
+RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 
 SAFE_JOB_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
+
+
+@dataclass(frozen=True)
+class GatewayOutcome:
+    """One evaluator outcome assembled from every safe transport diagnostic."""
+
+    has_result: bool
+    primary_diagnostic: dict[str, object] | None
+    secondary_diagnostics: tuple[dict[str, object], ...] = ()
+
+    def failure_record(self) -> dict[str, object] | None:
+        """Return the primary failure with its causal context preserved."""
+        if self.has_result or self.primary_diagnostic is None:
+            return None
+        record = dict(self.primary_diagnostic)
+        record["candidate_repairable"] = bool(
+            record.get("failure_class") == "request"
+            and not record.get("reference_rejected")
+            and (record.get("candidate_rejected") or record.get("io_contract_rejected"))
+        )
+        if self.secondary_diagnostics:
+            record["secondary_diagnostics"] = [
+                dict(item) for item in self.secondary_diagnostics
+            ]
+        return record
+
+
+def classify_gateway_outcome(
+    process: subprocess.CompletedProcess[str],
+) -> GatewayOutcome:
+    """Classify a complete gateway attempt chain through one stable interface."""
+    has_result = any(
+        line.startswith(RESULT_PREFIX)
+        for line in (process.stdout or "").splitlines()
+    )
+    diagnostics: list[dict[str, object]] = []
+    for line in (process.stderr or "").splitlines():
+        if not line.startswith(FAILURE_PREFIX):
+            continue
+        try:
+            payload = json.loads(line[len(FAILURE_PREFIX):])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict):
+            diagnostics.append(payload)
+    if has_result or not diagnostics:
+        return GatewayOutcome(has_result, None)
+    primary_index = len(diagnostics) - 1
+    for classes in (
+        {"cancelled"},
+        {"authentication"},
+        {"request"},
+        {"infrastructure"},
+    ):
+        decisive = next(
+            (
+                index
+                for index, item in enumerate(diagnostics)
+                if item.get("failure_class") in classes
+            ),
+            None,
+        )
+        if decisive is not None:
+            primary_index = decisive
+            break
+    return GatewayOutcome(
+        False,
+        diagnostics[primary_index],
+        tuple(item for index, item in enumerate(diagnostics) if index != primary_index),
+    )
 
 def terminal_cancellation(job: dict | None) -> bool:
     """An explicit cancellation outcome must survive evaluator redaction."""

@@ -1443,6 +1443,12 @@ def _typed_request(
             if multi_seed > 0 and version not in {"v0", "v1"}
             else "full"
         )
+        if request["mode"] != "correctness_only":
+            from aka.legacy.task.problem.inputs import validate_performance_baseline
+
+            validate_performance_baseline(
+                shapes, reference.get("metadata"), hardware
+            )
     else:
         if profiler:
             request["profiler"] = profiler
@@ -3235,7 +3241,12 @@ def _mask_generalized_result(
         return result
     masked = dict(result)
     if result.get("failures"):
-        if result.get("actionable_diagnostics"):
+        evaluation_failure = result.get("evaluation_failure")
+        if isinstance(evaluation_failure, dict):
+            masked["failures"] = [
+                str(evaluation_failure.get("message") or "evaluation unavailable")
+            ]
+        elif result.get("actionable_diagnostics"):
             masked["failures"] = [
                 "candidate compile/import/runtime failure; see actionable_diagnostics"
             ]
@@ -3281,6 +3292,8 @@ def _run_typed_gateway(
 ) -> int | None:
     """Run agate run/profile, returning None only for a documented dev fallback."""
     generalized = _is_generalized_workspace(workspace)
+    from aka.legacy.task.problem.inputs import PerformanceBaselineError
+
     try:
         request = _typed_request(
             workspace,
@@ -3295,6 +3308,26 @@ def _run_typed_gateway(
             kernel_regex=args.kernel_regex,
             top_kernels=args.top_kernels,
         )
+    except PerformanceBaselineError as exc:
+        diagnostic = {
+            "schema": "optimization.gateway-protocol-failure/v1",
+            "agate_return_code": 2,
+            "response_type": "local-validation",
+            "reason": "invalid-performance-baseline",
+            "failure_class": "request",
+            "metadata_invalid": True,
+            "metadata_reason": exc.reason,
+            "shape_id": exc.shape_id,
+            "hardware": exc.hardware,
+        }
+        print(f"[sandbox] {exc}; GPU submission skipped", file=sys.stderr)
+        print(
+            "[sandbox] gateway_protocol_failure="
+            + json.dumps(diagnostic, sort_keys=True),
+            file=sys.stderr,
+            flush=True,
+        )
+        return 2
     except (OSError, UnicodeDecodeError, ValueError) as exc:
         print(
             f"[sandbox] {kind} interface unsupported for this workspace: {exc}; using dev",
@@ -3481,6 +3514,7 @@ def _run_typed_gateway(
                 shape_ids,
                 metadata,
                 require_performance=require_performance,
+                hardware=args.hardware,
             )
             for job, shape_ids in zip(jobs, shape_batches)
         ]
@@ -3491,6 +3525,7 @@ def _run_typed_gateway(
                 expected_shape_ids,
                 metadata,
                 require_performance=require_performance,
+                hardware=args.hardware,
             )
             if batched
             else batch_results[0],
@@ -3634,6 +3669,10 @@ def _main(argv: list[str] | None = None) -> int:
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
     evaluator_command = _is_test_kernel_command(args.command)
+    if evaluator_command:
+        command = (
+            f"AKA_TARGET_HARDWARE={shlex.quote(args.hardware)} " + command
+        )
     profile_command = _is_profile_command(args.command)
     profile_request = gateway_kind == "profile" or profile_command
     if profile_command:

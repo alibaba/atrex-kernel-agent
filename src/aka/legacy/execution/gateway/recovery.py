@@ -89,9 +89,11 @@ def _has_result(process: subprocess.CompletedProcess[str]) -> bool:
     )
 
 def _failed_transiently(process: subprocess.CompletedProcess[str]) -> bool:
-    if process.returncode == 0 or _has_result(process):
+    from .protocol import classify_gateway_outcome, terminal_cancellation
+
+    outcome = classify_gateway_outcome(process)
+    if process.returncode == 0 or outcome.has_result:
         return False
-    from .protocol import terminal_cancellation
     try:
         job = json.loads(process.stdout or "")
     except (TypeError, json.JSONDecodeError):
@@ -101,32 +103,39 @@ def _failed_transiently(process: subprocess.CompletedProcess[str]) -> bool:
     output = ((process.stdout or "") + "\n" + (process.stderr or "")).lower()
     if UPSTREAM_EVAL_RETRIES_EXHAUSTED in output:
         return False
-    diagnostic = _last_protocol_failure(process)
+    diagnostic = outcome.failure_record()
     if diagnostic and diagnostic.get("failure_class") in {"request", "authentication", "cancelled"}:
         return False
     return any(marker in output for marker in TRANSIENT_MARKERS)
 
 def _last_protocol_failure(process: subprocess.CompletedProcess[str]) -> dict | None:
-    for line in reversed((process.stderr or "").splitlines()):
-        if line.startswith(FAILURE_PREFIX):
-            return json.loads(line[len(FAILURE_PREFIX):])
-    return None
+    """Return the decisive diagnostic while keeping the legacy helper available."""
+    from .protocol import classify_gateway_outcome
+
+    return classify_gateway_outcome(process).failure_record()
 
 def _record_gateway_failure(argv: list[str], process: subprocess.CompletedProcess[str]) -> None:
+    from .protocol import classify_gateway_outcome
+
     workspace = _workspace_arg(argv)
     if workspace is None:
         return
     path = workspace / FAILURE_FILE
-    if process.returncode == 0 or _has_result(process):
+    outcome = classify_gateway_outcome(process)
+    if process.returncode == 0 or outcome.has_result:
         path.unlink(missing_ok=True)
         return
-    diagnostic = _last_protocol_failure(process)
+    diagnostic = outcome.failure_record()
     if diagnostic is None and not (
         _failed_transiently(process)
         or UPSTREAM_EVAL_RETRIES_EXHAUSTED in (process.stderr or "")
     ):
         return
     diagnostic = dict(diagnostic or {})
+    # Preserve the exact single-diagnostic record produced by older adapters.
+    # The enriched field is required when several attempts form one causal chain.
+    if not outcome.secondary_diagnostics:
+        diagnostic.pop("candidate_repairable", None)
     diagnostic.setdefault("failure_class", "infrastructure")
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(".tmp")

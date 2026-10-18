@@ -10,6 +10,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from aka.legacy.task.problem.inputs import validate_performance_baseline
+
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
@@ -242,50 +244,56 @@ def _candidate_exception_diagnostics(
     return diagnostics
 
 
-def _metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
+def _evaluation_failure(payload: dict[str, Any]) -> dict[str, str] | None:
+    """Classify evaluator startup failures that precede all candidate imports."""
+    error = str(payload.get("error") or "")
+    if (
+        "import torch" in error
+        and "typing._ClassVar" in error
+        and "module 'typing' has no attribute '_ClassVar'" in error
+    ):
+        return {
+            "category": "infrastructure",
+            "code": "worker_bootstrap_failed",
+            "message": (
+                "GPU worker bootstrap failed before candidate import: the worker "
+                "Python typing/dataclasses runtime is incompatible with torch"
+            ),
+        }
+    return None
+
+
+def _metadata_shape_latency_us(
+    metadata: object, shape_id: str, hardware: str = ""
+) -> float | None:
     """Read one authoritative production latency from Atrex-Bench metadata."""
-    if not isinstance(metadata, dict):
+    try:
+        return validate_performance_baseline(
+            {shape_id: None}, metadata, hardware
+        )[shape_id]
+    except ValueError:
         return None
-    shapes = metadata.get("shapes")
-    shape = shapes.get(shape_id) if isinstance(shapes, dict) else None
-    if not isinstance(shape, dict):
-        return None
-    production = shape.get("production_performance")
-    if not isinstance(production, dict):
-        return None
-    direct = _finite_number(production.get("performance_us"))
-    if direct is not None and direct > 0.0:
-        return direct
-    nested = [
-        value
-        for entry in production.values()
-        if isinstance(entry, dict)
-        if (value := _finite_number(entry.get("performance_us"))) is not None
-        and value > 0.0
-    ]
-    return nested[0] if len(nested) == 1 else None
 
 
 def _metadata_speedup_mean(
     metadata: object,
     shape_ids: list[str],
     latency_by_shape: dict[str, float],
+    hardware: str = "",
 ) -> tuple[float | None, list[str]]:
     if any(shape_id not in latency_by_shape for shape_id in shape_ids):
         return None, []
+    try:
+        baselines = validate_performance_baseline(
+            {shape_id: None for shape_id in shape_ids}, metadata, hardware
+        )
+    except ValueError as exc:
+        return None, [str(exc)]
     speedups: list[float] = []
-    failures: list[str] = []
     for shape_id in shape_ids:
-        reference_us = _metadata_shape_latency_us(metadata, shape_id)
-        if reference_us is None:
-            failures.append(
-                f"sid={shape_id}: metadata has no unambiguous positive "
-                "production_performance.performance_us"
-            )
-            continue
-        speedups.append(reference_us / latency_by_shape[shape_id])
-    if failures or len(speedups) != len(shape_ids) or not speedups:
-        return None, failures
+        speedups.append(baselines[shape_id] / latency_by_shape[shape_id])
+    if len(speedups) != len(shape_ids) or not speedups:
+        return None, []
     return sum(speedups) / len(speedups), []
 
 
@@ -295,16 +303,31 @@ def _optimizer_result_from_eval(
     metadata: object,
     *,
     require_performance: bool = True,
+    hardware: str = "",
 ) -> dict[str, Any]:
     """Convert the typed gateway's Atrex-Bench result to optimizer RESULT_JSON."""
     failures: list[str] = []
+    evaluation_failure = _evaluation_failure(payload)
     if payload.get("error"):
-        failures.append("evaluation: " + str(payload["error"]))
+        failures.append(
+            evaluation_failure["message"]
+            if evaluation_failure is not None
+            else "evaluation: " + str(payload["error"])
+        )
     passed = payload.get("passed")
     passed = passed if isinstance(passed, dict) else {}
     compile_result = passed.get("compile")
     failures.extend(_compile_failures(compile_result, shape_ids))
     actionable_diagnostics = _compile_diagnostics(compile_result, shape_ids)
+    if evaluation_failure is not None:
+        actionable_diagnostics.insert(
+            0,
+            {
+                "stage": "worker_bootstrap",
+                "shape_id": "",
+                "message": evaluation_failure["message"],
+            },
+        )
 
     correctness_status = passed.get("correctness")
     correctness_status = (
@@ -388,12 +411,12 @@ def _optimizer_result_from_eval(
     )
     arithmetic = sum(latencies) / len(latencies) if complete and latencies else 0.0
     speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape, hardware)
         if require_performance
         else (None, [])
     )
     failures.extend(metadata_failures)
-    return {
+    result = {
         "all_pass": not failures,
         "failures": failures,
         "latency_us_geomean": geomean,
@@ -409,6 +432,9 @@ def _optimizer_result_from_eval(
         "eval_id": payload.get("eval_id"),
         "actionable_diagnostics": actionable_diagnostics[:8],
     }
+    if evaluation_failure is not None:
+        result["evaluation_failure"] = evaluation_failure
+    return result
 
 
 def _merge_optimizer_results(
@@ -417,7 +443,16 @@ def _merge_optimizer_results(
     metadata: object,
     *,
     require_performance: bool = True,
+    hardware: str = "",
 ) -> dict[str, Any]:
+    evaluation_failure = next(
+        (
+            result["evaluation_failure"]
+            for result in results
+            if isinstance(result.get("evaluation_failure"), dict)
+        ),
+        None,
+    )
     latency_by_shape = {
         str(shape_id): float(latency)
         for result in results
@@ -454,7 +489,7 @@ def _merge_optimizer_results(
                 break
 
     speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
+        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape, hardware)
         if require_performance
         else (None, [])
     )
@@ -465,7 +500,7 @@ def _merge_optimizer_results(
         if failure not in failures:
             failures.append(failure)
 
-    return {
+    merged = {
         "all_pass": complete
         and (not require_performance or speedup_mean is not None)
         and all(result.get("all_pass") for result in results),
@@ -494,6 +529,9 @@ def _merge_optimizer_results(
         "shape_batch_count": len(results),
         "actionable_diagnostics": actionable_diagnostics,
     }
+    if evaluation_failure is not None:
+        merged["evaluation_failure"] = evaluation_failure
+    return merged
 
 
 def _record_episode_evaluation(
