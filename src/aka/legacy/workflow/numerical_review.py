@@ -153,25 +153,37 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
             check_transport(process)
             for line in process.stdout.splitlines():
                 if line.startswith(PREFIX):
-                    batch = json.loads(line[len(PREFIX):])
+                    try:
+                        batch = json.loads(line[len(PREFIX):])
+                    except json.JSONDecodeError:
+                        return {"runs": "invalid"}
+                    if not isinstance(batch, dict):
+                        return {"runs": "invalid"}
                     if process.returncode:
                         batch["error"] = f"probe transport exited {process.returncode}"
                     return batch
-            raise ValueError(f"numerical probe produced no receipt (exit={process.returncode})")
+            if process.returncode:
+                return {
+                    "runs": [],
+                    "error": f"probe transport exited {process.returncode}",
+                }
+            return {"runs": []}
 
         batch = retry_infrastructure(workspace, f"numerical-probe:{digest}:{plan['case_id']}", probe_once)
-        status = _probe_status(batch, plan, suite, shapes)
+        verdict = _probe_status(batch, plan, suite, shapes)
+        status = verdict["status"]
         # Preserve comparison metrics and actual input-generation diagnostics, but
         # never surface private workload kwargs or raw evaluator output to the agent.
         rows = batch.get("runs", [])
         result = (rows[0].get("result") or {}) if rows else {}
         results.append({
             "case_id": plan["case_id"], "status": status,
+            "reason": verdict["reason"],
             "metrics": result.get("numerical_metrics", {}),
             "nonfinite_outputs": result.get("nonfinite_outputs", []),
-            "expected_probes": rows[0].get("expected_probes") if rows else None,
-            "observed_probes": rows[0].get("observed_probes") if rows else None,
-            "failed_probes": rows[0].get("failed_probes", 0) if rows else 0,
+            "expected_probes": verdict["expected_probes"],
+            "observed_probes": verdict["observed_probes"],
+            "failed_probes": verdict["failed_probes"],
             "exit_code": rows[0].get("exit_code") if rows else None,
             "diagnosis": (
                 "non-finite output diagnostic has unknown roles; repair or verify the probe evaluator"
@@ -191,7 +203,54 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
               else "needs_validation" if any(r["status"] == "needs_validation" for r in results)
               else "advisory" if any(r["status"] == "unsupported" for r in results)
               else "passed")
-    return {"status": status, "probes": results}
+    reason = next(
+        (r.get("reason") for r in results if r["status"] == status and r.get("reason")),
+        "unsupported" if status == "advisory" else status,
+    )
+    counted = [r for r in results if r["status"] != "unsupported"]
+    return {
+        "status": status,
+        "reason": reason,
+        "expected_probes": sum(r.get("expected_probes") or 0 for r in counted),
+        "observed_probes": sum(r.get("observed_probes") or 0 for r in counted),
+        "failed_probes": sum(r.get("failed_probes") or 0 for r in counted),
+        "probes": results,
+    }
+
+
+def _public_numerical_supplement(record):
+    """Project private numerical feedback into one bounded public diagnostic."""
+    evaluations = record.get("evaluations") if isinstance(record, dict) else None
+    evaluations = evaluations if isinstance(evaluations, list) else []
+    latest = evaluations[-1] if evaluations and isinstance(evaluations[-1], dict) else {}
+    probes = latest.get("probes") if isinstance(latest.get("probes"), list) else []
+
+    def count(name):
+        value = latest.get(name)
+        if type(value) is int and value >= 0:
+            return value
+        return sum(
+            probe.get(name, 0)
+            for probe in probes
+            if isinstance(probe, dict)
+            and type(probe.get(name, 0)) is int
+            and probe.get(name, 0) >= 0
+        )
+
+    status = record.get("status") if isinstance(record, dict) else None
+    status = status if isinstance(status, str) and status else "needs_validation"
+    reason = latest.get("reason") or record.get("reason")
+    if not isinstance(reason, str) or not reason:
+        reason = "passed" if status in {"passed", "advisory", "skipped_planner_timeout"} else "probe_exception"
+    return {
+        "schema_version": 1,
+        "status": status,
+        "reason": reason,
+        "attempts": len(evaluations),
+        "expected_probes": count("expected_probes"),
+        "observed_probes": count("observed_probes"),
+        "failed_probes": count("failed_probes"),
+    }
 
 
 def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None, harness=None):
@@ -253,7 +312,14 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                     evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial,
                                              execute=execute, harness=harness)
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-                    evaluation = {"status": "needs_validation", "diagnosis": str(exc)}
+                    evaluation = {
+                        "status": "needs_validation",
+                        "reason": "probe_exception",
+                        "expected_probes": 0,
+                        "observed_probes": 0,
+                        "failed_probes": 0,
+                        "diagnosis": str(exc),
+                    }
                 record.setdefault("evaluations", []).append(evaluation)
                 record["status"] = evaluation["status"]
                 if evaluation["status"] != "needs_validation" or attempt == 1:
@@ -296,21 +362,32 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
             record.update(
                 status=("skipped_planner_timeout" if standard_passed and unchanged and not measured_failure
                         else "needs_validation"),
+                reason="probe_exception",
                 diagnosis=str(exc), standard_correctness_passed=bool(standard_passed),
             )
         except (OSError, ValueError, TypeError, KeyError) as evidence_error:
             record.update(
                 status="needs_validation",
+                reason="probe_exception",
                 diagnosis=f"{exc}; timeout skip evidence unavailable: {evidence_error}",
             )
     except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-        record.update(status="needs_validation", diagnosis=str(exc))
+        record.update(status="needs_validation", reason="probe_exception", diagnosis=str(exc))
 
     durable_write_json(directory / "numerical_result.json", record, indent=2, ensure_ascii=False)
     feedback_path = workspace / VERIFY_DIR / "numerical_feedback.json"
     durable_write_json(feedback_path, record, indent=2, ensure_ascii=False)
+    public = _public_numerical_supplement(record)
+    public_path = workspace / VERIFY_DIR / "numerical-supplement.json"
+    durable_write_json(public_path, public, indent=2, ensure_ascii=False)
     status = record["status"]
-    print(f"[numerical-supplement] {status}; evidence={feedback_path}", flush=True)
+    print(
+        "[numerical-supplement] "
+        f"status={public['status']} reason={public['reason']} attempts={public['attempts']} "
+        f"expected={public['expected_probes']} observed={public['observed_probes']} "
+        f"failed={public['failed_probes']}",
+        flush=True,
+    )
     if status in {"passed", "advisory", "skipped_planner_timeout"}:
         # A timeout skips only this candidate's expansion; it is not a probe PASS.
         # Retained probe plans still run against subsequent candidate edits.

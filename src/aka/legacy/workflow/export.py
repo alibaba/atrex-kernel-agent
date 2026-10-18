@@ -15,6 +15,7 @@ from aka.contracts.workflow_export import (
     ProgressFact, ResultFact, WorkflowExportSnapshot, snapshot_from_document,
 )
 from aka.core.keys import ServiceKey
+from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
 
 WORKFLOW_EXPORT = ServiceKey('workflow_export', 'WorkflowExportReader', module='aka.contracts.workflow_export')
 name = 'export'
@@ -123,6 +124,46 @@ def _result(memory, attempt, expected):
 def _artifact(identifier, filename, role, content, content_type='application/json'):
     return ExportArtifact(identifier, filename, content_type, role,
                           hashlib.sha256(content).hexdigest(), 'public', content)
+
+
+def _numerical_supplement_artifact(workspace):
+    """Return the bounded public numerical diagnostic, if one was produced."""
+    path = Path(workspace) / VERIFY_DIR / 'numerical-supplement.json'
+    if not path.is_file():
+        return None
+    try:
+        content = path.read_bytes()
+        value = json.loads(content)
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise ValueError('public numerical supplement is corrupt') from exc
+    keys = {
+        'schema_version', 'status', 'reason', 'attempts',
+        'expected_probes', 'observed_probes', 'failed_probes',
+    }
+    if not isinstance(value, dict) or set(value) != keys or value.get('schema_version') != 1:
+        raise ValueError('public numerical supplement has an invalid schema')
+    statuses = {
+        'needs_validation', 'needs_repair', 'passed', 'advisory',
+        'skipped_planner_timeout',
+    }
+    reasons = {
+        'receipt_missing', 'batch_error', 'run_count_mismatch',
+        'receipt_identity_mismatch', 'receipt_schema_mismatch', 'input_error',
+        'reference_nonfinite', 'nonfinite_role_unknown', 'coverage_incomplete',
+        'probe_exception', 'passed', 'candidate_failure', 'unsupported',
+    }
+    if value.get('status') not in statuses:
+        raise ValueError('public numerical supplement has an unsupported status')
+    if value.get('reason') not in reasons:
+        raise ValueError('public numerical supplement has an unsupported reason')
+    if any(type(value.get(key)) is not int or value[key] < 0 for key in (
+        'attempts', 'expected_probes', 'observed_probes', 'failed_probes'
+    )):
+        raise ValueError('public numerical supplement has invalid counts')
+    return _artifact(
+        'numerical_supplement', 'numerical-supplement.json',
+        'supplemental-numerical-diagnostic', content,
+    )
 
 
 def _warning_records(path):
@@ -270,6 +311,9 @@ class RetainedWorkflowExport:
                 ResultFact('running',None,None,False,None,{},expected,None,None,None)))
         candidates.sort(key=lambda candidate:candidate.version)
         artifacts = []
+        numerical_supplement = _numerical_supplement_artifact(workspace)
+        if numerical_supplement is not None:
+            artifacts.append(numerical_supplement)
         # Bind exported sources to the exact measured candidate revision.
         for candidate in candidates:
             if not candidate.revision or not candidate.record_revision:
