@@ -109,8 +109,13 @@ class WorkflowBaseline:
         except (OSError, subprocess.SubprocessError) as exc:
             return None, f"combined validation failed to run: {exc}"
         if not verification.passed:
-            if verification.failure is not None and not verification.failure.candidate_repairable:
-                raise EvaluationUnavailable(verification.failure)
+            if verification.failure is not None:
+                repair_enabled = (
+                    self.campaign.gateway_candidate_recovery == "typed-once"
+                    and verification.failure.candidate_repairable
+                )
+                if not repair_enabled:
+                    raise EvaluationUnavailable(verification.failure)
             return None, verification.error
         return verification.runs[0].result, ""
 

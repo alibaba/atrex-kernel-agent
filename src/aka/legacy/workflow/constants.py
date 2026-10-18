@@ -44,6 +44,9 @@ FRAMEWORK_BASELINE_TIMEOUT_S = 10800
 FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
 
 
+GATEWAY_CANDIDATE_RECOVERY_MODES = ("disabled", "typed-once")
+
+
 FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
 
 

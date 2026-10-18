@@ -40,6 +40,10 @@ class WorkflowLaunch:
                 raise ValueError(f"{name} must be a positive integer")
         if settings.conversion_budget_action not in {"fail", "retain_verified"}:
             raise ValueError("conversion_budget_action must be fail or retain_verified")
+        if settings.gateway_candidate_recovery not in {"disabled", "typed-once"}:
+            raise ValueError(
+                "gateway_candidate_recovery must be disabled or typed-once"
+            )
         if type(settings.resume_framework_candidate) is not bool:
             raise TypeError("resume_framework_candidate must be a boolean")
         if runtime.timeout > 600 or 2 * runtime.verify_repeats * runtime.verify_run_timeout + 30 > runtime.timeout:

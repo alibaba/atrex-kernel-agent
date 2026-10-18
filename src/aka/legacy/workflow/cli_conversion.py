@@ -2,7 +2,7 @@
 from __future__ import annotations
 import argparse, json, os, re, sys
 from pathlib import Path
-from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S
+from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S, GATEWAY_CANDIDATE_RECOVERY_MODES
 from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT, MAX_SANDBOX_TIMEOUT
 from aka.legacy.execution.recovery import DEFAULT_SSH_HEALTH_COMMAND
 from aka.legacy.task.hardware import _workspace_slug
@@ -250,6 +250,16 @@ def parse_arguments(argv):
         type=int,
         default=FRAMEWORK_BASELINE_TIMEOUT_S,
         help="Framework baseline session timeout (s).",
+    )
+    ap.add_argument(
+        "--gateway-candidate-recovery",
+        choices=GATEWAY_CANDIDATE_RECOVERY_MODES,
+        default="disabled",
+        help=(
+            "Recovery policy for a typed gateway rejection of only the candidate. "
+            "disabled preserves the legacy fail-closed behavior (default); typed-once "
+            "allows the existing single framework-baseline repair turn."
+        ),
     )
     ap.add_argument(
         "--max-stall",
