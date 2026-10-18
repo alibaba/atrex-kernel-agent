@@ -5,17 +5,22 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "atrex-aka-legacy"
 version = "0.1.0"
-description = "AKA legacy application and task implementations"
+description = "AKA Task, Agent, Workflow and Execution implementations"
 requires-python = ">=3.10"
 dependencies = ["atrex-aka-framework==0.1.0"]
 
 [project.entry-points."aka.commands"]
-optimize = "aka.legacy.application.cli:main"
+optimize = "aka.legacy.compat.command:main"
+workflow = "aka.bootstrap.workflow_cli:main"
+execution = "aka.legacy.execution.cli:main"
 
 [project.entry-points."aka.tokens"]
+agent = "aka.legacy.agent.plugin:AGENT"
+workflow = "aka.legacy.workflow.plugin:WORKFLOW"
 problem = "aka.legacy.task.problem.plugin:PROBLEM"
 source = "aka.legacy.task.source.plugin:SOURCE"
 candidate = "aka.legacy.task.candidate_workspace.plugin:CANDIDATE"
+evaluator_factory = "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -26,7 +31,7 @@ where = ["src"]
 include = ["aka.legacy", "aka.legacy.*"]
 
 [tool.setuptools.package-data]
-"aka.legacy.application" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]
-"aka.legacy.task.problem" = ["profiles/*.json", "profiles/bundles/*.json"]
-"aka.legacy.task.source" = ["profiles/*.json", "profiles/bundles/*.json"]
-"aka.legacy.task.candidate_workspace" = ["profiles/*.json", "profiles/bundles/*.json", "*.sh"]
+"*" = ["*", "**/*"]
+"aka.legacy.execution" = ["profiles/*.json", "profiles/bundles/*.json"]
+
+"aka.legacy.workflow" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]

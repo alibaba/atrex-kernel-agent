@@ -49,9 +49,7 @@ sys.path.insert(0, str(HERE))
 import query_nl                                                    # noqa: E402
 
 SAMPLE_ROOT = Path("/root/wiki_query_traces/nl_samples")
-DEFAULT_STORE = query_nl.SIBLING_INTERNAL if (
-    query_nl.SIBLING_INTERNAL / "tools" / "query_wiki.py").is_file() \
-    else query_nl.OWN_STORE_ROOT
+DEFAULT_STORE = query_nl.OWN_STORE_ROOT
 
 # Words a request uses when the bottleneck is still a guess. A symptom axis spent on
 # a guess is the expensive mistake, so scoring has to be able to tell the two apart.

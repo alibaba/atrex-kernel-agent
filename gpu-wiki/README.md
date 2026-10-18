@@ -1,7 +1,7 @@
 # GPU Wiki
 
 In an AKA campaign, use the enabled `gpu-wiki.query` plugin through
-`python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json`.
+`python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json`.
 The input is a JSON object with a `request` string and optional `max_records`, `max_bytes`,
 and `exclude`. Follow the campaign's injected plugin instructions. The direct commands below
 remain available for standalone Wiki maintenance and queries.

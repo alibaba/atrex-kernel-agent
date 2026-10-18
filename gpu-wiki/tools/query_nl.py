@@ -14,9 +14,8 @@ widening, execution, deduplication, projection and context limits.
 The output has a per-invocation ``query_id``, plus records and notes. Records
 from kernel experience and hardware facts share one backward-compatible id-keyed
 mapping, while every value emits its canonical ``store::record`` ``wiki_id``.
-The public store is always queried; an installed sibling ``internal_gpu_wiki``
-is queried as a second isolated store. Internal mapping keys are namespaced so a
-private record can never overwrite a public record with the same stable id.
+Only the selected public store is queried. Internal knowledge is contributed by
+the independent ``internal-gpu-wiki.query`` plugin, with its own resource lock.
 """
 from __future__ import annotations
 
@@ -40,7 +39,6 @@ import wiki_trace
 
 HERE = Path(__file__).resolve().parent
 OWN_STORE_ROOT = HERE.parent
-SIBLING_INTERNAL = OWN_STORE_ROOT.parent / "internal_gpu_wiki"
 PUBLIC_STORE = "gpu_wiki"
 INTERNAL_STORE = "internal_gpu_wiki"
 STORE_ENV = "ATREX_WIKI_STORE_ROOT"
@@ -243,14 +241,8 @@ def _queryable_store(root: Path) -> bool:
 
 
 def resolve_store_roots(explicit: str | None) -> list[tuple[str, Path]]:
-    """Return the two fixed Wiki module slots without pre-classifying availability."""
-    primary = _selected_store_root(explicit)
-    internal = (
-        primary.parent / INTERNAL_STORE
-        if explicit or os.environ.get(STORE_ENV)
-        else SIBLING_INTERNAL
-    ).expanduser().resolve()
-    return [(PUBLIC_STORE, primary), (INTERNAL_STORE, internal)]
+    """Query only the declared public root, without discovering sibling stores."""
+    return [(PUBLIC_STORE, _selected_store_root(explicit))]
 
 
 def _string(value) -> str | None:

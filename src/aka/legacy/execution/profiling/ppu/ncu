@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# Preserve the PPU ncu-compatible command when Python wheel files are non-executable.
+set -euo pipefail
+entry="${BASH_SOURCE[0]}"
+while [[ -L "$entry" ]]; do
+    directory="$(cd "$(dirname "$entry")" && pwd)"
+    entry="$(readlink "$entry")"
+    [[ "$entry" = /* ]] || entry="$directory/$entry"
+done
+directory="$(cd "$(dirname "$entry")" && pwd)"
+exec python3 "$directory/profile_ppu.py" "$@"

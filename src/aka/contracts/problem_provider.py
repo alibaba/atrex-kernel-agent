@@ -2,7 +2,7 @@
 from pathlib import Path
 from typing import Protocol
 
-from .problem import LoadedProblem, EvaluationInput
+from .problem import LoadedProblem, EvaluationInput, ProblemSnapshot
 from .content import PublicInputContent, WorkspaceFile
 
 
@@ -37,4 +37,29 @@ class ProblemProvider(Protocol):
     def content(self, problem: LoadedProblem, workspace: Path, *,
                 generated_digest: str = "") -> ProblemContent:
         """Return typed public contributions and host checks using owned content."""
+        ...
+
+    def runtime_files(self, problem: LoadedProblem) -> tuple[WorkspaceFile, ...]:
+        """Describe retained evaluator code for copying from a validated frozen Task.
+
+        These files are Task checkpoint content, not external Resources roots.
+        Private cases and benchmark data are never included in this projection.
+        """
+        ...
+
+    def snapshot(self, problem: LoadedProblem) -> ProblemSnapshot:
+        """Validate an already frozen Problem and return its current content identity."""
+        ...
+
+    def export_snapshot(self, problem: LoadedProblem, destination: Path) -> ProblemSnapshot:
+        """Copy all retained Task roles and authored input, preserving content identity."""
+        ...
+
+    def validate_snapshot(self, snapshot: ProblemSnapshot, *,
+                          destination: Path | None = None) -> LoadedProblem:
+        """Read-only validation of identity, roles, all bytes and modes; never writes."""
+        ...
+
+    def restore_snapshot(self, snapshot: ProblemSnapshot, destination: Path) -> LoadedProblem:
+        """Validate first, atomically copy to a new destination or require its same identity."""
         ...
