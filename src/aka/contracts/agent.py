@@ -147,6 +147,7 @@ class AgentRunRequest:
     reasoning_effort: str = "max"
     session_id: str | None = None
     environment: Mapping[str, str | None] | None = None
+    observation_directory: Path | None = None
 
 
 @dataclass(frozen=True)

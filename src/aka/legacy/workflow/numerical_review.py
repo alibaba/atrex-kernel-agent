@@ -24,6 +24,7 @@ from aka.legacy.agent.availability import check_review_service
 from aka.legacy.execution.transport import check_transport
 from aka.legacy.execution.gateway.protocol import classify_gateway_outcome
 from aka.legacy.experiment.retry import retry_infrastructure
+from aka.legacy.workflow.review_trace import ReviewTrace
 
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
 from aka.legacy.evaluation.numerical import _validate_review, _probe_status
@@ -33,6 +34,93 @@ PROMPT = PROMPTS_DIR / "numerical_review.md"
 
 class NumericalPlanningTimeout(RuntimeError):
     """The numerical planner timed out without a usable plan."""
+
+
+class NumericalProbeFailure(RuntimeError):
+    """A supplemental probe failed at a supervisor-owned execution stage."""
+
+    def __init__(self, stage, cause):
+        super().__init__(f"{stage}: {cause}")
+        self.stage = stage
+        self.cause = cause
+
+
+_PROBE_EXCEPTIONS = (
+    OSError,
+    ValueError,
+    TypeError,
+    KeyError,
+    subprocess.SubprocessError,
+)
+
+
+def _at_probe_stage(stage, operation, *args, **kwargs):
+    try:
+        return operation(*args, **kwargs)
+    except NumericalProbeFailure:
+        raise
+    except _PROBE_EXCEPTIONS as exc:
+        raise NumericalProbeFailure(stage, exc) from exc
+
+
+def _public_failure_fact(stage, exc):
+    """Return a bounded diagnostic without private inputs, paths or messages."""
+    if isinstance(exc, json.JSONDecodeError):
+        exception_type, category = "JSONDecodeError", "invalid_json"
+        summary, retryable = "validation JSON is invalid", False
+    elif isinstance(exc, FileNotFoundError):
+        exception_type, category = "FileNotFoundError", "missing_file"
+        summary, retryable = "required validation file is missing", False
+    elif isinstance(exc, subprocess.TimeoutExpired):
+        exception_type, category = "TimeoutExpired", "timeout"
+        summary, retryable = "validation subprocess timed out", True
+    elif isinstance(exc, subprocess.CalledProcessError):
+        exception_type, category = "CalledProcessError", "subprocess_error"
+        summary, retryable = "validation subprocess failed", True
+    elif isinstance(exc, KeyError):
+        exception_type, category = "KeyError", "missing_key"
+        summary, retryable = "validation data is missing a required field", False
+    elif isinstance(exc, TypeError):
+        exception_type, category = "TypeError", "type_error"
+        summary, retryable = "validation data has an incompatible type", False
+    elif isinstance(exc, ValueError):
+        exception_type, category = "ValueError", "value_error"
+        summary, retryable = "validation data was rejected", False
+    elif isinstance(exc, OSError):
+        exception_type, category = "OSError", "io_error"
+        summary, retryable = "validation I/O failed", True
+    elif isinstance(exc, subprocess.SubprocessError):
+        exception_type, category = "SubprocessError", "subprocess_error"
+        summary, retryable = "validation subprocess failed", True
+    elif isinstance(exc, NumericalPlanningTimeout):
+        exception_type, category = "NumericalPlanningTimeout", "timeout"
+        summary, retryable = "numerical planner timed out", True
+    else:
+        exception_type, category = "Exception", "internal_error"
+        summary, retryable = "supplemental validation failed", False
+    return {
+        "stage": stage,
+        "exception_type": exception_type,
+        "code": f"{stage}.{category}",
+        "retryable": retryable,
+        "summary": summary,
+    }
+
+
+def _load_shapes(path):
+    return json.loads(path.read_text())
+
+
+def _uses_native_harness(path):
+    return "atrex-bench/run_eval" in path.read_text()
+
+
+def _write_probe_request(request, suite, case_id, digest, private):
+    durable_write_json(request, {
+        "suite": suite, "case_ids": [case_id], "rotation": digest,
+        "mode": "thorough", "per_case_timeout": 540,
+        "max_rel_l2": _fp4_correctness_max_rel_l2(private) or MAX_REL_L2,
+    })
 
 
 def _digest(files):
@@ -65,52 +153,81 @@ def _request_review(campaign, workspace, files, digest, previous=None):
 
     def review_once():
         timeout = campaign.production_review_timeout
-        with tempfile.TemporaryDirectory(prefix="atrex-numerical-advice-") as temporary:
-            root = Path(temporary)
-            for name, source in files.items():
-                target = root / name
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
-            request = {"evidence_digest": digest, "previous_validation": previous}
-            (root / "review_request.json").write_text(json.dumps(request, indent=2))
-            result = run_session(
-                root, PROMPT.read_text(), timeout=timeout,
-                agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
-                runtime=campaign.agent_runtime,
+        trace = ReviewTrace(
+            workspace,
+            "numerical-planner",
+            getattr(campaign, "review_trace_mode", "errors"),
+        )
+        try:
+            with tempfile.TemporaryDirectory(prefix="atrex-numerical-advice-") as temporary:
+                root = Path(temporary)
+                for name, source in files.items():
+                    target = root / name
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+                request = {"evidence_digest": digest, "previous_validation": previous}
+                (root / "review_request.json").write_text(json.dumps(request, indent=2))
+                trace.write_private_json("review-request.json", request)
+                result = run_session(
+                    root, PROMPT.read_text(), timeout=timeout,
+                    agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
+                    runtime=campaign.agent_runtime,
+                    observation_directory=trace.observation_directory,
+                )
+                trace.record_session(result)
+                campaign._account(result, "numerical supplemental-test planning")
+                response = root / "numerical_review.json"
+                record = {"evidence_digest": digest, "session_id": result.session_id,
+                          "timeout_s": timeout, "exit_status": result.exit_status,
+                          "timed_out": result.timed_out, "response_written": response.is_file()}
+                record_path = (
+                    workspace / VERIFY_DIR / f"numerical_planning-{trace.attempt_id}.json"
+                )
+                durable_write_json(record_path, record, indent=2)
+                if _digest({name: root / name for name in files}) != digest:
+                    raise ValueError("numerical reviewer modified supplied evidence")
+                # A timed-out CLI may already have written the requested plan before
+                # hanging on its final response. Validate that artifact rather than
+                # discarding it with the temporary session directory.
+                if not result.timed_out:
+                    check_review_service(result)
+                try:
+                    value = json.loads(response.read_text())
+                    record["response"] = value
+                    _validate_review(value, digest)
+                except (OSError, ValueError, TypeError, KeyError) as exc:
+                    record["validation_error"] = str(exc)
+                    if result.timed_out:
+                        raise NumericalPlanningTimeout(
+                            "numerical supplemental-test planner timed out without a usable plan"
+                        ) from exc
+                    check_review_service(result)
+                    raise
+                else:
+                    record["validated"] = True
+                    retain_diagnostics = bool(
+                        result.timed_out
+                        or result.exit_status
+                        or result.observation_errors
+                    )
+                    trace.finish(
+                        "recovered_after_timeout" if result.timed_out else "validated",
+                        failed=retain_diagnostics,
+                        response_written=True,
+                        recovered_after_timeout=bool(result.timed_out),
+                    )
+                    if result.timed_out:
+                        print("[numerical-supplement] recovered valid plan from timed-out reviewer", flush=True)
+                    return value
+                finally:
+                    durable_write_json(record_path, record, indent=2, ensure_ascii=False)
+        except BaseException as exc:
+            trace.finish(
+                "timed_out" if isinstance(exc, NumericalPlanningTimeout) else "failed",
+                failed=True,
+                failure_type=type(exc).__name__,
             )
-            campaign._account(result, "numerical supplemental-test planning")
-            response = root / "numerical_review.json"
-            record = {"evidence_digest": digest, "session_id": result.session_id,
-                      "timeout_s": timeout, "exit_status": result.exit_status,
-                      "timed_out": result.timed_out, "response_written": response.is_file()}
-            record_path = workspace / VERIFY_DIR / f"numerical_planning-{uuid.uuid4().hex}.json"
-            durable_write_json(record_path, record, indent=2)
-            if _digest({name: root / name for name in files}) != digest:
-                raise ValueError("numerical reviewer modified supplied evidence")
-            # A timed-out CLI may already have written the requested plan before
-            # hanging on its final response. Validate that artifact rather than
-            # discarding it with the temporary session directory.
-            if not result.timed_out:
-                check_review_service(result)
-            try:
-                value = json.loads(response.read_text())
-                record["response"] = value
-                _validate_review(value, digest)
-            except (OSError, ValueError, TypeError, KeyError) as exc:
-                record["validation_error"] = str(exc)
-                if result.timed_out:
-                    raise NumericalPlanningTimeout(
-                        "numerical supplemental-test planner timed out without a usable plan"
-                    ) from exc
-                check_review_service(result)
-                raise
-            else:
-                record["validated"] = True
-                if result.timed_out:
-                    print("[numerical-supplement] recovered valid plan from timed-out reviewer", flush=True)
-                return value
-            finally:
-                durable_write_json(record_path, record, indent=2, ensure_ascii=False)
+            raise
 
     context = hashlib.sha256(json.dumps(previous, sort_keys=True).encode()).hexdigest()
     stage = f"numerical-advice:{digest}:{campaign.agent_cli}:{campaign.production_review_timeout}:{context}"
@@ -119,16 +236,24 @@ def _request_review(campaign, workspace, files, digest, previous=None):
 
 def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, execute=None, harness=None):
 
-    shapes = json.loads(shapes_path.read_text())
-    schedule = validation_schedule(suite, shapes, digest, "thorough")
+    shapes = _at_probe_stage("load_shapes", _load_shapes, shapes_path)
+    schedule = _at_probe_stage(
+        "schedule", validation_schedule, suite, shapes, digest, "thorough"
+    )
     driver = directory / "test_kernel.py"
-    shutil.copy2(DRIVER, driver)
-    if "atrex-bench/run_eval" in (workspace / "test_kernel.py").read_text():
+    _at_probe_stage("prepare_driver", shutil.copy2, DRIVER, driver)
+    native_harness = _at_probe_stage(
+        "prepare_harness", _uses_native_harness, workspace / "test_kernel.py",
+    )
+    if native_harness:
         snapshot = directory / "snapshots" / "evaluator.py"
-        snapshot.parent.mkdir()
+        _at_probe_stage("prepare_harness", snapshot.parent.mkdir)
         if harness is None:
-            raise ValueError('numerical validation requires the frozen Task harness')
-        shutil.copy2(harness, snapshot)
+            raise NumericalProbeFailure(
+                "prepare_harness",
+                ValueError('numerical validation requires the frozen Task harness'),
+            )
+        _at_probe_stage("prepare_harness", shutil.copy2, harness, snapshot)
     results = []
     for index, plan in enumerate(schedule):
         if plan.get("status") == "unsupported":
@@ -136,49 +261,66 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
                             "diagnosis": plan["diagnosis"]})
             continue
         request = directory / f"request-{index:04d}.json"
-        durable_write_json(request, {
-            "suite": suite, "case_ids": [plan["case_id"]], "rotation": digest,
-            "mode": "thorough", "per_case_timeout": 540,
-            "max_rel_l2": _fp4_correctness_max_rel_l2(Path(campaign.private_reference_dir or workspace)) or MAX_REL_L2,
-        })
+        _at_probe_stage(
+            "prepare_request",
+            _write_probe_request,
+            request,
+            suite,
+            plan["case_id"],
+            digest,
+            Path(campaign.private_reference_dir or workspace),
+        )
 
         transport_attempts = []
 
-        def probe_once():
+        def probe_once(request=request, transport_attempts=transport_attempts):
             from aka.contracts.execution import CommandSpec
             if execute is None:
                 execute_command = campaign.services.numerical_command
             else:
                 execute_command = execute
-            process = execute_command(CommandSpec(workspace,
+            command = CommandSpec(workspace,
                 ("python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))),
-                timeout=600, operation="dev"))
-            receipt_status = "missing"
-            batch = {"runs": []}
-            for line in process.stdout.splitlines():
-                if line.startswith(PREFIX):
-                    try:
-                        batch = json.loads(line[len(PREFIX):])
-                    except json.JSONDecodeError:
-                        receipt_status = "invalid_json"
-                        batch = {"runs": "invalid"}
-                    else:
-                        if isinstance(batch, dict):
-                            receipt_status = "valid"
-                        else:
-                            receipt_status = "invalid_schema"
-                            batch = {"runs": "invalid"}
-                    break
-            transport_attempts.append(
-                _probe_transport_fact(process, receipt_status=receipt_status)
+                timeout=600, operation="dev")
+            process = _at_probe_stage(
+                "launch_probe", execute_command, command,
             )
+
+            def parse_receipt():
+                receipt_status = "missing"
+                batch = {"runs": []}
+                for line in process.stdout.splitlines():
+                    if line.startswith(PREFIX):
+                        try:
+                            batch = json.loads(line[len(PREFIX):])
+                        except json.JSONDecodeError:
+                            receipt_status = "invalid_json"
+                            batch = {"runs": "invalid"}
+                        else:
+                            if isinstance(batch, dict):
+                                receipt_status = "valid"
+                            else:
+                                receipt_status = "invalid_schema"
+                                batch = {"runs": "invalid"}
+                        break
+                return batch, receipt_status
+
+            batch, receipt_status = _at_probe_stage("parse_receipt", parse_receipt)
+            transport_attempts.append(_at_probe_stage(
+                "record_transport",
+                _probe_transport_fact,
+                process,
+                receipt_status=receipt_status,
+            ))
             check_transport(process)
             if process.returncode:
                 batch["error"] = f"probe transport exited {process.returncode}"
             return batch
 
         batch = retry_infrastructure(workspace, f"numerical-probe:{digest}:{plan['case_id']}", probe_once)
-        verdict = _probe_status(batch, plan, suite, shapes)
+        verdict = _at_probe_stage(
+            "classify_result", _probe_status, batch, plan, suite, shapes
+        )
         status = verdict["status"]
         # Preserve comparison metrics and actual input-generation diagnostics, but
         # never surface private workload kwargs or raw evaluator output to the agent.
@@ -286,8 +428,11 @@ def _public_numerical_supplement(record):
         for attempt in attempts:
             if isinstance(attempt, dict) and len(transport_attempts) < 32:
                 transport_attempts.append(dict(attempt))
+    failure = latest.get("failure") or record.get("failure")
+    if not isinstance(failure, dict):
+        failure = None
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": status,
         "reason": reason,
         "attempts": len(evaluations),
@@ -296,7 +441,26 @@ def _public_numerical_supplement(record):
         "failed_probes": count("failed_probes"),
         "transport_retry_count": retry_count,
         "transport_attempts": transport_attempts,
+        "failure": failure,
     }
+
+
+def _numerical_advice_root(campaign, workspace):
+    """Keep mutable probe plans beside, never inside, immutable Problem snapshots."""
+    snapshot = getattr(getattr(campaign, "problem", None), "snapshot_directory", None)
+    if snapshot is not None:
+        root = Path(snapshot).parent / ".atrex_numerical_advice"
+    else:
+        root = (
+            Path.home()
+            / ".local"
+            / "state"
+            / "atrex-kernel-agent"
+            / "numerical_advice"
+        )
+    if root.resolve().is_relative_to(Path(workspace).resolve()):
+        raise ValueError("supplemental plans require supervisor state outside the agent workspace")
+    return root
 
 
 def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None, harness=None):
@@ -322,16 +486,12 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
     review = plans.get(plan_key)
     # Persist outside agent worktrees, just like the private reference corpus.
     # Workspace feedback copies are never accepted as supervisor state.
-    plan_root = (Path(campaign.private_reference_dir) / ".atrex_numerical_advice"
-                 if campaign.private_reference_dir else
-                 Path.home() / ".local" / "state" / "atrex-kernel-agent" / "numerical_advice")
+    plan_root = _numerical_advice_root(campaign, workspace)
     plan_path = plan_root / (hashlib.sha256(repr(plan_key).encode()).hexdigest() + ".json")
     record = {"schema_version": 1, "evidence_digest": validation_digest,
               "comparison": {"metric": "relative_l2", "max_rel_l2":
                   _fp4_correctness_max_rel_l2(Path(campaign.private_reference_dir or workspace)) or MAX_REL_L2}}
     try:
-        if plan_root.resolve().is_relative_to(workspace.resolve()):
-            raise ValueError("supplemental plans require supervisor state outside the agent workspace")
         if review is None and plan_path.is_file():
             review = json.loads(plan_path.read_text())
             if not isinstance(review, dict) or review.get("action") != "probe":
@@ -357,7 +517,17 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                 try:
                     evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial,
                                              execute=execute, harness=harness)
-                except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
+                except NumericalProbeFailure as exc:
+                    evaluation = {
+                        "status": "needs_validation",
+                        "reason": "probe_exception",
+                        "expected_probes": 0,
+                        "observed_probes": 0,
+                        "failed_probes": 0,
+                        "diagnosis": str(exc.cause),
+                        "failure": _public_failure_fact(exc.stage, exc.cause),
+                    }
+                except _PROBE_EXCEPTIONS as exc:
                     evaluation = {
                         "status": "needs_validation",
                         "reason": "probe_exception",
@@ -365,6 +535,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                         "observed_probes": 0,
                         "failed_probes": 0,
                         "diagnosis": str(exc),
+                        "failure": _public_failure_fact("supplemental_validation", exc),
                     }
                 record.setdefault("evaluations", []).append(evaluation)
                 record["status"] = evaluation["status"]
@@ -387,7 +558,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
         if _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"}) != validation_digest:
             raise ValueError("candidate or contract changed during supplemental validation")
     except NumericalPlanningTimeout as exc:
-        from aka.legacy.workflow.episode import _latest_complete_episode_performance
+        from aka.legacy.evaluation.results import _latest_complete_episode_performance
 
         try:
             # Episode receipts bind the full standard workload result to the current
@@ -410,15 +581,22 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                         else "needs_validation"),
                 reason="probe_exception",
                 diagnosis=str(exc), standard_correctness_passed=bool(standard_passed),
+                failure=_public_failure_fact("planner", exc),
             )
         except (OSError, ValueError, TypeError, KeyError) as evidence_error:
             record.update(
                 status="needs_validation",
                 reason="probe_exception",
                 diagnosis=f"{exc}; timeout skip evidence unavailable: {evidence_error}",
+                failure=_public_failure_fact("timeout_evidence", evidence_error),
             )
-    except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-        record.update(status="needs_validation", reason="probe_exception", diagnosis=str(exc))
+    except _PROBE_EXCEPTIONS as exc:
+        record.update(
+            status="needs_validation",
+            reason="probe_exception",
+            diagnosis=str(exc),
+            failure=_public_failure_fact("supplemental_validation", exc),
+        )
 
     durable_write_json(directory / "numerical_result.json", record, indent=2, ensure_ascii=False)
     feedback_path = workspace / VERIFY_DIR / "numerical_feedback.json"

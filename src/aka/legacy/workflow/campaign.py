@@ -59,6 +59,7 @@ from .plan_reviewers import (
     discover_plan_reviewers,
     plan_reviewer_environment,
 )
+from .review_trace import ReviewTrace
 from aka.legacy.execution.configuration import distributed_evaluation_world_size, evaluator_num_gpus
 from aka.legacy.resources.plugins import PluginRegistry
 from aka.legacy.agent.session import SessionResult
@@ -444,6 +445,11 @@ class Campaign:
         errors: list[str]
         review_payload: object | None = None
         review_summary = ""
+        review_valid = False
+        review_trace_issue = False
+        trace = ReviewTrace(
+            workspace, "production-policy", self.review_trace_mode
+        )
         with tempfile.TemporaryDirectory(
             prefix="atrex-production-review-"
         ) as directory:
@@ -471,6 +477,7 @@ class Campaign:
                 json.dumps(request, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
+            trace.write_private_json("review-request.json", request)
             try:
                 result = self._run_session(
                     review_workspace,
@@ -479,10 +486,22 @@ class Campaign:
                     agent_cli=self.agent_cli,
                     reasoning_effort="high",
                     agent_plugins=False,
+                    observation_directory=trace.observation_directory,
+                )
+                trace.record_session(result)
+                review_trace_issue = bool(
+                    result.timed_out
+                    or result.exit_status
+                    or result.observation_errors
                 )
                 self._account(result, "independent production policy review")
                 check_review_service(result)
             except ValueError as exc:
+                trace.finish(
+                    "review_service_failed",
+                    failed=True,
+                    failure_type=type(exc).__name__,
+                )
                 return [f"independent production policy review failed: {exc}"]
             changed = []
             for relative, expected_hash in source_hashes.items():
@@ -517,12 +536,19 @@ class Campaign:
                         f"{type(exc).__name__}: {exc}"
                     ]
                 else:
+                    review_valid = True
                     status = "accepted" if not errors else "rejected"
                     print(
                         f"[production-policy] independent full-candidate review {status}: "
                         f"{review_summary}",
                         flush=True,
                     )
+
+            trace.finish(
+                "validated" if review_valid and not changed else "invalid_response",
+                failed=not review_valid or bool(changed) or review_trace_issue,
+                response_written=(review_workspace / "dependency_review.json").is_file(),
+            )
 
         try:
             reviewed_digest = _production_review_digest(

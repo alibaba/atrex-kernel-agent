@@ -140,11 +140,13 @@ def _numerical_supplement_artifact(workspace):
         'schema_version', 'status', 'reason', 'attempts',
         'expected_probes', 'observed_probes', 'failed_probes',
     }
-    if not isinstance(value, dict) or value.get('schema_version') not in {1, 2}:
+    if not isinstance(value, dict) or value.get('schema_version') not in {1, 2, 3}:
         raise ValueError('public numerical supplement has an invalid schema')
     expected_keys = set(base_keys)
-    if value['schema_version'] == 2:
+    if value['schema_version'] >= 2:
         expected_keys.update({'transport_retry_count', 'transport_attempts'})
+    if value['schema_version'] >= 3:
+        expected_keys.add('failure')
     if set(value) != expected_keys:
         raise ValueError('public numerical supplement has unexpected fields')
     statuses = {
@@ -165,7 +167,7 @@ def _numerical_supplement_artifact(workspace):
         'attempts', 'expected_probes', 'observed_probes', 'failed_probes'
     )):
         raise ValueError('public numerical supplement has invalid counts')
-    if value['schema_version'] == 2:
+    if value['schema_version'] >= 2:
         if type(value.get('transport_retry_count')) is not int or value['transport_retry_count'] < 0:
             raise ValueError('public numerical supplement has invalid retry count')
         attempts = value.get('transport_attempts')
@@ -205,6 +207,45 @@ def _numerical_supplement_artifact(workspace):
                 )
             ):
                 raise ValueError('public numerical supplement has an invalid transport fact')
+    if value['schema_version'] >= 3:
+        failure = value.get('failure')
+        allowed_stages = {
+            'load_shapes', 'schedule', 'prepare_driver', 'prepare_harness',
+            'prepare_request', 'launch_probe', 'parse_receipt', 'record_transport',
+            'classify_result', 'planner', 'timeout_evidence',
+            'supplemental_validation',
+        }
+        allowed_types = {
+            'JSONDecodeError', 'FileNotFoundError', 'TimeoutExpired',
+            'CalledProcessError', 'KeyError', 'TypeError', 'ValueError',
+            'OSError', 'SubprocessError', 'NumericalPlanningTimeout', 'Exception',
+        }
+        allowed_summaries = {
+            'validation JSON is invalid',
+            'required validation file is missing',
+            'validation subprocess timed out',
+            'validation subprocess failed',
+            'validation data is missing a required field',
+            'validation data has an incompatible type',
+            'validation data was rejected',
+            'validation I/O failed',
+            'numerical planner timed out',
+            'supplemental validation failed',
+        }
+        if failure is not None and (
+            not isinstance(failure, dict)
+            or set(failure) != {
+                'stage', 'exception_type', 'code', 'retryable', 'summary',
+            }
+            or failure.get('stage') not in allowed_stages
+            or failure.get('exception_type') not in allowed_types
+            or type(failure.get('retryable')) is not bool
+            or failure.get('summary') not in allowed_summaries
+            or not isinstance(failure.get('code'), str)
+            or re.fullmatch(r'[a-z][a-z0-9_]{0,63}\.[a-z][a-z0-9_]{0,63}', failure['code']) is None
+            or not failure['code'].startswith(failure['stage'] + '.')
+        ):
+            raise ValueError('public numerical supplement has an invalid failure fact')
     return _artifact(
         'numerical_supplement', 'numerical-supplement.json',
         'supplemental-numerical-diagnostic', content,

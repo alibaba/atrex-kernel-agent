@@ -216,6 +216,16 @@ def parse_arguments(argv):
         help="Independent production dependency review timeout in seconds (default: 600).",
     )
     ap.add_argument(
+        "--review-trace-mode",
+        choices=("off", "errors", "all"),
+        default=os.environ.get("ATREX_REVIEW_TRACE_MODE", "errors"),
+        help=(
+            "Reviewer observation retention: off keeps receipts only, errors retains "
+            "failed/timed-out sessions, and all retains every reviewer session "
+            "(default: errors; env: ATREX_REVIEW_TRACE_MODE)."
+        ),
+    )
+    ap.add_argument(
         "--verify-repeats",
         type=int,
         default=DEFAULT_VERIFY_REPEATS,

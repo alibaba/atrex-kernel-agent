@@ -33,6 +33,7 @@ def run_session(
     extra_environment: Optional[dict[str, str]] = None,
     agent_plugins: bool = True,
     runtime: _agent_runtime.AgentRuntime | None = None,
+    observation_directory: Path | None = None,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     # Kept for the dependency-review call contract. Runtime plan generation is now a
@@ -51,7 +52,13 @@ def run_session(
         state_file=str(environment_state_file() or ""), extra=extra_environment,
     )
     result = runtime.run(AgentRunRequest(
-        workspace, prompt, timeout, reasoning_effort, session_id, environment,
+        workspace,
+        prompt,
+        timeout,
+        reasoning_effort,
+        session_id,
+        environment,
+        observation_directory,
     ))
     raise_if_environment_blocked()
     return SessionResult(

@@ -246,8 +246,16 @@ class CliAgentRuntime:
             if cleanup_error:
                 observation_errors += (cleanup_error,)
         from .public_output import record_invocation
-        record_invocation(request.workspace, self.id, session_id,
-                          terminal_usage, events, observation_errors, stdout=stdout)
+        observation_directory = request.observation_directory or request.workspace
+        record_invocation(
+            observation_directory,
+            self.id,
+            session_id,
+            terminal_usage,
+            events,
+            observation_errors,
+            stdout=stdout,
+        )
         return AgentRunResult(
             runtime_id=self.id,
             exit_status=exit_status,

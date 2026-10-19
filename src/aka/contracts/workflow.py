@@ -28,12 +28,19 @@ class WorkflowSettings:
     framework_baseline_timeout: int = 10800
     handoff_resumes: int = 2
     production_review_timeout: int = 600
+    review_trace_mode: str = "errors"
     long_reviewer_session: str = ""
     framework_baseline_reviewers: tuple[str, ...] = ()
     fast_episode_reviewers: tuple[str, ...] = ()
     full_episode_reviewers: tuple[str, ...] = ()
     conversion_budget_action: str = "fail"
     resume_framework_candidate: bool = False
+
+    def __post_init__(self):
+        if self.review_trace_mode not in {"off", "errors", "all"}:
+            raise ValueError(
+                "review_trace_mode must be one of: off, errors, all"
+            )
 
 
 @dataclass(frozen=True)
