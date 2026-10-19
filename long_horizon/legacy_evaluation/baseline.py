@@ -584,7 +584,7 @@ class LegacyBaselineEvaluation:
         candidate_blob = git_worktree_blob(self.workspace, "kernel.py")
         if not candidate_blob or candidate_blob == v0_blob:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
-        violations = (
+        violations = [] if not self.source_checks_enabled else (
             self._production_kernel_violations()
             if include_policy_review
             else production_structure_violations(self.workspace, self.framework)
@@ -594,9 +594,9 @@ class LegacyBaselineEvaluation:
                 f"the candidate is not a self-contained {self.framework} implementation: "
                 + "; ".join(violations)
             )
-        if self.framework.lower() in {"triton", "gluon"} and kernel_is_gluon(
-            self.workspace
-        ):
+        if (self.source_checks_enabled
+                and self.framework.lower() in {"triton", "gluon"}
+                and kernel_is_gluon(self.workspace)):
             # A Gluon v1 would permanently disarm the orchestrator's mandatory Triton->Gluon latch.
             return "the framework baseline must be plain Triton; Gluon is a later orchestrator escalation"
         mutated = self.candidate_workspace.baseline_changes(
@@ -609,11 +609,10 @@ class LegacyBaselineEvaluation:
     @staticmethod
     def framework_baseline_external_gates(self, n: int) -> tuple[Optional[dict], str]:
         """Run policy review and the sole authoritative V1 evaluator concurrently."""
-        print(
-            "[orchestrator] framework baseline: running policy review and combined "
-            "correctness/performance validation in parallel",
-            flush=True,
-        )
+        message = ("running policy review and combined correctness/performance validation in parallel"
+                   if self.source_checks_enabled else
+                   "multi-GPU Agate source review skipped; running correctness/performance validation")
+        print(f"[orchestrator] framework baseline: {message}", flush=True)
         with ThreadPoolExecutor(max_workers=2) as executor:
             policy_future = executor.submit(self._production_kernel_violations)
             validation_future = executor.submit(self._validate_framework_baseline, n)
