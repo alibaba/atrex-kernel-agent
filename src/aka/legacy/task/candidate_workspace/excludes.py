@@ -10,8 +10,8 @@ def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
     """Install supervisor excludes, or the early runtime subset.
 
     Workspace setup happens before the framework baseline commit.  At that
-    point Wiki telemetry and private Agent runtime files must be excluded;
-    installing the complete supervisor set would also hide baseline plans.
+    point frozen evaluator files, Wiki telemetry and private Agent runtime
+    files must be excluded; the complete supervisor set would hide baseline plans.
     """
     result = subprocess.run(
         ["git", "rev-parse", "--git-path", "info/exclude"],
@@ -33,6 +33,9 @@ def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
         "/.aka-agent-sessions/",
         "/.aka-agent-session-errors/",
     )
+    # Reinstalled from the frozen Problem snapshot in every episode worktree.
+    # Content/mode integrity is checked by install_files(immutable=True).
+    evaluator_runtime_rules = ("/atrex-bench/",)
     supervisor_rules = (
         f"/{RUNTIME_DIR}/",
         f"/{VERIFY_DIR}/",
@@ -40,13 +43,17 @@ def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
         f"/{LIVE_MEMORY_FILE}",
         *wiki_trace_rules,
         *agent_runtime_rules,
+        *evaluator_runtime_rules,
         # Episode evidence is archived by the supervisor and must never
         # become part of the candidate commit.
         "/plans/",
         "/profiles/",
         "/.humanize/",
     )
-    rules = (*wiki_trace_rules, *agent_runtime_rules) if wiki_trace_only else supervisor_rules
+    rules = (
+        (*wiki_trace_rules, *agent_runtime_rules, *evaluator_runtime_rules)
+        if wiki_trace_only else supervisor_rules
+    )
     missing = [rule for rule in rules if rule not in text.splitlines()]
     if missing:
         suffix = ("" if not text or text.endswith("\n") else "\n") + "\n".join(missing) + "\n"
