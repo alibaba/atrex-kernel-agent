@@ -1,7 +1,14 @@
 {
-  "api_version": 1,
+  "api_version": 2,
   "composition": "dashboard",
   "target": "startup",
-  "tokens": ["observation_source"],
-  "required_services": ["observation_source"]
+  "tokens": [
+    "observation_source"
+  ],
+  "required_services": [
+    "observation_source"
+  ],
+  "token_definitions": {
+    "observation_source": "aka.dashboard.tokens:OBSERVATION_SOURCE"
+  }
 }

@@ -323,7 +323,18 @@ def resolve(
     rows: list[Row] = []
     layers: list[str] = []
     for bundle in bundles:
-        bundle_path = profiles_dir / "bundles" / f"{bundle}.json"
+        if ":" in bundle:
+            import importlib.resources
+            module, relative = bundle.split(":", 1)
+            if (not module or any(not part.isidentifier() for part in module.split("."))
+                    or not relative or Path(relative).is_absolute() or ".." in Path(relative).parts):
+                raise CompositionError(str(profile_path), "invalid module bundle reference")
+            try:
+                bundle_path = Path(str(importlib.resources.files(module).joinpath(relative)))
+            except (ImportError, ValueError) as exc:
+                raise CompositionError(str(profile_path), "module bundle is unavailable") from exc
+        else:
+            bundle_path = profiles_dir / "bundles" / f"{bundle}.json"
         bundle_document = _read(bundle_path)
         _check_fields(str(bundle_path), bundle_document, BUNDLE_FIELDS)
         source = f"bundle:{bundle}"

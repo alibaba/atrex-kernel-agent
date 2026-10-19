@@ -4,8 +4,157 @@ from dataclasses import dataclass
 from functools import cached_property
 from pathlib import Path
 import hashlib
+import math
+import re
 from aka.contracts.content import PublicInputContent, WorkspaceFile
 from .layout import (AGENT_PROBLEM_FILENAME, is_sol_op, has_agent_problem, validate_private_shapes, validate_agent_problem, validate_generated_agent_problem, agent_visible_operator_files)
+
+
+class PerformanceBaselineError(ValueError):
+    """A production task cannot produce a hardware-specific performance score."""
+
+    def __init__(self, hardware: str, shape_id: str, reason: str, detail: str):
+        self.hardware = hardware
+        self.shape_id = shape_id
+        self.reason = reason
+        super().__init__(
+            f"invalid performance metadata for hardware={hardware or 'unknown'}: "
+            f"sid={shape_id}: {detail}"
+        )
+
+
+def _positive_finite(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    number = float(value)
+    return number if math.isfinite(number) and number > 0.0 else None
+
+
+def _hardware_key(value: object) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").casefold())
+
+
+def _matches_hardware(name: str, record: dict, hardware: str) -> bool:
+    target = _hardware_key(hardware)
+    if not target:
+        return False
+    labels = [name]
+    labels.extend(
+        str(record.get(field) or "")
+        for field in ("hardware", "platform", "measured_on")
+    )
+    for label in labels:
+        label_key = _hardware_key(label)
+        if label_key and (
+            target == label_key or target in label_key or label_key in target
+        ):
+            return True
+    return False
+
+
+def _direct_trace_performance_values(payload: object) -> list[float]:
+    if isinstance(payload, dict):
+        values: list[float] = []
+        direct = _positive_finite(payload.get("performance_us"))
+        if direct is not None and payload.get("direct_trace_shape") is True:
+            values.append(direct)
+        for value in payload.values():
+            values.extend(_direct_trace_performance_values(value))
+        return values
+    if isinstance(payload, list):
+        values: list[float] = []
+        for value in payload:
+            values.extend(_direct_trace_performance_values(value))
+        return values
+    return []
+
+
+def _trace_hardware_matches(shape: dict, metadata: dict, hardware: str) -> bool:
+    target = _hardware_key(hardware)
+    if not target:
+        return True
+    labels = [metadata.get("perf_gpu"), metadata.get("verify_gpu")]
+    target_gpus = shape.get("target_gpus")
+    if isinstance(target_gpus, list):
+        labels.extend(target_gpus)
+    keys = [_hardware_key(label) for label in labels if label]
+    return not keys or any(target in key or key in target for key in keys)
+
+
+def validate_performance_baseline(
+    shapes: object, metadata: object, hardware: str
+) -> dict[str, float]:
+    """Return one positive production baseline per requested shape."""
+    if not isinstance(shapes, dict) or not shapes:
+        raise ValueError("shapes must contain a non-empty JSON object")
+    metadata_shapes = metadata.get("shapes") if isinstance(metadata, dict) else None
+    baselines: dict[str, float] = {}
+    for raw_shape_id in shapes:
+        shape_id = str(raw_shape_id)
+        shape = (
+            metadata_shapes.get(shape_id)
+            if isinstance(metadata_shapes, dict)
+            else None
+        )
+        production = (
+            shape.get("production_performance") if isinstance(shape, dict) else None
+        )
+        if not isinstance(production, dict):
+            trace_values = (
+                _direct_trace_performance_values(
+                    shape.get("trace_performance_baseline")
+                )
+                if isinstance(shape, dict)
+                and isinstance(metadata, dict)
+                and _trace_hardware_matches(shape, metadata, hardware)
+                else []
+            )
+            if len(trace_values) == 1:
+                baselines[shape_id] = trace_values[0]
+                continue
+            raise PerformanceBaselineError(
+                hardware,
+                shape_id,
+                "missing",
+                "missing production_performance",
+            )
+        direct = _positive_finite(production.get("performance_us"))
+        if direct is not None:
+            baselines[shape_id] = direct
+            continue
+        candidates = [
+            (str(name), value, record)
+            for name, record in production.items()
+            if isinstance(record, dict)
+            if (value := _positive_finite(record.get("performance_us"))) is not None
+        ]
+        matching = [
+            (name, value)
+            for name, value, record in candidates
+            if _matches_hardware(name, record, hardware)
+        ]
+        if len(matching) == 1:
+            baselines[shape_id] = matching[0][1]
+            continue
+        if not matching and len(candidates) == 1:
+            baselines[shape_id] = candidates[0][1]
+            continue
+        if candidates:
+            platforms = ",".join(sorted(name for name, _, _ in candidates))
+            raise PerformanceBaselineError(
+                hardware,
+                shape_id,
+                "ambiguous" if matching else "hardware_unmatched",
+                "production_performance has no unique baseline for the requested "
+                f"hardware; available platforms={platforms}",
+            )
+        raise PerformanceBaselineError(
+            hardware,
+            shape_id,
+            "non_positive",
+            "production_performance.performance_us must be a positive finite number",
+        )
+    return baselines
 
 
 @dataclass

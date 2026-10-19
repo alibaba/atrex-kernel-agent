@@ -12,8 +12,7 @@
     }
   },
   "resources": {
-    "gpu-wiki": "../../gpu-wiki",
-    "internal-gpu-wiki": {"path": "../../internal_gpu_wiki", "optional": true, "mount": false}
+    "gpu-wiki": "../../gpu-wiki"
   },
   "skills": {"KernelWiki": {"path": "../../gpu-wiki/3rdparty/KernelWiki", "optional": true}},
   "instructions": {
