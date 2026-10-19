@@ -424,11 +424,36 @@ class LegacyEvaluator:
         )
 
 
+def _framework_actionable_repair_hint(result: dict) -> str:
+    """Return a bounded deterministic hint for a known candidate-runtime defect."""
+    diagnostics = result.get("actionable_diagnostics")
+    if not isinstance(diagnostics, list):
+        return ""
+    for row in diagnostics[:8]:
+        if not isinstance(row, dict):
+            continue
+        message = row.get("message")
+        if (
+            row.get("stage") == "candidate_runtime"
+            and isinstance(message, str)
+            and "Argument 'kernelParams' is not a valid type" in message
+        ):
+            return (
+                "CUDA launch ABI repair: replace version-sensitive tuple packing with "
+                "typed ctypes argument storage plus a native ctypes void** kernelParams "
+                "array containing each argument address; keep both alive through "
+                "cuLaunchKernel and pass extra=0"
+            )
+    return ""
+
+
 def framework_result_problem(result, workspace):
     from .memory import read_memory
 
     if not result.get("all_pass"):
-        return "combined multi-seed correctness validation failed"
+        problem = "combined multi-seed correctness validation failed"
+        repair_hint = _framework_actionable_repair_hint(result)
+        return f"{problem}; {repair_hint}" if repair_hint else problem
     latency = result.get("latency_us_geomean")
     if not isinstance(latency, (int, float)) or latency <= 0:
         return "validation reported no usable latency_us_geomean"

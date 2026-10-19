@@ -19,7 +19,11 @@ Focus exclusively on correctness-first implementation guidance:
   GQA head mapping, bottom-right causal alignment, scheduler-mode behavior, dtype conversion, and numerical
   stability requirements that apply according to the supplied packet.
 - For CUDA, identify launch-ABI, stream, lifetime, compilation, grid-coverage, synchronization, shared-memory,
-  and bounds-checking mistakes that could silently corrupt results.
+  and bounds-checking mistakes that could silently corrupt results. For raw
+  `cuda.bindings.driver.cuLaunchKernel` calls, require native `void **kernelParams`: typed `ctypes` backing
+  values whose order, pointer/scalar role, width, and signedness match the kernel declaration, plus a
+  `ctypes.c_void_p` array containing their addresses and kept alive through launch. Flag nested
+  `(values, ctypes_types)` tuple packing and any simultaneous use of `kernelParams` and `extra`.
 - Separate packet evidence from inference. Cite `context/<file>:line` or a precise JSON field for each material
   requirement. Do not invent hidden cases or performance requirements.
 - From `context/reference_catalog.md`, nominate zero, one, or at most two exact paths that the implementation

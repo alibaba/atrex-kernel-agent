@@ -35,6 +35,12 @@ Hard rules for this session:
   `solution.json` entry such as `kernel.cu::run` cannot be versioned by the campaign. Embed the self-authored CUDA
   source in `kernel.py` and use an in-process loader supported by the sandbox; prefer
   `cuda.bindings`/NVRTC because SOL GPU workers block `torch.utils.cpp_extension.load_inline`.
+- **Raw CUDA Driver launches must use the native `void **kernelParams` ABI.** When calling
+  `cuda.bindings.driver.cuLaunchKernel`, do not rely on the version-sensitive nested
+  `(values, ctypes_types)` tuple convenience. Materialize every argument as the exact matching
+  `ctypes` scalar or pointer, build a `(ctypes.c_void_p * n)` array from each argument's
+  `ctypes.addressof(...)`, and keep both the typed arguments and pointer array alive until
+  `cuLaunchKernel` returns. Pass `0` for `extra`; never provide both parameter mechanisms.
 - **Do not delegate computation to a third-party kernel/operator library.** The supervisor sends every
   complete candidate to an independent policy agent, which reviews the full implementation and manifest
   by actual use rather than package-name rules. Compiler/header/ABI/launch plumbing for the self-authored
@@ -127,6 +133,10 @@ evaluator-facing entry point (`Model` / `run`) exactly as the harness expects. P
   toolchain/plumbing dependencies must have a clear, inspectable purpose for the independent reviewer.
 - For CUDA, `kernel.py` itself must contain both the self-authored `__global__` source and its in-process
   loader. Do not redirect the evaluated entry point to a separately compiled `kernel.cu` source.
+- For raw `cuda.bindings` Driver launches, verify that every host-side `ctypes` argument has the same order,
+  pointer/scalar role, width, and signedness as the CUDA kernel declaration. Construct `kernelParams` as a
+  native `ctypes.c_void_p` array of addresses and keep its typed backing objects alive through the launch;
+  nested tuple packing is not a portable contract across worker `cuda-python` versions.
 - Update `solution.json` so its languages, dependencies, sources, and entry point accurately describe
   the reviewed implementation.
 
