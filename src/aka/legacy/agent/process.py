@@ -15,6 +15,7 @@ from typing import Protocol
 from aka.legacy.execution.processes import spawn_owned_session
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
+AGENT_HEARTBEAT_SECONDS = 60
 ENVIRONMENT_TEMPFAIL = 75
 DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
 DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
@@ -485,8 +486,36 @@ def run_bounded(
     )
     guard.start()
     timed_out = False
+    started = time.monotonic()
+    deadline = started + timeout if timeout is not None else None
+    last_output_change = started
+    output_sizes = (0, 0)
     try:
-        stdout, stderr = proc.communicate(timeout=timeout)
+        while True:
+            remaining = None if deadline is None else max(0, deadline - time.monotonic())
+            try:
+                stdout, stderr = proc.communicate(
+                    timeout=AGENT_HEARTBEAT_SECONDS if remaining is None
+                    else min(AGENT_HEARTBEAT_SECONDS, remaining)
+                )
+                break
+            except subprocess.TimeoutExpired as exc:
+                now = time.monotonic()
+                if deadline is not None and now >= deadline:
+                    raise
+                # communicate() keeps draining both pipes across timeout retries.
+                # TimeoutExpired carries cumulative bytes, even with text=True.
+                sizes = (len(exc.output or b""), len(exc.stderr or b""))
+                if sizes != output_sizes:
+                    last_output_change = now
+                    output_sizes = sizes
+                print(
+                    f"[agent-heartbeat] elapsed={round(now - started)}s "
+                    f"process_running={proc.poll() is None} "
+                    f"stdout_bytes={sizes[0]} stderr_bytes={sizes[1]} "
+                    f"output_unchanged_seconds={round(now - last_output_change)}",
+                    flush=True,
+                )
     except subprocess.TimeoutExpired:
         timed_out = True
         process_groups = descendant_process_groups(proc.pid)
