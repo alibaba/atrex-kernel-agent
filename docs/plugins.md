@@ -13,11 +13,13 @@ It guides ISA inspection, layout probes, and controlled experiments across GPU b
 construct experiments for the current kernel and toolchain; the plugin ships no probe executable,
 statistics script, or hardware-specific reference manual.
 For an unfamiliar operator or device, establish the operator's dataflow and exact target/toolchain.
-The Agent obtains hardware knowledge through its existing GPUWiki lookup step and checks its
-applicability. When knowledge is insufficient, consult target documentation and use focused probes
-or A/B experiments to resolve specific unknowns. Keep unresolved facts explicit and distinguish
-contextual measurements from specifications. Backend documentation owns collection commands and
-metric meanings.
+MicroAnalysis can be selected independently of GPUWiki. Use the workflow's enabled knowledge
+sources and available target documentation, following each source's lookup and attribution
+requirements and checking applicability. GPUWiki is one such source when enabled; selecting it
+alongside MicroAnalysis in the default Workflow does not create a plugin dependency. Use focused
+probes or A/B experiments to check existing knowledge or investigate unresolved observations.
+Keep unresolved facts explicit and distinguish contextual measurements from specifications.
+Backend documentation owns collection commands and metric meanings.
 
 New campaigns using the default Workflow include this plugin without an extra option. AKA links
 the complete Skill directory into `.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`,
