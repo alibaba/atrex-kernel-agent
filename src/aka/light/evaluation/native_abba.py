@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from aka.legacy.evaluation.abba import verification_schedule
-from aka.legacy.evaluation.results import compile_failures
+from aka.light.evaluation.result_conversion import compile_failures
 from aka.legacy.evaluation.shapes import batch_shape_ids, shape_batch_request
 from aka.light.evaluation.evaluation_feedback import evaluation_feedback
 from aka.light.evaluation.policy import BATCH_WORKERS, validate_abba_repeats

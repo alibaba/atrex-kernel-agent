@@ -1,0 +1,9 @@
+{
+  "extends": "aka.legacy.workflow:profiles/workflow.json",
+  "api_version": 2,
+  "composition": "observed",
+  "environment_values": {
+    "AKA_LEGACY_REPO_ROOT": "${aka:repo_root}"
+  },
+  "doc": "Opt-in session capture on the standard Workflow; the default Workflow profile is unchanged."
+}

@@ -7,7 +7,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
 
-from orchestrator.environment_recovery import raise_if_environment_blocked
+from aka.legacy.execution.recovery import raise_if_environment_blocked
 
 from aka.contracts.agent import Agent, NativeInvocation
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
@@ -79,6 +79,7 @@ class LongSessionRunner:
         session_id: str = "",
         telemetry_environment: Mapping[str, str] | None = None,
         record_usage: Callable[[int], None] | None = None,
+        output_directory: Path | None = None,
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
         is_codex = self.agent_cli == "codex"
@@ -89,7 +90,7 @@ class LongSessionRunner:
             self.agent_cli,
             workspace,
             session_id=session_id,
-            environment=telemetry_environment,
+            environment=telemetry_environment, output_directory=output_directory,
         )
         try:
             telemetry_attempt_prefix = native.environment.get(
@@ -235,3 +236,13 @@ class LongSessionRunner:
             )
         finally:
             native.close()
+
+
+def budget_tokens(turn, agent_cli):
+    if turn.terminal_usage.total_tokens is not None:
+        return turn.terminal_usage.total_tokens
+    if agent_cli == "codex":
+        return 0
+    from aka.legacy.agent.runtime import terminal_usage_from_stream
+
+    return terminal_usage_from_stream(turn.stdout).total_tokens or 0

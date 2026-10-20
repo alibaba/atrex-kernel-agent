@@ -19,9 +19,9 @@ It coordinates coding agents, GPU profiling, correctness checks, performance ver
 isolation, recovery, and final packaging while keeping acceptance and termination under mechanical
 supervisor control.
 
-The optimization application can be launched through `orchestrator/optimize.py`
-or the installed `aka optimize` command. Both select the application through Core;
-the internal `long_horizon/` package supplies its episode engine.
+The optimization application is launched through the installed `aka optimize` command.
+It selects the application through Core, and the installed Workflow module supplies its
+episode engine.
 The supervisor establishes an evaluator-backed V0 and, when enabled, a framework-native V1. Coding
 agents then explore fast, full, or goal episodes in isolated Git worktrees. The supervisor owns
 correctness, production policy, performance verification, and promotion; every outcome is recorded
@@ -58,9 +58,11 @@ contract requires every supplied `hardware.required_gpus` value, including `1`, 
 `world_size`.
 
 `ATREX_SANDBOX_ATREX_BENCH_VERSION` and `ATREX_SANDBOX_REQUIREMENTS_FILE` can pin an Agate
-runtime. The latter is read as UTF-8 with explicit file errors. When replaying a typed request
-through the CLI, the requirements file must still be configured and its parsed contents must
-match the request; missing or changed pins fail instead of silently using a different runtime.
+runtime. The requirements path is resolved through the Problem plugin, validated as UTF-8 flat
+package specifications, and frozen into the Task snapshot. Baseline, Agent sandbox, dispatch and
+resume bind the same frozen file; an explicit empty file remains empty. When replaying a typed
+request through the CLI, its parsed contents must match the request, so missing or changed pins fail
+instead of silently selecting a different runtime.
 
 ## News
 
@@ -81,7 +83,7 @@ Or start a coding agent such as Claude Code, Codex, or Qoder in this repository 
 launch an AKA optimization task. We recommend the following prompt:
 
 ```text
-Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+Use the installed `aka optimize` command with this checkout as `--repo-root` to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
 ```
 
 ## Documentation
@@ -96,7 +98,8 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [Optimization dashboard](docs/optimization-dashboard.md) | Optional Core plugin for local progress, performance history and settled token usage |
 | [v0.3.0 release notes](docs/releases/v0.3.0.md) | New features, correctness and measurement changes, and upgrade guidance |
 
-Run `python orchestrator/optimize.py --help` for the authoritative CLI interface and defaults.
+Run `aka optimize --help` and `aka optimize --repo-root "$PWD" -- --help` for the framework and
+optimization interfaces and defaults.
 
 For a GPU server reachable through OpenSSH, use a dedicated low-privilege account and pass
 `--sandbox-ssh user@gpu-host --sandbox-ssh-gpu 0` with an explicit `--framework`. AKA keeps Agent,
@@ -156,8 +159,7 @@ If AKA is useful in your work, please cite the [Atrex paper](https://arxiv.org/a
 
 ## Application framework
 
-The existing script keeps its arguments and default behavior. After installing
-the Core, Contracts, Bootstrap and Optimization packages, the new command is:
+After installing the Core, Contracts, Bootstrap and Optimization packages, run:
 
 ```sh
 aka optimize --repo-root /path/to/aka -- \

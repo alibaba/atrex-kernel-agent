@@ -125,7 +125,7 @@ from aka.legacy.evaluation.shapes import (
     shape_batch_request as _shape_batch_request,
 )
 
-from aka.legacy.evaluation.results import (
+from aka.light.evaluation.result_conversion import (
     finite_number as _finite_number,
     compile_failures as _compile_failures,
     bounded_actionable_diagnostic as bounded_actionable_diagnostic,

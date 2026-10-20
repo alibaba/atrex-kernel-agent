@@ -230,7 +230,6 @@ def configure_recovery(
                 **stable_metadata,
             },
         )
-        monitor = optimize_script.resolve().parent.parent / "tools" / "monitor_optimize_tasks.py"
         recover = directory / "recover.sh"
         durable_write_text(
             recover,
@@ -238,7 +237,8 @@ def configure_recovery(
             + " ".join(
                 [
                     _shell_quote(str(Path(sys.executable).resolve())),
-                    _shell_quote(str(monitor)),
+                    "-m",
+                    "aka.legacy.workflow.monitor_optimize_tasks",
                     "--state-dir",
                     _shell_quote(str(directory)),
                     "--resume",
@@ -254,7 +254,8 @@ def configure_recovery(
             + " ".join(
                 [
                     _shell_quote(str(Path(sys.executable).resolve())),
-                    _shell_quote(str(monitor)),
+                    "-m",
+                    "aka.legacy.workflow.monitor_optimize_tasks",
                     "--state-dir",
                     _shell_quote(str(directory)),
                     "--stop",
@@ -276,14 +277,13 @@ def launch_recovery_monitor(context: RecoveryContext) -> int | None:
     """Start one detached monitor. Its own lock resolves concurrent launch races."""
     if not context.owner or not context.state_file.is_file():
         return None
-    from aka.legacy.application.paths import checkout_root
-    monitor = checkout_root() / "tools" / "monitor_optimize_tasks.py"
     log_path = context.directory / "monitor.log"
     with log_path.open("a", encoding="utf-8") as log:
         process = subprocess.Popen(
             [
                 str(Path(sys.executable).resolve()),
-                str(monitor),
+                "-m",
+                "aka.legacy.workflow.monitor_optimize_tasks",
                 "--state-dir",
                 str(context.directory),
             ],

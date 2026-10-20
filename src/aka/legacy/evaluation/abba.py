@@ -1,8 +1,30 @@
-"""ABBA schedule and scoring; evidence acquisition remains with each caller."""
+"""Original ABBA schedule, shape batches and result interpretation."""
+
 from __future__ import annotations
+import json
 import math
+from pathlib import Path
 from typing import Any
-from .models import VerificationRun, VerificationResult
+from aka.contracts.evaluation import VerificationResult, VerificationRun
+
+ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
+DEFAULT_SHAPE_BATCH_SIZE = 4
+DEFAULT_SHAPE_BATCH_WORKERS = 4
+
+
+def _payload_from_stdout(stdout: str) -> dict[str, Any]:
+    """Extract the long-horizon ABBA payload from ordinary sandbox stdout."""
+    for line in reversed(stdout.splitlines()):
+        if not line.startswith(ABBA_RESULT_PREFIX):
+            continue
+        try:
+            payload = json.loads(line[len(ABBA_RESULT_PREFIX) :])
+        except json.JSONDecodeError as exc:
+            raise ValueError("malformed ABBA result sentinel") from exc
+        if not isinstance(payload, dict):
+            raise ValueError("ABBA result sentinel must contain a JSON object")
+        return payload
+    raise ValueError("missing ABBA result sentinel")
 
 
 def verification_schedule(repeats: int) -> list[dict[str, int | str]]:
@@ -19,13 +41,43 @@ def verification_schedule(repeats: int) -> list[dict[str, int | str]]:
     return schedule
 
 
-def geomean(values: list[float]) -> float | None:
+def _geomean(values: list[float]) -> float | None:
     if not values or any(value <= 0.0 or not math.isfinite(value) for value in values):
         return None
     return math.exp(sum(math.log(value) for value in values) / len(values))
 
 
-def merge_batch_results(
+def _verification_shape_batches(
+    workspace: Path, private_reference_dir: Path | None, batch_size: int
+) -> tuple[list[list[str] | None], list[str]]:
+    harness = workspace / "test_kernel.py"
+    if not harness.is_file() or "--shape-id" not in harness.read_text(encoding="utf-8"):
+        return [None], []
+    shapes_path = (private_reference_dir or workspace) / "shapes.json"
+    if not shapes_path.is_file():
+        return [None], []
+    shapes = json.loads(shapes_path.read_text(encoding="utf-8"))
+    shape_ids = sorted(
+        (str(shape_id) for shape_id in shapes),
+        key=lambda shape_id: (
+            (
+                0,
+                int(shape_id),
+            )
+            if shape_id.isdigit()
+            else (1, shape_id)
+        ),
+    )
+    return (
+        [
+            shape_ids[offset : offset + batch_size]
+            for offset in range(0, len(shape_ids), batch_size)
+        ],
+        shape_ids,
+    )
+
+
+def _merge_batch_results(
     results: list[dict[str, Any]], shape_ids: list[str]
 ) -> dict[str, Any]:
     latency_by_shape = {
@@ -63,14 +115,11 @@ def merge_batch_results(
     )
     merged = dict(results[-1])
     failures = [
-        str(failure)
-        for result in results
-        for failure in (result.get("failures") or [])
+        str(failure) for result in results for failure in (result.get("failures") or [])
     ]
     if missing_shape_ids:
         failures.append(
-            "shape batches did not return latency for: "
-            + ", ".join(missing_shape_ids)
+            "shape batches did not return latency for: " + ", ".join(missing_shape_ids)
         )
     merged.update(
         {
@@ -78,9 +127,9 @@ def merge_batch_results(
             and performance_score is not None
             and all(result.get("all_pass") for result in results),
             "failures": failures,
-            "latency_us_geomean": geomean(latencies),
+            "latency_us_geomean": None if missing_shape_ids else _geomean(latencies),
             "latency_us_arith_mean": (
-                sum(latencies) / len(latencies) if latencies else 0.0
+                None if missing_shape_ids else sum(latencies) / len(latencies) if latencies else 0.0
             ),
             "latency_us_by_shape": latency_by_shape,
             "speedup_vs_ref_mean": performance_score,
@@ -97,7 +146,66 @@ def merge_batch_results(
     return merged
 
 
-def result_latency(result: object) -> float | None:
+def _merge_batch_payloads(
+    payloads: list[dict[str, Any]],
+    schedule: list[dict[str, int | str]],
+    shape_ids: list[str],
+) -> dict[str, Any]:
+    if len(payloads) == 1:
+        return payloads[0]
+    for payload in payloads:
+        rows = payload.get("runs")
+        if (
+            payload.get("schema_version") != 1
+            or payload.get("error")
+            or not isinstance(rows, list)
+            or len(rows) != len(schedule)
+        ):
+            raise ValueError(str(payload.get("error") or "invalid shape batch result"))
+        if any(
+            not isinstance(row, dict) or not isinstance(row.get("result"), dict)
+            for row in rows
+        ):
+            raise ValueError("shape batch has no valid run result")
+        actual = [
+            {"revision": row.get("revision"), "repeat": row.get("repeat")}
+            for row in rows
+        ]
+        if actual != schedule:
+            raise ValueError("shape batch returned an invalid ABBA schedule")
+    runs = []
+    for index, step in enumerate(schedule):
+        rows = [payload["runs"][index] for payload in payloads]
+        result = _merge_batch_results([row["result"] for row in rows], shape_ids)
+        runs.append(
+            {
+                **step,
+                "exit_code": (
+                    0
+                    if result["all_pass"] and all(row["exit_code"] == 0 for row in rows)
+                    else 1
+                ),
+                "result": result,
+                "stdout_tail": "\n".join(
+                    str(row.get("stdout_tail", "")) for row in rows
+                )[-3000:],
+                "stderr_tail": "\n".join(
+                    str(row.get("stderr_tail", "")) for row in rows
+                )[-3000:],
+            }
+        )
+    return {
+        "schema_version": 1,
+        "runs": runs,
+        "error": "; ".join(
+            str(payload["error"]) for payload in payloads if payload.get("error")
+        )
+        or None,
+        "shape_batch_count": len(payloads),
+    }
+
+
+def _result_latency(result: object) -> float | None:
     if not isinstance(result, dict) or not result.get("all_pass"):
         return None
     value = result.get("latency_us_geomean")
@@ -113,7 +221,7 @@ def result_latency(result: object) -> float | None:
     return float(value)
 
 
-def result_performance_score(result: object) -> float | None:
+def _result_performance_score(result: object) -> float | None:
     if not isinstance(result, dict) or not result.get("all_pass"):
         return None
     value = result.get("performance_score", result.get("speedup_vs_ref_geomean"))
@@ -127,22 +235,20 @@ def result_performance_score(result: object) -> float | None:
     return float(value)
 
 
-def score_verification_payload(
+def interpret_verification_payload(
     payload: object,
     *,
     schedule: list[dict[str, int | str]],
     repeats: int,
-    min_improvement_pct: float,
     artifact: str = "",
-    result_type=VerificationResult,
 ) -> VerificationResult:
     if not isinstance(payload, dict) or payload.get("schema_version") != 1:
-        return result_type(
+        return VerificationResult(
             "ERROR", None, None, None, error="unsupported result schema"
         )
     rows = payload.get("runs")
     if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        return result_type(
+        return VerificationResult(
             "ERROR", None, None, None, error="runs must be a list of objects"
         )
     runs = [
@@ -157,7 +263,7 @@ def score_verification_payload(
         for row in rows
     ]
     if payload.get("error"):
-        return result_type(
+        return VerificationResult(
             "ERROR",
             None,
             None,
@@ -168,7 +274,7 @@ def score_verification_payload(
         )
     actual = [{"revision": run.revision, "repeat": run.repeat} for run in runs]
     if actual != schedule:
-        return result_type(
+        return VerificationResult(
             "ERROR",
             None,
             None,
@@ -181,28 +287,28 @@ def score_verification_payload(
         value
         for run in runs
         if run.revision == "candidate" and run.exit_code == 0
-        if (value := result_latency(run.result)) is not None
+        if (value := _result_latency(run.result)) is not None
     ]
     incumbent_latency_values = [
         value
         for run in runs
         if run.revision == "incumbent" and run.exit_code == 0
-        if (value := result_latency(run.result)) is not None
+        if (value := _result_latency(run.result)) is not None
     ]
     candidate_score_values = [
         value
         for run in runs
         if run.revision == "candidate" and run.exit_code == 0
-        if (value := result_performance_score(run.result)) is not None
+        if (value := _result_performance_score(run.result)) is not None
     ]
     incumbent_score_values = [
         value
         for run in runs
         if run.revision == "incumbent" and run.exit_code == 0
-        if (value := result_performance_score(run.result)) is not None
+        if (value := _result_performance_score(run.result)) is not None
     ]
-    candidate_latency = geomean(candidate_latency_values)
-    incumbent_latency = geomean(incumbent_latency_values)
+    candidate_latency = _geomean(candidate_latency_values)
+    incumbent_latency = _geomean(incumbent_latency_values)
     candidate_score = (
         sum(candidate_score_values) / len(candidate_score_values)
         if candidate_score_values
@@ -219,7 +325,7 @@ def score_verification_payload(
         or len(candidate_score_values) != repeats
         or len(incumbent_score_values) != repeats
     ):
-        return result_type(
+        return VerificationResult(
             "FAIL",
             candidate_latency,
             incumbent_latency,
@@ -238,22 +344,7 @@ def score_verification_payload(
         if candidate_score and incumbent_score
         else None
     )
-    if improvement is None or improvement <= min_improvement_pct:
-        return result_type(
-            "FAIL",
-            candidate_latency,
-            incumbent_latency,
-            improvement,
-            runs=runs,
-            error=(
-                f"candidate improvement {improvement if improvement is not None else 'unknown'} "
-                f"in performance score did not exceed {min_improvement_pct:.3f}%"
-            ),
-            artifact=artifact,
-            candidate_performance_score=candidate_score,
-            incumbent_performance_score=incumbent_score,
-        )
-    return result_type(
+    return VerificationResult(
         "PASS",
         candidate_latency,
         incumbent_latency,

@@ -9,8 +9,8 @@ workspace resources.
 
 ```mermaid
 flowchart TD
-    A[Campaign construction<br/>orchestrator/campaign.py] --> B[Discover plugins/*/plugin.json<br/>orchestrator/plugins.py]
-    B --> C{Manifest and files valid?<br/>plugin_runtime/registry.py}
+    A[Campaign construction<br/>aka.legacy.workflow.campaign] --> B[Discover selected plugins<br/>aka.legacy.resources.plugins]
+    B --> C{Manifest and files valid?<br/>resources/plugin_runtime/registry.py}
     C -- no --> C1[Stop: invalid_manifest]
     C -- yes --> D[Resolve tool argv and fingerprint<br/>code, resources, Skills]
     D --> E{Workspace lock exists?}
@@ -21,7 +21,7 @@ flowchart TD
     H -- yes --> I[Reuse installed plugin set]
     G --> J[Inject phase instructions and environment]
     I --> J
-    J --> K[Agent calls tools/plugin.py call plugin.tool]
+    J --> K[Agent calls Resources CLI<br/>call plugin.tool]
     K --> L{Input schema valid?}
     L -- no --> L1[Return: schema_validation]
     L -- yes --> M[Run argv with JSON stdin<br/>plugin_runtime/execution.py]
@@ -49,7 +49,7 @@ the usual way. Conflicting resource or Skill installation paths fail before anyt
 From the repository or an initialized campaign workspace:
 
 ```bash
-python3 tools/plugin.py list
+python -m aka.legacy.resources.cli list
 ```
 
 The command returns separate `tools` and `skills` catalogs. Each tool uses a namespaced name such as
@@ -68,7 +68,7 @@ To query GPU Wiki, create `wiki_request.json`:
 Then call:
 
 ```bash
-python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json
+python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json
 ```
 
 `--input -` reads JSON from stdin. The response preserves the Wiki envelope: `query_id`, `records`,

@@ -6,8 +6,8 @@ from pathlib import Path
 from typing import Any
 
 from aka.legacy.evaluation.abba import (
-    verification_schedule, geomean as _geomean, merge_batch_results as _merge_batch_results,
-    result_latency as _result_latency, result_performance_score as _result_performance_score,
+    verification_schedule, _geomean, _merge_batch_results,
+    _result_latency, _result_performance_score,
 )
 from aka.light.evaluation.policy import SHAPE_BATCH_SIZE, BATCH_WORKERS, validate_abba_repeats
 

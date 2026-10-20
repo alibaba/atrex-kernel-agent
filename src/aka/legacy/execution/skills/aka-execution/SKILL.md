@@ -5,16 +5,14 @@ description: Prepare requests for the selected AKA Execution entry point, consul
 
 # AKA Execution
 
-Execute prepared work through the entry point supplied by this AKA run. Requests
-may retain backend-specific options during migration. Use the installed
-implementation's request format, defaults, and error behavior.
+Execute prepared work through the entry point supplied by this AKA run. Use its
+supported backend options, request format, defaults, and error behavior.
 
 ## Identify the entry point
 
 Read the run's Execution tool description, schema, selected backend, and workspace
 information. Use its bound executor and configuration. For standalone
-`aka execution`, inspect `aka execution --help` and supply a matching checkout and
-prepared workspace. The current legacy implementation is described in
+`aka execution`, inspect `aka execution --help` and supply a prepared workspace. The current legacy implementation is described in
 [Legacy requests](references/legacy-request.md).
 
 Continue existing runs with their recorded selection and execution path.

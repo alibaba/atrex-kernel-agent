@@ -15,9 +15,9 @@ PLUGIN_DIR = REPO_ROOT / "plugins"
 
 class PluginRegistry(Registry):
     def __init__(self, *, plugin_root: Path | None = None, enabled: bool = False):
-        from aka.legacy.application.paths import checkout_root
+        from aka.light.runtime.paths import legacy_resource_root
         super().__init__(PLUGIN_DIR, plugin_root=plugin_root,
-                         resource_root=checkout_root(), enabled=enabled)
+                         resource_root=legacy_resource_root(), enabled=enabled)
 
     def validate_call(self, name: str, value: object) -> dict:
         for plugin in self.plugins:

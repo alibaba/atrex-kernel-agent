@@ -1,8 +1,6 @@
 """Native session invocation; no handoff, retry budget or completion decisions."""
 
 from dataclasses import replace
-from pathlib import Path
-from collections.abc import Mapping
 from .adapter import DEFAULT_BACKEND_REGISTRY
 from .runtime import (
     REASONING_EFFORTS,
@@ -195,24 +193,31 @@ class NativeSession:
         check_open=None,
         *,
         runtime=None,
+        output_directory=None,
     ):
+        from .runtime import build_agent_runtime
+
         self._runtime = (
-            runtime if runtime is not None else self._build_runtime(runtime_id)
+            runtime if runtime is not None else build_agent_runtime(runtime_id)
         )
         is_codex = runtime_id == "codex"
         self.workspace = workspace
+        self.output_directory = output_directory or workspace
         environment = (
             session_environment()
             if runtime_id == "claude"
             else session_environment(runtime_id)
         )
         environment["IS_SANDBOX"] = "1"
-        environment = self._prepare_environment(environment, environment_overrides, session_id)
+        if environment_overrides:
+            environment.update(
+                {str(key): str(value) for key, value in environment_overrides.items()}
+            )
         codex_observer = None
         codex_setup_errors: tuple[str, ...] = ()
         if is_codex:
             try:
-                codex_observer = self._new_codex_observer(environment)
+                codex_observer = CodexSessionLedgerObserver(codex_home(environment))
             except Exception as exc:
                 codex_setup_errors = (
                     f"codex_ledger_setup_failed:{type(exc).__name__}",
@@ -232,40 +237,6 @@ class NativeSession:
         self._invoked = False
         self._check_open = check_open
 
-    # Execution/accounting policy hooks are used by the Light Agent. The session
-    # lifecycle and resume cursor bookkeeping below have one implementation.
-    @staticmethod
-    def _build_runtime(runtime_id):
-        from .runtime import build_agent_runtime
-        return build_agent_runtime(runtime_id)
-
-    def _prepare_environment(self, environment, overrides, session_id):
-        if overrides:
-            environment.update({str(key): str(value) for key, value in overrides.items()})
-        return environment
-
-    def _invocation_environment(self, overrides):
-        if overrides:
-            self.environment.update(overrides)
-        return self.environment
-
-    @staticmethod
-    def _new_codex_observer(environment):
-        return CodexSessionLedgerObserver(codex_home(environment))
-
-    def _stream_usage(self, stdout):
-        return terminal_usage_from_stream(stdout)
-
-    def _observe(self, stdout):
-        return normalize_stream(
-            self.runtime_id, stdout, session_id=self._session_id,
-            codex_observer=self._observer if self._ledger_usable else None,
-            adapter=self._runtime._adapter,
-        )
-
-    def _check_invocation(self, resume):
-        """Legacy permits repeated fresh invocations; providers may restrict it."""
-
     @property
     def supports_resume(self):
         return supports_same_session_resume(self.runtime_id)
@@ -275,6 +246,18 @@ class NativeSession:
         return self._session_id
 
     def close(self):
+        if not self._closed and self._invoked and self.supports_resume:
+            from .checkpoint import capture_native_session
+            from pathlib import Path
+            import hashlib
+            marker = Path(self.output_directory)/'.aka-agent-session-errors'/hashlib.sha256(self._session_id.encode()).hexdigest()
+            try:
+                capture_native_session(self.output_directory, self.workspace, self.runtime_id,
+                                       self._session_id, self.environment)
+                marker.unlink(missing_ok=True)
+            except (OSError, ValueError) as error:
+                marker.parent.mkdir(parents=True, exist_ok=True)
+                marker.write_text(type(error).__name__ + '\n')
         self._closed = True
         self._observer = None
 
@@ -283,7 +266,6 @@ class NativeSession:
             self._check_open()
         if self._closed:
             raise RuntimeError("native session has been closed")
-        self._check_invocation(resume)
         if resume:
             if not self.supports_resume or not self._session_id:
                 raise RuntimeError(
@@ -304,9 +286,10 @@ class NativeSession:
                 self.runtime_id,
                 runtime=self._runtime,
             )
-        invocation_environment = self._invocation_environment(environment)
+        if environment:
+            self.environment.update(environment)
         stdout, stderr, exit_status, timed_out = self._executor(
-            command, self.workspace, None, invocation_environment
+            command, self.workspace, None, self.environment
         )
         is_codex = self.runtime_id == "codex"
         observed_session_id = session_id_from_stream(
@@ -314,8 +297,14 @@ class NativeSession:
         )
         if observed_session_id:
             self._session_id = observed_session_id
-        stream_session_usage = self._stream_usage(stdout) if is_codex else None
-        events, terminal_usage, capabilities, observation_errors = self._observe(stdout)
+        stream_session_usage = terminal_usage_from_stream(stdout) if is_codex else None
+        events, terminal_usage, capabilities, observation_errors = normalize_stream(
+            self.runtime_id,
+            stdout,
+            session_id=self._session_id,
+            codex_observer=(self._observer if self._ledger_usable else None),
+            adapter=self._runtime._adapter,
+        )
         if not self._invoked and self._setup_errors:
             observation_errors = self._setup_errors + observation_errors
         ledger_failed = any(
@@ -353,6 +342,10 @@ class NativeSession:
         ):
             self._stdout_usage = stream_session_usage
         self._invoked = True
+        from .public_output import record_invocation
+        record_invocation(self.output_directory, self.runtime_id, self._session_id,
+                          terminal_usage, events, observation_errors,
+                          resume_supported=self.supports_resume, stdout=stdout)
         return NativeInvocation(
             exit_status,
             timed_out,

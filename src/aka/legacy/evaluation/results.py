@@ -1,413 +1,258 @@
-"""Shared evaluator results; routing, retries and public projections stay with callers."""
+"""Interpret original production evaluation records and per-shape measurements."""
+
 from __future__ import annotations
-from typing import Any
+import hashlib
+import json
 import math
-import statistics
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+from .memory import read_memory
+from aka.contracts.evaluation import VerificationResult
 
-PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
+EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
 
 
-def finite_number(value: object) -> float | None:
+def _iso_timestamp(value: str) -> float:
+    return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+
+
+def _representative_candidate_result(
+    verification: VerificationResult | None,
+) -> dict[str, Any]:
+    """Return the latest real candidate measurement from authoritative verification."""
+    if verification is None:
+        return {}
+    for run in reversed(verification.runs):
+        if run.revision == "candidate" and isinstance(run.result, dict):
+            return run.result
+    return {}
+
+
+def _candidate_shape_latencies(
+    verification: VerificationResult | None,
+) -> tuple[dict[str, float], int]:
+    """Aggregate real per-shape candidate latency across authoritative ABBA repeats."""
+    values: dict[str, list[float]] = {}
+    measured_runs = 0
+    if verification is None:
+        return {}, measured_runs
+    for run in verification.runs:
+        if run.revision != "candidate" or not isinstance(run.result, dict):
+            continue
+        by_shape = run.result.get("latency_us_by_shape")
+        if not isinstance(by_shape, dict):
+            continue
+        measured_runs += 1
+        for shape_id, raw_value in by_shape.items():
+            if (
+                isinstance(raw_value, (int, float))
+                and not isinstance(raw_value, bool)
+                and raw_value > 0
+                and math.isfinite(float(raw_value))
+            ):
+                values.setdefault(str(shape_id), []).append(float(raw_value))
+    return (
+        {
+            shape_id: (
+                samples[0]
+                if len(samples) == 1
+                else math.exp(sum(math.log(value) for value in samples) / len(samples))
+            )
+            for shape_id, samples in values.items()
+            if samples
+        },
+        measured_runs,
+    )
+
+
+def _positive_finite(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
     number = float(value)
-    return number if math.isfinite(number) else None
+    return number if number > 0.0 and math.isfinite(number) else None
 
 
-def compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]:
-    """Return compile failures for aggregate and per-shape evaluator schemas.
+def _latest_complete_canonical_performance(
+    workspace: Path,
+    *,
+    before_version: int,
+    expected_shape_ids: set[str] | None,
+    required_performance_objective: str | None = None,
+) -> tuple[dict[str, Any], int] | None:
+    """Find the newest complete real-shape incumbent measurement before a round.
 
-    Older gateway/evaluator versions returned one ``{"status": ...}`` object,
-    while current Atrex-Bench returns ``{shape_id: {"status": ...}}``.  Keep
-    accepting the aggregate form, but require every expected shape to pass when
-    the result is shape-scoped.
+    A pivot, blocked session, protocol failure, or supervisor interruption may have no
+    candidate verification at all.  Its memory must still carry the real per-shape
+    performance of the unchanged canonical incumbent rather than replacing known facts
+    with nulls.  Only a complete, finite canonical record is eligible for carry-forward.
     """
-    if not isinstance(compile_result, dict):
-        compile_result = {}
-
-    if "status" in compile_result:
-        if compile_result.get("status") == "passed":
-            return []
-        return [
-            "compile: "
-            + str(
-                compile_result.get("reason")
-                or compile_result.get("status")
-                or "did not pass"
-            )
-        ]
-
-    failures: list[str] = []
-    for shape_id in shape_ids:
-        status = compile_result.get(shape_id)
-        status = status if isinstance(status, dict) else {}
-        if status.get("status") != "passed":
-            failures.append(
-                f"sid={shape_id}: compile "
-                + str(status.get("reason") or status.get("status") or "missing")
-            )
-    return failures
-
-
-def bounded_actionable_diagnostic(value: object, *, limit: int = 6000) -> str:
-    """Keep useful compiler/exception context without emitting unbounded tracebacks."""
-    text = str(value or "").replace("\x00", "").strip()
-    if len(text) <= limit:
-        return text
-    head = min(1000, limit // 3)
-    tail = limit - head - len("\n... diagnostic truncated ...\n")
-    return text[:head] + "\n... diagnostic truncated ...\n" + text[-tail:]
-
-
-def looks_like_candidate_exception(value: object) -> bool:
-    """Recognize build/import/driver failures without exposing arbitrary case errors."""
-    text = str(value or "")
-    lowered = text.lower()
-    return any(
-        marker in lowered
-        for marker in (
-            "compilation error",
-            "compileerror",
-            "cuda_error_",
-            "cudaerror",
-            "culaunchkernel",
-            "cumodule",
-            "invalid context",
-            "kernelparams",
-            "modulenotfounderror:",
-            "importerror:",
-            "nvrtc",
-            "syntaxerror:",
-            "undefined symbol",
-        )
-    )
-
-
-def compile_diagnostics(
-    compile_result: object, shape_ids: list[str]
-) -> list[dict[str, str]]:
-    """Extract compile/import failures that are safe and useful in generalized mode."""
-    if not isinstance(compile_result, dict):
-        return []
-    if "status" in compile_result:
-        if compile_result.get("status") == "passed":
-            return []
-        message = bounded_actionable_diagnostic(
-            compile_result.get("reason") or compile_result.get("status")
-        )
-        return (
-            [{"stage": "compile_import", "shape_id": "", "message": message}]
-            if message
-            else []
-        )
-
-    diagnostics: list[dict[str, str]] = []
-    seen_messages: set[str] = set()
-    for shape_id in shape_ids:
-        status = compile_result.get(shape_id)
-        status = status if isinstance(status, dict) else {}
-        if status.get("status") == "passed":
+    for version in range(before_version - 1, -1, -1):
+        memory = read_memory(workspace, version)
+        if not isinstance(memory, dict):
             continue
-        message = bounded_actionable_diagnostic(
-            status.get("reason") or status.get("status") or "missing"
-        )
-        if message in seen_messages:
+        if (memory.get("quality_gate") or {}).get("result") != "PASS":
             continue
-        seen_messages.add(message)
-        diagnostics.append(
-            {
-                "stage": "compile_import",
-                "shape_id": shape_id,
-                "message": message,
-            }
-        )
-    return diagnostics
-
-
-def candidate_exception_diagnostics(
-    correctness_status: dict[str, Any],
-    correctness_shapes: dict[str, Any],
-    shape_ids: list[str],
-) -> list[dict[str, str]]:
-    """Surface traceback-backed candidate failures without exposing numeric case data."""
-    diagnostics: list[dict[str, str]] = []
-    seen: set[str] = set()
-    for shape_id in shape_ids:
-        status = correctness_status.get(shape_id)
-        status = status if isinstance(status, dict) else {}
-        reasons: list[object] = [status.get("reason")]
-        shape_result = correctness_shapes.get(shape_id)
-        shape_result = shape_result if isinstance(shape_result, dict) else {}
-        cases = shape_result.get("cases")
-        for case in cases if isinstance(cases, list) else []:
-            if isinstance(case, dict):
-                reasons.append(case.get("error"))
-        for reason in reasons:
-            if not looks_like_candidate_exception(reason):
-                continue
-            message = bounded_actionable_diagnostic(reason)
-            if not message or message in seen:
-                continue
-            seen.add(message)
-            diagnostics.append(
-                {
-                    "stage": "candidate_runtime",
-                    "shape_id": shape_id,
-                    "message": message,
-                }
-            )
-    return diagnostics
-
-
-def metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
-    """Read one authoritative production latency from Atrex-Bench metadata."""
-    if not isinstance(metadata, dict):
-        return None
-    shapes = metadata.get("shapes")
-    shape = shapes.get(shape_id) if isinstance(shapes, dict) else None
-    if not isinstance(shape, dict):
-        return None
-    production = shape.get("production_performance")
-    if not isinstance(production, dict):
-        return None
-    direct = finite_number(production.get("performance_us"))
-    if direct is not None and direct > 0.0:
-        return direct
-    nested = [
-        value
-        for entry in production.values()
-        if isinstance(entry, dict)
-        if (value := finite_number(entry.get("performance_us"))) is not None
-        and value > 0.0
-    ]
-    return nested[0] if len(nested) == 1 else None
-
-
-def metadata_speedup_mean(
-    metadata: object,
-    shape_ids: list[str],
-    latency_by_shape: dict[str, float],
-) -> tuple[float | None, list[str]]:
-    if any(shape_id not in latency_by_shape for shape_id in shape_ids):
-        return None, []
-    speedups: list[float] = []
-    failures: list[str] = []
-    for shape_id in shape_ids:
-        reference_us = metadata_shape_latency_us(metadata, shape_id)
-        if reference_us is None:
-            failures.append(
-                f"sid={shape_id}: metadata has no unambiguous positive "
-                "production_performance.performance_us"
-            )
+        performance = memory.get("performance")
+        if not isinstance(performance, dict):
             continue
-        speedups.append(reference_us / latency_by_shape[shape_id])
-    if failures or len(speedups) != len(shape_ids) or not speedups:
-        return None, failures
-    return sum(speedups) / len(speedups), []
-
-
-def optimizer_result_from_eval(
-    payload: dict[str, Any],
-    shape_ids: list[str],
-    metadata: object,
-    *,
-    require_performance: bool = True,
-) -> dict[str, Any]:
-    """Convert the typed gateway's Atrex-Bench result to optimizer RESULT_JSON."""
-    failures: list[str] = []
-    if payload.get("error"):
-        failures.append("evaluation: " + str(payload["error"]))
-    passed = payload.get("passed")
-    passed = passed if isinstance(passed, dict) else {}
-    compile_result = passed.get("compile")
-    failures.extend(compile_failures(compile_result, shape_ids))
-    actionable_diagnostics = compile_diagnostics(compile_result, shape_ids)
-
-    correctness_status = passed.get("correctness")
-    correctness_status = (
-        correctness_status if isinstance(correctness_status, dict) else {}
-    )
-    correctness = payload.get("correctness")
-    correctness = correctness if isinstance(correctness, dict) else {}
-    correctness_shapes = correctness.get("shapes")
-    correctness_shapes = (
-        correctness_shapes if isinstance(correctness_shapes, dict) else {}
-    )
-    actionable_diagnostics.extend(
-        candidate_exception_diagnostics(
-            correctness_status, correctness_shapes, shape_ids
-        )
-    )
-    max_abs = 0.0
-    max_rel = 0.0
-    for shape_id in shape_ids:
-        status = correctness_status.get(shape_id)
-        status = status if isinstance(status, dict) else {}
-        if status.get("status") != "passed":
-            failures.append(
-                f"sid={shape_id}: correctness "
-                + str(status.get("reason") or status.get("status") or "missing")
-            )
-        shape_result = correctness_shapes.get(shape_id)
-        shape_result = shape_result if isinstance(shape_result, dict) else {}
-        cases = shape_result.get("cases")
-        for case in cases if isinstance(cases, list) else []:
-            if not isinstance(case, dict):
-                continue
-            outputs = case.get("outputs")
-            for output in outputs if isinstance(outputs, list) else []:
-                if not isinstance(output, dict):
-                    continue
-                abs_diff = finite_number(output.get("max_elementwise_abs_diff"))
-                rel_diff = finite_number(output.get("max_elementwise_rel_diff"))
-                if abs_diff is not None:
-                    max_abs = max(max_abs, abs_diff)
-                if rel_diff is not None:
-                    max_rel = max(max_rel, rel_diff)
-
-    latency_by_shape: dict[str, float] = {}
-    if require_performance:
-        performance = payload.get("performance")
-        performance = performance if isinstance(performance, dict) else {}
-        performance_shapes = performance.get("shapes")
-        performance_shapes = (
-            performance_shapes if isinstance(performance_shapes, dict) else {}
-        )
-        for shape_id in shape_ids:
-            shape_result = performance_shapes.get(shape_id)
-            shape_result = shape_result if isinstance(shape_result, dict) else {}
-            sample_ms: list[float] = []
-            samples = shape_result.get("samples")
-            for sample in samples if isinstance(samples, list) else []:
-                if not isinstance(sample, dict):
-                    continue
-                value = finite_number(sample.get("end_to_end_time_ms"))
-                if value is not None and value > 0.0:
-                    sample_ms.append(value)
-            if shape_result.get("error") is not None or not sample_ms:
-                failures.append(
-                    f"sid={shape_id}: performance "
-                    + str(shape_result.get("error") or "has no valid samples")
-                )
-                continue
-            latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
-
-    latencies = [
-        latency_by_shape[shape_id]
-        for shape_id in shape_ids
-        if shape_id in latency_by_shape
-    ]
-    complete = len(latencies) == len(shape_ids)
-    geomean = (
-        math.exp(sum(math.log(value) for value in latencies) / len(latencies))
-        if complete and latencies
-        else 0.0
-    )
-    arithmetic = sum(latencies) / len(latencies) if complete and latencies else 0.0
-    speedup_mean, _metadata_failures = (
-        metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
-        if require_performance
-        else (None, [])
-    )
-    # Production-reference metadata is optional.  Its absence means that the
-    # convenience speedup score is unavailable; it does not invalidate a
-    # successful correctness check or a complete latency measurement.  Light's
-    # promotion policy compares measured GeoMean latency directly.
-    return {
-        "all_pass": not failures,
-        "failures": failures,
-        "latency_us_geomean": geomean,
-        "latency_us_arith_mean": arithmetic,
-        "latency_us_by_shape": latency_by_shape,
-        "speedup_vs_ref_mean": speedup_mean,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": speedup_mean,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
-        "max_abs_err": max_abs,
-        "max_rel_err": max_rel,
-        "evaluator": "atrex-gpu-gateway/run",
-        "eval_id": payload.get("eval_id"),
-        "actionable_diagnostics": actionable_diagnostics[:8],
-    }
-
-
-def merge_optimizer_results(
-    results: list[dict[str, Any]],
-    shape_ids: list[str],
-    metadata: object,
-    *,
-    require_performance: bool = True,
-) -> dict[str, Any]:
-    latency_by_shape = {
-        str(shape_id): float(latency)
-        for result in results
-        for shape_id, latency in (result.get("latency_us_by_shape") or {}).items()
-    }
-    latencies = [
-        latency_by_shape[shape_id]
-        for shape_id in shape_ids
-        if shape_id in latency_by_shape
-    ]
-    complete = not require_performance or len(latencies) == len(shape_ids)
-    actionable_diagnostics: list[dict[str, str]] = []
-    seen_diagnostics: set[tuple[str, str]] = set()
-    for result in results:
-        if len(actionable_diagnostics) >= 8:
-            break
-        for diagnostic in result.get("actionable_diagnostics") or []:
-            if not isinstance(diagnostic, dict):
-                continue
-            normalized = {
-                "stage": str(diagnostic.get("stage") or "candidate_runtime"),
-                "shape_id": str(diagnostic.get("shape_id") or ""),
-                "message": str(diagnostic.get("message") or ""),
-            }
-            key = (
-                normalized["stage"],
-                normalized["message"],
-            )
-            if not normalized["message"] or key in seen_diagnostics:
-                continue
-            seen_diagnostics.add(key)
-            actionable_diagnostics.append(normalized)
-            if len(actionable_diagnostics) >= 8:
+        if (
+            required_performance_objective is not None
+            and performance.get("performance_objective")
+            != required_performance_objective
+        ):
+            continue
+        by_shape = performance.get("latency_us_by_shape")
+        if not isinstance(by_shape, dict) or not by_shape:
+            continue
+        normalized: dict[str, float] = {}
+        for shape_id, raw_value in by_shape.items():
+            value = _positive_finite(raw_value)
+            if value is None:
+                normalized = {}
                 break
+            normalized[str(shape_id)] = value
+        if not normalized:
+            continue
+        if expected_shape_ids is not None and set(normalized) != expected_shape_ids:
+            continue
+        latency = _positive_finite(
+            performance.get("latency_us_geomean", performance.get("latency_us"))
+        )
+        performance_score = _positive_finite(
+            performance.get(
+                "performance_score", performance.get("speedup_vs_ref_geomean")
+            )
+        )
+        if latency is None or performance_score is None:
+            continue
+        carried = dict(performance)
+        carried["latency_us"] = latency
+        carried["latency_us_geomean"] = latency
+        carried["latency_us_arith_mean"] = _positive_finite(
+            performance.get("latency_us_arith_mean")
+        ) or (sum(normalized.values()) / len(normalized))
+        carried["latency_us_by_shape"] = normalized
+        carried["performance_score"] = performance_score
+        return carried, version
+    return None
 
-    speedup_mean, _metadata_failures = (
-        metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
-        if require_performance
-        else (None, [])
-    )
-    failures = [
-        str(failure)
-        for result in results
-        for failure in (result.get("failures") or [])
-    ]
-    return {
-        "all_pass": complete
-        and all(result.get("all_pass") for result in results),
-        "failures": failures,
-        "latency_us_geomean": (
-            math.exp(sum(math.log(value) for value in latencies) / len(latencies))
-            if complete and latencies
-            else 0.0
-        ),
-        "latency_us_arith_mean": (
-            sum(latencies) / len(latencies) if complete and latencies else 0.0
-        ),
-        "latency_us_by_shape": latency_by_shape,
-        "speedup_vs_ref_mean": speedup_mean,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": speedup_mean,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
-        "max_abs_err": max(
-            float(result.get("max_abs_err") or 0.0) for result in results
-        ),
-        "max_rel_err": max(
-            float(result.get("max_rel_err") or 0.0) for result in results
-        ),
-        "evaluator": "atrex-gpu-gateway/run/batched",
-        "eval_id": results[-1].get("eval_id"),
-        "shape_batch_count": len(results),
-        "actionable_diagnostics": actionable_diagnostics,
-    }
+
+def _latest_complete_episode_performance(
+    episode_workspace: Path | None,
+    *,
+    expected_shape_ids: set[str] | None,
+    required_performance_objective: str | None = None,
+) -> dict[str, Any] | None:
+    """Read the latest complete supervisor-independent measurement from an episode."""
+    if episode_workspace is None:
+        return None
+    path = episode_workspace / EPISODE_EVALUATIONS_PATH
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        kernel_path = episode_workspace / "kernel.py"
+        kernel_bytes = kernel_path.read_bytes()
+        kernel_sha256 = hashlib.sha256(kernel_bytes).hexdigest()
+        kernel_mtime = kernel_path.stat().st_mtime
+        manifest = episode_workspace / "solution.json"
+        solution_sha256 = (
+            hashlib.sha256(manifest.read_bytes()).hexdigest()
+            if manifest.exists()
+            else None
+        )
+    except (OSError, UnicodeError):
+        return None
+    for line in reversed(lines):
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        result = payload.get("result") if isinstance(payload, dict) else None
+        if not isinstance(result, dict) or not result.get("all_pass"):
+            continue
+        if (
+            required_performance_objective is not None
+            and result.get("performance_objective") != required_performance_objective
+        ):
+            continue
+        schema_version = payload.get("schema_version")
+        if isinstance(schema_version, int) and schema_version >= 3:
+            if (
+                "solution_sha256" not in payload
+                or payload["solution_sha256"] != solution_sha256
+            ):
+                continue
+        elif solution_sha256 is not None:
+            # Legacy receipts do not certify a candidate with a manifest.
+            continue
+        recorded_kernel_sha256 = payload.get("kernel_sha256")
+        if isinstance(schema_version, int) and schema_version >= 2:
+            if recorded_kernel_sha256 != kernel_sha256:
+                continue
+        else:
+            # Schema v1 predates code fingerprints.  It is safe only when the
+            # current kernel has not been modified since this measurement.
+            try:
+                measured_at = _iso_timestamp(str(payload["timestamp"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if measured_at < kernel_mtime:
+                continue
+        by_shape = result.get("latency_us_by_shape")
+        if not isinstance(by_shape, dict) or not by_shape:
+            continue
+        normalized: dict[str, float] = {}
+        for shape_id, raw_value in by_shape.items():
+            value = _positive_finite(raw_value)
+            if value is None:
+                normalized = {}
+                break
+            normalized[str(shape_id)] = value
+        if not normalized:
+            continue
+        if expected_shape_ids is not None and set(normalized) != expected_shape_ids:
+            continue
+        latency = _positive_finite(
+            result.get("latency_us_geomean", result.get("latency_us"))
+        )
+        performance_score = _positive_finite(
+            result.get("performance_score", result.get("speedup_vs_ref_geomean"))
+        )
+        if latency is None or performance_score is None:
+            continue
+        return {
+            "all_pass": True,
+            "latency_us_geomean": latency,
+            "latency_us_arith_mean": _positive_finite(
+                result.get("latency_us_arith_mean")
+            )
+            or (sum(normalized.values()) / len(normalized)),
+            "latency_us_by_shape": normalized,
+            "speedup_vs_ref_mean": result.get("speedup_vs_ref_mean"),
+            "speedup_vs_ref_geomean": result.get("speedup_vs_ref_geomean"),
+            "performance_score": performance_score,
+            "performance_objective": result.get("performance_objective"),
+            "max_abs_err": result.get("max_abs_err"),
+            "max_rel_err": result.get("max_rel_err"),
+            "eval_id": result.get("eval_id"),
+            "timestamp": payload.get("timestamp"),
+        }
+    return None
+
+
+def _episode_evaluation_count(episode_workspace: Path) -> int:
+    """Count durable evaluator results emitted by one episode."""
+    path = episode_workspace / EPISODE_EVALUATIONS_PATH
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return 0
+    count = 0
+    for line in lines:
+        try:
+            payload = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and isinstance(payload.get("result"), dict):
+            count += 1
+    return count

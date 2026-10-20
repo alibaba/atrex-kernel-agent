@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from aka.legacy.evaluation.models import VerificationRun, VerificationResult
-
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -11,6 +9,8 @@ from aka.contracts.agent import (
     TokenUsage,
 )
 
+
+from aka.contracts.evaluation import VerificationRun, VerificationResult
 
 TERMINAL_STATUSES = frozenset({"candidate_ready", "pivot", "blocked"})
 

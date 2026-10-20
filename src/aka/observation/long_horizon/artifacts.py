@@ -1,62 +1,45 @@
-"""Export declared workspace outputs and task-level observations, without writes."""
-from __future__ import annotations
-
+"""Capture public outputs once and bind download IDs to exact content."""
+import hashlib
 import io
 import json
-from datetime import datetime, timezone
+import re
+import subprocess
 from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from aka.contracts.observation import Artifact, Campaign
+from aka.contracts.observation import check_observation_version
 
-OUTPUTS = (("kernel", "kernel.py", "Kernel source", "text/x-python"),
-           ("solution", "solution.json", "Solution manifest", "application/json"))
-SCOPE = "Current workspace files and a snapshot of recorded optimization results."
-
-
-def _files(workspace: Path):
-    for identifier, filename, label, content_type in OUTPUTS:
-        path = workspace / filename
-        if path.is_file() and not path.is_symlink():
-            yield path, {"id": identifier, "filename": filename, "label": label,
-                         "content_type": content_type, "kind": "file", "size_bytes": path.stat().st_size}
+OUTPUTS = (('kernel', 'kernel.py', 'Kernel source', 'text/x-python'),
+           ('solution', 'solution.json', 'Solution manifest', 'application/json'))
+SCOPE = 'Measured incumbent revision content captured with this observation; evaluator truth is excluded.'
 
 
-def describe_artifacts(workspace: Path) -> list[Artifact]:
-    return [{"id": "bundle", "filename": f"{workspace.name}-results.zip", "label": "Result bundle",
-             "content_type": "application/zip", "kind": "bundle", "size_bytes": None},
-            *(metadata for _, metadata in _files(workspace)),
-            {"id": "summary", "filename": "result-summary.json", "label": "Optimization summary",
-             "content_type": "application/json", "kind": "file", "size_bytes": None}]
-
-
-def artifact_bytes(workspace: Path, artifact_id: str, snapshot: Campaign) -> bytes:
-    """Expose two exact source files and generated summaries, never directory trees."""
-    if artifact_id not in {artifact["id"] for artifact in snapshot["artifacts"]}:
-        raise KeyError(artifact_id)
-    files = list(_files(workspace))
-    if artifact_id not in {"bundle", "summary"}:
-        path = {metadata["id"]: path for path, metadata in files}[artifact_id]
-        try:
-            return path.read_bytes()
-        except FileNotFoundError as exc:
-            raise KeyError(artifact_id) from exc
-    report = {"observation_version": snapshot["observation_version"],
-              "exported_at": datetime.now(timezone.utc).isoformat(),
-              "artifact_scope": "current_workspace",
-              "files": [metadata["filename"] for _, metadata in files],
-              "campaign": {key: snapshot[key] for key in ("name", "display_name", "framework", "platform", "arch")},
-              **{key: snapshot[key] for key in ("updated_at", "canonical", "counts", "tokens", "progress", "issues")}}
-    summary = (json.dumps(report, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode()
-    if artifact_id == "summary":
-        return summary
+def capture_artifacts(workspace: Path, snapshot):
+    # Never publish snapshot-scoped artifact semantics under an older protocol.
+    check_observation_version(snapshot.get('observation_version'))
+    contents, descriptions = {}, []
+    report = {key: snapshot[key] for key in ('observation_version', 'name', 'framework',
+              'platform', 'arch', 'updated_at', 'canonical', 'counts', 'tokens', 'progress', 'issues')}
+    summary = (json.dumps(report, ensure_ascii=False, sort_keys=True, allow_nan=False)+'\n').encode()
+    files = []
+    revision = (snapshot.get('canonical', {}).get('incumbent') or {}).get('revision')
+    if isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{40}', revision):
+        for identifier, filename, label, mime in OUTPUTS:
+            blob = subprocess.run(['git','show',f'{revision}:{filename}'], cwd=workspace,capture_output=True)
+            if blob.returncode == 0:
+                files.append((identifier, filename, label, mime, blob.stdout, 'file'))
+    files.append(('summary', 'result-summary.json', 'Optimization summary', 'application/json', summary, 'file'))
     buffer = io.BytesIO()
-    with ZipFile(buffer, "w", compression=ZIP_DEFLATED) as archive:
-        for path, metadata in files:
-            try:
-                data = path.read_bytes()
-            except FileNotFoundError as exc:
-                raise KeyError(artifact_id) from exc
-            archive.writestr(metadata["filename"], data)
-        archive.writestr("result-summary.json", summary)
-    return buffer.getvalue()
+    with ZipFile(buffer, 'w', compression=ZIP_DEFLATED) as archive:
+        for _, filename, _, _, content, _ in files:
+            archive.writestr(filename, content)
+    files.append(('bundle', 'results.zip', 'Result bundle', 'application/zip', buffer.getvalue(), 'bundle'))
+    snapshot_id = hashlib.sha256(summary + b''.join(hashlib.sha256(row[4]).digest() for row in files)).hexdigest()
+    for identifier, filename, label, mime, content, kind in files:
+        digest = hashlib.sha256(content).hexdigest()
+        download_id = identifier + '_' + snapshot_id
+        contents[download_id] = content
+        descriptions.append({'id': download_id, 'filename': filename, 'label': label,
+                             'content_type': mime, 'kind': kind, 'size_bytes': len(content),
+                             'sha256': digest, 'snapshot_id': snapshot_id, 'visibility': 'public'})
+    return descriptions, contents

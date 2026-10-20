@@ -1,25 +1,21 @@
 from __future__ import annotations
 
-from contextvars import copy_context
-
 import json
 import shutil
 import subprocess
 import tempfile
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
-from dataclasses import dataclass
+from contextvars import copy_context
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from .resources import PROMPTS_DIR
 from threading import Event
 from typing import Any
 
-from orchestrator.constants import (
-    DEFAULT_FAST_EPISODES,
-    DEFAULT_FAST_TRIALS,
-    SUPPLEMENTAL_PENDING_PREFIX,
-)
-from orchestrator.hardware import hardware_vendor
+from aka.legacy.workflow.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, SUPPLEMENTAL_PENDING_PREFIX
+from aka.legacy.task.hardware import hardware_vendor
 
 from aka.contracts.workspace import CandidateHandle
 from aka.legacy.task.git import git_head, git_text, working_changes
@@ -29,17 +25,15 @@ from .journal import load as load_journal
 from .journal import normalize_accepted_ppu_diagnostics
 from .journal import sync_live_memory, validate_accepted_ppu_evidence, validate_terminal
 from .models import EpisodeHandoff, SupervisorState, VerificationResult
+from aka.contracts.acceptance import AcceptancePolicy, AcceptanceRequirements
 from .protocol import read_handoff
 from .session import LongSessionRunner
-from .dependencies import EpisodeEvaluation, EpisodeEnvironment, Verifier
+from .dependencies import EpisodeMeasurements, EpisodeEnvironment, Verifier
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from .telemetry import summarize_episode
 
-from aka.legacy.application.paths import checkout_root
-
-MODULE_ROOT = checkout_root()
-PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "episode.md"
-FAST_PROMPT_PATH = MODULE_ROOT / "orchestrator" / "prompts" / "fast_episode.md"
+PROMPT_PATH = PROMPTS_DIR / "episode.md"
+FAST_PROMPT_PATH = PROMPTS_DIR / "fast_episode.md"
 GOAL_AFTER_EPISODES = 50
 GOAL_STALL_THRESHOLD = 3
 GOAL_HANDOFF_RESUMES = 20
@@ -248,7 +242,7 @@ class LongHorizonCampaign:
     base_campaign: object
     verifier: Verifier
     session_runner: LongSessionRunner
-    evaluation: EpisodeEvaluation
+    evaluation: EpisodeMeasurements
     environment: EpisodeEnvironment
     max_episodes: int = 8
     max_version: int | None = None
@@ -260,11 +254,44 @@ class LongHorizonCampaign:
     max_stall: int = 0
     worktree_root: Path | None = None
 
+    acceptance: AcceptancePolicy = field(kw_only=True)
+    conversion_budget_action: str = field(default="fail", kw_only=True)
+
     def __post_init__(self) -> None:
         if self.fast_episodes < 0:
             raise ValueError("fast_episodes must be non-negative")
         if self.fast_trials < 1:
             raise ValueError("fast_trials must be positive")
+
+    def _conversion_budget(self, limit):
+        if self.conversion_budget_action == "fail":
+            raise RuntimeError(f"mandatory Triton->Gluon conversion did not succeed before {limit}")
+        if self.conversion_budget_action != "retain_verified":
+            raise ValueError("invalid conversion budget action")
+        # Preparation must have produced a measured incumbent before any budget can retain it.
+        from aka.legacy.evaluation.memory import read_memory
+        memory = read_memory(self.workspace, 0)
+        from .export import verified_memory
+        if (not verified_memory(self.workspace, memory)
+                or self.base_campaign._generalized_memory_coverage_problem(memory)):
+            raise RuntimeError("cannot retain an unverified baseline after conversion budget")
+        code = "gluon_conversion_incomplete"
+        message = f"mandatory Triton->Gluon conversion did not succeed before {limit}"
+        stop_reason = f"budget: {limit}; warning: {code}"
+        if code:
+            from datetime import datetime, timezone
+            warning = self.workspace / RUNTIME_DIR / "warnings.jsonl"
+            warning.parent.mkdir(parents=True, exist_ok=True)
+            existing = [json.loads(line) for line in warning.read_text().splitlines()] if warning.exists() else []
+            if any(row.get("code") == code and row.get("stop_reason") == f"budget: {limit}"
+                   for row in existing):
+                return stop_reason
+            with warning.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps({"schema_version": 1, "severity": "warning", "gate_failed": False,
+                    "timestamp": datetime.now(timezone.utc).isoformat(), "code": code,
+                    "message": message, "stop_reason": f"budget: {limit}"}) + "\n")
+            print(f"[long-horizon] WARNING: {message}; retaining the verified incumbent", flush=True)
+        return stop_reason
 
     @property
     def workspace(self) -> Path:
@@ -424,7 +451,7 @@ class LongHorizonCampaign:
         )
         fast_trial_count = fast_trials or self.fast_trials
         journal_command = (
-            f"PYTHONPATH={MODULE_ROOT} python -m long_horizon.journal "
+            "python -m aka.legacy.workflow.journal "
             f"--live-path {json.dumps(str(live_memory_path))}"
         )
         fast_trial_plan_paths = "\n".join(
@@ -576,12 +603,18 @@ class LongHorizonCampaign:
     def _copy_runtime_artifacts(
         self, worktree: CandidateHandle, episode_dir: Path
     ) -> None:
+        from .episode_evidence import FILENAME, capture as capture_evidence
+        if not (episode_dir / FILENAME).exists():
+            capture_evidence(worktree.path, episode_dir, episode=worktree.episode)
         source = worktree.path / RUNTIME_DIR
         if source.is_dir():
             destination = episode_dir / "episode_runtime"
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
+        observations = worktree.path / '.aka-agent-observations'
+        if observations.is_dir():
+            shutil.copytree(observations, episode_dir / 'agent_observations', dirs_exist_ok=True)
         verification = worktree.path / VERIFY_DIR
         if verification.is_dir():
             destination = episode_dir / "verification_runtime"
@@ -1008,26 +1041,13 @@ class LongHorizonCampaign:
                         path for path in paths if not path.startswith(EVIDENCE_PREFIXES)
                     ],
                 )
-            if (
-                conversion_pending
-                and not verification.passed
-                and self.evaluation.conversion_parity_passes(verification)
-            ):
-                verification = VerificationResult(
-                    "PASS",
-                    verification.candidate_latency_us,
-                    verification.incumbent_latency_us,
-                    verification.improvement_pct,
-                    runs=verification.runs,
-                    artifact=verification.artifact,
-                    candidate_performance_score=(
-                        verification.candidate_performance_score
-                    ),
-                    incumbent_performance_score=(
-                        verification.incumbent_performance_score
-                    ),
-                )
-            accepted = verification.passed
+            decision = self.acceptance.decide(
+                verification,
+                AcceptanceRequirements(
+                    mode="accepted", conversion_pending=conversion_pending
+                ),
+            )
+            verification, accepted = decision.verification, decision.accepted
         return violation, paths, verification, accepted
 
     def _record_terminal_episode(
@@ -1065,6 +1085,14 @@ class LongHorizonCampaign:
         )
 
         episode_dir = store.episode_dir(episode)
+        from .episode_output import capture as capture_episode_output
+        expected_cases = self.evaluation.expected_shape_ids()
+        if expected_cases is None:
+            baseline = self.environment.read_memory(self.workspace, 0) or {}
+            expected_cases = set((baseline.get("performance") or {}).get("latency_us_by_shape") or {})
+        capture_episode_output(worktree.path, episode_dir, episode=episode,
+            version=memory_version, base_revision=base_commit,
+            expected_case_ids=tuple(sorted(str(key) for key in expected_cases)))
         self.base_campaign.candidate_workspace.archive(
             worktree, episode_dir / "archive", "HEAD"
         )
@@ -1189,7 +1217,12 @@ class LongHorizonCampaign:
                 memory_record=memory,
             )
             attempt["outcome_commit"] = outcome_commit
-            state.consecutive_without_promotion += 1
+            unavailable = verification is not None and verification.gate == "ERROR"
+            attempt["stall_counted"] = not unavailable
+            if unavailable:
+                attempt["verification_infrastructure_error"] = True
+            else:
+                state.consecutive_without_promotion += 1
             self.environment.save_stall(
                 self.workspace, state.consecutive_without_promotion
             )
@@ -1199,7 +1232,7 @@ class LongHorizonCampaign:
                 state.blocked += 1
             elif status == "invalid_handoff":
                 state.protocol_failures += 1
-            else:
+            elif not unavailable:
                 state.rejected += 1
         self._require_canonical_memory(memory_version)
         try:
@@ -1408,6 +1441,7 @@ class LongHorizonCampaign:
                 worktree_path,
             )
             CampaignStore.ensure_excluded(worktree.path)
+            self.environment.link_episode_runtime(self.base_campaign, worktree.path)
             if self._recover_completed_handoff(
                 store,
                 state,
@@ -1647,15 +1681,17 @@ class LongHorizonCampaign:
         reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
 
         while True:
+            if recovered_episode is None and (store.root / 'pause-requested').exists():
+                reason = 'paused: checkpoint requested'
+                break
             conversion_pending = self.environment.conversion_required(
                 self.base_campaign, state.consecutive_without_promotion, self.workspace
             )
             if self.max_version is not None:
                 if self.environment.latest_version(self.workspace) >= self.max_version:
                     if conversion_pending:
-                        raise RuntimeError(
-                            "mandatory Triton->Gluon conversion did not succeed before max-iters"
-                        )
+                        reason = self._conversion_budget("max-iters")
+                        break
                     reason = "budget: max-iters"
                     break
             elif self.max_version is None and state.episodes >= self.max_episodes:
@@ -1669,9 +1705,8 @@ class LongHorizonCampaign:
                 break
             if self.token_budget and state.tokens >= self.token_budget:
                 if conversion_pending:
-                    raise RuntimeError(
-                        "mandatory Triton->Gluon conversion did not succeed before token-budget"
-                    )
+                    reason = self._conversion_budget("token-budget")
+                    break
                 reason = "budget: token-budget"
                 break
             resumed = recovered_episode is not None
@@ -1820,6 +1855,7 @@ class LongHorizonCampaign:
                         episode_mode=episode_mode
                     ),
                     telemetry_environment=telemetry_environment,
+                    output_directory=self.workspace,
                     record_usage=lambda tokens: store.record_usage(
                         state, usage_receipt, tokens
                     ),

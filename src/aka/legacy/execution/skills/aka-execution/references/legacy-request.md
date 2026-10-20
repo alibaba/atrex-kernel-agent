@@ -1,21 +1,19 @@
 # Legacy Execution requests
 
-This guide describes the local AKA `codex/execution-main` candidate based on
-`2023112`. The selected Execution module contributes this Skill to the
-optimization Agent's workspace through the application's resource installer.
-Only `legacy` is bundled; separate SSH, Agate, and direct Local plugins are not
-implemented yet.
+The `legacy` Execution provider runs the existing sandbox launcher. It supports
+SSH, Agate Gateway, and direct HTTP transport through one provider. The selected
+Execution module contributes this Skill to the optimization Agent's workspace
+through the application's resource installer.
 Inspect the actual installed `aka execution --help` before preparing a request.
 
 ## Standalone entry point
 
-Use Python 3.10+, matching installed AKA packages, a matching AKA checkout, and
-the original runtime dependencies. `--repo-root` must contain `tools/sandbox.py`;
+Use Python 3.10+, matching installed AKA packages and the original runtime dependencies.
 `--workspace` identifies prepared execution inputs. Run the following on the host,
 replacing paths and using the endpoint and hardware selected for this run:
 
 ```sh
-aka execution --repo-root /path/to/matching-checkout \
+aka execution \
   --workspace /path/to/prepared-workspace --hardware L20N \
   --gateway-profile prod --kind dev --timeout 60 \
   -- python3 gpu_smoke.py
@@ -37,8 +35,7 @@ aka execution --repo-root /path/to/matching-checkout \
 | argv after `--` | Prepared worker command; optional for preflight |
 
 `AKA_EXECUTION_SELECTION` can carry profile, profiles_dir, and patches.
-The removed agate Execution profile differs from the retained Agate transport;
-invalid inherited selections fail rather than silently changing providers.
+Invalid inherited selections fail rather than silently changing providers.
 The CLI does not add arbitrary worker environment flags. The original launcher
 and caller determine worker injection; host `os.environ` is not forwarded in full.
 
@@ -47,7 +44,7 @@ and caller determine worker injection; host `os.environ` is not forwarded in ful
 **Gateway:** Use the selected profile / URL and existing Agate authentication.
 Typed run / profile mappings and necessary dev fallbacks remain inside the
 original sandbox. An explicit URL with no installed Agate client can use its
-direct HTTP path; this is not another Execution profile.
+direct HTTP path.
 
 **SSH:** Use `--ssh`, any required `--ssh-init`, and a valid `--health-command`.
 The matching launcher reads existing `ATREX_SANDBOX_SSH_GPU` and
@@ -56,7 +53,7 @@ The target requires OpenSSH/SCP, Bubblewrap, explicitly bound runtimes, and one
 assigned NVIDIA GPU. Original distributed evaluation / profiling limits apply.
 
 **Local HTTP:** Use the selected service URL and a hardware alias it accepts
-(local is the default alias). `tools/local_gateway.py` serves this path and
+(local is the default alias). `python -m aka.legacy.execution.runtime_tools.local_gateway` serves this path and
 currently rejects multi-GPU requests. Starting or changing a service is not an
 automatic consequence of reading the Skill.
 
@@ -64,16 +61,17 @@ automatic consequence of reading the Skill.
 
 The public interface is `Executor.run(CommandSpec) -> JobResult`. CommandSpec
 contains workspace, command, timeout, environment, hardware, artifacts,
-operation, and optional cancellation / control. Legacy requires an application
+operation, and optional cooperative cancellation. Legacy requires an application
 adapter's private runtime binding; use the CLI or existing application entry
 point rather than calling an unbound LegacyExecutor directly.
 
-Legacy implements no DurableExecutor methods and rejects neutral budget / control
-requests. Original wall timeout, host hooks, and cooperative cancellation remain
-active in the compatibility path.
+The sandbox host adapter supports the Legacy provider. Original wall timeout,
+host hooks, and cooperative cancellation remain active inside that implementation.
+Other synchronous Executors can be injected into consumers using their own
+binding; the sandbox adapter does not supply supervision for them.
 
 When results match, the application adapter preserves the original
 CompletedProcess. The CLI writes its stdout / stderr and returns its returncode.
 JobResult alone omits original args and a separately parsed remote exit code;
-it is not the proposed complete result contract. Preserve the caller's existing
-full result and artifacts without claiming a new normalized return is implemented.
+the application adapter supplies the original launcher args. Preserve the caller's
+existing full result and artifacts when reporting execution outcomes.

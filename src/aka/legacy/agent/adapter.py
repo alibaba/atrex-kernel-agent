@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Mapping
@@ -17,7 +18,7 @@ from .model import (
 )
 
 
-def usage_counter(usage: Mapping[str, object], *names: str) -> int | None:
+def _counter(usage: Mapping[str, object], *names: str) -> int | None:
     for name in names:
         value = usage.get(name)
         if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
@@ -67,19 +68,6 @@ def token_usage_from_model_usage(model_usage: object) -> TokenUsage:
     return sum_token_usages(
         [token_usage_from_mapping(value) for value in model_usage.values()]
     )
-
-
-def pi_event_usage(event: Mapping[str, object]) -> TokenUsage:
-    """The billable final events shared by the Pi adapter and live capture."""
-    if event.get("type") == "message_end":
-        message = event.get("message")
-        if isinstance(message, Mapping) and message.get("role") in {"assistant", "toolResult"}:
-            return token_usage_from_mapping(message.get("usage"))
-    elif event.get("type") == "compaction_end":
-        result = event.get("result")
-        if isinstance(result, Mapping):
-            return token_usage_from_mapping(result.get("usage"))
-    return TokenUsage.unavailable()
 
 
 def toml_config_value(value: object) -> str:
@@ -191,7 +179,7 @@ class AgentBackendAdapter(ABC):
     def auth_hint(self) -> str: ...
 
 
-def event_phase_marker_receipts(event: Mapping[str, object]):
+def _phase_marker_receipts(event: Mapping[str, object]):
     event_type = event.get("type")
     roots: list[object] = []
     if event_type == "user":
@@ -230,7 +218,7 @@ def event_phase_marker_receipts(event: Mapping[str, object]):
         yield from phase_marker_receipts(root)
 
 
-def json_events(stdout: str):
+def _json_events(stdout: str):
     for line in stdout.splitlines():
         line = line.strip()
         if not line or not line.startswith("{"):
@@ -339,6 +327,8 @@ class ClaudeAdapter(ClaudeLikeAdapter):
             "--dangerously-skip-permissions",
             "--output-format",
             "stream-json",
+            *(["--name", os.environ["ATREX_CLAUDE_SESSION_NAME"].format(session_id=session_id)]
+              if os.environ.get("ATREX_CLAUDE_SESSION_NAME") else []),
             "--session-id",
             session_id,
             "--effort",
@@ -451,16 +441,21 @@ class PiAdapter(AgentBackendAdapter):
         settled = False
         for event in _json_events(stdout):
             if event.get("type") == "message_end":
-                usage = pi_event_usage(event)
-                if usage.total_tokens is not None:
-                    deltas.append(usage)
-                    normalized.append(
-                        NormalizedAgentEvent(
-                            sequence=len(normalized),
-                            kind="usage_delta",
-                            usage=usage,
+                message = event.get("message")
+                if isinstance(message, Mapping) and message.get("role") in {
+                    "assistant",
+                    "toolResult",
+                }:
+                    usage = token_usage_from_mapping(message.get("usage"))
+                    if usage.total_tokens is not None:
+                        deltas.append(usage)
+                        normalized.append(
+                            NormalizedAgentEvent(
+                                sequence=len(normalized),
+                                kind="usage_delta",
+                                usage=usage,
+                            )
                         )
-                    )
                 for action, phase, marker_id in _phase_marker_receipts(event):
                     normalized.append(
                         NormalizedAgentEvent(
@@ -472,7 +467,10 @@ class PiAdapter(AgentBackendAdapter):
                         )
                     )
             elif event.get("type") == "compaction_end":
-                usage = pi_event_usage(event)
+                result = event.get("result")
+                usage = token_usage_from_mapping(
+                    result.get("usage") if isinstance(result, Mapping) else None
+                )
                 if usage.total_tokens is not None:
                     deltas.append(usage)
                     normalized.append(
@@ -614,12 +612,6 @@ class BackendAdapterRegistry:
     def ids(self) -> tuple[str, ...]:
         return tuple(self._factories)
 
-
-# Compatibility aliases for existing in-module and legacy imports. New providers
-# use the public helper names rather than depend on another module's internals.
-_counter = usage_counter
-_json_events = json_events
-_phase_marker_receipts = event_phase_marker_receipts
 
 DEFAULT_BACKEND_REGISTRY = BackendAdapterRegistry()
 DEFAULT_BACKEND_REGISTRY.register("claude", ClaudeAdapter)

@@ -505,10 +505,9 @@ def _run_bounded(
     # HTTP Runtime sessions must continue to use the Light client exclusively.
     trusted_sandbox_entrypoints = TRUSTED_SANDBOX_ENTRYPOINTS
     if not environment_values.get("ATREX_AKA_RUNTIME_URL"):
-        from aka.legacy.application.paths import checkout_root
-        trusted_sandbox_entrypoints |= frozenset({
-            (checkout_root() / "tools" / "sandbox.py").resolve(),
-        })
+        # The standard Workflow transport is module-based; the bundled Light
+        # client is the only script entrypoint that needs explicit trust.
+        trusted_sandbox_entrypoints |= TRUSTED_SANDBOX_ENTRYPOINTS
     else:
         from aka.light.agent.claude_tools import foreground_command
         # Like Runtime, keep these calls foreground; the authenticated server

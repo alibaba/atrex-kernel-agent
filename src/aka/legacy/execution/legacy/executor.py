@@ -11,9 +11,10 @@ import signal
 import subprocess
 import time
 from dataclasses import replace
+from pathlib import Path
 
 from aka.contracts.execution import BackendCapabilities, CommandSpec, JobResult, ResourceIdentity
-from .runtime import ExecutionHooks, SandboxRequest, current_invocation
+from .runtime import ExecutionHooks, SandboxRequest, current_invocation, current_transport_arguments
 
 
 class LegacyExecutor:
@@ -27,10 +28,9 @@ class LegacyExecutor:
         invocation = current_invocation()
         request = replace(invocation.request, workspace=command.workspace, command=command.command,
             timeout=command.timeout, environment=command.environment, hardware=command.hardware,
-            sync=command.artifacts, gateway_kind="auto" if command.operation == "preflight" else command.operation,
+            sync=command.artifacts,
+            gateway_kind=invocation.request.gateway_kind if command.operation == "preflight" else command.operation,
             preflight=command.operation == "preflight", cancel_event=command.cancel_event)
-        if command.operation == "preflight":
-            request = replace(request, gateway_kind=invocation.request.gateway_kind)
         result = self._run_sandbox(request, hooks=invocation.hooks)
         invocation.result = result
         return JobResult(result.returncode, result.stdout, result.stderr, resource=self.resource_identity)
@@ -53,7 +53,7 @@ class LegacyExecutor:
         if sum(bool(value) for value in (ssh, url, profile)) > 1:
             raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
         cmd = [
-            *request.launcher,
+            request.launcher[0], "-m", "aka.legacy.execution.gateway.sandbox",
             "--kind",
             gateway_kind,
             "--hardware",
@@ -78,11 +78,15 @@ class LegacyExecutor:
                 cmd += ["--sync", path]
         else:
             cmd.append("--no-sync")
+        cmd += current_transport_arguments()
         if preflight:
             cmd.append("--preflight")
         else:
             cmd += ["--", *command]
         environment = dict(request.environment)
+        package_root = str(Path(__file__).resolve().parents[4])
+        environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(
+            [package_root, *environment.get("PYTHONPATH", "").split(os.pathsep)]))
         if wall_timeout is not None:
             effective_timeout = wall_timeout
         else:

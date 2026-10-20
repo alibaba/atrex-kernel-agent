@@ -8,8 +8,7 @@ from types import SimpleNamespace
 from weakref import WeakSet
 
 from aka.contracts.problem import LoadedProblem
-from aka.legacy.compat.startup import prepare_request
-from aka.legacy.compat.configuration import current_settings
+from aka.contracts.workflow import CampaignRequest, ProblemSource
 from .search import SearchOptions
 
 
@@ -39,7 +38,8 @@ class WorkflowOptions:
 
 
 class LightWorkflow:
-    def __init__(self, agent, problem, source, candidate, tool_runtime, options=WorkflowOptions()):
+    def __init__(self, agent, problem, source, candidate, tool_runtime,
+                 *, workflow_observer=None, options=WorkflowOptions()):
         if not getattr(agent, "supports_tool_runtime", False):
             raise ValueError("light Workflow requires aka.light.agent.plugin (sandbox may remain none)")
         if not getattr(candidate, "managed_drafts", False):
@@ -47,28 +47,77 @@ class LightWorkflow:
         self.agent, self.problem, self.source, self.candidate = agent, problem, source, candidate
         self.options = options
         self.tool_runtime = tool_runtime
+        self.workflow_observer = workflow_observer
         self._closed = False
         self._campaigns = WeakSet()
-        # Historical Application construction has one prepared-Problem entry.
-        self._dependencies = SimpleNamespace(prepare_request=prepare_request)
 
-    def campaign(self, request):
+    def _check_open(self):
         if self._closed:
             raise RuntimeError("Workflow selection has been closed")
-        problem = self.problem.load(request.problem.directory,
+
+    def _load_problem(self, request: CampaignRequest) -> LoadedProblem:
+        self._check_open()
+        problem = self.problem.load(
+            request.problem.directory,
             optimization_mode=request.settings.optimization_mode,
-            snapshot_directory=request.problem.snapshot_directory)
-        return self._campaign(prepare_request(request, problem), problem)
+            snapshot_directory=request.problem.snapshot_directory,
+        )
+        if not isinstance(problem, LoadedProblem):
+            raise TypeError("ProblemProvider.load must return LoadedProblem")
+        if problem.initial_source is None or problem.evaluation is None:
+            raise TypeError(
+                "light Workflow requires explicit Problem initial-source and evaluation roles"
+            )
+        return problem
+
+    def campaign(self, request: CampaignRequest):
+        self._check_open()
+        if not isinstance(request.problem, ProblemSource):
+            raise TypeError("CampaignRequest.problem must be a ProblemSource")
+        return self._campaign(request, self._load_problem(request))
+
+    @staticmethod
+    def _evaluation_settings(request):
+        from aka.legacy.execution.configuration import legacy_settings
+        from aka.legacy.execution.selection import selected_execution
+
+        connection = (legacy_settings()
+                      if selected_execution().get("profile", "legacy") == "legacy"
+                      else SimpleNamespace(profile="", url="", ssh="", ssh_init="",
+                                           ssh_gpu=None, health_command=""))
+        runtime = request.runtime
+        return SimpleNamespace(
+            hardware=runtime.hardware or request.settings.platform,
+            profile=connection.profile,
+            url=connection.url,
+            timeout=runtime.timeout,
+            verify_repeats=runtime.verify_repeats,
+            verify_run_timeout=runtime.verify_run_timeout,
+            min_improvement_pct=runtime.min_improvement_pct,
+            ssh=connection.ssh,
+            ssh_init=connection.ssh_init,
+            ssh_gpu=getattr(connection, "ssh_gpu", None),
+            health_command=connection.health_command,
+        )
 
     def _campaign(self, request, problem):
         from .campaign import ManagedCampaign
-        if self._closed:
-            raise RuntimeError("Workflow selection has been closed")
+        self._check_open()
         if not isinstance(problem, LoadedProblem) or problem.agent is None or problem.initial_source is None or problem.evaluation is None:
             raise TypeError("light Workflow requires explicit public, initial-source and evaluator Problem roles")
         if problem.initial_source.kind != "sol" and problem.evaluation.runtime_root is None:
             raise ValueError("light Workflow deterministic V0 requires native Atrex-Bench or SOL; use legacy for custom setup")
-        campaign = ManagedCampaign.create(request, problem, self, current_settings())
+        evaluation = self._evaluation_settings(request)
+        campaign = ManagedCampaign.create(request, problem, self, evaluation)
+        from aka.legacy.execution.campaign_runtime import CampaignExecution
+        campaign.execution = CampaignExecution(evaluation)
+        if self.workflow_observer is not None:
+            try:
+                self.workflow_observer.campaign_started(request)
+            except Exception as error:
+                import sys
+                print(f"[workflow] auxiliary observer failed: {type(error).__name__}",
+                      file=sys.stderr)
         self._campaigns.add(campaign)
         return campaign
 

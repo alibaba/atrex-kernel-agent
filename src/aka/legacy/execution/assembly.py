@@ -1,12 +1,11 @@
 """Own selected provider scopes; injected executors retain caller ownership."""
 from __future__ import annotations
 
-from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Mapping, Sequence
 
 from aka.contracts.execution import Executor, validate_executor
-from aka.contracts.agent_resources import AgentSkill
+from aka.contracts.agent_resources import AgentSkill, WorkspaceResourceContribution
 from aka.core.boot import boot, compose
 from aka.core.errors import BootFailure
 from aka.core.keys import ServiceKey
@@ -43,6 +42,17 @@ class ExecutionComposition:
             self.disposed = True
             self.report.dispose()
 
+    @property
+    def workspace_resources(self) -> tuple[WorkspaceResourceContribution, ...]:
+        if self.disposed:
+            raise RuntimeError("execution composition has been disposed")
+        entries = self.report.root.scope.resolve("workspace_resources")
+        values = tuple(entry.value for entry in entries)
+        if any(not isinstance(value, WorkspaceResourceContribution) or entry.name != value.name
+               for entry, value in zip(entries, values)):
+            raise TypeError("invalid Execution workspace resource contribution")
+        return values
+
     def __enter__(self) -> ExecutionComposition:
         return self
 
@@ -66,15 +76,3 @@ def compose_execution(*, profile: str = "legacy", profiles_dir: Path = PROFILES_
         report.dispose()
         raise
     return ExecutionComposition(report, executor)
-
-
-@contextmanager
-def execution_scope(executor: Executor | None = None, **selection) -> Iterator[Executor]:
-    if executor is not None:
-        if selection:
-            raise ValueError("an injected executor cannot also select a provider")
-        validate_executor(executor)
-        yield executor
-    else:
-        with compose_execution(**selection) as composition:
-            yield composition.executor

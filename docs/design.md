@@ -3,17 +3,17 @@
 ## Overview
 
 Atrex Kernel Agent is an orchestrated system for GPU kernel implementation, profiling, and
-iterative optimization. The repository has one supported entry point: `orchestrator/optimize.py`.
-It owns the optimization lifecycle and launches isolated Long Horizon episodes through Claude,
-Qoder, Codex, or Pi. A user may invoke that entry point directly or ask a coding agent in the
-repository to translate a natural-language task into its CLI arguments and launch it.
+iterative optimization. The installed `aka optimize` command is the supported entry point. The
+selected Workflow module owns the optimization lifecycle and launches isolated episodes through
+Claude, Qoder, Codex, or Pi. A user may invoke that command directly or ask a coding agent in the
+checkout to translate a natural-language task into its arguments and launch it.
 
 Agent sessions propose and implement changes. The orchestrator remains authoritative for
 budgets, state transitions, sandbox execution, correctness and performance gates, production
 policy, rollback, aggregation, and final packaging.
 
 Each canonical optimization version is one multi-experiment episode in a private Git worktree.
-The internal `long_horizon/` engine supplies worktree isolation, journals, handoff recovery,
+The installed `aka.legacy.workflow` module supplies worktree isolation, journals, handoff recovery,
 fast five-trial evaluator-backed selection or full same-allocation ABBA verification, and squash
 promotion; it is not a second CLI.
 
@@ -27,7 +27,7 @@ promotion; it is not a second CLI.
   without profiling or ABBA; later full episodes are supported by official profiler evidence.
 - **Reproducible state**: Git HEAD is the incumbent kernel; structured memory and artifacts
   preserve the reasoning and measurements behind each attempt.
-- **Execution isolation**: GPU work crosses `tools/sandbox.py`; campaign memory, plans, edits,
+- **Execution isolation**: GPU work crosses `python -m aka.legacy.execution.cli`; campaign memory, plans, edits,
   and Git state remain local.
 - **Evaluator integrity**: immutable ground truth and full-workload validation prevent harness
   edits or partial-shape wins from becoming accepted results.
@@ -41,44 +41,34 @@ promotion; it is not a second CLI.
 
 ```text
 .
-├── orchestrator/
-│   ├── optimize.py                    # CLI entry point: arguments, framework dispatch, run wiring
-│   ├── campaign.py                    # Single-operator campaign: baseline, episodes, promotion
-│   ├── operator_layout.py             # Supported operator layout detection
-│   ├── session_io.py                  # Coding-agent sessions, dependency review, sandbox I/O
-│   ├── workspace_state.py             # Canonical memory, git facts, stall counter
-│   ├── workspace_runtime.py           # Workspace runtime links, agent skills, directives
-│   ├── hardware.py                    # Vendor/framework identity and Gluon escalation
-│   ├── constants.py                   # Shared paths, policy defaults, state filenames
-│   ├── agent_runtime/                 # Claude/Qoder/Codex/Pi adapters and process policy
-│   ├── telemetry/                     # Phase timing and token telemetry
-│   ├── optimization_policy.py         # leaderboard/production policy gates
-│   └── prompts/                       # Setup, inspection, baseline, and episode prompts
-├── long_horizon/                      # Episode worktrees, handoff protocol, ABBA verification
-├── agents/                            # Baseline Agent definition injected into campaign workspaces
-├── skills/                            # Backend-local workflows, including adaptive PPU profiling
-├── tools/
-│   ├── sandbox.py                     # Remote packaging and execution boundary
-│   ├── memory_manager.py              # Structured iteration memory manager
-│   └── profile_*.sh / analysis tools  # NVIDIA and AMD profiling helpers
-├── reference/                         # Workspace init, evaluator adapters, schema, SOL packaging
+├── src/aka/
+│   ├── core/                          # Plugin declarations, composition and lifecycle
+│   ├── contracts/                     # Shared module interfaces
+│   ├── bootstrap/                     # Profile selection and continuation identity
+│   └── legacy/
+│       ├── workflow/                  # Campaign, episodes, recovery and public export
+│       ├── task/                      # Problem, source and candidate workspace ownership
+│       ├── execution/                 # Sandbox, gateway, profiling and runtime tools
+│       ├── agent/                     # Claude/Qoder/Codex/Pi adapters and session state
+│       └── resources/                 # Plugin tools, Skills and workspace resources
+├── packages/                          # Distribution metadata
 ├── gpu-wiki/                          # Structured hardware/kernel retrieval and trace mining
 ├── plugins/                           # Automatically discovered local plugin manifests and adapters
 ├── reference-projects/                # Optional source-search repositories
-└── 3rdparty/                          # Profiler-analysis dependencies
+└── tools/                              # Build and validation-only checkout helpers
 ```
 
-The `skills/` and `agents/` directories are internal runtime assets. The orchestrator links or
-installs them into generated campaign workspaces; they are not standalone repository entry
-points.
+Runtime Skills, profiling helpers and prompts are package data owned by their modules. Resources
+installs the selected contributions into generated campaign workspaces; root directories are not
+runtime import or command interfaces.
 
 ### Authority boundaries
 
 | Boundary | Owner | Durable result |
 | --- | --- | --- |
-| Campaign control | `orchestrator/campaign.py` | Workspace Git history and canonical memory |
-| Episode exploration | `long_horizon/` plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
-| GPU execution | `tools/sandbox.py` plus the configured executor | Structured evaluator result and requested profile artifacts |
+| Campaign control | `aka.legacy.workflow.campaign` | Workspace Git history and canonical memory |
+| Episode exploration | Workflow plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
+| GPU execution | `python -m aka.legacy.execution.cli` plus the configured executor | Structured evaluator result and requested profile artifacts |
 | Optimization knowledge | Discovered plugins, then optional `reference-projects/` | Evidence references recorded by the episode |
 
 The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
@@ -91,7 +81,7 @@ exact committed sources.
 For interactive use, the recommended surface is a repository-scoped coding-agent prompt:
 
 ```text
-Use AKA's orchestrator/optimize.py to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+Use the installed `aka optimize` command with this checkout as `--repo-root` to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
 ```
 
 The coding agent resolves the request, checks prerequisites, and invokes the same supported entry
@@ -101,7 +91,7 @@ surface does not create a second optimization workflow.
 For automation and direct operation, invoke the entry point explicitly:
 
 ```bash
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/operator \
   --platform TARGET_GPU \
   --sandbox-hardware REMOTE_GPU \
@@ -124,7 +114,7 @@ runtime-detected GPU vendor.
 
 ### Campaign lifecycle
 
-`Campaign` in `orchestrator/campaign.py` is the single-operator state machine:
+`Campaign` in `aka.legacy.workflow.campaign` is the single-operator state machine:
 
 1. Materialize or resume a Git workspace and validate its committed V0.
 2. In production mode by default, create and pin a self-contained framework-native V1.
@@ -147,7 +137,7 @@ allowed to replace it.
 
 ### Agent Runtime
 
-`orchestrator/agent_runtime/` separates backend-specific command and event formats from campaign
+`aka.legacy.agent` separates backend-specific command and event formats from campaign
 control. Adapters expose a common request/result model containing:
 
 - exit status and timeout state;
@@ -161,10 +151,11 @@ direct host GPU execution, and profiler use outside the sandbox.
 
 ### Workspace runtime assets
 
-`link_runtime()` exposes `tools/`, `reference/`, `skills/`, `reference-projects/`, and discovered
-plugin resources inside each campaign workspace. AKA discovers each `plugins/*/plugin.json`; the
-bundled GPU Wiki plugin provides `gpu-wiki.query` through `tools/plugin.py`. Plugin manifests own resources and phase instructions; campaign locks
-check versions and content fingerprints on resume. See [Local plugins](plugins.md).
+Resources installs explicitly selected tools, Skills, profiling content and optional reference
+projects inside each campaign workspace. AKA discovers the configured plugin manifests; the bundled
+GPU Wiki plugin provides `gpu-wiki.query` through `python -m aka.legacy.resources.cli`. Plugin
+manifests own resources and phase instructions; campaign locks check versions and content fingerprints
+on resume. See [Local plugins](plugins.md).
 It also prepares backend-specific project-local discovery trees:
 
 - `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
@@ -179,7 +170,7 @@ It also prepares backend-specific project-local discovery trees:
 ### Sandbox execution
 
 All correctness, benchmark, and profiling work crosses
-`tools/sandbox.py`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
+`python -m aka.legacy.execution.cli`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
 submits evaluator or profiler work to the configured remote executor, and synchronizes only the
 requested result artifacts. Campaign memory, plans, edits, episode state, and Git history stay on
 the coordinator.
@@ -187,7 +178,7 @@ the coordinator.
 The remote executor is selected explicitly. Gateway URL/profile modes retain typed evaluator and
 profiler requests plus their existing HTTP/OSS transports. OpenSSH mode creates a fresh
 `/tmp/atrex-sandbox.*` directory and uploads the allowlisted bundle with `scp`, but never executes a
-candidate in the login account's ordinary shell. `tools/sandbox.py` always enters a Bubblewrap
+candidate in the login account's ordinary shell. `python -m aka.legacy.execution.cli` always enters a Bubblewrap
 namespace that exposes a minimal read-only system tree, explicitly configured read-only runtime
 directories, one assigned physical NVIDIA GPU, and the one writable job directory. Runtime bind
 sources are denied when broad/sensitive, resolved on the remote host, and validated again so a
@@ -218,12 +209,12 @@ serially on the assigned GPU, and SSH auto-framework dispatch is rejected. A rem
 could not be deleted is recorded separately and becomes a
 required recovery action rather than being forgotten.
 
-Only the outer recovery owner starts `tools/monitor_optimize_tasks.py`. The detached monitor holds an
+Only the outer recovery owner starts `python -m aka.legacy.workflow.monitor_optimize_tasks`. The detached monitor holds an
 OS advisory lock, repeats the configured health probe, removes every deferred remote workspace, and
 then replays the exact original argument array and working directory. Recovery state is keyed by the
 resolved target, init, runtime binds, assigned GPU, health probe, and a unique invocation identity;
 existing metadata is validated before reuse. After `Popen`, the monitor retains the marker as
-`restarting.json` while it supervises operator resolution, architecture/submodule setup, campaign
+`restarting.json` while it supervises operator resolution, selected-resource validation, campaign
 construction, and workspace resume. An early exit restores `failure.json`; the durable campaign
 resume signal begins a two-phase transition: the monitor moves the marker to `active.json`, then the
 same registered primary must observe that marker and persist an acknowledgement. The monitor remains
@@ -322,7 +313,7 @@ requested.
 commit or canonical memory needs to be reverted. Run the generated `recover.sh` (or pass `--resume`
 while starting the monitor) to clear the tombstone under the monitor lock. If automatic restart is
 undesired but SSH should remain enabled, use the same verified stop path and then run
-`python tools/monitor_optimize_tasks.py --state-dir STATE_DIR --resume --once --no-restart` after
+`python -m aka.legacy.workflow.monitor_optimize_tasks --state-dir STATE_DIR --resume --once --no-restart` after
 cleaning any listed remote workspaces.
 
 ### Full-workload optimization
@@ -370,7 +361,7 @@ correctness and performance-parity gates.
 
 ### Long Horizon episode engine
 
-`Campaign.run()` in `orchestrator/campaign.py` invokes the internal Long Horizon engine. It creates
+`Campaign.run()` in `aka.legacy.workflow.campaign` invokes the Workflow episode engine. It creates
 an isolated branch and Git worktree from the incumbent for each episode. The Agent records
 structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
 `pivot`, or `blocked`.
@@ -388,9 +379,9 @@ episode state supports crash recovery.
 
 ### 1. Resolve the operator and runtime
 
-`--op-dir` supplies all operator-specific ground truth. The orchestrator detects SOL or native
-Atrex-Bench format, probes the runtime GPU architecture, resolves the framework set, initializes
-required submodules, and creates a framework/hardware-suffixed workspace below `--workspace` or
+`--op-dir` supplies all operator-specific ground truth. The Workflow detects SOL or native
+Atrex-Bench format, probes the runtime GPU architecture, resolves the framework set, validates
+explicitly selected resources, and creates a framework/hardware-suffixed workspace below `--workspace` or
 the current directory.
 
 ### 2. Establish V0
@@ -490,9 +481,9 @@ from main-workspace commits; their recoverable local state remains on disk.
 
 ## Profiling and Telemetry
 
-- NVIDIA profiling uses `tools/profile_nvidia.sh` and Nsight Compute.
-- AMD profiling uses `tools/profile_kernel.sh`, rocprofv3, ATT, PMC, and assembly extraction.
-- PPU profiling uses `skills/ppu-acu-joint-profile/` as an evidence router: ACU-only device analysis,
+- NVIDIA profiling uses `profiling/nvidia/profile_nvidia.sh` and Nsight Compute.
+- AMD profiling uses `profiling/amd/profile_kernel.sh`, rocprofv3, ATT, PMC, and assembly extraction.
+- PPU profiling uses the selected `ppu-acu-joint-profile` Skill as an evidence router: ACU-only device analysis,
   standalone adaptive timeline analysis, and bounded joint analysis are separate selectable modes.
   PPU alone uses a per-iteration evidence gate: the episode agent may skip a new PPU profile when
   source or compiler inspection, the probe-free benchmark, or still-valid PPU evidence already
@@ -511,7 +502,7 @@ from main-workspace commits; their recoverable local state remains on disk.
   from the same read, while raw artifact hashes are streamed. The supervisor then adds stable
   memory and artifact references to canonical `memory/v<N>.json`. A later episode can therefore
   decide whether to reuse the bounded conclusion without loading the raw episode archive.
-- `tools/memory_manager.py` creates, reads, updates, masks, and summarizes iteration records.
+- `python -m aka.legacy.workflow.memory_manager` creates, reads, updates, masks, and summarizes iteration records.
 - Episodes attribute wall time and token usage to profile, research, planning, implementation,
   correctness, benchmark, and recording phases when the backend emits complete markers and usage
   deltas.

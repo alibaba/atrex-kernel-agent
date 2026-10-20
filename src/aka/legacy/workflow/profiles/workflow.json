@@ -1,0 +1,58 @@
+{
+  "api_version": 2,
+  "token_definitions": {
+    "problem": "aka.legacy.task.problem.plugin:PROBLEM",
+    "source": "aka.legacy.task.source.plugin:SOURCE",
+    "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
+    "agent": "aka.legacy.agent.plugin:AGENT",
+    "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
+    "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
+    "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER"
+  },
+  "composition": "workflow",
+  "target": "startup",
+  "required_services": [
+    "problem",
+    "source",
+    "candidate",
+    "agent",
+    "evaluator_factory",
+    "workflow_observer",
+    "workflow"
+  ],
+  "resources": [
+    {
+      "root": "${aka:repo_root}",
+      "paths": [
+        "plugins/gpu-wiki",
+        "gpu-wiki"
+      ]
+    }
+  ],
+  "environment": [
+    "ATREX_PLUGIN_DIR",
+    "ATREX_CLAUDE_SESSION_NAME",
+    "ATREX_ABBA_SHAPE_BATCH_SIZE",
+    "ATREX_EVAL_SHAPE_BATCH_SIZE",
+    "ATREX_SANDBOX_ATREX_BENCH_VERSION",
+    "ATREX_SANDBOX_REQUIREMENTS_FILE",
+    "AKA_EXECUTION_SELECTION",
+    "ATREX_SANDBOX_PROFILE",
+    "ATREX_SANDBOX_URL",
+    "ATREX_SANDBOX_SSH",
+    "ATREX_SANDBOX_SSH_INIT",
+    "ATREX_SANDBOX_SSH_GPU",
+    "ATREX_SANDBOX_HEALTH_COMMAND",
+    "ATREX_SANDBOX_SSH_RUNTIME_BINDS",
+    "ATREX_ENVIRONMENT_POLL_INTERVAL"
+  ],
+  "tokens": [
+    "problem",
+    "source",
+    "candidate",
+    "agent",
+    "evaluator_factory",
+    "workflow_observer",
+    "workflow"
+  ]
+}

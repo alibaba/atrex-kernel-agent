@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from contextvars import copy_context
-
 import hashlib
 import json
 import re
@@ -12,47 +10,28 @@ import subprocess
 import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from functools import cached_property
 from pathlib import Path
 from typing import Optional
 
-from orchestrator._bootstrap import task_modules
 
-task_modules()
 from aka.contracts.problem import LoadedProblem
+from aka.contracts.evaluation import EvaluationUnavailable
 from aka.legacy.agent.runtime import auth_hint
 
-from orchestrator.constants import (
-    SUPPLEMENTAL_PENDING_PREFIX,
-    SUPPLEMENTAL_REPAIR_PREFIX,
-    AGENT_PROBLEM_GENERATION_PROMPT,
-    ATREX_PRIVATE_REFERENCE_ENV,
-    DEFAULT_CONVERT_AFTER,
-    DEFAULT_FAST_EPISODES,
-    DEFAULT_FAST_TRIALS,
-    DEFAULT_HANDOFF_RESUMES,
-    DEFAULT_SANDBOX_TIMEOUT,
-    DEFAULT_VERIFY_REPEATS,
-    DEFAULT_VERIFY_RUN_TIMEOUT,
-    DEPENDENCY_REVIEW_PROMPT,
-    DEPENDENCY_REVIEW_SCHEMA_VERSION,
-    DEPENDENCY_REVIEW_TIMEOUT_S,
-    FRAMEWORK_BASELINE_CATEGORY,
-    FRAMEWORK_BASELINE_FILE,
-    FRAMEWORK_BASELINE_TIMEOUT_S,
-    FRAMEWORK_BASELINE_VERSION,
-    PROMPTS_DIR,
-    REPO_ROOT,
-    WORKSPACE_INIT,
-)
-from orchestrator.environment_recovery import (
-    EnvironmentUnavailable,
-    environment_state_file,
-)
+from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, DEPENDENCY_REVIEW_SCHEMA_VERSION, DEPENDENCY_REVIEW_TIMEOUT_S, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
+from .resources import DEPENDENCY_REVIEW_PROMPT, PROMPTS_DIR
+from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT
+from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
+from aka.legacy.execution.recovery import EnvironmentUnavailable, environment_state_file
 from .framework_baseline_progress import (
     capture_unexpected_exit as capture_framework_baseline_exit,
+)
+from .framework_baseline_progress import (
+    capture_terminal_rejection as capture_framework_baseline_rejection,
 )
 from .framework_baseline_progress import (
     load_progress as load_framework_baseline_progress,
@@ -69,46 +48,26 @@ from .framework_baseline_progress import (
 from .framework_baseline_progress import (
     save_supervisor_recovery as save_framework_baseline_recovery,
 )
-from orchestrator.hardware import hardware_directive, hardware_vendor, kernel_is_gluon
-from orchestrator.operator_layout import AGENT_PROBLEM_FILENAME
-from orchestrator.optimization_policy import (
-    install_workspace_policy,
-    optimization_mode_directive,
-    production_kernel_violations,
-    production_structure_violations,
-)
+from aka.legacy.workflow.hardware import hardware_directive
+from aka.legacy.task.hardware import hardware_vendor
+from aka.legacy.task.source.inspection import kernel_is_gluon
+from aka.legacy.task.problem import AGENT_PROBLEM_FILENAME
+from aka.legacy.workflow.policy import install_workspace_policy, optimization_mode_directive
+from aka.legacy.acceptance.source_policy import production_kernel_violations, production_structure_violations
 from .plan_reviewers import (
     REVIEWER_ENVIRONMENT,
     discover_plan_reviewers,
     plan_reviewer_environment,
 )
-from orchestrator.plugins import PluginRegistry
-from orchestrator.sandbox_config import distributed_evaluation_world_size, evaluator_num_gpus
-from orchestrator.session_io import (
-    SessionResult,
-    _production_review_candidate_paths,
-    _production_review_digest,
-    _record_local_test_result,
-    _render,
-    _validate_production_review,
-)
-from orchestrator.workspace_runtime import (
-    _agent_runtime_directive,
-    _baseline_driver_directive,
-    link_runtime,
-)
-from orchestrator.workspace_state import (
-    git_head,
-    git_kernel_blob,
-    git_path_blob,
-    git_worktree_blob,
-    head_kernel_is_initial_baseline,
-    latest_version,
-    read_memory,
-    resolve_framework_baseline_commit,
-    v0_baseline_commit,
-    write_stall,
-)
+from .review_trace import ReviewTrace
+from aka.legacy.execution.configuration import distributed_evaluation_world_size, evaluator_num_gpus
+from aka.legacy.resources.plugins import PluginRegistry
+from aka.legacy.agent.session import SessionResult
+from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
+from aka.legacy.evaluation.local_results import _record_local_test_result
+from aka.legacy.resources.prompts import render_prompt
+from .runtime_directives import _agent_runtime_directive, _baseline_driver_directive
+from aka.legacy.task.candidate_workspace.state import git_head, git_kernel_blob, git_path_blob, git_worktree_blob, head_kernel_is_initial_baseline, latest_version, read_memory, resolve_framework_baseline_commit, v0_baseline_commit, write_stall
 
 _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
@@ -192,6 +151,7 @@ class Campaign:
                 self, definition.name, getattr(self.request.settings, definition.name)
             )
         self.atrex_bench_root = str(self.problem.evaluation.runtime_root or "")
+        self.services = self.dependencies.services(self)
         self.evaluation = self.dependencies.evaluation(self)
         self.execution = self.dependencies.execution(self)
         self.plugin_registry.check_lock(self.workspace)
@@ -248,8 +208,8 @@ class Campaign:
                     if validation_error
                     else "Create agent_problem.json now."
                 )
-                prompt = _render(
-                    AGENT_PROBLEM_GENERATION_PROMPT,
+                prompt = render_prompt(
+                    self.plugin_registry.resource_result().resource("task-problem-generation-prompt").source,
                     REPAIR_CONTEXT=repair_context,
                 )
                 result = self._run_session(
@@ -344,12 +304,16 @@ class Campaign:
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
         environment.update(self.execution.environment())
+        if self.execution.uses_ssh:
+            environment.pop("ATREX_SANDBOX_URL", None)
+            environment.pop("ATREX_SANDBOX_PROFILE", None)
         state_file = environment_state_file()
         if state_file is not None:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
         environment.update(
             self.plugin_registry.environment(self.workspace, self.campaign_name)
         )
+        environment.update(self.services.task_environment())
         return environment
 
     def ensure_plan_reviewer_availability(self, *, episode_mode: str) -> None:
@@ -462,7 +426,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
-        from orchestrator.infrastructure_retry import check_review_service
+        from aka.legacy.agent.availability import check_review_service
 
         candidate_digest = _production_review_digest(
             workspace, framework, require_gluon
@@ -481,6 +445,11 @@ class Campaign:
         errors: list[str]
         review_payload: object | None = None
         review_summary = ""
+        review_valid = False
+        review_trace_issue = False
+        trace = ReviewTrace(
+            workspace, "production-policy", self.review_trace_mode
+        )
         with tempfile.TemporaryDirectory(
             prefix="atrex-production-review-"
         ) as directory:
@@ -508,6 +477,7 @@ class Campaign:
                 json.dumps(request, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
+            trace.write_private_json("review-request.json", request)
             try:
                 result = self._run_session(
                     review_workspace,
@@ -516,10 +486,22 @@ class Campaign:
                     agent_cli=self.agent_cli,
                     reasoning_effort="high",
                     agent_plugins=False,
+                    observation_directory=trace.observation_directory,
+                )
+                trace.record_session(result)
+                review_trace_issue = bool(
+                    result.timed_out
+                    or result.exit_status
+                    or result.observation_errors
                 )
                 self._account(result, "independent production policy review")
                 check_review_service(result)
             except ValueError as exc:
+                trace.finish(
+                    "review_service_failed",
+                    failed=True,
+                    failure_type=type(exc).__name__,
+                )
                 return [f"independent production policy review failed: {exc}"]
             changed = []
             for relative, expected_hash in source_hashes.items():
@@ -554,12 +536,19 @@ class Campaign:
                         f"{type(exc).__name__}: {exc}"
                     ]
                 else:
+                    review_valid = True
                     status = "accepted" if not errors else "rejected"
                     print(
                         f"[production-policy] independent full-candidate review {status}: "
                         f"{review_summary}",
                         flush=True,
                     )
+
+            trace.finish(
+                "validated" if review_valid and not changed else "invalid_response",
+                failed=not review_valid or bool(changed) or review_trace_issue,
+                response_written=(review_workspace / "dependency_review.json").is_file(),
+            )
 
         try:
             reviewed_digest = _production_review_digest(
@@ -600,7 +589,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Bound timeout retries across sessions and supervisor restarts."""
-        from orchestrator.infrastructure_retry import retry_review
+        from aka.legacy.workflow.review_retry import retry_review
 
         digest = _production_review_digest(workspace, framework, require_gluon)
         stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
@@ -632,19 +621,22 @@ class Campaign:
 
     @cached_property
     def source_checks_enabled(self) -> bool:
-        """Freeze source policy from evaluator-owned inputs, not candidate edits."""
-        if self.execution.environment().get("ATREX_SANDBOX_SSH"):
+        """Freeze policy from trusted inputs, never candidate worktree metadata."""
+        if self.execution.uses_ssh:
             return True
         reference = self.private_reference_dir
         if reference is not None:
             return evaluator_num_gpus(reference) < 2
         baseline = v0_baseline_commit(self.workspace) if self.workspace.is_dir() else ""
         if baseline:
+            # Resume from the immutable V0, including the absence of metadata.
+            # Reading HEAD or the live file would let a candidate disable its gate.
             if not git_path_blob(self.workspace, baseline, "metadata.json"):
                 return True
             result = subprocess.run(
-                ["git", "show", f"{baseline}:metadata.json"], cwd=str(self.workspace),
-                capture_output=True, encoding="utf-8", check=True,
+                ["git", "show", f"{baseline}:metadata.json"],
+                cwd=str(self.workspace), capture_output=True, encoding="utf-8",
+                check=True,
             )
             try:
                 metadata = json.loads(result.stdout)
@@ -653,21 +645,16 @@ class Campaign:
             if not isinstance(metadata, dict):
                 raise ValueError("V0 metadata.json must contain a JSON object")
             return distributed_evaluation_world_size(metadata) < 2
-        return evaluator_num_gpus(self._loaded_problem().evaluation.directory) < 2
+        # Before V0 exists, the Task-owned evaluation snapshot is authoritative.
+        return evaluator_num_gpus(self.problem.evaluation.directory) < 2
 
     def _link_runtime(self) -> None:
-        from long_horizon.store import CampaignStore
+        from aka.legacy.workflow.store import CampaignStore
+        from .environment import install_campaign_resources
 
         self._assert_generalized_inputs_are_private()
         CampaignStore.ensure_excluded(self.workspace, wiki_trace_only=True)
-        native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
-        link_runtime(
-            self.workspace,
-            native_root,
-            plugin_registry=self.plugin_registry,
-            provider=self.candidate_workspace,
-            is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-        )
+        install_campaign_resources(self, self.workspace)
         install_workspace_policy(
             self.workspace,
             self.optimization_mode,
@@ -690,37 +677,21 @@ class Campaign:
 
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
-        # (no baseline session) — sol_seed.py copies the ground-truth files, writes
+        # (no baseline session) — Task installs the ground-truth files, writes
         # the DPS wrapper kernel.py + solution.json; this method benches V0 in the sandbox.
         problem = self._loaded_problem()
         op_dir = problem.evaluation.directory
         if problem.initial_source.kind == "sol":
             self.evaluation.setup_baseline_sol(op_dir)
             return
-        if not WORKSPACE_INIT.exists():
-            raise FileNotFoundError(f"missing {WORKSPACE_INIT}")
-        # workspace_init.sh builds the workspace as $(pwd)/kernel_opt_<name>,
-        # so cwd must be the work_dir (or the process cwd when --workspace is absent).
-        from orchestrator._bootstrap import task_modules
-
-        task_modules()
         from aka.contracts.workspace import SourceRequest
+        from .resources import initial_files
 
-        content = self.source_provider.prepare(
-            SourceRequest(initial=problem.initial_source)
-        )
-        initial_entry = str(problem.initial_source.entry)
+        content = self.source_provider.prepare(SourceRequest(initial=problem.initial_source))
         code = self.candidate_workspace.initialize_kernel(
-            WORKSPACE_INIT.parent,
-            str(WORKSPACE_INIT),
-            [self.campaign_name, initial_entry],
-            content=content,
-            working_directory=self.workspace.parent,
-        )
+            self.workspace, content, runtime_files=initial_files(self.plugin_registry))
         if code:
-            raise subprocess.CalledProcessError(
-                code, ["bash", str(WORKSPACE_INIT), self.campaign_name, initial_entry]
-            )
+            raise RuntimeError(f'Task workspace initialization failed with code {code}')
         # Production native tasks always expose a generalized public contract. Exact shapes and
         # release metadata remain in the source operator directory and are injected only at the
         # sandbox boundary. A missing public contract is authored before the baseline session.
@@ -748,7 +719,7 @@ class Campaign:
         if self.atrex_bench_root:
             self.evaluation.setup_baseline_native(op_dir, generalized=generalized)
             return
-        prompt = _render(
+        prompt = render_prompt(
             PROMPTS_DIR / "setup.md",
             PLUGINS=self.plugin_directive("setup"),
             WORKSPACE=str(self.workspace),
@@ -756,10 +727,7 @@ class Campaign:
             FRAMEWORK=self.framework,
             KERNEL_DEMO="reference.py",
             NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(
-                self.agent_cli,
-                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-            ),
+            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
             BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._sandbox_directive(),
@@ -870,7 +838,7 @@ class Campaign:
         )
         with ThreadPoolExecutor(max_workers=1) as executor:
             review_future = executor.submit(
-                    copy_context().run,
+                copy_context().run,
                 self._ensure_framework_baseline_correctness_guidance
             )
             try:
@@ -957,7 +925,7 @@ class Campaign:
             )
         result: Optional[dict] = None
         if not problem:
-            result, problem = self.evaluation.framework_baseline_external_gates(n)
+            result, problem = self._framework_baseline_external_gates(n)
         numerical_repairs = 0
         while (
             problem
@@ -984,7 +952,7 @@ class Campaign:
                 v0_blob, baseline_commit, include_policy_review=False
             )
             if not problem:
-                result, problem = self.evaluation.framework_baseline_external_gates(n)
+                result, problem = self._framework_baseline_external_gates(n)
         if problem:
             # Undo any session-authored commits while retaining every worktree file.  A hard reset
             # here used to erase the exact candidate and debugging experience needed by a restart.
@@ -997,6 +965,7 @@ class Campaign:
                     stderr=subprocess.DEVNULL,
                 )
             self._warn_restored_baseline_paths(baseline_commit)
+            self._capture_framework_baseline_rejection(problem)
             self._record_framework_baseline_failure(problem)
             self._sync_framework_baseline_live(
                 phase="failed",
@@ -1045,6 +1014,54 @@ class Campaign:
             flush=True,
         )
 
+    def _framework_baseline_external_gates(self, n: int):
+        try:
+            return self.evaluation.framework_baseline_external_gates(n)
+        except EvaluationUnavailable as exc:
+            status = "rejected" if exc.failure.candidate_repairable else "validation_blocked"
+            self._capture_framework_baseline_rejection(
+                exc.failure.message, status=status
+            )
+            raise
+
+    def _capture_framework_baseline_rejection(
+        self, problem: str, *, status: str | None = None
+    ) -> None:
+        if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX):
+            reason = "supplemental-validation-pending"
+            status = status or "validation_blocked"
+        elif problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
+            reason = "supplemental-candidate-failure"
+            status = status or "rejected"
+        elif "self-contained" in problem:
+            reason = "production-policy-rejected"
+            status = status or "rejected"
+        elif "combined validation" in problem:
+            reason = "combined-validation-failed"
+            status = status or "rejected"
+        elif "candidate request rejected" in problem:
+            reason = "candidate-request-rejected"
+            status = status or "rejected"
+        else:
+            reason = "framework-baseline-rejected"
+            status = status or "rejected"
+        try:
+            capture_framework_baseline_rejection(
+                self.workspace,
+                version=FRAMEWORK_BASELINE_VERSION,
+                status=status,
+                reason=reason,
+                diagnostic=self.evaluation.framework_baseline_rejection_diagnostic(
+                    problem
+                ),
+            )
+        except (OSError, RuntimeError, TypeError, ValueError) as exc:
+            print(
+                "[orchestrator] WARNING: could not retain terminal framework-baseline "
+                f"diagnostic: {type(exc).__name__}: {exc}",
+                flush=True,
+            )
+
     def _sync_framework_baseline_live(
         self,
         *,
@@ -1057,8 +1074,8 @@ class Campaign:
     ) -> None:
         """Best-effort live progress before the Long Horizon supervisor starts."""
         try:
-            from long_horizon.journal import sync_live_memory
-            from long_horizon.store import CampaignStore
+            from aka.legacy.workflow.journal import sync_live_memory
+            from aka.legacy.workflow.store import CampaignStore
 
             store = CampaignStore(self.workspace)
             created_at = datetime.now(timezone.utc).isoformat()
@@ -1120,8 +1137,12 @@ class Campaign:
         # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
         # interrupted V1 worktree and needs validation/recovery first.
         if restart_journal:
+            if self.resume_framework_candidate:
+                return "adopt", "validate the retained framework candidate"
             return "run", "resuming the unexpected-exit V1 handoff"
         if not progressed and dirty_candidate:
+            if self.resume_framework_candidate:
+                return "adopt", "validate the retained framework candidate"
             return "run", "resuming preserved framework-baseline work"
 
         if self.framework_baseline == "auto" and self.optimization_mode != "production":
@@ -1165,6 +1186,8 @@ class Campaign:
             return "run", f"V0 is not a self-contained {self.framework} kernel"
         if latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION:
             return "adopt", "an interrupted framework baseline is already committed"
+        if self.resume_framework_candidate:
+            return "adopt", "validate the retained framework candidate"
         return "skip", (
             "HEAD has progressed beyond V0 without a framework-baseline pin; "
             "leaving this campaign on its existing baseline"
@@ -1351,43 +1374,23 @@ class Campaign:
     def _framework_baseline_reference_catalog(self) -> list[str]:
         """Rank a small exact-path catalog; reviewers may select only from this list."""
         # Knowledge stores are queried through enabled tools, not scanned as raw files.
-        roots = (REPO_ROOT / "reference-projects",)
-        roots = tuple(root for root in roots if root.is_dir())
-        if not roots:
-            return []
-        candidates: list[str] = []
-        if shutil.which("rg"):
-            completed = subprocess.run(
-                ["rg", "--files", *(str(root) for root in roots if root.is_dir())],
-                cwd=str(REPO_ROOT),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
-            if completed.returncode in {0, 1}:
-                candidates = [line.strip() for line in completed.stdout.splitlines()]
-        if not candidates:
-            for root in roots:
-                if not root.is_dir():
-                    continue
-                for path in root.rglob("*"):
-                    if path.is_file():
-                        candidates.append(path.relative_to(REPO_ROOT).as_posix())
+        selected = self.plugin_registry.resource_result().resources
+        sources = {}
+        for resource in selected:
+            if not resource.name.startswith('workflow-reference-') or resource.destination is None:
+                continue
+            for member in resource.files:
+                relative = (Path(resource.destination)/member.path).as_posix()
+                sources[relative] = resource.source/member.path
+        candidates = tuple(sources)
 
         keywords = self._framework_baseline_reference_keywords()
         targets_ppu = hardware_vendor(self.platform, self.arch) == "ppu"
         wants_backward = bool(keywords & {"backward", "bwd"})
         ranked: list[tuple[int, str]] = []
         for raw_path in candidates:
-            path = Path(raw_path)
-            try:
-                absolute = path if path.is_absolute() else REPO_ROOT / path
-                relative = (
-                    absolute.resolve().relative_to(REPO_ROOT.resolve()).as_posix()
-                )
-            except (OSError, ValueError):
-                continue
-            source = REPO_ROOT / relative
+            relative = raw_path
+            source = sources[relative]
             suffix = source.suffix.lower()
             if (
                 suffix not in _FRAMEWORK_BASELINE_REFERENCE_EXTENSIONS
@@ -1608,7 +1611,7 @@ class Campaign:
                     catalog_path.read_bytes()
                 ).hexdigest()
 
-                prompt = _render(
+                prompt = render_prompt(
                     PROMPTS_DIR / "framework_baseline_correctness_review.md",
                     REVIEWER=label,
                     FRAMEWORK=self.framework,
@@ -1995,7 +1998,7 @@ class Campaign:
 
     def _framework_baseline_prompt(self, n: int) -> str:
         smoke_command, smoke_scope = self.evaluation.framework_baseline_smoke_command(n)
-        return _render(
+        return render_prompt(
             PROMPTS_DIR / "framework_baseline.md",
             PLUGINS=self.plugin_directive("framework_baseline"),
             WORKSPACE=str(self.workspace),
@@ -2005,10 +2008,7 @@ class Campaign:
             FRAMEWORK=self.framework,
             ARCH=self.arch or "the runtime GPU arch",
             NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(
-                self.agent_cli,
-                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-            ),
+            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._framework_baseline_sandbox_directive(),
             EVALUATOR=self.evaluation.evaluator_directive(),
@@ -2233,6 +2233,9 @@ class Campaign:
         # The metadata commit must not read as a stalled optimization round on the next resume.
         write_stall(self.workspace, 0)
 
+    def numerical_feedback(self, workspace, *, standard_correctness_passed=False):
+        return self.services.numerical_feedback(workspace, standard_correctness_passed=standard_correctness_passed)
+
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude", **options):
         runtime = (
             self.agent_runtime
@@ -2273,7 +2276,7 @@ class Campaign:
             subprocess.run(
                 [
                     sys.executable,
-                    str(REPO_ROOT / "tools" / "memory_manager.py"),
+                    "-m", "aka.legacy.workflow.memory_manager",
                     "summary",
                     "--workspace",
                     str(self.workspace),
@@ -2300,7 +2303,7 @@ class Campaign:
                 subprocess.run(
                     [
                         sys.executable,
-                        str(REPO_ROOT / "reference" / "sol_finalize.py"),
+                        "-m", "aka.legacy.workflow.sol_finalize",
                         "--workspace",
                         str(self.workspace),
                     ],

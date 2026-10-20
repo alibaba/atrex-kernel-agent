@@ -24,7 +24,6 @@ class LegacyWorkflow:
         if not isinstance(request.problem, ProblemSource):
             raise TypeError("CampaignRequest.problem must be a ProblemSource")
         problem = self._load_problem(request)
-        request = self._dependencies.prepare_request(request, problem)
         return self._campaign(request, problem)
 
     def _campaign(self, request: CampaignRequest, problem: LoadedProblem):

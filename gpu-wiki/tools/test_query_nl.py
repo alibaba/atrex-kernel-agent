@@ -11,6 +11,7 @@ from contextlib import redirect_stdout, redirect_stderr
 from io import StringIO
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
@@ -280,20 +281,20 @@ class StoreResolutionTests(unittest.TestCase):
             if old is not None:
                 os.environ[query_nl.STORE_ENV] = old
 
-    def test_placeholder_internal_directory_remains_an_empty_module_slot(self):
-        old_internal = query_nl.SIBLING_INTERNAL
+    def test_placeholder_internal_directory_is_not_selected(self):
         with TemporaryDirectory() as tmp:
+            public = Path(tmp).resolve() / "gpu-wiki"
+            public.mkdir()
             placeholder = Path(tmp) / "internal_gpu_wiki"
             placeholder.mkdir()
             (placeholder / "SOURCE.txt").write_text("source only", encoding="utf-8")
-            query_nl.SIBLING_INTERNAL = placeholder
-            try:
+            with patch.object(query_nl, "OWN_STORE_ROOT", public), patch.dict(os.environ, {}, clear=True):
                 self.assertEqual(query_nl.resolve_store_roots(None), [
-                    (query_nl.PUBLIC_STORE, STORE),
-                    (query_nl.INTERNAL_STORE, placeholder.resolve()),
+                    (query_nl.PUBLIC_STORE, public),
                 ])
-            finally:
-                query_nl.SIBLING_INTERNAL = old_internal
+                self.assertEqual(query_nl.resolve_store_roots(str(public)), [
+                    (query_nl.PUBLIC_STORE, public),
+                ])
 
     def test_excluded_ids_remain_store_isolated(self):
         exclude = "public.id,internal_gpu_wiki::private.id"
@@ -399,35 +400,26 @@ class FrontDoorTests(unittest.TestCase):
             "hardware_wiki",
         )
 
-    def test_installed_internal_store_is_queried_and_id_namespaced(self):
-        old_internal = query_nl.SIBLING_INTERNAL
+    def test_installed_internal_sibling_is_not_queried(self):
         with TemporaryDirectory() as tmp:
+            public = Path(tmp).resolve() / "gpu-wiki"
             internal = Path(tmp) / "internal_gpu_wiki"
-            internal.mkdir()
-            for name in ("tools", "kernel_wiki", "hardware_wiki"):
-                os.symlink(STORE / name, internal / name, target_is_directory=True)
-            query_nl.SIBLING_INTERNAL = internal
-            try:
-                intent = stub_intent(hardware_requests=[{
-                    "kind": "product", "value": "b200", "field": None, "vs": None,
-                }])
-                with fake_bridge(intent):
-                    code, out, err = run_front_door(
-                        self.REQUEST, "--max-records", "6")
-                self.assertEqual(code, 0, err)
-                records = json.loads(out)["records"]
-            finally:
-                query_nl.SIBLING_INTERNAL = old_internal
-        self.assertTrue(any(
-            row["store"] == query_nl.PUBLIC_STORE for row in records.values()))
-        self.assertTrue(any(
-            row["store"] == query_nl.INTERNAL_STORE for row in records.values()))
-        self.assertTrue(any(
-            rid.startswith(query_nl.INTERNAL_STORE + "::") for rid in records))
-        for rid, row in records.items():
-            raw_id = rid.split("::", 1)[1] if "::" in rid else rid
-            self.assertEqual(row["wiki_id"], f"{row['store']}::{raw_id}")
-        self.assertLessEqual(len(records), 6)
+            for root in (public, internal):
+                root.mkdir()
+                for name in ("tools", "kernel_wiki", "hardware_wiki"):
+                    os.symlink(STORE / name, root / name, target_is_directory=True)
+            intent = stub_intent(hardware_requests=[{
+                "kind": "product", "value": "b200", "field": None, "vs": None,
+            }])
+            with patch.object(query_nl, "OWN_STORE_ROOT", public), patch.dict(os.environ, {}, clear=True):
+                for arguments in ([], ["--store-root", str(public)]):
+                    with self.subTest(arguments=arguments), fake_bridge(intent):
+                        code, out, err = run_front_door(self.REQUEST, "--max-records", "6", *arguments)
+                    self.assertEqual(code, 0, err)
+                    records = json.loads(out)["records"]
+                    self.assertTrue(records)
+                    self.assertTrue(all(row["store"] == query_nl.PUBLIC_STORE for row in records.values()))
+                    self.assertTrue(all(row["wiki_id"] == f"gpu_wiki::{rid}" for rid, row in records.items()))
 
     def test_unknown_product_field_falls_back_to_complete_product_record(self):
         intent = stub_intent(hardware_requests=[{

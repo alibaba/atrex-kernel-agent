@@ -7,16 +7,15 @@ from typing import Any, Protocol, Callable, TYPE_CHECKING, Optional
 from aka.contracts.agent import Agent
 from aka.contracts.problem_provider import ProblemProvider
 from aka.contracts.workspace import SourceProvider, CandidateWorkspace
-from aka.contracts.problem import LoadedProblem
-from aka.contracts.workflow import CampaignRequest
 import subprocess
 
 if TYPE_CHECKING:
     from .models import VerificationResult
     from .campaign import Campaign
+    from aka.legacy.workflow.services import WorkflowServices
 
 
-class BaselineEvaluation(Protocol):
+class BaselineOperations(Protocol):
     def evaluator_directive(self) -> str: ...
     def install_native_evaluator(self) -> None: ...
     def install_profile_driver(self) -> None: ...
@@ -50,7 +49,7 @@ class BaselineEvaluation(Protocol):
     def validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]: ...
 
 
-class EpisodeEvaluation(Protocol):
+class EpisodeMeasurements(Protocol):
     def expected_shape_ids(self) -> set[str] | None: ...
     def fast_evaluator_command(self, version: int) -> str: ...
     def fast_verification_result(
@@ -118,6 +117,7 @@ class EpisodeEnvironment(Protocol):
     def restored_stall(self, workspace: Path) -> int: ...
     def save_stall(self, workspace: Path, value: int) -> None: ...
     def read_memory(self, workspace: Path, version: int) -> dict | None: ...
+    def latest_version(self, workspace: Path) -> int: ...
     def speedup_vs_reference(self, memory: dict) -> float: ...
     def peak_util(self, memory: dict) -> float: ...
 
@@ -132,9 +132,7 @@ class CampaignDependencies:
     problem: ProblemProvider
     source: SourceProvider
     candidate: CandidateWorkspace
-    evaluation: Callable[[Campaign], BaselineEvaluation]
+    evaluation: Callable[[Campaign], BaselineOperations]
     workflow: Callable[[Campaign], str]
     execution: Callable[[Campaign], CampaignExecution]
-    prepare_request: Callable[[CampaignRequest, LoadedProblem], CampaignRequest] = (
-        lambda request, problem: request
-    )
+    services: Callable[[Campaign], WorkflowServices]

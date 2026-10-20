@@ -7,10 +7,13 @@ contain metadata, not duplicate source trees; invoke this script from any cwd.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import shutil
 import subprocess
 import sys
 import tempfile
+import tarfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,19 +28,46 @@ OWNERS = {
 
 def owned(distribution: str) -> tuple[Path, ...]:
     files = []
-    suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json', '.sh')
-    if distribution == 'atrex-aka-light':
-        suffixes = ('.py', '.json', '.sh', '.md', '.cu', '.cuh', '.h', '.cpp', '.c')
+    suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json', '.sh', '.md')
     for relative in OWNERS[distribution]:
         path = ROOT / 'src' / relative
         files.extend([path] if path.is_file() else
                      sorted(p for p in path.rglob('*') if p.is_file() and p.suffix in suffixes))
-    if distribution == 'atrex-aka-legacy':
-        # Execution owns this runtime Skill and its reference files. Installation
-        # into an optimization Agent's workspace is handled by the application.
-        skills = ROOT / 'src' / 'aka' / 'legacy' / 'execution' / 'skills'
-        files.extend(sorted(p for p in skills.rglob('*.md') if p.is_file()))
-    return tuple(files)
+    if distribution in {'atrex-aka-legacy', 'atrex-aka-light'}:
+        # Runtime content belongs to its installed module. Include binary and
+        # extensionless attachments as well as prompts and Skills; never stage
+        # checkout-level tools, resources or generated caches.
+        package = 'legacy' if distribution == 'atrex-aka-legacy' else 'light'
+        files = sorted(p for p in (ROOT / 'src' / 'aka' / package).rglob('*')
+            if p.is_file() and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
+            and p.suffix not in {'.pyc', '.pyo'})
+    return tuple(dict.fromkeys(files))
+
+
+def build_wiki_resources(output: Path) -> None:
+    """Export the explicitly selected public Wiki plugin and its data closure."""
+    output.mkdir(parents=True, exist_ok=True)
+    inventory = {}
+    with tarfile.open(output / 'atrex-aka-public-resources-0.1.0.tar.gz', 'w:gz') as archive:
+        for relative in ('plugins/gpu-wiki', 'gpu-wiki'):
+            directory = ROOT / relative
+            if not directory.is_dir():
+                raise FileNotFoundError(f'missing selected public resource: {directory}')
+            for path in sorted(directory.rglob('*')):
+                if {'.git', '__pycache__', '.pytest_cache'}.intersection(path.parts) or path.suffix in {'.pyc', '.pyo'}:
+                    continue
+                if path.is_symlink():
+                    raise ValueError(f'resource export requires materialized files: {path}')
+                if path.is_file():
+                    name = path.relative_to(ROOT).as_posix()
+                    inventory[name] = {'sha256': hashlib.sha256(path.read_bytes()).hexdigest(),
+                                       'mode': path.stat().st_mode & 0o777}
+                    archive.add(path, arcname=name, recursive=False)
+    identity = hashlib.sha256(json.dumps(inventory, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    (output / 'public-wiki-resource.json').write_text(json.dumps({
+        'schema_version': 1, 'resource': 'gpu-wiki', 'identity': identity, 'files': inventory,
+    }, indent=2) + '\n')
+
 
 
 def build(distribution: str, output: Path) -> None:
@@ -50,10 +80,6 @@ def build(distribution: str, output: Path) -> None:
             target = stage / 'src' / source.relative_to(ROOT / 'src')
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
-        if distribution == 'atrex-aka-legacy':
-            assets = stage / 'src/aka/legacy/evaluation/assets'
-            for relative in ('long_horizon/remote_abba.py', 'reference/profile_driver.py'):
-                shutil.copy2(ROOT / relative, assets / Path(relative).name)
         # The default `build` operation deliberately builds a wheel from the sdist.
         subprocess.run([sys.executable, '-m', 'build', '--outdir', str(output.resolve())], cwd=stage, check=True)
 
@@ -61,6 +87,8 @@ def build(distribution: str, output: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--with-wiki-resources', action='store_true',
+                        help='also export the selected public Wiki plugin and data as a separate artifact')
     parser.add_argument('distributions', nargs='*')
     args = parser.parse_args()
     distributions = args.distributions or list(OWNERS)
@@ -68,6 +96,8 @@ def main() -> int:
         if distribution not in OWNERS:
             parser.error(f'unknown distribution: {distribution}')
         build(distribution, args.output)
+    if args.with_wiki_resources:
+        build_wiki_resources(args.output.resolve())
     return 0
 
 

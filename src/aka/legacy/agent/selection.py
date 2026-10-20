@@ -4,8 +4,8 @@ from threading import RLock
 
 
 class LegacyAgent:
-    def __init__(self, *, process_runner=None, registry=None):
-        self._options = {}
+    def __init__(self, *, process_runner=None, registry=None, session_name=""):
+        self._options = {"session_name":session_name}
         if process_runner is not None:
             self._options["process_runner"] = process_runner
         if registry is not None:
@@ -33,10 +33,10 @@ class LegacyAgent:
                 self._runtimes[runtime_id] = runtime
             return self._runtimes[runtime_id]
 
-    def open_session(self, runtime_id, workspace, *, session_id="", environment=None):
+    def open_session(self, runtime_id, workspace, *, session_id="", environment=None, output_directory=None):
         import uuid
         from .native import NativeSession
-        from orchestrator.agent_runtime.process import run_bounded
+        from aka.legacy.agent.process import run_bounded
 
         with self._lock:
             self._check_open()
@@ -53,10 +53,22 @@ class LegacyAgent:
                 executor,
                 environment,
                 self._check_open,
-                runtime=runtime,
+                runtime=runtime, output_directory=output_directory,
             )
             self._sessions.add(session)
             return session
+
+    def export_checkpoint(self, workspace, destination):
+        from .checkpoint import export_checkpoint
+        return export_checkpoint(workspace, destination)
+
+    def validate_checkpoint(self, snapshot, *, check_destinations=False):
+        from .checkpoint import validate_checkpoint
+        validate_checkpoint(snapshot, check_destinations=check_destinations)
+
+    def restore_checkpoint(self, snapshot):
+        from .checkpoint import restore_checkpoint
+        restore_checkpoint(snapshot)
 
     def close(self):
         with self._lock:

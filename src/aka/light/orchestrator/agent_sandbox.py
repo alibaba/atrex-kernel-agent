@@ -22,9 +22,9 @@ from .recovery_processes import HANDOFF_ID_ENV
 from .episode_workspace import EPISODE_WORKSPACE_ENV, PUBLIC_FILES
 from .sandbox_launch import SandboxLaunch
 
-from aka.legacy.application.paths import checkout_root
+from aka.light.runtime.paths import legacy_resource_root
 
-REPOSITORY_ROOT = checkout_root()
+REPOSITORY_ROOT = legacy_resource_root()
 PUBLIC_ASSETS = (
     "tools",
     "skills",

@@ -1,7 +1,8 @@
 # Community Local Sandbox
 
-`tools/local_gateway.py` is a small, standard-library-only scheduler for maintaining and testing the
-localhost optimization path. It accepts requests from `tools/sandbox.py` and queues local GPU commands
+`python -m aka.legacy.execution.runtime_tools.local_gateway` starts a small,
+standard-library-only scheduler for maintaining and testing the localhost optimization path. It
+accepts requests from `python -m aka.legacy.execution.cli` and queues local GPU commands
 FIFO.
 
 ## Start the Server
@@ -9,7 +10,7 @@ FIFO.
 Run it from the repository root in the Python environment that contains the workload's GPU stack:
 
 ```bash
-python tools/local_gateway.py serve \
+python -m aka.legacy.execution.runtime_tools.local_gateway serve \
   --host 127.0.0.1 \
   --port 8000 \
   --state-dir .atrex-local-gateway
@@ -19,7 +20,7 @@ If an existing workflow uses a hardware token instead of `local`, register it as
 the optimizer arguments:
 
 ```bash
-python tools/local_gateway.py serve --gpu-alias YOUR_GPU_TOKEN
+python -m aka.legacy.execution.runtime_tools.local_gateway serve --gpu-alias YOUR_GPU_TOKEN
 ```
 
 The default `--workers 1` serializes commands for one local GPU. A larger value enables parallel command
@@ -31,11 +32,11 @@ silently executed twice.
 
 ## Use with the Optimizer
 
-The optimizer continues to use `tools/sandbox.py`, so correctness, performance, and profiler commands have
+The optimizer continues to use `python -m aka.legacy.execution.cli`, so correctness, performance, and profiler commands have
 the same packaging and artifact-return behavior as the remote execution path:
 
 ```bash
-python orchestrator/optimize.py \
+aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/operator \
   --platform H20 --framework Triton \
   --sandbox-hardware local \
@@ -65,7 +66,7 @@ The community scheduler implements:
 - `POST /v1/jobs/<job_id>/cancel`
 - legacy `GET /v1/evals/<job_id>` polling compatibility
 
-`tools/sandbox.py` prefers typed `eval` and `profile` requests when the workspace fits their source
+`python -m aka.legacy.execution.cli` prefers typed `eval` and `profile` requests when the workspace fits their source
 contract, and falls back to a self-contained `dev` request for SOL, aggregate, custom-input, or otherwise
 unrepresentable commands. `disassemble` remains unsupported and returns a structured HTTP 501
 `kind_not_supported` response.

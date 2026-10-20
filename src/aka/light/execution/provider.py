@@ -23,12 +23,12 @@ class ReliableExecutor(LegacyExecutor):
         from aka.light.runtime.paths import supervisor_campaign_root
         from aka.light.supervisor.measurement_records import JOB_ROOT_ENV
         from aka.light.orchestrator.agent_home import open_private_directory
-        from aka.legacy.application.paths import checkout_root
+        from aka.light.runtime.paths import legacy_resource_root
         evidence = supervisor_campaign_root(request.workspace) / "execution"
         with open_private_directory(evidence):
             pass
         environment = dict(request.environment)
-        environment["AKA_LEGACY_REPO_ROOT"] = str(checkout_root())
+        environment["AKA_LEGACY_REPO_ROOT"] = str(legacy_resource_root())
         environment[JOB_ROOT_ENV] = str(evidence)
         source_root = str(Path(__file__).resolve().parents[3])
         environment["PYTHONPATH"] = os.pathsep.join(filter(None, (source_root, environment.get("PYTHONPATH"))))

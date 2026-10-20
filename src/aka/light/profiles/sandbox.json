@@ -1,0 +1,9 @@
+{
+  "extends": "aka.legacy.workflow:profiles/workflow.json",
+  "api_version": 2,
+  "composition": "sandbox",
+  "environment_values": {
+    "AKA_LEGACY_REPO_ROOT": "${aka:repo_root}"
+  },
+  "doc": "Opt-in Agent sandboxing on the standard Workflow; the default Workflow profile is unchanged."
+}

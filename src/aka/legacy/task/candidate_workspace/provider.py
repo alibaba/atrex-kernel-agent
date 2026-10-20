@@ -9,6 +9,22 @@ def _legacy(handle):
 
 
 class GitCandidateWorkspace(GitSnapshots):
+    def export_checkpoint(self, workspace, destination, *, candidates=()):
+        from .checkpoint import export_checkpoint
+        return export_checkpoint(workspace, destination, candidates=candidates)
+
+    def validate_checkpoint(self, snapshot, *, check_destinations=False):
+        from .checkpoint import validate_checkpoint
+        return validate_checkpoint(snapshot, check_destinations=check_destinations)
+
+    def checkpoint_files(self, snapshot, paths):
+        from .checkpoint import checkpoint_files
+        return checkpoint_files(snapshot, paths)
+
+    def restore_checkpoint(self, snapshot):
+        from .checkpoint import restore_checkpoint
+        return restore_checkpoint(snapshot)
+
     def baseline_changes(self, workspace, baseline_commit):
         from .baseline import baseline_changes
         return baseline_changes(workspace, baseline_commit)
@@ -17,9 +33,9 @@ class GitCandidateWorkspace(GitSnapshots):
         from .baseline import restore_baseline
         return restore_baseline(workspace, baseline_commit)
 
-    def install_files(self, workspace, files):
+    def install_files(self, workspace, files, *, immutable=False):
         from .content import install_files
-        return install_files(workspace, files)
+        return install_files(workspace, files, immutable=immutable)
 
     def plan(self, workspace, episode, base_commit, root=None):
         handle = EpisodeWorktree.plan(workspace, episode, base_commit, root)
@@ -41,20 +57,11 @@ class GitCandidateWorkspace(GitSnapshots):
         return promote_candidate(workspace, **options)
 
 
-    def initialize_kernel(self, reference_dir, entry, arguments, *, content, working_directory=None):
+    def initialize_kernel(self, workspace, content, *, runtime_files):
         from .initial import initialize_kernel
-        return initialize_kernel(reference_dir, entry, arguments, content=content,
-                                 working_directory=working_directory)
+        return initialize_kernel(workspace, content, runtime_files=runtime_files)
 
-    def prepare_sol(self, workspace, content, *, problem_files, reference_dir, profile_driver=None):
+    def prepare_sol(self, workspace, content, *, problem_files, harness, runtime_files):
         from .initial import prepare_sol
-        prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir,
-                    profile_driver=profile_driver)
-
-    def commit_sol(self, workspace):
-        from .initial import commit_sol
-        commit_sol(workspace)
-
-    def install_runtime(self, workspace, atrex_bench_root=None, **options):
-        from .runtime import link_runtime
-        link_runtime(workspace, atrex_bench_root, **options)
+        return prepare_sol(workspace, content, problem_files=problem_files,
+                           harness=harness, runtime_files=runtime_files)

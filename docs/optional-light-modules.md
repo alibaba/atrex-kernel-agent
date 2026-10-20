@@ -1,12 +1,12 @@
 # Optional light implementations
 
-The default `application` composition retains the upstream Agent, Task and Workflow. Installing `atrex-aka-light` does not activate isolation, capture, a private HTTP service, a different correctness policy, or simplified Episodes. These behaviors require an explicit profile or provider replacement.
+The default `workflow` composition retains the upstream Agent, Task and Workflow. Installing `atrex-aka-light` does not activate isolation, capture, a private HTTP service, a different correctness policy, or simplified Episodes. These behaviors require an explicit profile or provider replacement.
 
 ## Select a composition
 
-| Application profile | Agent | Workspace / Workflow | Tool service |
+| Launch profile | Agent | Workspace / Workflow | Tool service |
 | --- | --- | --- | --- |
-| `application` (default) | Upstream | Upstream | Upstream behavior |
+| `workflow` (default; omit `--profile`) | Upstream | Upstream | Upstream behavior |
 | `observed` | Native, capture enabled | Upstream | Upstream behavior |
 | `sandbox` | Bubblewrap, capture disabled | Upstream | Upstream behavior |
 | `light` | Native, capture enabled | Managed drafts / light Episodes | Private HTTP measurements, records and Journal |
@@ -15,10 +15,10 @@ The default `application` composition retains the upstream Agent, Task and Workf
 The first two optional profiles replace only the Agent provider. They do not remove legacy Setup/Fast stages, take over Git, or hide evaluator inputs that the legacy Workflow requires. The two light profiles deliberately select the managed Workspace, Tool Runtime and light Workflow together. A report cannot be accepted without its evidence store and sealed source; turning off those dependencies is not a supported combination.
 
 Agent shell tools retain the launching Python environment, including symlink-based virtual
-environments. On an upstream Workflow, the optional Agent's process guard permits the exact
-`tools/sandbox.py` in the controller-selected checkout, including the workspace link to it.
-This permission is invocation-local; it does not authorize arbitrary same-named scripts or
-the Legacy transport inside an HTTP Light session.
+environments. On an upstream Workflow, the optional Agent's process guard recognizes the
+installed `aka.legacy.execution` transport selected by the controller. The bundled
+`tools/sandbox.py` client remains the only script entrypoint trusted inside an HTTP Light
+session; arbitrary same-named scripts are not authorized.
 
 Build and install the three packages from a matching checkout:
 
@@ -31,7 +31,7 @@ aka optimize --repo-root /path/to/aka --profile light -- --op-dir /path/to/probl
 
 Use `--profile light-sandbox` on a Linux coordinator with Bubblewrap. macOS supports the native profiles; selecting Bubblewrap there fails explicitly. There is no silent native fallback.
 
-The independent Execution selection is `--execution-profile reliable`, or `aka execution --profile reliable`. It preserves the public Execution contract and uses the hardened Gateway submission/checkpoint implementation. It affects prepared controller calls routed through Execution; it does **not** replace a legacy Agent's direct `tools/sandbox.py`. Light application profiles additionally select that same provider for their Tool Runtime's executor dependency. These are separately owned composition instances, not an implicit shared singleton.
+The independent Execution selection is `--execution-profile reliable`, or `aka execution --profile reliable`. It preserves the public Execution contract and uses the hardened Gateway submission/checkpoint implementation. It affects prepared controller calls routed through Execution; it does **not** replace the standard Workflow transport. Light profiles additionally select that same provider for their Tool Runtime's executor dependency. These are separately owned composition instances, not an implicit shared singleton.
 
 ## Options
 
@@ -48,7 +48,7 @@ With `wiki: false` (or omitted), the Agent receives no KernelWiki Skill, Wiki
 catalog entry, or Wiki-query prompt requirement. Direct Wiki requests return
 `wiki_disabled` without starting a query. Supplying `wiki_options` alone does not
 enable Wiki. Existing explicitly enabled configurations remain enabled; this does
-not change upstream legacy/application defaults or running Campaigns.
+not change the upstream Workflow default or running Campaigns.
 
 When enabled, set `tool_runtime.config.wiki_options` independently of Optimizer configuration:
 
@@ -451,7 +451,7 @@ Change the option at an Episode boundary. Existing memory-only histories remain 
 disabling generation does not delete old summaries, and enabling it does not backfill old
 versions. Existing summaries remain read-only Agent history. This switch is independent of
 research records, `episode-report`, capture, historical Conversations and Skills/tools
-inheritance. Upstream `application` behavior is unchanged.
+inheritance. Upstream `workflow` behavior is unchanged.
 
 ### Historical Conversations
 
@@ -685,7 +685,7 @@ remove Light's configured HTTP/Session deadlines and CLI uncertainty protection.
 
 On 2026-10-19 this integration branch merged upstream `main` at `7247206287ef2747342eccb89421fa4606368e2d` (multi-GPU source-policy support). Its relocated Workflow changes apply to both upstream and light implementations. Explicit distributed evaluator contracts accept 2–64 GPUs and must agree with `hardware.required_gpus`. Multi-GPU Agate skips production **source-policy** checks only; SSH and single-GPU retain them. Evaluator correctness, supplemental numerical checks and performance acceptance remain enabled according to the selected profile.
 
-Light promotion now matches Runtime: compare the candidate and incumbent's GeoMean latency from the same native Eval ABBA measurement. Improvement is `(incumbent_us - candidate_us) / incumbent_us * 100`, and must strictly exceed the configured threshold (floating-point roundoff at equality is not an improvement). `performance_score` remains diagnostic, not a promotion gate. The existing Triton-to-Gluon conversion tolerance remains separate. The upstream `application` composition retains its original score-based rule.
+Light promotion now matches Runtime: compare the candidate and incumbent's GeoMean latency from the same native Eval ABBA measurement. Improvement is `(incumbent_us - candidate_us) / incumbent_us * 100`, and must strictly exceed the configured threshold (floating-point roundoff at equality is not an improvement). `performance_score` remains diagnostic, not a promotion gate. The existing Triton-to-Gluon conversion tolerance remains separate. The upstream `workflow` composition retains its original score-based rule.
 
 Light's shared defaults are defined in `aka.light.evaluation.policy`, aligned with Runtime production: full Evaluate and candidate correctness use 5 cases (base plus 4 additional), 100 timing iterations, 10 warmup iterations, 120-second candidate/performance limits, clock locking, and 600-second default allocation timeout. Full Bootstrap/V1 measurements use the same sampling defaults; explicitly targeted bring-up smoke remains one case. Evaluate and ABBA split into one Shape per batch, with up to 16 batches in parallel. Explicit operator/request overrides remain part of task identity.
 
@@ -732,7 +732,7 @@ testing. Neither compatibility mode is a network isolation boundary.
 
 `sandbox=none` is cooperative same-UID coordination, not a malicious-Agent security boundary. Private directory layout and HTTP capabilities do not stop a process with the operator's own OS privileges. With the legacy Workflow, even Bubblewrap must retain the Git/evaluator/credential access required by that workflow. Choose the complete `light-sandbox` composition for a Git-free draft and Supervisor-owned GPU/Wiki credentials. This is filesystem/process isolation, not network isolation or a separate OS account.
 
-Begin a new workspace when changing between upstream and light Workflows. Do not point two implementations at the same live workspace, or assume their checkpoints are interchangeable. Keep the previous revision and workspace backup for rollback. Selecting `application` restores the upstream behavior for a new run; selecting `observed` or `sandbox` changes only the Agent on an upstream Workflow. Preserve the selected composition and options when resuming.
+Begin a new workspace when changing between upstream and light Workflows. Do not point two implementations at the same live workspace, or assume their checkpoints are interchangeable. Keep the previous revision and workspace backup for rollback. Omitting `--profile` (or selecting `workflow`) restores upstream behavior for a new run; selecting `observed` or `sandbox` changes only the Agent on an upstream Workflow. Preserve the selected composition and options when resuming.
 
 Both the public module APIs and the actual source snapshots were integrated from fixed modular heads (`fd7e0466` Execution, `bb7660e1` Agent/Workflow). The newer, unmerged PR #113 redesign was inspected but not merged as part of updating `main`; its Evaluation/Experiment interfaces are not the contracts claimed here. This is an integration branch, not a claim that those upstream PRs are merged or their APIs cannot change. The pre-migration implementation is retained at `codex/aka-light-before-modularization`.
 
@@ -791,7 +791,7 @@ A deterministic V0 plus one complete pivot Episode runs through the selected Tas
 
 On 2026-10-19, the 15 integration regressions passed again on Lima/Linux; macOS passed 13 and skipped the two Linux-only checks. An additional 12 boundary regressions cover selected-provider identity, actual executor injection, coexistence with legacy imports, evaluator-owned multi-GPU policy, frozen dependency-pin identity, six-case acceptance, and executor deadline/slot cleanup. Fixtures remain outside the repository. Production GPU execution, real provider installs, and restart under a live remote outage still require a deployment smoke run before rollout.
 
-The framework, legacy and light wheels were built from sdists and installed into a fresh virtual environment. Outside the checkout, `application`, `observed` and `light` profiles booted; both module/direct-file Gateway entrypoints, injected services, packaged Skill assets and a captured Agent subprocess passed. The latter used a controlled Provider result (120 tokens), not a live model call.
+The framework, legacy and light wheels were built from sdists and installed into a fresh virtual environment. Outside the checkout, `workflow`, `observed` and `light` profiles booted; both module/direct-file Gateway entrypoints, injected services, packaged Skill assets and a captured Agent subprocess passed. The latter used a controlled Provider result (120 tokens), not a live model call.
 
 The infrastructure/feedback alignment additionally passes 35 offline fault-injection
 checks: Runtime classification/feedback parity, repeated infra failures, persisted
@@ -805,7 +805,7 @@ Local reproduction fixtures for this run are `/private/tmp/aka-modular-checks-20
 
 The shared-code refactor was additionally checked against a pre-refactor source snapshot with 12 differential checks (`/private/tmp/aka-reuse-checks-20261019.py`). They cover all four backend command/usage contracts, unchanged main defaults, fresh/resumed/closed sessions, Codex fallback accounting, exact ABBA scoring and serialization, Shape batching, and 50 deterministic evaluation-result fixtures in both timed and correctness-only modes. Shared remote scripts are byte-identical to their previous Light copies; Journal, Tool Runtime and Workflow service bodies were checked unchanged. Combined with the existing integration, boundary, research-switch and Wiki/feedback fixtures, macOS passes 58 checks with two Linux-only skips. Lima passes the 27 integration/boundary checks, including real Bubblewrap and a controlled complete Episode.
 
-The refactored framework/legacy/light wheels were rebuilt from sdists and installed into a fresh environment. Isolated (`python -I`) smoke checks cover application/observed/light composition startup, both Gateway entrypoints, installed script assets, standalone SOL seed help, Qoder persistence policy, Light native resume and a captured subprocess. Shared Agent imports do not load the checkout-only legacy executor; that runner is imported only when actually selected. These checks do not use live model or GPU services and make no performance claim.
+The refactored framework/legacy/light wheels were rebuilt from sdists and installed into a fresh environment. Isolated (`python -I`) smoke checks cover workflow/observed/light composition startup, both Gateway entrypoints, installed script assets, standalone SOL seed help, Qoder persistence policy, Light native resume and a captured subprocess. Shared Agent imports do not load the checkout-only legacy executor; that runner is imported only when actually selected. These checks do not use live model or GPU services and make no performance claim.
 
 On 2026-10-20, 12 controlled active-time/suspension regressions passed on macOS
 and Lima/Linux. Linux additionally exercised both private-proc and projected-proc

@@ -34,6 +34,7 @@ class ManagedCampaign(Campaign):
             agent_read_only_paths=workflow.agent.options.read_only_paths)
         campaign.request = request
         campaign.problem = problem
+        campaign.problem_provider = workflow.problem
         campaign.agent = workflow.agent
         campaign.source_provider = workflow.source
         campaign.candidate_workspace = workflow.candidate
@@ -84,9 +85,9 @@ class ManagedCampaign(Campaign):
                 raise ValueError("This workspace uses pooled search; restore its search configuration to resume")
             return super().run()
         except LightEnvironmentUnavailable as exc:
-            # The existing Application owns the recovery monitor. Translate at
-            # this compatibility boundary, not by replacing either module.
-            from orchestrator.environment_recovery import EnvironmentUnavailable
+            # WorkflowStartup owns the shared recovery monitor. Translate at
+            # this module boundary without reviving the retired Application.
+            from aka.legacy.execution.recovery import EnvironmentUnavailable
 
             raise EnvironmentUnavailable(str(exc)) from exc
 

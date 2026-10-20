@@ -22,7 +22,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from aka.legacy.application.paths import checkout_root
+from aka.light.runtime.paths import legacy_resource_root
 
 from aka.light.supervisor.gateway import (
     EPISODE_EVALUATIONS_PATH, build_parser, configured_queue_wait_grace, find_agate, validate_evaluation_options,
@@ -998,7 +998,7 @@ class SupervisorRuntime:
         if self.config.wiki_profile_root:
             environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
         environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
-        return [sys.executable, str(checkout_root() / "gpu-wiki/tools" / f"{tool}.py"), *argv]
+        return [sys.executable, str(legacy_resource_root() / "gpu-wiki/tools" / f"{tool}.py"), *argv]
 
     def publish_legacy_outputs(self, workspace, staged, args):
         # Profile artifacts remain part of the old Agent workflow. Only these

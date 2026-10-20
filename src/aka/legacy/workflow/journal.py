@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aka.legacy.application.paths import checkout_root
 from .models import TERMINAL_STATUSES
 from .protocol import atomic_write_json
 
@@ -57,13 +56,14 @@ PPU_ARTIFACT_SECTIONS = {
     "ppu-critical-path-report/v3": ("inputs",),
     "ppu-joint-profile/v4": ("inputs", "outputs"),
 }
-PPU_PROFILE_VALIDATOR = (
-    checkout_root()
-    / "skills"
-    / "ppu-acu-joint-profile"
-    / "scripts"
-    / "profile_report.py"
-)
+def _ppu_profile_validator():
+    from aka.legacy.resources.plugins import PluginRegistry
+    try:
+        return PluginRegistry().resource_result().resource('execution-ppu-profile-validator').source
+    except KeyError:
+        return None
+
+
 PPU_DIAGNOSTIC_TEXT_FIELDS = (
     "question",
     "kernel_specialization",
@@ -665,6 +665,8 @@ def validate_accepted_ppu_evidence(
     """Verify that reusable conclusions bind to decision-grade artifacts."""
     errors: list[str] = []
     workspace = workspace.resolve()
+    validator_loaded = False
+    validator = None
     for index, row in enumerate(rows):
         error_count_before = len(errors)
         label = f"accepted_ppu_diagnostics[{index}].evidence"
@@ -730,14 +732,17 @@ def validate_accepted_ppu_evidence(
                     errors=errors,
                 )
             if len(errors) == error_count_before:
-                if not PPU_PROFILE_VALIDATOR.is_file():
+                if not validator_loaded:
+                    validator = _ppu_profile_validator()
+                    validator_loaded = True
+                if validator is None or not validator.is_file():
                     errors.append(f"{label} schema-specific validator is missing")
                 else:
                     try:
                         result = subprocess.run(
                             [
                                 sys.executable,
-                                str(PPU_PROFILE_VALIDATOR),
+                                str(validator),
                                 "validate",
                                 "--artifact",
                                 str(resolved),

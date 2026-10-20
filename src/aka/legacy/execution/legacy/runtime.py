@@ -29,7 +29,6 @@ class SandboxRequest:
     gateway_kind: str = "auto"
     preflight: bool = False
     cancel_event: Cancellation | None = None
-    health_command_explicit: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -47,6 +46,21 @@ class SandboxInvocation:
 
 
 _invocation = ContextVar("aka_legacy_sandbox_invocation", default=None)
+_transport_arguments = ContextVar("aka_execution_transport_arguments", default=())
+
+
+def current_transport_arguments() -> tuple[str, ...]:
+    """Borrow validated CLI-only transport options within the Execution call."""
+    return _transport_arguments.get()
+
+
+@contextmanager
+def transport_arguments(arguments: tuple[str, ...]):
+    token = _transport_arguments.set(arguments)
+    try:
+        yield
+    finally:
+        _transport_arguments.reset(token)
 
 
 def current_invocation() -> SandboxInvocation:

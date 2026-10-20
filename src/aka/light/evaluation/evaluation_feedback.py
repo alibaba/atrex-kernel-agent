@@ -266,7 +266,7 @@ def project_feedback(value: dict) -> dict:
 
 
 def optimizer_result_with_feedback(payload, shape_ids, metadata, *, require_performance=True):
-    from aka.legacy.evaluation.results import optimizer_result_from_eval
+    from .result_conversion import optimizer_result_from_eval
     from .public_result import correctness_summary
     result = optimizer_result_from_eval(payload, shape_ids, metadata, require_performance=require_performance)
     return {**result, "correctness": correctness_summary(payload, passed=result["all_pass"]),
@@ -274,7 +274,7 @@ def optimizer_result_with_feedback(payload, shape_ids, metadata, *, require_perf
 
 
 def merge_results_with_feedback(results, shape_ids, metadata, *, require_performance=True):
-    from aka.legacy.evaluation.results import merge_optimizer_results
+    from .result_conversion import merge_optimizer_results
     from .public_result import correctness_summary
     result = merge_optimizer_results(results, shape_ids, metadata, require_performance=require_performance)
     return {**result, "correctness": correctness_summary(results, passed=result["all_pass"]), **merge_feedback(results)}

@@ -1,7 +1,7 @@
 # GPU Wiki Agent Entry
 
 In an AKA campaign, use the enabled `gpu-wiki.query` plugin through
-`python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json`.
+`python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json`.
 The input is a JSON object with a `request` string and optional `max_records`, `max_bytes`,
 and `exclude`. Follow the campaign's injected plugin instructions. The direct commands below
 remain available for standalone Wiki maintenance and queries.
@@ -16,11 +16,10 @@ format deterministically; other prose gets one store-blind intent extraction by
 components, queries isolated lanes, safely widens, and returns payloads keyed by
 stable record id. The bridge cannot invoke either query tool or carry a record.
 
-Every call independently attempts both `gpu_wiki` and `internal_gpu_wiki`. A missing
-directory, the tracked `SOURCE.txt` placeholder alone, an incomplete interface, or a
-zero-result lookup makes only that module empty. Internal results use
-`internal_gpu_wiki::<stable-id>` and each record declares its `store`, preserving
-strict store and payload isolation.
+The natural-language query reads the selected public `gpu_wiki` root. Each record
+declares its `store`, preserving strict store and payload isolation. In a campaign,
+use `python -m aka.legacy.resources.cli list` to discover optional tools. Follow
+each selected tool's instructions to call it separately and retain its attribution.
 
 ```bash
 python3 gpu-wiki/tools/query_nl.py "fused RMSNorm in triton on sm_100. ncu says 75% of

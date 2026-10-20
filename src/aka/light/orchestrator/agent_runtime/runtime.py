@@ -39,9 +39,8 @@ from .model import (
 from .process import ProcessRunner, protected_gateway_identity, run_bounded
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-from aka.legacy.application.paths import checkout_root
 
-SESSION_SHELL_GUARD = checkout_root() / "tools" / "session_shell_guard.sh"
+SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
 PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})

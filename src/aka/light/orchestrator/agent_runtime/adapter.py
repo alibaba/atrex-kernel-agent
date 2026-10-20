@@ -9,12 +9,26 @@ from aka.legacy.agent.adapter import (
     AgentBackendAdapter, AdapterFactory, BackendAdapterRegistry,
     ClaudeLikeAdapter as _ClaudeLikeAdapter, ClaudeAdapter as _ClaudeAdapter,
     QoderAdapter as _QoderAdapter, PiAdapter, CodexAdapter,
-    token_usage_from_mapping, token_usage_from_model_usage, pi_event_usage,
+    token_usage_from_mapping, token_usage_from_model_usage,
     toml_config_value, pi_settings_args, codex_settings_args,
-    usage_counter as _counter, json_events as _json_events,
-    event_phase_marker_receipts as _phase_marker_receipts,
+    _counter, _json_events, _phase_marker_receipts,
 )
 from .model import NormalizedAgentEvent, TokenUsage, sum_token_usages
+
+
+def pi_event_usage(event: Mapping[str, object]) -> TokenUsage:
+    """Return billable Pi terminal-event usage for live capture reconciliation."""
+    if event.get("type") == "message_end":
+        message = event.get("message")
+        if isinstance(message, Mapping) and message.get("role") in {
+            "assistant", "toolResult",
+        }:
+            return token_usage_from_mapping(message.get("usage"))
+    elif event.get("type") == "compaction_end":
+        result = event.get("result")
+        if isinstance(result, Mapping):
+            return token_usage_from_mapping(result.get("usage"))
+    return TokenUsage.unavailable()
 
 
 class ClaudeLikeAdapter(_ClaudeLikeAdapter):
