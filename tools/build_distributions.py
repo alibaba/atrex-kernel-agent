@@ -43,11 +43,11 @@ def owned(distribution: str) -> tuple[Path, ...]:
 
 
 def build_wiki_resources(output: Path) -> None:
-    """Export the explicitly selected public Wiki plugin and its data closure."""
+    """Export the default local plugins and the public Wiki data closure."""
     output.mkdir(parents=True, exist_ok=True)
     inventory = {}
     with tarfile.open(output / 'atrex-aka-public-resources-0.1.0.tar.gz', 'w:gz') as archive:
-        for relative in ('plugins/gpu-wiki', 'gpu-wiki'):
+        for relative in ('plugins/gpu-wiki', 'plugins/micro-analysis', 'gpu-wiki'):
             directory = ROOT / relative
             if not directory.is_dir():
                 raise FileNotFoundError(f'missing selected public resource: {directory}')

@@ -1,9 +1,46 @@
 # AKA local plugins
 
-AKA discovers plugins automatically from immediate subdirectories of `plugins/` that contain a
-`plugin.json`. GPU Wiki ships as `plugins/gpu-wiki` and is therefore available to every campaign
-without another command-line option. A plugin may contribute tools, Skills, instructions, and
-workspace resources.
+AKA loads the plugins selected by the Resources configuration. The default Workflow selects
+`plugins/gpu-wiki` and `plugins/micro-analysis` from the checkout supplied with `--repo-root`.
+A custom configuration can select explicit `plugins` paths or a `plugin_dir` catalog; catalog mode
+discovers immediate subdirectories containing `plugin.json`. A plugin may contribute tools, Skills,
+instructions, and workspace resources.
+
+## MicroAnalysis
+
+`plugins/micro-analysis` is an independent Skill-only plugin containing a methodology `SKILL.md`.
+It guides ISA inspection, layout probes, and controlled experiments across GPU backends. Agents
+construct experiments for the current kernel and toolchain; the plugin ships no probe executable,
+statistics script, or hardware-specific reference manual.
+For an unfamiliar operator or device, establish the operator's dataflow and exact target/toolchain.
+The Agent obtains hardware knowledge through its existing GPUWiki lookup step and checks its
+applicability. When knowledge is insufficient, consult target documentation and use focused probes
+or A/B experiments to resolve specific unknowns. Keep unresolved facts explicit and distinguish
+contextual measurements from specifications. Backend documentation owns collection commands and
+metric meanings.
+
+New campaigns using the default Workflow include this plugin without an extra option. AKA links
+the complete Skill directory into `.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`,
+and `.qoder/skills/micro-analysis`. In the campaign's Agent environment, list the enabled catalog:
+
+```bash
+python -m aka.legacy.resources.cli list
+```
+
+The Skill ID is `micro-analysis.micro-analysis`. Ask the Agent, for example:
+
+```text
+Use the micro-analysis Skill to investigate whether this kernel's load wait comes from addressing,
+layout, or data movement. Choose an experiment that distinguishes these explanations.
+```
+
+This is a Skill, not a Resources tool, so it has no `call micro-analysis.*` command. It adds no
+environment variables or per-phase instruction files. Backend profiling Skills remain independent:
+on PPU, use the selected `ppu-acu-joint-profile` Skill when ACU or timeline evidence is needed.
+Use the selected backend's tools for collection commands, counter definitions, and report formats.
+
+Existing campaigns retain their locked plugin set and contents. Use a new campaign to adopt this
+plugin rather than modifying a running campaign's locks.
 
 ## Design and runtime flow
 
@@ -142,8 +179,9 @@ text = (root / "data" / "reference.txt").read_text()
 print(json.dumps({"source": "reference.txt", "text": text}))
 ```
 
-Populate `data/reference.txt` and describe when to use the tool in `instructions.md`. The next
-campaign discovers it automatically; no orchestrator registration or startup argument is needed.
+Populate `data/reference.txt` and describe when to use the tool in `instructions.md`. Select the
+plugin directory in the Resources `plugins` list, or use a `plugin_dir` catalog containing it.
+The next campaign loads that selected configuration; no orchestrator code change is needed.
 
 ## Add a Skill-only plugin
 

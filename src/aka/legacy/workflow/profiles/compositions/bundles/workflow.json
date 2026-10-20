@@ -15,7 +15,8 @@
       "required": true,
       "config": {
         "plugins": [
-          "${aka:repo_root}/plugins/gpu-wiki"
+          "${aka:repo_root}/plugins/gpu-wiki",
+          "${aka:repo_root}/plugins/micro-analysis"
         ]
       }
     },

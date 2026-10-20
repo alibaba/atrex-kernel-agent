@@ -1,0 +1,11 @@
+{
+  "id": "micro-analysis",
+  "version": "1.0.0",
+  "api_version": 1,
+  "skills": {
+    "micro-analysis": {
+      "path": "skills/micro-analysis",
+      "description": "Analyze GPU microarchitecture questions across vendors using focused microkernels, ISA inspection, and controlled A/B experiments when compiler behavior, layout, dependencies, or performance are unclear."
+    }
+  }
+}
