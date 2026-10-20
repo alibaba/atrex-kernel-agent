@@ -32,8 +32,11 @@ from .infrastructure_retry import (
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / "long_horizon" / "remote_numerical.py"
-PROMPT = Path(__file__).with_name("prompts") / "numerical_review.md"
-HARNESS = native_harness_script()
+# Trusted package assets may be imported through a virtualenv's lib64 -> lib
+# alias. Canonicalize them here, not in _digest/read_input: candidate and
+# reviewer-owned evidence must still reject symlinks in every path component.
+PROMPT = ROOT / "orchestrator" / "prompts" / "numerical_review.md"
+HARNESS = native_harness_script().resolve(strict=True)
 
 
 class NumericalPlanningTimeout(RuntimeError):

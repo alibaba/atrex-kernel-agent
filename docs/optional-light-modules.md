@@ -20,6 +20,12 @@ installed `aka.legacy.execution` transport selected by the controller. The bundl
 `tools/sandbox.py` client remains the only script entrypoint trusted inside an HTTP Light
 session; arbitrary same-named scripts are not authorized.
 
+Supplemental numerical validation canonicalizes its trusted installed Prompt and
+Harness paths, including virtual environments imported through `lib64 -> lib`.
+Candidate files and reviewer-owned evidence still use bounded reads that reject
+symlinks in every path component; this installation compatibility does not relax
+the workspace boundary.
+
 Build and install the three packages from a matching checkout:
 
 ```sh
