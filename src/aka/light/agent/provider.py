@@ -9,6 +9,7 @@ from aka.contracts.agent import AgentRunResult
 from aka.light.orchestrator.agent_runtime.model import AgentRunRequest as LegacyRequest
 from aka.light.orchestrator.agent_runtime.runtime import build_agent_runtime
 from aka.light.orchestrator.agent_runtime.process import run_bounded
+from aka.light.runtime.paths import SESSION_SHELL_GUARD
 
 
 @dataclass(frozen=True)
@@ -93,7 +94,9 @@ class LightAgent:
         from .native import NativeSession
         with self._lock:
             self.check_open()
-            values = dict(environment or {})
+            # The shared NativeSession constructor otherwise selects Legacy's
+            # BASH_ENV. Light mounts its own packaged guard for both call paths.
+            values = {"BASH_ENV": str(SESSION_SHELL_GUARD), **(environment or {})}
             values.update(self.options.environment())
             session = NativeSession(
                 runtime_id, workspace, session_id or str(uuid.uuid4()), self._execute,

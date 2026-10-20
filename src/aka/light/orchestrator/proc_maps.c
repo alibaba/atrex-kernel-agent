@@ -6,6 +6,7 @@
 #include <dlfcn.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <limits.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -111,8 +112,8 @@ int pthread_getattr_np(pthread_t thread, pthread_attr_t *attributes) {
     return error;
 }
 
-/* Bun resolves open directory handles using /proc/self/fd/N. Return only a
- * textual link for the caller's own handle, never an openable host /proc link. */
+/* Bun's realpath needs link text for its own metadata handles. This is not a
+ * full procfs: never advertise FD-backed I/O or expose openable host links. */
 static ssize_t own_link(const char *path, char *buffer, size_t size) {
     const char *prefix = "/proc/self/fd/";
     if (strncmp(path, prefix, strlen(prefix))) return -2;
@@ -122,6 +123,18 @@ static ssize_t own_link(const char *path, char *buffer, size_t size) {
     }
     const char *endpoint = getenv("ATREX_PROC_MAPS_SOCKET");
     if (!endpoint) return -2;
+    /* This projection has no openable /proc FD magic links. Bun's realpath
+     * needs metadata for O_PATH (without O_DIRECTORY) handles, but advertising
+     * readlink for I/O/pinned-directory handles makes newer Claude select
+     * /proc/self/fd/N[/leaf] I/O that the kernel cannot perform here. Report
+     * that capability as absent so its native checked-path fallback is used.
+     * Do not emulate writes by resolving a pinned directory back to a name.
+     */
+    unsigned long value = strtoul(number, NULL, 10);
+    if (value > INT_MAX) { errno = EBADF; return -1; }
+    int flags = fcntl((int)value, F_GETFL);
+    if (flags < 0) return -1;
+    if (!(flags & O_PATH) || (flags & O_DIRECTORY)) { errno = ENOENT; return -1; }
     struct sockaddr_un address = {.sun_family = AF_UNIX};
     if (strlen(endpoint) >= sizeof(address.sun_path)) { errno = ENAMETOOLONG; return -1; }
     strcpy(address.sun_path, endpoint);

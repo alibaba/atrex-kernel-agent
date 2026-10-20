@@ -4,6 +4,9 @@ import os
 from pathlib import Path
 
 
+SESSION_SHELL_GUARD = Path(__file__).resolve().parents[1] / "tools" / "session_shell_guard.sh"
+
+
 def supervisor_campaign_root(workspace: Path) -> Path:
     workspace = workspace.resolve()
     scope = hashlib.sha256(str(workspace).encode()).hexdigest()[:16]

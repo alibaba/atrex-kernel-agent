@@ -9,7 +9,8 @@ from dataclasses import replace
 from pathlib import Path
 
 from aka.legacy.agent.runtime import (
-    CliAgentRuntime as SharedCliAgentRuntime, build_session_environment,
+    CliAgentRuntime as SharedCliAgentRuntime,
+    build_session_environment as shared_session_environment,
 )
 
 from .adapter import (
@@ -37,13 +38,23 @@ from .model import (
     sum_token_usages,
 )
 from .process import ProcessRunner, protected_gateway_identity, run_bounded
+from aka.light.runtime.paths import SESSION_SHELL_GUARD
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
-SESSION_SHELL_GUARD = REPO_ROOT / "tools" / "session_shell_guard.sh"
 PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
 SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def build_session_environment(runtime_id: str) -> dict[str, str]:
+    environment = shared_session_environment(runtime_id)
+    # HTTP sandboxes mount the Light guard, not the Legacy package resources.
+    # Keep the shared environment policy while selecting the visible tool route.
+    if not SESSION_SHELL_GUARD.is_file():
+        raise ValueError("selected Agent shell guard resource is unavailable")
+    environment["BASH_ENV"] = str(SESSION_SHELL_GUARD)
+    return environment
 
 
 def terminal_usage_from_stream(stdout: str, *, backend: str = "") -> TokenUsage:

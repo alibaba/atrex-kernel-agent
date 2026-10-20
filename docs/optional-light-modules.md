@@ -447,6 +447,12 @@ drafts and GPU inputs; it is not an alternative memory summary. Version numberin
 performance, stop conditions, promotion audits and crash recovery therefore do not depend
 on generating memory. Native mode remains cooperative, not an OS security boundary.
 
+The public Workflow export (including CI baseline, per-case latency and source
+artifacts) reads these committed facts even when memory generation is disabled.
+For the same version, `.atrex_versions/vN.json` takes precedence over a memory
+summary; memory-only Legacy histories remain supported. Both paths retain the
+same Git/content verification and accepted-incumbent selection checks.
+
 Change the option at an Episode boundary. Existing memory-only histories remain readable;
 disabling generation does not delete old summaries, and enabling it does not backfill old
 versions. Existing summaries remain read-only Agent history. This switch is independent of
@@ -730,6 +736,15 @@ or path. It serves only the caller's read-only maps or FD link text; the fixed
 compatibility view, not a complete procfs implementation. `cc`, writable temporary
 storage, namespace creation and ordinary bind mounts are still required.
 
+FD link text is supplied only for metadata handles (`O_PATH` without
+`O_DIRECTORY`). Ordinary I/O and pinned-directory handles report `ENOENT`, so
+CLI capability checks use their checked-path fallback instead of trying to open
+nonexistent `/proc/self/fd/N[/leaf]` magic links. The shim does not translate
+directory handles back into path-based writes or expose the host's FD tree.
+The Light shell guard is independently mounted read-only from the same packaged
+resource named by `BASH_ENV`, including resumable-session launches; it does not
+depend on the old checkout-level `tools/` location.
+
 Light preserves its anonymous-FD environment transport across the additional
 wrapper; credentials never become `KEY=value` arguments. The shim is loaded only
 inside bwrap. The wrapper owns the namespace and temporary view for the CLI's
@@ -764,6 +779,19 @@ live smoke campaigns (`sandbox` and `light-sandbox`, one Bootstrap and one Episo
 each, three of 90 Shapes) have passed Bootstrap and entered real Agent sessions in
 distinct PID namespaces. This is startup/isolation evidence, not a claim that the
 full Episodes or every Provider CLI have completed successfully.
+
+The 2026-10-21 file-operation regression was reproduced with the real Claude Code
+2.1.302 CLI: the old projection allowed Read but Write failed with `ENOENT` and
+left the candidate unchanged. After the fix, Claude Code 2.1.235 and 2.1.302 passed
+Read followed by Write, Edit or Bash in both private and projected proc modes
+(12 combinations) on Lima/Linux. Additional checks cover the native-session
+entrypoint, mounted shell guard, workspace atomic replacement, read-only public
+inputs, hidden operator files, caller-only read-only maps and unavailable proc
+escape links. Framework, Legacy and Light wheels were rebuilt from sdists and
+installed into a fresh Linux environment; Claude Write and native-session Bash
+also passed using those packaged resources. Model responses were controlled local
+fixtures; these are real CLI and Bubblewrap checks, not a new live model/GPU
+campaign or CI pass.
 
 Default-disabled research recording is checked with omitted configuration and explicit opt-in
 for both `light` and `light-sandbox` on Lima/Linux. The checks cover rejected research writes,

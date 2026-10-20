@@ -22,7 +22,7 @@ from .recovery_processes import HANDOFF_ID_ENV
 from .episode_workspace import EPISODE_WORKSPACE_ENV, PUBLIC_FILES
 from .sandbox_launch import SandboxLaunch
 
-from aka.light.runtime.paths import legacy_resource_root
+from aka.light.runtime.paths import SESSION_SHELL_GUARD, legacy_resource_root
 
 REPOSITORY_ROOT = legacy_resource_root()
 PUBLIC_ASSETS = (
@@ -253,11 +253,16 @@ def wrap_agent_command(
         _mount(argv, home, home, writable=True)
         # HTTP sessions carry their reviewed tool/Skill copies in the workspace.
         # Do not re-expose the repository's retired workflows or evaluator code.
-        assets = PUBLIC_ASSETS if view is None and not environment.get("ATREX_AKA_RUNTIME_URL") else ("tools/session_shell_guard.sh",)
+        assets = PUBLIC_ASSETS if view is None and not environment.get("ATREX_AKA_RUNTIME_URL") else ()
         for name in assets:
             source = REPOSITORY_ROOT / name
             if source.exists():
                 _mount(argv, source.resolve(), source)
+        # BASH_ENV and its mount must name the same packaged Light asset.
+        # The checkout's old tools/ location is not an installed resource.
+        if not SESSION_SHELL_GUARD.is_file():
+            raise ValueError("selected Agent shell guard resource is unavailable")
+        _mount(argv, SESSION_SHELL_GUARD.resolve(), SESSION_SHELL_GUARD)
         if environment.get("ATREX_AKA_RUNTIME_URL"):
             from aka.light.agent import claude_tools
             hook = Path(claude_tools.__file__).resolve()
