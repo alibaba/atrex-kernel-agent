@@ -21,6 +21,11 @@ probes or A/B experiments to check existing knowledge or investigate unresolved 
 Keep unresolved facts explicit and distinguish contextual measurements from specifications.
 Backend documentation owns collection commands and metric meanings.
 
+`--with-wiki-resources` exports the default public plugins and Wiki data together in
+`atrex-aka-public-resources-0.1.0.tar.gz`. Its `public-wiki-resource.json` manifest uses
+`resource: aka-public-resources`; `files` and `identity` cover the entire bundle. The option and
+manifest filename retain their historical names.
+
 New campaigns using the default Workflow include this plugin without an extra option. AKA links
 the complete Skill directory into `.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`,
 and `.qoder/skills/micro-analysis`. In the campaign's Agent environment, list the enabled catalog:
