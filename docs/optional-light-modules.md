@@ -735,6 +735,12 @@ testing. Neither compatibility mode is a network isolation boundary.
 
 Begin a new workspace when changing between upstream and light Workflows. Do not point two implementations at the same live workspace, or assume their checkpoints are interchangeable. Keep the previous revision and workspace backup for rollback. Omitting `--profile` (or selecting `workflow`) restores upstream behavior for a new run; selecting `observed` or `sandbox` changes only the Agent on an upstream Workflow. Preserve the selected composition and options when resuming.
 
+Light reuses the shared Workflow startup and records its own resource snapshot in
+the frozen launch context. The snapshot contains the selected plugin fingerprints;
+built-in Light assets are pinned by the launch selection's package identity.
+This startup bookkeeping does not make Light state exportable as a Legacy portable
+checkpoint, whose registry and retained-state formats are different.
+
 Both the public module APIs and the actual source snapshots were integrated from fixed modular heads (`fd7e0466` Execution, `bb7660e1` Agent/Workflow). The newer, unmerged PR #113 redesign was inspected but not merged as part of updating `main`; its Evaluation/Experiment interfaces are not the contracts claimed here. This is an integration branch, not a claim that those upstream PRs are merged or their APIs cannot change. The pre-migration implementation is retained at `codex/aka-light-before-modularization`.
 
 ## Verification scope

@@ -19,6 +19,16 @@ class PluginRegistry(Registry):
         super().__init__(PLUGIN_DIR, plugin_root=plugin_root,
                          resource_root=legacy_resource_root(), enabled=enabled)
 
+    def resource_snapshot(self) -> dict:
+        """Freeze Light resources for the shared startup's launch context.
+
+        Plugin fingerprints include their tools, Skills and declared resources.
+        Built-in Light assets are already pinned by the launch selection's
+        ``aka.light`` package identity. Keep an explicit owner/schema: this is
+        not a Legacy resource lock or a portable Legacy checkpoint.
+        """
+        return {"schema": "aka.light.resources.v1", "plugins": self.snapshot()}
+
     def validate_call(self, name: str, value: object) -> dict:
         for plugin in self.plugins:
             for key, tool in plugin.tools.items():
