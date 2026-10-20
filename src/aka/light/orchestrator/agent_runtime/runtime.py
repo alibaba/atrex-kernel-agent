@@ -253,6 +253,21 @@ class CliAgentRuntime(SharedCliAgentRuntime):
             cleanup_error = codex_temporary_home.close()
             if cleanup_error:
                 observation_errors += (cleanup_error,)
+        # WorkflowExportReader consumes normalized public observations, not the
+        # private capture/native transcript tree. Include setup/V1 invocations,
+        # even when no Episode was reached or the optional capture is disabled.
+        from aka.legacy.agent.public_output import record_invocation
+
+        try:
+            record_invocation(
+                request.observation_directory or request.workspace,
+                self.id, session_id, terminal_usage, events, observation_errors,
+                stdout=stdout,
+            )
+        except Exception as exc:
+            observation_errors += (f"public_observation_failed:{type(exc).__name__}",)
+            print(f"[orchestrator] public Agent observation failed: {type(exc).__name__}",
+                  file=sys.stderr, flush=True)
         return AgentRunResult(
             runtime_id=self.id,
             exit_status=exit_status,

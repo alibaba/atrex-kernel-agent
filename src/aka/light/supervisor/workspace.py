@@ -12,6 +12,7 @@ from aka.light.orchestrator.session_tail import read_regular_bytes
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
 SKIP = {".git", ".claude", ".codex", ".qoder", ".qodersec", ".pi", ".agents",
+        ".aka-agent-observations",
         ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins", ".gpu_wiki_profile", ".atrex_environment",
         "atrex-bench", "tools", "skills", "reference", "reference-projects",
         "gpu-wiki", "__pycache__", ".venv", "node_modules", "plans"}
@@ -22,6 +23,7 @@ def relative_path(value: str) -> Path:
     if not value or path.is_absolute() or ".." in path.parts or path == Path("."):
         raise ValueError("Use a non-empty workspace-relative path without '..'")
     if path.parts[0] in {".git", ".claude", ".codex", ".qoder", ".agents",
+                          ".aka-agent-observations",
                           ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins", ".atrex_environment", "atrex-bench"}:
         raise ValueError("Private/control paths cannot be used as request files")
     if path.parts[:2] == ("input", "evidence"):

@@ -46,6 +46,7 @@ class CampaignStore:
         wiki_trace_rules = (
             "/.gpu_wiki_profile/",
             "/trace-retention-manifest.json",
+            "/.aka-agent-observations/",
         )
         supervisor_rules = (
             f"/{RUNTIME_DIR}/",

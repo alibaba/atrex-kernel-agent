@@ -48,6 +48,7 @@ class _Runtime:
             workspace=request.workspace, prompt=request.prompt,
             timeout_s=request.timeout_s, reasoning_effort=request.reasoning_effort,
             session_id=request.session_id, extra_environment=environment,
+            observation_directory=request.observation_directory,
         ))
         return AgentRunResult(
             runtime_id=self.id, exit_status=result.exit_status, timed_out=result.timed_out,

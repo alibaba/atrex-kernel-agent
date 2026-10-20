@@ -42,6 +42,7 @@ class AgentRunRequest:
     sandbox_ssh_init: str = ""
     sandbox_health_command: str = ""
     environment_state_file: str = ""
+    observation_directory: Path | None = None
 
 
 @dataclass(frozen=True)
