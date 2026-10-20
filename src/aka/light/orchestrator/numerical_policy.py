@@ -18,11 +18,12 @@ import threading
 import time
 from concurrent.futures import CancelledError
 
+from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
+from aka.legacy.task.problem.resources import native_harness_script
 from aka.light.supervisor.workspace import read_input, publish
 from .session_tail import read_regular_bytes
 
 from aka.light.long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
-from aka.light.reference.atrex_bench_test_kernel import _fp4_correctness_max_rel_l2
 from .constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from .durable_state import durable_write_json
 from .infrastructure_retry import (
@@ -32,7 +33,7 @@ from .infrastructure_retry import (
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = ROOT / "long_horizon" / "remote_numerical.py"
 PROMPT = Path(__file__).with_name("prompts") / "numerical_review.md"
-HARNESS = ROOT / "reference" / "atrex_bench_test_kernel.py"
+HARNESS = native_harness_script()
 
 
 class NumericalPlanningTimeout(RuntimeError):

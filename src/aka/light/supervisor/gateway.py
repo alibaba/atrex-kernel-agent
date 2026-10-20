@@ -982,7 +982,7 @@ def _option_values(parts: list[str], name: str) -> list[str]:
 def evaluation_policy(command: list[str], mode: str | None = None) -> dict[str, Any]:
     """Resolve Atrex-Bench correctness policy before execution and task hashing.
 
-    Implicit full-contract evaluation checks five cases without turning a v2+
+    Implicit full-contract evaluation checks six cases without turning a v2+
     performance request into the legacy explicit-multi-seed correctness mode.
     Targeted smoke keeps one case unless the caller asks for more.
     """
@@ -3505,7 +3505,7 @@ def build_typed_agate_command(
         "--wait-timeout",
         str(args.timeout + queue_wait_grace),
         "--job-timeout",
-        str(options["timeout_s"] if kind == "run" else gateway_job_timeout(args.timeout, queue_wait_grace)),
+        str(gateway_job_timeout(args.timeout, queue_wait_grace)),
     ]
     if kind == "run":
         command += ["--mode", str(request.get("mode") or "full")]

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from aka.legacy.evaluation.resources import profile_driver_script
+from aka.legacy.task.problem.resources import native_harness_script
 
 from . import agent_runtime as _agent_runtime
 
@@ -14,7 +15,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
-ATREX_BENCH_HARNESS = REPO_ROOT / "reference" / "atrex_bench_test_kernel.py"
+ATREX_BENCH_HARNESS = native_harness_script()
 SOL_HARNESS = REPO_ROOT / "reference" / "test_kernel.py"
 PROFILE_DRIVER = profile_driver_script()
 SANDBOX_TOOL = REPO_ROOT / "supervisor" / "gateway.py"

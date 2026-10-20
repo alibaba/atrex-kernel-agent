@@ -5,7 +5,8 @@ its evaluator or acceptance policy. Explicit request/operator overrides still
 participate in the measurement identity.
 """
 
-CORRECTNESS_CASES = 5
+# Preserve the legacy candidate gate: one base seed plus five additional seeds.
+CORRECTNESS_CASES = 6
 BENCH_ITERS = 100
 WARMUP_ITERS = 10
 CANDIDATE_TIMEOUT = 120

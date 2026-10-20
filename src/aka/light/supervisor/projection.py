@@ -94,9 +94,6 @@ def candidate_source_rejection(process: subprocess.CompletedProcess) -> dict[str
     result = source_error_result({"error": {
         "code": "candidate_source_rejected", "job_submitted": False, "violations": violations,
     }})
-    raw = gateway_error_from_process(process, "source_validation")
-    if raw is not None:
-        result["gateway_error"] = raw["error"]
     return result
 
 
@@ -826,11 +823,6 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                     GATEWAY_ERROR_PREFIX: gateway_error_result,
                 }[prefix]
                 value = redact_diagnostics(formatter(raw), private_paths=private_paths, private_values=private_values)
-                # Source-repair records can also carry the original rejection.
-                if prefix == SOURCE_ERROR_PREFIX and "gateway_error" in raw:
-                    value["gateway_error"] = redact_diagnostics(
-                        bounded_error(raw["gateway_error"]), private_paths=private_paths, private_values=private_values,
-                    )
                 projected.append(prefix + json.dumps(value, ensure_ascii=False))
             except (ValueError, TypeError, RecursionError, OverflowError):
                 projected.append(json.dumps({"error": "Gateway result could not be projected"}))

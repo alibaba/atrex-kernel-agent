@@ -72,7 +72,7 @@ def query(store, args, workspace: Path) -> dict:
 
 
 def correctness_identity(request: dict) -> dict | None:
-    """A narrow equivalence: full/untimed five-case evaluation of the same inputs.
+    """A narrow equivalence: full/untimed six-case evaluation of the same inputs.
 
     Only mode, performance repetitions and timing iterations may differ. All
     evaluator bytes, input/source hashes, tolerances, dependencies, target and

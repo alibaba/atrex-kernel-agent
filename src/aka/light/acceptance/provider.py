@@ -22,7 +22,7 @@ SOL_ACCEPTANCE_INPUTS = frozenset({
 def candidate_acceptance_argv(*, atrex_bench: bool) -> list[str]:
     """Return the evaluator-specific, Supervisor-owned acceptance request.
 
-    Native Atrex-Bench has a typed five-case correctness mode. SOL-ExecBench
+    Native Atrex-Bench has a typed six-case correctness mode. SOL-ExecBench
     instead owns correctness through its full workload evaluator; typed controls
     cannot represent that contract and would prevent the required Dev fallback.
     """
@@ -89,7 +89,7 @@ class RecordedAcceptance:
     def validate_candidate(self, context: CandidateValidation, source: bytes) -> dict:
         """Reuse or execute the evaluator-specific mandatory correctness gate.
 
-        Atrex-Bench uses its typed five-case gate. SOL-ExecBench executes the
+        Atrex-Bench uses its typed six-case gate. SOL-ExecBench executes the
         official evaluator over all workload.jsonl records with their own
         tolerances. Run under the caller's Session/deadline, never a capability
         surviving its revocation.
@@ -135,7 +135,7 @@ class RecordedAcceptance:
         # never cacheable and cannot reach this repairable rejection path.
         if (result is None and response["exit_code"] != 0) or (result and result.get("all_pass") is False):
             gate_name = (
-                "multi-seed correctness (base case plus four additional seeds)"
+                "multi-seed correctness (base case plus five additional seeds)"
                 if atrex_bench else
                 "SOL-ExecBench full-workload correctness"
             )

@@ -78,7 +78,7 @@ python3 tools/sandbox.py --kind env
 
 | Operation | Behavior and Agent result |
 | --- | --- |
-| Evaluate (`run`) | Atrex-Bench defaults to six correctness cases; compact `[test_kernel] RESULT_JSON=` with correctness, latency, per-Shape measurements and actionable diagnostics |
+| Evaluate (`run`) | Atrex-Bench defaults to six correctness cases (base plus five additional), matching the legacy candidate gate; compact `[test_kernel] RESULT_JSON=` with correctness, latency, per-Shape measurements and actionable diagnostics |
 | ABBA (`run --baseline-path`) | Reuses the existing same-allocation AB/BA runner; compact `[sandbox] ABBA_JSON=` with baseline/candidate per-Shape metrics and speedup; does not select or promote a Kernel |
 | Profile | Typed NCU/rocprof result, hottest Kernel/resource/SOL facts and requested counters via `[sandbox] PROFILE_JSON=`; legacy Profile commands and declared file synchronization remain supported |
 | Dev | Bounded stdout/stderr and command exit status for an explicitly declared GPU probe, not necessarily an evaluation |
@@ -115,8 +115,10 @@ GPU execution uses a regular-file snapshot, not the mutable Agent directory. Pro
 Remote output archives are restricted to the declared synchronization roots, with local member/count/byte limits and no-follow publication. Inline transport uses a per-request frame tag to avoid accidental marker collisions; it is not an authentication boundary against arbitrary code inside the same remote allocation. The synchronization roots never include Git, memory or Supervisor control paths.
 
 Before recording request identity or dispatching a job, the Supervisor replaces `test_kernel.py`
-with the repository's evaluator: `reference/atrex_bench_test_kernel.py` for Atrex-Bench or
-`reference/test_kernel.py` for SOL. SOL snapshots also take `config.json` from the controller
+with the packaged canonical evaluator: `aka.legacy.task.problem.native_harness` for Atrex-Bench
+or the Light SOL harness for SOL. Legacy and Light therefore execute the same Atrex-Bench grading
+semantics rather than maintaining synchronized evaluator copies. SOL snapshots also take
+`config.json` from the controller
 worktree's V0 commit, not the Agent draft, mutable worktree, index or later commits. If V0 had no
 config, an Agent-added copy is omitted. Missing Git provenance, invalid JSON, non-regular blobs
 or oversized configs fail before dispatch. Worktree files are not rewritten by this staging step.

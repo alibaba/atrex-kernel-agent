@@ -57,7 +57,7 @@ The first command copies this Episode's committed incumbent, not the current dra
 safe to use after edits or resume. Do not modify `{self.BASELINE_PATH}` before the comparison.
 The second command matches the Supervisor's configured ABBA repeats, per-run timeout and
 Shape batch size. Retention ABBA uses one correctness case, matching Runtime;
-the separate candidate correctness gate covers five cases. Do not add
+the separate candidate correctness gate covers six cases. Do not add
 command/input/Shape/seed/benchmark/dependency overrides.
 The Runtime supplies the evaluator, full workload and target; private inputs stay private.
 

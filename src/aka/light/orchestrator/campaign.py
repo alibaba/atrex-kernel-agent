@@ -2603,7 +2603,7 @@ class Campaign:
         memory["git_commit_hash"] = kernel_commit
         memory[FRAMEWORK_BASELINE_CATEGORY] = {
             "framework": self.framework,
-            "validated_stages": ["combined-base-performance+five-cases" if self.atrex_bench_root
+            "validated_stages": ["combined-base-performance+six-cases" if self.atrex_bench_root
                                  else "combined-base-performance+multi-seed-5"],
         }
         save_version_record(self.workspace, n, memory, generate_memory=self.generate_memory)
