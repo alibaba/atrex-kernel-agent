@@ -1,7 +1,7 @@
 # AKA local plugins
 
 AKA loads the plugins selected by the Resources configuration. The default Workflow selects
-`plugins/gpu-wiki` and `plugins/micro-analysis` from the checkout supplied with `--repo-root`.
+`plugins/gpu-wiki` from the checkout supplied with `--repo-root`.
 A custom configuration can select explicit `plugins` paths or a `plugin_dir` catalog; catalog mode
 discovers immediate subdirectories containing `plugin.json`. A plugin may contribute tools, Skills,
 instructions, and workspace resources.
@@ -16,19 +16,17 @@ For an unfamiliar operator or device, establish the operator's dataflow and exac
 MicroAnalysis can be selected independently of GPUWiki. Use the workflow's enabled knowledge
 sources and available target documentation, following each source's lookup and attribution
 requirements and checking applicability. GPUWiki is one such source when enabled; selecting it
-alongside MicroAnalysis in the default Workflow does not create a plugin dependency. Use focused
+alongside MicroAnalysis in a custom configuration does not create a plugin dependency. Use focused
 probes or A/B experiments to check existing knowledge or investigate unresolved observations.
 Keep unresolved facts explicit and distinguish contextual measurements from specifications.
 Backend documentation owns collection commands and metric meanings.
 
-`--with-wiki-resources` exports the default public plugins and Wiki data together in
-`atrex-aka-public-resources-0.1.0.tar.gz`. Its `public-wiki-resource.json` manifest uses
-`resource: aka-public-resources`; `files` and `identity` cover the entire bundle. The option and
-manifest filename retain their historical names.
-
-New campaigns using the default Workflow include this plugin without an extra option. AKA links
-the complete Skill directory into `.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`,
-and `.qoder/skills/micro-analysis`. In the campaign's Agent environment, list the enabled catalog:
+MicroAnalysis is supplied as an independent plugin directory. It is not included in the Wiki
+resource export or the AKA Python packages. Select its directory explicitly in the Resources
+`plugins` list alongside any other required plugins, or select a `plugin_dir` catalog containing it.
+Keep this directory available to the campaign. AKA links the selected Skill directory into
+`.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`, and `.qoder/skills/micro-analysis`.
+In the campaign's Agent environment, list the enabled catalog:
 
 ```bash
 python -m aka.legacy.resources.cli list
@@ -46,8 +44,9 @@ environment variables or per-phase instruction files. Backend profiling Skills r
 on PPU, use the selected `ppu-acu-joint-profile` Skill when ACU or timeline evidence is needed.
 Use the selected backend's tools for collection commands, counter definitions, and report formats.
 
-Existing campaigns retain their locked plugin set and contents. Use a new campaign to adopt this
-plugin rather than modifying a running campaign's locks.
+Plugin locks record fingerprints and Skill installations use symlinks; they do not preserve copies
+of the plugin files. Keep the original selected plugin directory available for existing campaigns.
+Use a new campaign to change plugin selection rather than modifying a running campaign's locks.
 
 ## Design and runtime flow
 

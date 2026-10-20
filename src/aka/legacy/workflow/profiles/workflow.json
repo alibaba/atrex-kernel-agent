@@ -25,7 +25,6 @@
       "root": "${aka:repo_root}",
       "paths": [
         "plugins/gpu-wiki",
-        "plugins/micro-analysis",
         "gpu-wiki"
       ]
     }

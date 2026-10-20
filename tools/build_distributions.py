@@ -43,11 +43,11 @@ def owned(distribution: str) -> tuple[Path, ...]:
 
 
 def build_wiki_resources(output: Path) -> None:
-    """Export the default local plugins and the public Wiki data closure."""
+    """Export the explicitly selected public Wiki plugin and its data closure."""
     output.mkdir(parents=True, exist_ok=True)
     inventory = {}
     with tarfile.open(output / 'atrex-aka-public-resources-0.1.0.tar.gz', 'w:gz') as archive:
-        for relative in ('plugins/gpu-wiki', 'plugins/micro-analysis', 'gpu-wiki'):
+        for relative in ('plugins/gpu-wiki', 'gpu-wiki'):
             directory = ROOT / relative
             if not directory.is_dir():
                 raise FileNotFoundError(f'missing selected public resource: {directory}')
@@ -63,7 +63,7 @@ def build_wiki_resources(output: Path) -> None:
                     archive.add(path, arcname=name, recursive=False)
     identity = hashlib.sha256(json.dumps(inventory, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
     (output / 'public-wiki-resource.json').write_text(json.dumps({
-        'schema_version': 1, 'resource': 'aka-public-resources', 'identity': identity, 'files': inventory,
+        'schema_version': 1, 'resource': 'gpu-wiki', 'identity': identity, 'files': inventory,
     }, indent=2) + '\n')
 
 
@@ -86,7 +86,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--with-wiki-resources', action='store_true',
-                        help='also export the default public plugins and Wiki data closure as a separate artifact')
+                        help='also export the selected public Wiki plugin and data as a separate artifact')
     parser.add_argument('distributions', nargs='*')
     args = parser.parse_args()
     distributions = args.distributions or list(OWNERS)
