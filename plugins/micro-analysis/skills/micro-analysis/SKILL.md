@@ -39,6 +39,8 @@ Use these points to guide experiments and judgment; no point-by-point write-up o
 
 Keep experiment code and local test/measurement data as the primary evidence, with relevant conditions in code, commands, or logs. Brief observations or working hypotheses with file paths are sufficient; interpretations may be revised or overturned by new evidence in later iterations.
 
+Micro-analysis code and local data are supplementary evidence; experiment records continue to follow the active workflow's requirements.
+
 ## Working with profiling
 
 If dynamic counters or internal timing would help and suitable tools are available, use the project's selected backend profiling tools or Skills. Their documentation owns collection commands, counter definitions, and report formats; do not transplant those details from another GPU backend.
