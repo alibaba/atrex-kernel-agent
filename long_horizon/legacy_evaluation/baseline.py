@@ -17,6 +17,7 @@ from orchestrator._bootstrap import task_modules
 task_modules()
 
 from orchestrator.constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER, SOL_SEED
+from orchestrator.environment_recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable
 from orchestrator.hardware import kernel_is_gluon
 from orchestrator.operator_layout import AGENT_PROBLEM_FILENAME
 from orchestrator.optimization_policy import production_structure_violations
@@ -195,6 +196,8 @@ class LegacyBaselineEvaluation:
             private_reference_dir=self.private_reference_dir,
         )
         self._print_v0_evaluator_output(test)
+        if test.returncode == ENVIRONMENT_TEMPFAIL:
+            raise EnvironmentUnavailable("V0 evaluation infrastructure is unavailable; retain its job evidence for recovery")
         try:
             result = _test_result_from_stdout(test.stdout)
         except (RuntimeError, json.JSONDecodeError) as exc:

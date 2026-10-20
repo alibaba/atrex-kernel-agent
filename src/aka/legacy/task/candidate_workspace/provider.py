@@ -46,9 +46,10 @@ class GitCandidateWorkspace(GitSnapshots):
         return initialize_kernel(reference_dir, entry, arguments, content=content,
                                  working_directory=working_directory)
 
-    def prepare_sol(self, workspace, content, *, problem_files, reference_dir):
+    def prepare_sol(self, workspace, content, *, problem_files, reference_dir, profile_driver=None):
         from .initial import prepare_sol
-        prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir)
+        prepare_sol(workspace, content, problem_files=problem_files, reference_dir=reference_dir,
+                    profile_driver=profile_driver)
 
     def commit_sol(self, workspace):
         from .initial import commit_sol

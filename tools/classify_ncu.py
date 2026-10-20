@@ -16,8 +16,8 @@
 """
 NCU Metrics Symptom Classification Tool
 
-Reads key metrics from metrics_key_*.json output by the bundled
-tools/ncu_helpers/analyze_reports.py, infers symptoms based on the 14 NCU
+Reads key metrics from metrics_key_*.json output by the remote stdlib
+NCU CSV parser, infers symptoms based on the 14 NCU
 diagnosis Patterns (see reference/profile_guide.md), and generates summary.txt.
 
 Usage:
@@ -66,10 +66,10 @@ PATTERNS = {
 # never change the diagnosis. Symptoms without a line-level signal (e.g. occupancy)
 # are intentionally absent — for those the scalar metrics_key are the right read.
 LOCALIZE_BY_SYMPTOM = {
-    "memory-bound": ["source_metrics_line_run.txt", "warp_stalls_line_run.txt"],
-    "pipeline-stalls": ["warp_stalls_line_run.txt"],
-    "compute-bound": ["warp_stalls_line_run.txt", "disasm_run.txt"],
-    "register-pressure": ["disasm_run.txt"],
+    "memory-bound": ["source.txt", "metrics.csv"],
+    "pipeline-stalls": ["source.txt", "metrics.csv"],
+    "compute-bound": ["source.txt", "metrics.csv"],
+    "register-pressure": ["source.txt"],
 }
 
 
@@ -352,8 +352,7 @@ def format_summary(metrics, findings):
                     localize.append(f)
         if localize:
             lines.append(f"LOCALIZE: {', '.join('analysis/' + f for f in localize)} "
-                         f"(profile with --source to generate; see "
-                         f"analysis/source_evidence_manifest.json)")
+                         f"(profile with --source for source/SASS; availability depends on NCU support)")
 
     # Part 3: Query suggestions
     lines.append("")

@@ -1,0 +1,1152 @@
+#!/usr/bin/env python3
+"""Merge a PPU sparse timeline with ACU PM windows without time rescaling."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import hashlib
+import json
+import math
+import re
+import statistics
+import tempfile
+from bisect import bisect_right
+from collections import defaultdict
+from pathlib import Path
+from typing import Any, Sequence
+
+try:
+    from .evidence import (
+        binding_view,
+        descriptor_paths,
+        digest_json,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_acu_metadata,
+        validate_timeline_receipt,
+        verify_descriptor_tree,
+    )
+except ImportError:
+    from evidence import (
+        binding_view,
+        descriptor_paths,
+        digest_json,
+        ensure_no_output_aliases,
+        portable_descriptors,
+        validate_acu_metadata,
+        validate_timeline_receipt,
+        verify_descriptor_tree,
+    )
+
+
+WARNING_DELTA = 0.03
+REJECT_DELTA = 0.05
+MIN_SAMPLES = 10
+MEASUREMENT_SCHEMA = "ppu-timeline-measurement/v2"
+JOINT_SUMMARY_SCHEMA = "ppu-joint-profile/v4"
+VALID_PM_STATES = {"valid", "valid_activity_positive"}
+
+
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _descriptor(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        raise RuntimeError(f"artifact is not a regular file: {path}")
+    return {
+        "path": str(path.resolve()),
+        "sha256": _sha256(path),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+def _descriptor_target(owner_path: Path, descriptor: dict[str, Any]) -> Path:
+    target = Path(descriptor["path"])
+    return target if target.is_absolute() else owner_path.parent / target
+
+
+def _load_json(path: Path, label: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(f"cannot read {label} {path}: {error}") from error
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label} must be a JSON object")
+    return value
+
+
+def _read_timeline_receipt(
+    path: Path, timeline_path: Path, timeline_meta: dict[str, Any]
+) -> dict[str, Any]:
+    receipt = validate_timeline_receipt(
+        path,
+        expected_outputs={"perfetto": timeline_path},
+        require_decision=True,
+    )
+    binding = timeline_meta.get("evidenceBinding")
+    if not isinstance(binding, dict):
+        raise RuntimeError("timeline evidence binding is missing")
+    if (
+        binding.get("evidenceId") != receipt.get("evidence_id")
+        or binding.get("evidenceGrade") != "decision"
+    ):
+        raise RuntimeError("timeline evidence binding does not match its receipt")
+    if timeline_meta.get("kernelSha256") != receipt.get("kernel_sha256"):
+        raise RuntimeError("timeline metadata authoritative kernel mismatch")
+    return receipt
+
+
+def _read_acu_metadata(
+    path: Path, pm_path: Path, raw_path: Path
+) -> dict[str, Any]:
+    metadata = validate_acu_metadata(
+        path,
+        expected_pm=pm_path,
+        expected_raw=raw_path,
+        require_decision=True,
+    )
+    identity = metadata.get("identity")
+    if not isinstance(identity, dict) or not identity:
+        raise RuntimeError("ACU collection identity is missing")
+    for field in (
+        "kernel_name",
+        "kernel_specialization",
+        "workload_identity",
+        "device_identity",
+        "runtime_identity",
+        "cache_policy",
+        "clock_configuration",
+    ):
+        if field not in identity:
+            raise RuntimeError(f"ACU collection identity lacks {field}")
+    if not isinstance(identity["device_identity"], dict) or "physical_device" not in identity[
+        "device_identity"
+    ]:
+        raise RuntimeError("ACU collection physical device identity is missing")
+    return metadata
+
+
+def _parse_dims(value: str) -> list[int]:
+    result = [int(part.strip()) for part in value.strip().strip("()").split(",")]
+    if len(result) != 3 or any(item <= 0 for item in result):
+        raise RuntimeError("ACU launch dimensions must contain three positive integers")
+    return result
+
+
+def _optional_number(row: dict[str, str], name: str, cast):
+    value = row.get(name)
+    return None if value in (None, "") else cast(float(value))
+
+
+def _read_acu_raw(path: Path) -> dict[str, Any]:
+    with path.open(newline="", encoding="utf-8") as source:
+        rows = list(csv.DictReader(source))
+    if len(rows) != 1:
+        raise RuntimeError("ACU raw CSV must contain exactly one filtered kernel row")
+    row = rows[0]
+    result = {
+        "kernel_name": row["Kernel Name"],
+        "grid": _parse_dims(row["Grid Size"]),
+        "block": _parse_dims(row["Block Size"]),
+        "device": int(row["Device"]),
+        "duration_ns": float(row["ppu__time_duration.sum"]),
+        "pm_interval_ns": _optional_number(row, "pmsampler__interval_time.max", float),
+        "dropped_samples": _optional_number(row, "pmsampler__dropped_samples.max", int),
+        "buffer_size_bytes": _optional_number(
+            row, "pmsampler__buffer_size_bytes.max", int
+        ),
+        "cu_count": int(float(row["device__attribute_cu_count"])),
+        "occupancy_blocks_per_cu": float(row["launch__occupancy_blocks_per_cu"]),
+        "registers_per_thread": int(float(row["launch__registers_per_thread"])),
+        "shared_mem_per_block": int(float(row["launch__shared_mem_per_block"])),
+    }
+    for field in ("duration_ns", "cu_count", "occupancy_blocks_per_cu"):
+        value = result[field]
+        if not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise RuntimeError(f"ACU {field} must be positive and finite")
+    return result
+
+
+def _read_pm(path: Path) -> list[dict[str, Any]]:
+    with path.open(newline="", encoding="utf-8") as source:
+        rows = list(csv.DictReader(source))
+    if not rows:
+        raise RuntimeError("PM CSV contains no samples")
+    for row in rows:
+        row["packet_index"] = int(row["packet_index"])
+        row["sample_index"] = int(row["sample_index"])
+        row["window_start_ns"] = int(row["window_start_ns"])
+        row["window_end_ns"] = int(row["window_end_ns"])
+        row["interval_ns"] = int(row["interval_ns"])
+        row["metric_value"] = float(row["metric_value"])
+        if not math.isfinite(row["metric_value"]):
+            raise RuntimeError("ACU PM metric values must be finite")
+        if row["window_start_ns"] < 0 or row["window_end_ns"] <= row["window_start_ns"]:
+            raise RuntimeError("ACU PM sample has an invalid window")
+        if row["interval_ns"] != row["window_end_ns"] - row["window_start_ns"]:
+            raise RuntimeError("ACU PM interval does not match its exact window")
+        if not isinstance(row.get("validity"), str) or not row["validity"]:
+            raise RuntimeError("ACU PM sample validity is missing")
+    return rows
+
+
+def _read_measurement(path: Path, label: str) -> dict[str, Any]:
+    measurement = json.loads(path.read_text(encoding="utf-8"))
+    if measurement.get("schema") != MEASUREMENT_SCHEMA:
+        raise RuntimeError(f"{label} has an unsupported measurement schema")
+    if measurement.get("validation") != "accepted":
+        raise RuntimeError(f"{label} is not accepted")
+    runs = measurement.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise RuntimeError(f"{label} has no raw ordered samples")
+    schedule = measurement.get("schedule")
+    if (
+        not isinstance(schedule, list)
+        or not schedule
+        or any(
+            not isinstance(group, str) or not group or set(group) - {"A", "B"}
+            for group in schedule
+        )
+    ):
+        raise RuntimeError(f"{label} has an invalid schedule")
+    expected_order = [arm for group in schedule for arm in group]
+    if len(runs) != len(expected_order):
+        raise RuntimeError(f"{label} schedule does not match its raw samples")
+    kernel_sha256 = measurement.get("kernel_sha256")
+    if not isinstance(kernel_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", kernel_sha256
+    ):
+        raise RuntimeError(f"{label} kernel_sha256 is invalid")
+    if not isinstance(measurement.get("runtime_identity"), dict):
+        raise RuntimeError(f"{label} runtime identity is missing")
+    for field in ("cache_policy", "clock_configuration"):
+        if not isinstance(measurement.get(field), str) or not measurement[field]:
+            raise RuntimeError(f"{label} {field} is missing")
+    command_sha256 = measurement.get("command_sha256")
+    if (
+        not isinstance(command_sha256, dict)
+        or set(command_sha256) != {"A", "B"}
+        or any(
+            not isinstance(value, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", value)
+            for value in command_sha256.values()
+        )
+    ):
+        raise RuntimeError(f"{label} command hashes are invalid")
+    latencies: dict[str, list[float]] = {"A": [], "B": []}
+    for index, (run, expected_arm) in enumerate(zip(runs, expected_order)):
+        if not isinstance(run, dict) or run.get("order") != index:
+            raise RuntimeError(f"{label} has invalid sample order")
+        arm = run.get("arm")
+        sample = run.get("sample")
+        if arm != expected_arm or arm not in latencies or not isinstance(sample, dict):
+            raise RuntimeError(f"{label} has invalid sample arm")
+        if run.get("command_sha256") != command_sha256[arm]:
+            raise RuntimeError(f"{label} sample command hash drifted")
+        latency = sample.get("latency_ms")
+        if (
+            not isinstance(latency, (int, float))
+            or isinstance(latency, bool)
+            or not math.isfinite(latency)
+            or latency <= 0
+        ):
+            raise RuntimeError(f"{label} has invalid sample latency")
+        if (
+            sample.get("correctness") != "passed"
+            or sample.get("synchronized") is not True
+        ):
+            raise RuntimeError(f"{label} has an invalid timing sample")
+        if sample.get("workload_identity") != measurement.get("workload_identity"):
+            raise RuntimeError(f"{label} sample workload identity drifted")
+        if sample.get("device_identity") != measurement.get("device_identity"):
+            raise RuntimeError(f"{label} sample device identity drifted")
+        for field in (
+            "kernel_sha256",
+            "runtime_identity",
+            "cache_policy",
+            "clock_configuration",
+        ):
+            if sample.get(field) != measurement.get(field):
+                raise RuntimeError(f"{label} sample {field} drifted")
+        if sample.get("allocation_identity") != measurement.get(
+            "allocation_identity"
+        ):
+            raise RuntimeError(f"{label} sample allocation identity drifted")
+        if sample.get("warmup") != measurement.get("warmup") or sample.get(
+            "iterations"
+        ) != measurement.get("iterations"):
+            raise RuntimeError(f"{label} sample timing configuration drifted")
+        latencies[arm].append(float(latency))
+    if not latencies["A"] or not latencies["B"]:
+        raise RuntimeError(f"{label} must contain both A and B samples")
+    recomputed = {
+        "baseline_median_ms": statistics.median(latencies["A"]),
+        "instrumented_median_ms": statistics.median(latencies["B"]),
+    }
+    recomputed["relative_overhead"] = (
+        recomputed["instrumented_median_ms"] / recomputed["baseline_median_ms"] - 1.0
+    )
+    summary = measurement.get("summary")
+    summary_matches = isinstance(summary, dict)
+    if summary_matches:
+        for name, value in recomputed.items():
+            reported = summary.get(name)
+            if (
+                not isinstance(reported, (int, float))
+                or isinstance(reported, bool)
+                or not math.isclose(float(reported), value, rel_tol=1e-12)
+            ):
+                summary_matches = False
+                break
+    if not summary_matches:
+        raise RuntimeError(f"{label} summary does not match its raw samples")
+    bound = measurement.get("max_relative_change")
+    if (
+        not isinstance(bound, (int, float))
+        or isinstance(bound, bool)
+        or not math.isfinite(bound)
+        or not 0 <= bound < 1
+        or abs(recomputed["relative_overhead"]) > bound
+    ):
+        raise RuntimeError(f"{label} exceeds or lacks declared max_relative_change")
+    return measurement
+
+
+def _event_interval_ns(event: dict[str, Any]) -> tuple[int, int] | None:
+    if event.get("ph") != "X":
+        return None
+    args = event.get("args")
+    if not isinstance(args, dict):
+        raise RuntimeError("timeline range requires integer-nanosecond args")
+    start, duration = args.get("owner_relative_start_ns"), args.get("duration_ns")
+    for name, value in (("owner_relative_start_ns", start), ("duration_ns", duration)):
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise RuntimeError(f"timeline range requires non-negative integer {name}")
+    return start, start + duration
+
+
+def _overlaps(left_start: float, left_end: float, right_start: float, right_end: float):
+    return left_start < right_end and right_start < left_end
+
+
+def _metric_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, float | int]]:
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[(row["packet_index"], row["metric_name"])].append(row)
+    result: dict[str, dict[str, float | int]] = {}
+    for (packet_index, name), stream in sorted(grouped.items()):
+        total_interval_ns = sum(row["interval_ns"] for row in stream)
+        if total_interval_ns <= 0:
+            raise RuntimeError(
+                f"packet {packet_index} metric {name} has no positive PM interval"
+            )
+        values = [row["metric_value"] for row in stream]
+        result[f"packet_{packet_index}:{name}"] = {
+            "samples": len(stream),
+            "time_weighted_mean": sum(
+                row["metric_value"] * row["interval_ns"] for row in stream
+            )
+            / total_interval_ns,
+            "min": min(values),
+            "max": max(values),
+        }
+    return result
+
+
+def _validity_summary(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    result: dict[str, dict[str, int]] = {}
+    for row in rows:
+        metric = f"packet_{row['packet_index']}:{row['metric_name']}"
+        validity = row["validity"]
+        result.setdefault(metric, {})
+        result[metric][validity] = result[metric].get(validity, 0) + 1
+    return result
+
+
+def _validate_pm_windows(
+    by_stream: dict[tuple[int, str], list[dict[str, Any]]], errors: list[str]
+) -> None:
+    for (packet_index, name), rows in by_stream.items():
+        label = f"packet {packet_index} metric {name}"
+        if len(rows) < MIN_SAMPLES:
+            errors.append(f"{label} has only {len(rows)} samples")
+        ordered = sorted(rows, key=lambda row: row["sample_index"])
+        if [row["sample_index"] for row in ordered] != list(range(len(ordered))):
+            errors.append(f"{label} has non-contiguous sample indices")
+        if ordered[0]["window_start_ns"] != 0:
+            errors.append(f"{label} does not start at kernel-relative zero")
+        if any(
+            left["window_end_ns"] != right["window_start_ns"]
+            for left, right in zip(ordered, ordered[1:])
+        ):
+            errors.append(f"{label} has a gap or overlap between PM windows")
+
+
+def merge(
+    timeline_path: Path,
+    timeline_receipt_path: Path,
+    pm_path: Path,
+    acu_raw_path: Path,
+    acu_metadata_path: Path,
+    output_prefix: Path,
+    perturbation_path: Path | None = None,
+    density_sensitivity_path: Path | None = None,
+    *,
+    self_validate: bool = True,
+) -> dict[str, Any]:
+    timeline = _load_json(timeline_path, "timeline Perfetto")
+    timeline_meta = timeline.get("ppuTimeline", {})
+    if timeline_meta.get("schemaVersion") != 5:
+        raise RuntimeError("PPU timeline schemaVersion 5 is required")
+    if timeline_meta.get("captureValidation") != "accepted":
+        raise RuntimeError(
+            "PPU timeline must come from an accepted timeline.py decode capture"
+        )
+    if timeline_meta.get("clockScope") != "owner_local":
+        raise RuntimeError("PPU timeline clockScope must be owner_local")
+    if (
+        timeline_meta.get("timerSource") != "globaltimer"
+        or timeline_meta.get("timerUnit") != "ns"
+        or timeline_meta.get("timerContractValidation") != "accepted"
+    ):
+        raise RuntimeError("PPU timeline requires the accepted globaltimer ns contract")
+    timeline_receipt = _read_timeline_receipt(
+        timeline_receipt_path, timeline_path, timeline_meta
+    )
+    acu_metadata = _read_acu_metadata(
+        acu_metadata_path, pm_path, acu_raw_path
+    )
+    if timeline_receipt.get("kernel_sha256") != acu_metadata.get("kernel_sha256"):
+        raise RuntimeError(
+            "ACU and timeline evidence describe different authoritative kernels"
+        )
+    kernel_sha256 = acu_metadata["kernel_sha256"]
+    pm_rows = _read_pm(pm_path)
+    valid_pm_rows = [row for row in pm_rows if row["validity"] in VALID_PM_STATES]
+    if not valid_pm_rows:
+        raise RuntimeError("ACU PM CSV contains no interpretable samples")
+    acu = _read_acu_raw(acu_raw_path)
+    perturbation = (
+        _read_measurement(perturbation_path, "A/B perturbation")
+        if perturbation_path is not None
+        else None
+    )
+    density_sensitivity = (
+        _read_measurement(density_sensitivity_path, "B/C density sensitivity")
+        if density_sensitivity_path is not None
+        else None
+    )
+
+    valid_pm_rows = [row for row in pm_rows if row["validity"] in VALID_PM_STATES]
+    if not valid_pm_rows:
+        raise RuntimeError("joint profile has no interpretable PM samples")
+    observed_intervals = sorted({row["interval_ns"] for row in valid_pm_rows})
+    reported_interval = acu["pm_interval_ns"]
+    if acu.get("pm_interval_ns") is None:
+        acu["pm_interval_ns"] = max(observed_intervals)
+    acu["pm_interval_source"] = (
+        "acu_raw_pmsampler_column"
+        if reported_interval is not None
+        else "exact_pm_sample_windows"
+    )
+    if reported_interval is not None and reported_interval != max(observed_intervals):
+        raise RuntimeError(
+            "ACU raw PM interval disagrees with the sample-window maximum"
+        )
+
+    errors: list[str] = []
+    warnings: list[str] = []
+    notes: list[str] = []
+    acu_identity = acu_metadata["identity"]
+    for label, measurement in (
+        ("A/B perturbation", perturbation),
+        ("B/C density sensitivity", density_sensitivity),
+    ):
+        if measurement is None:
+            notes.append(f"{label} measurement was not supplied")
+            continue
+        if measurement.get("workload_identity") != timeline_meta.get(
+            "workloadIdentity"
+        ):
+            errors.append(f"{label} workload identity mismatch")
+        if measurement.get("device_identity") != timeline_meta.get("deviceIdentity"):
+            errors.append(f"{label} device identity mismatch")
+        if measurement.get("kernel_sha256") != kernel_sha256:
+            errors.append(f"{label} authoritative kernel mismatch")
+        for measurement_field, timeline_field in (
+            ("runtime_identity", "runtimeIdentity"),
+            ("cache_policy", "cachePolicy"),
+            ("clock_configuration", "clockConfiguration"),
+        ):
+            if measurement.get(measurement_field) != timeline_meta.get(
+                timeline_field
+            ):
+                errors.append(f"{label} {measurement_field} mismatch")
+    if timeline_meta.get("kernelName") != acu["kernel_name"]:
+        errors.append("kernel identity mismatch")
+    identity_pairs = (
+        ("kernelName", "kernel_name", "kernel"),
+        ("kernelSpecialization", "kernel_specialization", "kernel specialization"),
+        ("workloadIdentity", "workload_identity", "workload"),
+        ("deviceIdentity", "device_identity", "device"),
+        ("runtimeIdentity", "runtime_identity", "runtime"),
+        ("cachePolicy", "cache_policy", "cache policy"),
+        ("clockConfiguration", "clock_configuration", "clock configuration"),
+    )
+    for timeline_field, acu_field, label in identity_pairs:
+        if timeline_meta.get(timeline_field) != acu_identity.get(acu_field):
+            errors.append(f"{label} identity mismatch")
+    if acu_identity.get("device_identity", {}).get("physical_device") != acu["device"]:
+        errors.append("ACU raw physical device does not match collection metadata")
+    if timeline_meta.get("grid") != acu["grid"]:
+        errors.append("grid mismatch")
+    if timeline_meta.get("blockDims") != acu["block"]:
+        errors.append("block dimensions mismatch")
+    if acu["dropped_samples"] is None:
+        notes.append(
+            "ACU omitted dropped-sample aggregate; window continuity was validated"
+        )
+    elif acu["dropped_samples"] != 0:
+        errors.append(f"ACU dropped {acu['dropped_samples']} PM samples")
+
+    timeline_duration = float(timeline_meta["kernelDurationNs"])
+    duration_delta = abs(timeline_duration - acu["duration_ns"]) / acu["duration_ns"]
+    if duration_delta > REJECT_DELTA:
+        message = f"timeline/ACU duration delta {duration_delta:.2%} exceeds 5%"
+        errors.append(message)
+    elif duration_delta > WARNING_DELTA:
+        warnings.append(f"timeline/ACU duration delta {duration_delta:.2%} exceeds 3%")
+
+    by_stream: dict[tuple[int, str], list[dict[str, Any]]] = defaultdict(list)
+    for row in valid_pm_rows:
+        by_stream[(row["packet_index"], row["metric_name"])].append(row)
+    _validate_pm_windows(by_stream, errors)
+
+    if len(observed_intervals) != 1:
+        jitter = (
+            max(observed_intervals) - min(observed_intervals)
+        ) / statistics.median(observed_intervals)
+        message = f"PM intervals are {observed_intervals} (jitter {jitter:.3%})"
+        (warnings if jitter > 0.01 else notes).append(message)
+    coverage_end_ns = max(row["window_end_ns"] for row in valid_pm_rows)
+    final_gap_ns = acu["duration_ns"] - coverage_end_ns
+    if final_gap_ns > 0:
+        message = f"final partial interval is not sampled ({final_gap_ns:g} ns)"
+        (warnings if final_gap_ns > acu["pm_interval_ns"] else notes).append(message)
+    elif final_gap_ns < 0:
+        errors.append(
+            f"PM windows extend {-final_gap_ns:g} ns beyond the ACU kernel duration"
+        )
+
+    analysis_owner = timeline_meta.get("analysisOwner")
+    analysis_window_site_id = timeline_meta.get("analysisWindowSiteId")
+    analysis_site_ids = timeline_meta.get("analysisSiteIds")
+    if not isinstance(analysis_owner, int) or isinstance(analysis_owner, bool):
+        raise RuntimeError("joint analysis requires an explicit analysisOwner")
+    if not isinstance(analysis_window_site_id, int) or isinstance(
+        analysis_window_site_id, bool
+    ):
+        raise RuntimeError("joint analysis requires an explicit analysisWindowSiteId")
+    if (
+        not isinstance(analysis_site_ids, list)
+        or not analysis_site_ids
+        or not all(
+            isinstance(site_id, int) and not isinstance(site_id, bool)
+            for site_id in analysis_site_ids
+        )
+    ):
+        raise RuntimeError("joint analysis requires non-empty analysisSiteIds")
+
+    analysis_windows = []
+    detail_events = []
+    coverage_meta = timeline_meta.get("coverage", {})
+    coverage_all_blocks = coverage_meta.get("allBlocks") is True
+    coverage_range_site_id = coverage_meta.get("rangeSiteId")
+    coverage_events = []
+    for event in timeline.get("traceEvents", []):
+        interval = _event_interval_ns(event)
+        if interval is None:
+            continue
+        args = event.get("args", {})
+        owner = args.get("owner")
+        site_id = args.get("site_id")
+        if owner == analysis_owner and site_id == analysis_window_site_id:
+            analysis_windows.append((event, interval))
+        elif owner == analysis_owner and site_id in analysis_site_ids:
+            detail_events.append((event, interval))
+        if coverage_range_site_id is not None and site_id == coverage_range_site_id:
+            coverage_events.append((event, interval))
+
+    grid_blocks = math.prod(acu["grid"])
+    if len(analysis_windows) != 1:
+        errors.append(
+            "expected exactly one range for the declared analysis owner/window, "
+            f"found {len(analysis_windows)}"
+        )
+    if not detail_events:
+        errors.append("declared analysis sites produced no ranges")
+    if len(analysis_windows) != 1:
+        dispatch_upper_ns = timeline_duration
+    else:
+        window_start_ns, window_end_ns = analysis_windows[0][1]
+        dispatch_upper_ns = timeline_duration - window_end_ns
+        if dispatch_upper_ns < 0:
+            errors.append("analysis window ends after the HGGC kernel duration")
+            dispatch_upper_ns = 0
+        else:
+            notes.append(
+                f"analysis-owner origin offset is [0, {dispatch_upper_ns:g}] ns"
+            )
+        for event, interval in detail_events:
+            if interval[0] < window_start_ns or interval[1] > window_end_ns:
+                errors.append(
+                    f"analysis range {event['name']!r} is outside the analysis window"
+                )
+
+    instrumented_launch = coverage_meta.get("instrumentedLaunch")
+    one_wave_capacity: int | None = None
+    if coverage_all_blocks:
+        if not isinstance(instrumented_launch, dict):
+            errors.append(
+                "all-block coverage lacks instrumented-launch occupancy evidence"
+            )
+        else:
+            instrumented_cu_count = instrumented_launch.get("cu_count")
+            instrumented_occupancy = instrumented_launch.get(
+                "occupancy_blocks_per_cu"
+            )
+            if instrumented_cu_count != acu["cu_count"]:
+                errors.append(
+                    "instrumented-launch CU count disagrees with ACU device evidence"
+                )
+            if (
+                isinstance(instrumented_cu_count, int)
+                and not isinstance(instrumented_cu_count, bool)
+                and isinstance(instrumented_occupancy, (int, float))
+                and not isinstance(instrumented_occupancy, bool)
+                and math.isfinite(instrumented_occupancy)
+                and float(instrumented_occupancy).is_integer()
+                and instrumented_occupancy > 0
+            ):
+                one_wave_capacity = int(
+                    instrumented_cu_count * instrumented_occupancy
+                )
+            else:
+                errors.append("instrumented-launch occupancy evidence is invalid")
+    coverage_distribution_valid = False
+    if coverage_all_blocks:
+        coverage_counts: dict[int, int] = defaultdict(int)
+        for event, _ in coverage_events:
+            block_id = event.get("args", {}).get("block")
+            if isinstance(block_id, int) and not isinstance(block_id, bool):
+                coverage_counts[block_id] += 1
+        expected_counts = {block_id: 1 for block_id in range(grid_blocks)}
+        if coverage_counts != expected_counts:
+            errors.append(
+                "declared all-block coverage does not contain exactly one range per block"
+            )
+        elif one_wave_capacity is None:
+            warnings.append(
+                "instrumented one-wave capacity is unavailable; normalized "
+                "coverage-duration survival is omitted"
+            )
+        elif grid_blocks > one_wave_capacity:
+            warnings.append(
+                "grid exceeds one-wave capacity; normalized coverage-duration "
+                "survival is omitted"
+            )
+        else:
+            coverage_distribution_valid = True
+    else:
+        notes.append(
+            "capture declares partial block coverage; normalized all-block duration "
+            "survival is omitted"
+        )
+    if coverage_all_blocks and coverage_range_site_id is None:
+        errors.append("declared all-block coverage is missing rangeSiteId")
+    if coverage_all_blocks and not coverage_events:
+        warnings.append(
+            "declared all-block coverage produced no comparable coverage ranges"
+        )
+
+    coverage_durations = sorted(
+        interval[1] - interval[0] for _, interval in coverage_events
+    )
+    overlap_cache: dict[tuple[int, int], tuple[list[str], list[str]]] = {}
+    joined_rows = []
+    for row in pm_rows:
+        start = row["window_start_ns"]
+        end = row["window_end_ns"]
+        interpretable = row["validity"] in VALID_PM_STATES
+        normalized_survival = ""
+        possible, guaranteed = [], []
+        if interpretable:
+            if coverage_distribution_valid:
+                normalized_survival = (
+                    len(coverage_durations) - bisect_right(coverage_durations, start)
+                    if end > 0
+                    else 0
+                )
+            key = (start, end)
+            if key not in overlap_cache:
+                overlap_cache[key] = (
+                    sorted(
+                        {
+                            event["name"]
+                            for event, interval in detail_events
+                            if _overlaps(
+                                start, end, interval[0], interval[1] + dispatch_upper_ns
+                            )
+                        }
+                    ),
+                    sorted(
+                        {
+                            event["name"]
+                            for event, interval in detail_events
+                            if interval[0] + dispatch_upper_ns < end
+                            and start < interval[1]
+                        }
+                    ),
+                )
+            possible, guaranteed = overlap_cache[key]
+        joined = dict(row)
+        joined["normalized_coverage_duration_survival_count"] = normalized_survival
+        joined["possible_overlapping_sampled_ranges"] = ";".join(possible)
+        joined["guaranteed_overlapping_sampled_ranges"] = ";".join(guaranteed)
+        joined["analysis_owner_origin_offset_upper_ns"] = dispatch_upper_ns
+        joined["join_semantics"] = (
+            "bounded_dispatch_offset;possible_and_guaranteed_overlap;"
+            "device_global_metrics_not_ownership"
+            if interpretable
+            else "non_interpretable_metric;no_overlap_evidence"
+        )
+        joined_rows.append(joined)
+
+    # Timeline lanes use separated owner-local display bands. Copying them onto the
+    # kernel-relative ACU axis would imply an alignment that does not exist.
+    joint_events: list[dict[str, Any]] = []
+    joint_events.extend(
+        [
+            {
+                "name": "process_name",
+                "ph": "M",
+                "pid": 8,
+                "args": {"name": "ACU PM Sampling (device/global)"},
+            },
+            {
+                "name": "process_name",
+                "ph": "M",
+                "pid": 9,
+                "args": {"name": "Selected-range placement envelopes"},
+            },
+        ]
+    )
+    for event, interval in detail_events:
+        joint_events.append(
+            {
+                "name": event["name"] + " [possible placement]",
+                "cat": "dispatch-offset uncertainty",
+                "ph": "X",
+                "ts": interval[0] / 1000.0,
+                "dur": (interval[1] - interval[0] + dispatch_upper_ns) / 1000.0,
+                "pid": 9,
+                "tid": 1,
+                "args": {
+                    "dispatch_offset_lower_ns": 0,
+                    "dispatch_offset_upper_ns": dispatch_upper_ns,
+                    "semantics": "placement envelope, not activity duration",
+                },
+            }
+        )
+
+    metric_tids = {
+        stream: index for index, stream in enumerate(sorted(by_stream), 1)
+    }
+    for row in joined_rows:
+        if row["validity"] not in VALID_PM_STATES:
+            continue
+        tid = metric_tids[(row["packet_index"], row["metric_name"])]
+        start_us = row["window_start_ns"] / 1000.0
+        duration_us = row["interval_ns"] / 1000.0
+        joint_events.append(
+            {
+                "name": row["metric_name"],
+                "cat": "ACU PM window",
+                "ph": "X",
+                "ts": start_us,
+                "dur": duration_us,
+                "pid": 8,
+                "tid": tid,
+                "args": {
+                    "value": row["metric_value"],
+                    "unit": row["metric_unit"],
+                    "logical_metric_group": row["logical_metric_group"],
+                    "acu_packet_index": row["packet_index"],
+                    "scope": row["scope"],
+                    "validity": row["validity"],
+                    "possible_ranges": row["possible_overlapping_sampled_ranges"],
+                    "guaranteed_ranges": row["guaranteed_overlapping_sampled_ranges"],
+                    "join_semantics": row["join_semantics"],
+                },
+            }
+        )
+        joint_events.append(
+            {
+                "name": row["metric_name"],
+                "cat": "ACU PM counter",
+                "ph": "C",
+                "ts": start_us + duration_us,
+                "pid": 8,
+                "tid": tid,
+                "args": {"value": row["metric_value"]},
+            }
+        )
+    status = "rejected" if errors else ("warning" if warnings else "accepted")
+    output_prefix.parent.mkdir(parents=True, exist_ok=True)
+    joined_csv = Path(f"{output_prefix}.joint_samples.csv")
+    trace_path = Path(f"{output_prefix}.perfetto.json")
+    summary_path = Path(f"{output_prefix}.summary.json")
+    manifest_path = Path(f"{output_prefix}.run_manifest.json")
+    output_paths = [joined_csv, trace_path, summary_path, manifest_path]
+    source_paths = {
+        timeline_path.resolve(),
+        timeline_receipt_path.resolve(),
+        pm_path.resolve(),
+        acu_raw_path.resolve(),
+        acu_metadata_path.resolve(),
+        *descriptor_paths(timeline_receipt_path, timeline_receipt),
+        *descriptor_paths(acu_metadata_path, acu_metadata),
+    }
+    if perturbation_path is not None:
+        source_paths.add(perturbation_path.resolve())
+    if density_sensitivity_path is not None:
+        source_paths.add(density_sensitivity_path.resolve())
+    ensure_no_output_aliases(output_paths, source_paths, "joint")
+
+    input_descriptors: dict[str, Any] = {
+        "timeline": _descriptor(timeline_path),
+        "timeline_receipt": _descriptor(timeline_receipt_path),
+        "pm_samples": _descriptor(pm_path),
+        "acu_raw": _descriptor(acu_raw_path),
+        "acu_metadata": _descriptor(acu_metadata_path),
+    }
+    if perturbation_path is not None:
+        input_descriptors["a_b_perturbation"] = _descriptor(perturbation_path)
+    if density_sensitivity_path is not None:
+        input_descriptors["b_c_density_sensitivity"] = _descriptor(
+            density_sensitivity_path
+        )
+    inputs = portable_descriptors(input_descriptors, summary_path)
+    evidence_payload = {
+        "timeline_evidence_id": timeline_receipt["evidence_id"],
+        "acu_evidence_id": acu_metadata["evidence_id"],
+        "kernel_sha256": kernel_sha256,
+        "inputs": binding_view(inputs),
+        "identity": acu_identity,
+    }
+    evidence_id = digest_json(evidence_payload)
+    with joined_csv.open("w", newline="", encoding="utf-8") as output:
+        writer = csv.DictWriter(output, fieldnames=list(joined_rows[0]))
+        writer.writeheader()
+        writer.writerows(joined_rows)
+
+    trace = {
+        "displayTimeUnit": "ns",
+        "traceEvents": joint_events,
+        "ppuJointProfile": {
+            "schemaVersion": 4,
+            "evidenceId": evidence_id,
+            "evidenceGrade": "decision",
+            "kernelSha256": kernel_sha256,
+            "timerSource": timeline_meta["timerSource"],
+            "timerUnit": timeline_meta["timerUnit"],
+            "alignment": (
+                "ACU is kernel-start-relative; analysis ranges are owner-origin-"
+                "relative with a bounded origin offset; no scaling"
+            ),
+            "pmWindowSemantics": "[window_start_ns, window_end_ns)",
+            "attributionRule": "device/global overlap is not range ownership",
+            "validationStatus": status,
+        },
+    }
+    trace_path.write_text(
+        json.dumps(trace, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
+    output_descriptors = portable_descriptors(
+        {
+            "joint_samples": _descriptor(joined_csv),
+            "perfetto": _descriptor(trace_path),
+        },
+        summary_path,
+    )
+
+    summary = {
+        "schema": JOINT_SUMMARY_SCHEMA,
+        "evidence_id": evidence_id,
+        "evidence_grade": "decision",
+        "kernel_sha256": kernel_sha256,
+        "binding_payload": evidence_payload,
+        "inputs": inputs,
+        "outputs": output_descriptors,
+        "validation": {
+            "status": status,
+            "errors": errors,
+            "warnings": warnings,
+            "notes": notes,
+            "duration": {
+                "timeline_ns": timeline_duration,
+                "acu_ns": acu["duration_ns"],
+                "relative_delta": duration_delta,
+            },
+            "identity": {
+                "kernel_name": acu["kernel_name"],
+                "grid": acu["grid"],
+                "block": acu["block"],
+            },
+        },
+        "acu_launch": acu,
+        "pm": {
+            "metrics": _metric_summary(valid_pm_rows),
+            "validity_counts": _validity_summary(pm_rows),
+            "interpretable_row_count": len(valid_pm_rows),
+            "excluded_row_count": len(pm_rows) - len(valid_pm_rows),
+            "packet_metric_membership": {
+                str(packet): sorted(
+                    {
+                        row["metric_name"]
+                        for row in pm_rows
+                        if row["packet_index"] == packet
+                    }
+                )
+                for packet in sorted({row["packet_index"] for row in pm_rows})
+            },
+            "coverage_end_ns": coverage_end_ns,
+            "window_continuity_validated": not any(
+                "sample indices" in error or "PM windows" in error for error in errors
+            ),
+        },
+        "timeline": {
+            "timer": {
+                "source": timeline_meta["timerSource"],
+                "unit": timeline_meta["timerUnit"],
+                "contract_validation": timeline_meta["timerContractValidation"],
+            },
+            "capture_mode": timeline_meta.get("captureMode"),
+            "sampling_rationale": timeline_meta.get("samplingRationale"),
+            "owner_count": len(timeline_meta.get("owners", [])),
+            "coverage": coverage_meta,
+            "coverage_range_count": len(coverage_events),
+            "one_wave_capacity": one_wave_capacity,
+            "normalized_coverage_duration_distribution_valid": (
+                coverage_distribution_valid
+            ),
+            "detail_ranges": [event["name"] for event, _ in detail_events],
+            "analysis_owner": analysis_owner,
+            "analysis_block": timeline_meta.get("analysisBlock"),
+            "analysis_thread": timeline_meta.get("analysisThread"),
+            "analysis_tile": timeline_meta.get("tile"),
+            "analysis_k_stage": timeline_meta.get("kStage"),
+            "analysis_window_site_id": analysis_window_site_id,
+            "analysis_owner_origin_offset_bounds_ns": [0, dispatch_upper_ns],
+        },
+        "probe_effect": {
+            "a_b_end_to_end_perturbation": (
+                perturbation["summary"] if perturbation is not None else None
+            ),
+            "b_c_density_sensitivity": (
+                density_sensitivity["summary"]
+                if density_sensitivity is not None
+                else None
+            ),
+        },
+        "interpretation_limits": [
+            "PM values are device/global aggregates, not per CTA or range.",
+            "Different replay packets are not proof of simultaneity.",
+            "A PM window cannot resolve a much shorter K-stage.",
+            "Cross-domain PPU globaltimer starts are not compared.",
+            "Analysis-range launch placement is a bounded uncertainty envelope.",
+            "All-block duration survival exists only for explicit complete, comparable coverage.",
+        ],
+    }
+    summary_path.write_text(
+        json.dumps(summary, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
+
+    manifest = {
+        "schema_version": 3,
+        "validation": {"status": status, "errors": errors, "warnings": warnings},
+        "evidence_id": evidence_id,
+        "evidence_grade": "decision" if status == "accepted" else "diagnostic",
+        "kernel_sha256": kernel_sha256,
+        "inputs": inputs,
+        "outputs": {
+            "joint_samples": str(joined_csv),
+            "perfetto": str(trace_path),
+            "summary": str(summary_path),
+        },
+        "equivalence_contract": {
+            "duration_warning_threshold": WARNING_DELTA,
+            "duration_reject_threshold": REJECT_DELTA,
+            "minimum_samples_per_metric": MIN_SAMPLES,
+            "no_duration_rescaling": True,
+        },
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, indent=2, allow_nan=False) + "\n", encoding="utf-8"
+    )
+    if self_validate:
+        validate_joint_summary(summary_path, require_accepted=status == "accepted")
+    if errors:
+        raise RuntimeError("joint profile rejected: " + "; ".join(errors))
+    return summary
+
+
+def validate_joint_summary(
+    path: Path, *, require_accepted: bool = True
+) -> dict[str, Any]:
+    summary = _load_json(path, "joint profile summary")
+    if summary.get("schema") != JOINT_SUMMARY_SCHEMA:
+        raise RuntimeError("unsupported joint profile schema")
+    if summary.get("evidence_grade") != "decision":
+        raise RuntimeError("joint profile is not decision-grade")
+    validation = summary.get("validation")
+    if not isinstance(validation, dict):
+        raise RuntimeError("joint profile validation is missing")
+    if require_accepted and validation.get("status") != "accepted":
+        raise RuntimeError("joint profile is not accepted")
+    kernel_sha256 = summary.get("kernel_sha256")
+    if not isinstance(kernel_sha256, str) or not re.fullmatch(
+        r"[0-9a-f]{64}", kernel_sha256
+    ):
+        raise RuntimeError("joint profile has no authoritative kernel hash")
+    inputs = summary.get("inputs")
+    outputs = summary.get("outputs")
+    if not isinstance(inputs, dict):
+        raise RuntimeError("joint profile inputs are missing")
+    if not isinstance(outputs, dict):
+        raise RuntimeError("joint profile outputs are missing")
+    verify_descriptor_tree(path, inputs, "inputs")
+    verify_descriptor_tree(path, outputs, "outputs")
+    timeline_descriptor = inputs.get("timeline")
+    timeline_receipt_descriptor = inputs.get("timeline_receipt")
+    pm_descriptor = inputs.get("pm_samples")
+    raw_descriptor = inputs.get("acu_raw")
+    acu_descriptor = inputs.get("acu_metadata")
+    if not all(
+        isinstance(value, dict)
+        for value in (
+            timeline_descriptor,
+            timeline_receipt_descriptor,
+            pm_descriptor,
+            raw_descriptor,
+            acu_descriptor,
+        )
+    ):
+        raise RuntimeError("joint profile required input descriptors are incomplete")
+    timeline_path = _descriptor_target(path, timeline_descriptor)
+    timeline_receipt_path = _descriptor_target(path, timeline_receipt_descriptor)
+    pm_path = _descriptor_target(path, pm_descriptor)
+    raw_path = _descriptor_target(path, raw_descriptor)
+    acu_path = _descriptor_target(path, acu_descriptor)
+    timeline_receipt = validate_timeline_receipt(
+        timeline_receipt_path,
+        expected_outputs={"perfetto": timeline_path},
+        require_decision=True,
+    )
+    acu_metadata = validate_acu_metadata(
+        acu_path,
+        expected_pm=pm_path,
+        expected_raw=raw_path,
+        require_decision=True,
+    )
+    if (
+        timeline_receipt.get("kernel_sha256") != kernel_sha256
+        or acu_metadata.get("kernel_sha256") != kernel_sha256
+    ):
+        raise RuntimeError("joint profile input kernel hash mismatch")
+    measurement_paths: dict[str, Path] = {}
+    for field, label in (
+        ("a_b_perturbation", "A/B perturbation"),
+        ("b_c_density_sensitivity", "B/C density sensitivity"),
+    ):
+        descriptor = inputs.get(field)
+        if descriptor is not None:
+            if not isinstance(descriptor, dict):
+                raise RuntimeError(f"joint profile {field} descriptor is invalid")
+            measurement_path = _descriptor_target(path, descriptor)
+            _read_measurement(measurement_path, label)
+            measurement_paths[field] = measurement_path
+    expected_payload = {
+        "timeline_evidence_id": timeline_receipt["evidence_id"],
+        "acu_evidence_id": acu_metadata["evidence_id"],
+        "kernel_sha256": kernel_sha256,
+        "inputs": binding_view(inputs),
+        "identity": acu_metadata["identity"],
+    }
+    if summary.get("binding_payload") != expected_payload:
+        raise RuntimeError("joint profile binding payload mismatch")
+    if digest_json(expected_payload) != summary.get("evidence_id"):
+        raise RuntimeError("joint profile evidence id mismatch")
+    with tempfile.TemporaryDirectory(prefix="ppu-joint-validate-") as directory:
+        regenerated = merge(
+            timeline_path,
+            timeline_receipt_path,
+            pm_path,
+            raw_path,
+            acu_path,
+            Path(directory) / "joint",
+            perturbation_path=measurement_paths.get("a_b_perturbation"),
+            density_sensitivity_path=measurement_paths.get(
+                "b_c_density_sensitivity"
+            ),
+            self_validate=False,
+        )
+    if binding_view(summary) != binding_view(regenerated):
+        raise RuntimeError("joint profile summary does not match bound inputs")
+    return summary
+
+
+def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--timeline", type=Path, required=True)
+    parser.add_argument("--timeline-receipt", type=Path, required=True)
+    parser.add_argument("--pm-csv", type=Path, required=True)
+    parser.add_argument("--acu-raw-csv", type=Path, required=True)
+    parser.add_argument("--acu-metadata", type=Path, required=True)
+    parser.add_argument("--output-prefix", type=Path, required=True)
+    parser.add_argument("--perturbation", type=Path)
+    parser.add_argument("--density-sensitivity", type=Path)
+    return parser.parse_args(argv)
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    args = parse_args(argv)
+    summary = merge(
+        args.timeline,
+        args.timeline_receipt,
+        args.pm_csv,
+        args.acu_raw_csv,
+        args.acu_metadata,
+        args.output_prefix,
+        perturbation_path=args.perturbation,
+        density_sensitivity_path=args.density_sensitivity,
+    )
+    print(
+        f"joint profile {summary['validation']['status']}; duration delta "
+        f"{summary['validation']['duration']['relative_delta']:.2%}"
+    )
+    return 0
+
+
+def entrypoint() -> None:
+    raise SystemExit(main())
+
+
+if __name__ == "__main__":
+    entrypoint()

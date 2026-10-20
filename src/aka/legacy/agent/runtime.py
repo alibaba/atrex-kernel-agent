@@ -32,7 +32,7 @@ from .model import (
     TokenUsage,
     sum_token_usages,
 )
-from orchestrator.agent_runtime.process import (
+from .process import (
     ProcessRunner,
     protected_gateway_identity,
     run_bounded,
@@ -92,7 +92,9 @@ def build_session_environment(runtime_id: str) -> dict[str, str]:
     # the owning campaign, never inherited accidentally by an unrelated or legacy session.
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     environment["ATREX_AGENT_CLI"] = runtime_id
-    python_bin = str(Path(sys.executable).resolve().parent)
+    # A venv executable commonly symlinks to the base interpreter. Resolving it
+    # here makes Agent shell tools run outside the environment that owns AKA.
+    python_bin = str(Path(sys.executable).absolute().parent)
     path_parts = [
         part
         for part in environment.get("PATH", "").split(os.pathsep)

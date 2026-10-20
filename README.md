@@ -92,6 +92,7 @@ Use AKA's orchestrator/optimize.py to start one optimization task for atrex-benc
 | [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 | [Local plugins](docs/plugins.md) | Extend AKA tools and Skills through automatically discovered local plugins |
+| [Optional light modules](docs/optional-light-modules.md) | Select capture, sandboxing, reliable execution or the managed light Workflow without changing upstream defaults |
 | [Optimization dashboard](docs/optimization-dashboard.md) | Optional Core plugin for local progress, performance history and settled token usage |
 | [v0.3.0 release notes](docs/releases/v0.3.0.md) | New features, correctness and measurement changes, and upgrade guidance |
 

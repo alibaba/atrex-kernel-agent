@@ -17,6 +17,7 @@ ROOT = Path(__file__).resolve().parents[1]
 OWNERS = {
     'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/core', 'aka/contracts', 'aka/bootstrap'),
     'atrex-aka-legacy': ('aka/legacy',),
+    'atrex-aka-light': ('aka/light',),
     'atrex-aka-dashboard': ('aka/dashboard',),
     'atrex-aka-observation-long-horizon': ('aka/observation/long_horizon',),
 }
@@ -25,11 +26,13 @@ OWNERS = {
 def owned(distribution: str) -> tuple[Path, ...]:
     files = []
     suffixes = ('.py', '.json', '.html', '.woff2', '.txt') if distribution == 'atrex-aka-dashboard' else ('.py', '.json', '.sh')
+    if distribution == 'atrex-aka-light':
+        suffixes = ('.py', '.json', '.sh', '.md', '.cu', '.cuh', '.h', '.cpp', '.c')
     for relative in OWNERS[distribution]:
         path = ROOT / 'src' / relative
         files.extend([path] if path.is_file() else
                      sorted(p for p in path.rglob('*') if p.is_file() and p.suffix in suffixes))
-    if distribution == 'atrex-aka-optimization':
+    if distribution == 'atrex-aka-legacy':
         # Execution owns this runtime Skill and its reference files. Installation
         # into an optimization Agent's workspace is handled by the application.
         skills = ROOT / 'src' / 'aka' / 'legacy' / 'execution' / 'skills'
@@ -47,6 +50,10 @@ def build(distribution: str, output: Path) -> None:
             target = stage / 'src' / source.relative_to(ROOT / 'src')
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
+        if distribution == 'atrex-aka-legacy':
+            assets = stage / 'src/aka/legacy/evaluation/assets'
+            for relative in ('long_horizon/remote_abba.py', 'reference/profile_driver.py'):
+                shutil.copy2(ROOT / relative, assets / Path(relative).name)
         # The default `build` operation deliberately builds a wheel from the sdist.
         subprocess.run([sys.executable, '-m', 'build', '--outdir', str(output.resolve())], cwd=stage, check=True)
 

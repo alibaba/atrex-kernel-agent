@@ -134,9 +134,13 @@ survey` to enumerate kernels, `sol` (the default) for the bottleneck class, and 
 that name verbatim from the survey/SOL result; never guess a substring. Raw `.ncu-rep`/ATT artifacts
 stay remote unless `--include-raw-profile` is justified.
 
-On NVIDIA, `summary.txt` carries a `LOCALIZE` line naming the analysis files that pin a symptom to
-source lines. Those files exist only on a `--source` run: never pin a source-level claim to a profile
-collected without it.
+On NVIDIA, collection and parsing both run remotely. Read the structured
+`[sandbox] PROFILE_JSON=...` response; Dev wrapper sync also provides `profile.json`,
+`analysis/metrics.csv` and key metrics. `--source` adds `analysis/source.txt`
+(source-correlated CUDA/SASS when supported by NCU). Do not install/import
+`ncu_report` or parse binary reports on the Agent host. Missing source correlation
+is not evidence for a source-line claim. `summary.txt` is a heuristic; high Memory
+SOL is not proof of DRAM saturation—check DRAM throughput, traffic and cache counters.
 
 #### When the seeded driver cannot represent the work
 

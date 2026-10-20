@@ -24,7 +24,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--profile", default="application")
     parser.add_argument("--profiles-dir", type=Path, default=PROFILES_DIR)
     parser.add_argument("--patch", action="append", type=Path, default=[])
-    parser.add_argument("--execution-profile", choices=("legacy",), default=None)
+    parser.add_argument("--execution-profile", choices=("legacy", "reliable"), default=None)
     parser.add_argument("--execution-patch", action="append", type=Path, default=[])
     options = parser.parse_args(argv[:boundary])
     if boundary == len(argv):

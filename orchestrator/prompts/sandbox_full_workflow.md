@@ -19,4 +19,9 @@
   python tools/sandbox.py --kind profile --profile-level sol --sync profiles/v<N> -- bash tools/profile_kernel.sh profiles/v<N>/harness/profile_driver.py --output-dir profiles/v<N>
   ```
   Use `--profile-level deep --kernel-regex '^<exact kernel name>$'` for a focused typed profile. If source-line correlation or another typed-profile gap is specifically required, the sandbox may use the supplied wrapper through `dev`; do not choose dev merely for convenience.
+  Collection and parsing both run on the GPU worker. Read `[sandbox] PROFILE_JSON=...`
+  and synchronized `profile.json` / `analysis/metrics.csv` (`analysis/source.txt` with
+  `--source`). Do not import/install `ncu_report` or parse binary reports on the Agent
+  host. Missing worker tools or empty exports are Profile errors, not a request to
+  repair the local Python environment. Raw binary reports stay remote by default.
 - Any import/API probe/benchmark that may initialize GPU code must be routed through `tools/sandbox.py`; static source inspection remains allowed on the host.

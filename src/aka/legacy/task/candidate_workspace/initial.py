@@ -21,7 +21,7 @@ def initialize_kernel(reference_dir, entry, arguments, *, content, working_direc
                           env={**os.environ, "AKA_TASK_PYTHON": sys.executable}).returncode
 
 
-def prepare_sol(ws, content, *, problem_files, reference_dir):
+def prepare_sol(ws, content, *, problem_files, reference_dir, profile_driver=None):
     for sub in ("memory", "plans", "profiles"):
         (ws / sub).mkdir(parents=True, exist_ok=True)
 
@@ -40,7 +40,7 @@ def prepare_sol(ws, content, *, problem_files, reference_dir):
     # 4) harness + constraints + docs (copied from reference/)
     (ws / "test_kernel.py").write_text((reference_dir / "test_kernel.py").read_text(encoding="utf-8"), encoding="utf-8")
     (ws / "profile_driver.py").write_text(
-        (reference_dir / "profile_driver.py").read_text(encoding="utf-8"), encoding="utf-8"
+        (profile_driver or reference_dir / "profile_driver.py").read_text(encoding="utf-8"), encoding="utf-8"
     )
     claude = reference_dir / "CLAUDE.md"
     if claude.exists():

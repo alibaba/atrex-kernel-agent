@@ -11,7 +11,7 @@ from aka.legacy.execution.legacy.runtime import ExecutionHooks, SandboxRequest
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", choices=("legacy",), default=None)
+    parser.add_argument("--profile", choices=("legacy", "reliable"), default=None)
     parser.add_argument("--profiles-dir", type=Path)
     parser.add_argument("--patch", type=Path, action="append", default=[])
     parser.add_argument("--repo-root", type=Path, required=True)

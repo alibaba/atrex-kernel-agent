@@ -9,14 +9,18 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Protocol
+from orchestrator._bootstrap import task_modules
+
+task_modules()
+from aka.legacy.agent.process import (
+    ProcessRunner, protected_gateway_identity,
+    DEFAULT_PROTECTED_GATEWAY_SCREEN, DEFAULT_PROTECTED_GATEWAY_STATE_NAME,
+)
 
 from ..recovery_processes import spawn_owned_session
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 ENVIRONMENT_TEMPFAIL = 75
-DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
-DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
 TRUSTED_SANDBOX_ENTRYPOINTS = frozenset({
     (Path(__file__).resolve().parents[2] / "tools" / "sandbox.py").resolve(),
 })
@@ -57,31 +61,8 @@ def _python_entrypoint(tokens: list[str]) -> tuple[str, str]:
     return "", ""
 
 
-class ProcessRunner(Protocol):
-    def __call__(
-        self,
-        command: list[str],
-        cwd: Path,
-        timeout: int | None,
-        env: dict | None = None,
-    ) -> tuple[str, str, int, bool]:
-        ...
 
 
-def protected_gateway_identity(
-    environment: dict[str, str] | None = None,
-) -> tuple[str, str]:
-    """Resolve shared gateway protection targets without embedding host paths."""
-    values = os.environ if environment is None else environment
-    screen = values.get(
-        "ATREX_PROTECTED_GATEWAY_SCREEN", DEFAULT_PROTECTED_GATEWAY_SCREEN
-    )
-    state_dir = values.get("ATREX_PROTECTED_GATEWAY_STATE_DIR")
-    if not state_dir:
-        cache_home = values.get("XDG_CACHE_HOME")
-        cache_root = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
-        state_dir = str(cache_root / DEFAULT_PROTECTED_GATEWAY_STATE_NAME)
-    return screen, state_dir
 
 
 def python_import_roots(code: str, *, _depth: int = 0) -> set[str]:
