@@ -151,14 +151,14 @@ def _latest_complete_canonical_performance(
     *,
     before_version: int,
     expected_shape_ids: set[str] | None,
-    required_performance_objective: str | None = None,
 ) -> tuple[dict[str, Any], int] | None:
     """Find the newest complete real-shape incumbent measurement before a round.
 
     A pivot, blocked session, protocol failure, or supervisor interruption may have no
     candidate verification at all.  Its memory must still carry the real per-shape
     performance of the unchanged canonical incumbent rather than replacing known facts
-    with nulls.  Only a complete, finite canonical record is eligible for carry-forward.
+    with nulls. Only passing, complete, finite latency records are eligible for
+    carry-forward; reference scores and their objective labels are diagnostics.
     """
     for version in range(before_version - 1, -1, -1):
         memory = main_adapter.read_memory(workspace, version)
@@ -168,12 +168,6 @@ def _latest_complete_canonical_performance(
             continue
         performance = memory.get("performance")
         if not isinstance(performance, dict):
-            continue
-        if (
-            required_performance_objective is not None
-            and performance.get("performance_objective")
-            != required_performance_objective
-        ):
             continue
         by_shape = performance.get("latency_us_by_shape")
         if not isinstance(by_shape, dict) or not by_shape:
@@ -197,7 +191,7 @@ def _latest_complete_canonical_performance(
                 "performance_score", performance.get("speedup_vs_ref_geomean")
             )
         )
-        if latency is None or performance_score is None:
+        if latency is None:
             continue
         carried = dict(performance)
         carried["latency_us"] = latency
@@ -215,9 +209,8 @@ def _latest_complete_episode_performance(
     episode_workspace: Path | None,
     *,
     expected_shape_ids: set[str] | None,
-    required_performance_objective: str | None = None,
 ) -> dict[str, Any] | None:
-    """Read the latest complete supervisor-independent measurement from an episode."""
+    """Read passing, source-matched Episode latency evidence without requiring scores."""
     if episode_workspace is None:
         return None
     path = episode_workspace / EPISODE_EVALUATIONS_PATH
@@ -236,13 +229,7 @@ def _latest_complete_episode_performance(
         except json.JSONDecodeError:
             continue
         result = payload.get("result") if isinstance(payload, dict) else None
-        if not isinstance(result, dict) or not result.get("all_pass"):
-            continue
-        if (
-            required_performance_objective is not None
-            and result.get("performance_objective")
-            != required_performance_objective
-        ):
+        if not isinstance(result, dict) or result.get("all_pass") is not True:
             continue
         schema_version = payload.get("schema_version")
         recorded_kernel_sha256 = payload.get("kernel_sha256")
@@ -278,7 +265,7 @@ def _latest_complete_episode_performance(
         performance_score = _positive_finite(
             result.get("performance_score", result.get("speedup_vs_ref_geomean"))
         )
-        if latency is None or performance_score is None:
+        if latency is None:
             continue
         return {
             "all_pass": True,
@@ -905,7 +892,6 @@ class LongHorizonCampaign:
                 _latest_complete_episode_performance(
                     episode_workspace,
                     expected_shape_ids=expected_shape_ids,
-                    required_performance_objective="shape_speedup_arithmetic_mean",
                 )
                 if _episode_head_matches_incumbent(
                     self.workspace, episode_workspace
@@ -925,7 +911,6 @@ class LongHorizonCampaign:
                     self.workspace,
                     before_version=version,
                     expected_shape_ids=expected_shape_ids,
-                    required_performance_objective="shape_speedup_arithmetic_mean",
                 )
             if not measurement_complete and carried is not None:
                 incumbent_performance, carried_from_version = carried

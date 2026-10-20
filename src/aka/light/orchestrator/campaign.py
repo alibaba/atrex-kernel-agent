@@ -2428,27 +2428,35 @@ class Campaign:
             result = _test_result_from_stdout(test.stdout)
         except (RuntimeError, json.JSONDecodeError) as exc:
             return None, f"combined validation produced no usable result: {exc}"
-        if not result.get("all_pass"):
+        if result.get("all_pass") is not True:
             return None, "combined multi-seed correctness validation failed"
 
         latency = result.get("latency_us_geomean")
-        if not isinstance(latency, (int, float)) or latency <= 0:
-            return None, "validation reported no usable latency_us_geomean"
-        performance_score = result.get("performance_score")
         if (
-            isinstance(performance_score, bool)
-            or not isinstance(performance_score, (int, float))
-            or performance_score <= 0
-            or not math.isfinite(float(performance_score))
+            isinstance(latency, bool)
+            or not isinstance(latency, (int, float))
+            or latency <= 0
+            or not math.isfinite(float(latency))
         ):
-            return None, "validation reported no usable performance_score"
+            return None, "validation reported no usable latency_us_geomean"
+        # Light accepts measured latency, not optional reference-relative scores.
+        # Missing metadata must not reject a correct framework implementation.
+        by_shape = result.get("latency_us_by_shape")
+        if not isinstance(by_shape, dict) or not by_shape or any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or value <= 0
+            or not math.isfinite(float(value))
+            for value in by_shape.values()
+        ):
+            return None, "validation reported no usable latency_us_by_shape"
         # Require the framework baseline to preserve full-workload measurement coverage.
         baseline_shapes = set(
             ((read_memory(self.workspace, 0) or {}).get("performance") or {}).get(
                 "latency_us_by_shape", {}
             )
         )
-        measured_shapes = set(result.get("latency_us_by_shape") or {})
+        measured_shapes = set(by_shape)
         if baseline_shapes and measured_shapes != baseline_shapes:
             return None, (
                 "latency_us_by_shape does not cover the same workloads as v0 "

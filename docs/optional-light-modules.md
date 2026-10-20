@@ -707,6 +707,14 @@ On 2026-10-19 this integration branch merged upstream `main` at `7247206287ef274
 
 Light promotion now matches Runtime: compare the candidate and incumbent's GeoMean latency from the same native Eval ABBA measurement. Improvement is `(incumbent_us - candidate_us) / incumbent_us * 100`, and must strictly exceed the configured threshold (floating-point roundoff at equality is not an improvement). `performance_score` remains diagnostic, not a promotion gate. The existing Triton-to-Gluon conversion tolerance remains separate. The upstream `workflow` composition retains its original score-based rule.
 
+Light's V1 framework-baseline gate and historical measurement readers likewise do
+not require `performance_score` or the reference-score `performance_objective`
+label. Missing reference metadata leaves the score unavailable; it does not make
+valid latency evidence unusable. V1 still requires passing correctness, positive
+finite GeoMean/per-Shape latencies and full V0 Shape coverage. Historical reads
+retain their passing-status, Shape-coverage and Episode source-binding checks,
+and carry a valid reference score when present. The Legacy gates are unchanged.
+
 Light's shared defaults are defined in `aka.light.evaluation.policy`. Timing and execution controls remain aligned with Runtime production: 100 timing iterations, 10 warmup iterations, 120-second candidate/performance limits, clock locking, and a 600-second default allocation timeout. Correctness instead preserves the legacy candidate gate: full Evaluate and candidate correctness use 6 cases (base plus 5 additional). Full Bootstrap/V1 measurements use the same sampling defaults; explicitly targeted bring-up smoke remains one case. Evaluate and ABBA split into one Shape per batch, with up to 16 batches in parallel. Explicit operator/request overrides remain part of task identity.
 
 ABBA submits native `Eval` requests with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Agent exploration defaults to 6 correctness cases; the exact Supervisor retention request uses 1 case after the separate six-case candidate gate. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume; the former Dev-driver fallback is removed. SOL/SSH comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
