@@ -85,17 +85,30 @@ the usual way. Conflicting resource or Skill installation paths fail before anyt
 
 ## Discover and call tools
 
-From the repository or an initialized campaign workspace:
+In a campaign's Agent environment, list the plugins selected by that campaign:
 
 ```bash
 python -m aka.legacy.resources.cli list
 ```
 
-The command returns separate `tools` and `skills` catalogs. Each tool uses a namespaced name such as
+The campaign supplies the plugin-selection environment. Changing into the repository or a campaign
+workspace alone does not select plugins. For standalone discovery from the checkout root, in a shell
+without campaign plugin-selection variables, select the local catalog explicitly and use a fresh
+workspace outside the checkout:
+
+```bash
+aka_plugin_workspace=$(mktemp -d)
+python -m aka.legacy.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" list
+```
+
+This scans the specified catalog rather than resolving a Workflow's configured plugin selection.
+The separate workspace avoids conflicts with source directories such as `gpu-wiki` and with existing
+campaign locks.
+Both forms return separate `tools` and `skills` catalogs. Each tool uses a namespaced name such as
 `gpu-wiki.query`; each Skill has a namespaced catalog ID while retaining its native installation
 name.
 
-To query GPU Wiki, create `wiki_request.json`:
+To query GPU Wiki when that plugin is enabled, create `wiki_request.json`:
 
 ```json
 {
@@ -104,10 +117,17 @@ To query GPU Wiki, create `wiki_request.json`:
 }
 ```
 
-Then call:
+In the campaign's Agent environment, call:
 
 ```bash
 python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json
+```
+
+For a standalone call from the checkout root, retain the same catalog and workspace selection:
+
+```bash
+python -m aka.legacy.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" \
+  call gpu-wiki.query --input wiki_request.json
 ```
 
 `--input -` reads JSON from stdin. The response preserves the Wiki envelope: `query_id`, `records`,
