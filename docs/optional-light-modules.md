@@ -209,6 +209,18 @@ Patches replace a module's whole configuration; omitted fields receive that prov
 
 Capture can be switched without enabling isolation. Wiki disabling removes its mounted Skill and required-query prompt fragments as well as rejecting the endpoint. Disabling supplemental numerical planning does not disable ordinary evaluator correctness, six-case Atrex-Bench validation, full SOL workload coverage, production constraints, or ABBA acceptance. Three-repetition aggregation is opt-in; untimed correctness checks are not repeated three times.
 
+### Projected-proc compiler preflight
+
+For `proc_mode: projected`, run `python -m aka.light.agent.preflight` in the
+Linux container that will execute the Agent. This public, model-free command
+checks the packaged C shim, compiler/development headers and temporary storage,
+returning `{"check": "projected_proc_compile", "status": "ready"}` on success
+and a nonzero exit with fixed guidance on failure. CI consumers should use this
+entry point instead of importing private process-view helpers. It neither
+installs system packages nor launches an Agent/GPU job, and it does not certify
+Bubblewrap namespace permissions. Packages installed in a separate CI container
+are not evidence that this execution container has a working compiler.
+
 ### Agent active-time limit and blocking Runtime calls
 
 Light defaults to **28,800 seconds (8 hours) of Agent active time per Episode**,

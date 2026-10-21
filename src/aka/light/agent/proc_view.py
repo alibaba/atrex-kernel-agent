@@ -200,7 +200,7 @@ def _serve_maps(
                 continue
 
 
-def _install_maps_shim(destination: Path) -> Path:
+def _install_maps_shim(destination: Path, *, force_rebuild: bool = False) -> Path:
     source = Path(__file__).with_name("proc_maps.c")
     digest = hashlib.sha256(source.read_bytes()).hexdigest()
     cache = Path(tempfile.gettempdir()) / f"aka-proc-maps-{os.getuid()}-{digest}"
@@ -211,7 +211,7 @@ def _install_maps_shim(destination: Path) -> Path:
     compiled = cache / "libproc-maps.so"
     if compiled.is_symlink():
         raise RuntimeError("Unsafe process-view compiler output")
-    if not compiled.exists():
+    if force_rebuild or not compiled.exists():
         with tempfile.TemporaryDirectory(dir=cache) as temporary:
             output = Path(temporary) / compiled.name
             subprocess.run(
