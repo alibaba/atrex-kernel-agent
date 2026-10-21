@@ -7,9 +7,9 @@ ownership, profile commands, the new tools interface and legacy compatibility.
 
 ## Standalone legacy manifest catalogs
 
-The following manifest format remains available for explicitly selected standalone
-legacy catalogs and matching historical campaigns. The default legacy Workflow
-selects `plugins/gpu-wiki` from the checkout supplied with `--repo-root`. Custom
+The following material applies to explicitly selected standalone legacy catalogs
+and matching historical campaigns. The default legacy Workflow selects
+`plugins/gpu-wiki` from the checkout supplied with `--repo-root`. Custom
 configurations can select explicit `plugins` paths or a `plugin_dir` catalog;
 catalog mode discovers immediate subdirectories containing `plugin.json`. A
 plugin may contribute tools, Skills, instructions, and workspace resources. These
