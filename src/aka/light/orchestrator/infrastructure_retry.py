@@ -13,7 +13,7 @@ from threading import Event
 from .durable_state import durable_write_json
 from .session_tail import read_regular_bytes
 
-POLL_SECONDS = 30 * 60
+POLL_SECONDS = 60
 MAX_STATE_BYTES = 64 * 1024
 
 
@@ -103,7 +103,7 @@ def _wait_until(deadline: float, cancel: Event) -> None:
 
 
 def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None):
-    """Retry the same step every 30 minutes, retaining its deadline across restarts.
+    """Retry the same step every 60 seconds, retaining its deadline across restarts.
 
     Stage identity must include the candidate/contract digest. This loop does not
     update campaign counters, finalize a journal, or start another coding session.
@@ -112,6 +112,16 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
     key = hashlib.sha256(stage.encode()).hexdigest()[:24]
     path = _state_path(workspace, "infrastructure", key)
     record = _load_retry_state(path, stage, "infrastructure")
+    if record.get("status") == "waiting_for_infrastructure":
+        # Shorten older waits to the current policy without restarting the
+        # countdown or resetting the durable retry count on every resume.
+        deadline = min(
+            record["next_retry_at"],
+            record.get("last_failure_at", time.time()) + POLL_SECONDS,
+        )
+        if deadline != record["next_retry_at"] or record.get("poll_seconds") != POLL_SECONDS:
+            record.update(next_retry_at=deadline, poll_seconds=POLL_SECONDS)
+            durable_write_json(path, record, indent=2, ensure_ascii=False)
     while True:
         if record.get("status") == "waiting_for_infrastructure":
             _wait_until(record["next_retry_at"], cancel)
@@ -130,7 +140,7 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
                 "poll_seconds": POLL_SECONDS, "reason": reason,
             }
             durable_write_json(path, record, indent=2, ensure_ascii=False)
-            print(f"[infrastructure] {stage}: {reason}; retry in 30 minutes; "
+            print(f"[infrastructure] {stage}: {reason}; retry in {POLL_SECONDS} seconds; "
                   f"candidate and episode preserved; state={path}", flush=True)
         except ReviewerExecutionTimeout:
             # retry_review owns this expected outcome and its durable budget.

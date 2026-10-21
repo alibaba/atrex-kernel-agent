@@ -31,7 +31,7 @@ Reference non-finite outputs, invalid generation or incomplete receipts return t
 
 Each planner uses `--production-review-timeout` (default 600 seconds). A bounded plan recovered from a timeout remains untrusted until schema/evidence validation and execution. Without a usable plan, a timeout permits a recorded `skipped_planner_timeout` only after ordinary correctness passed, evidence is unchanged and no measured supplemental candidate failure remains. Malformed non-timeout responses do not receive this exemption.
 
-GPU probes use the same private MeasurementStore and exact-task reuse as other Supervisor requests. A case has a 540-second evaluator deadline inside a 600-second Dev allocation. Confirmed service outages use the existing 30-minute retry waits; uncertain submissions are not blindly replayed. Nested requests share the parent report's deadline and revocation. Total outage waiting is otherwise unbounded while the controller remains active.
+GPU probes use the same private MeasurementStore and exact-task reuse as other Supervisor requests. A case has a 540-second evaluator deadline inside a 600-second Dev allocation. Confirmed service outages use fixed 60-second outer Supervisor retry waits; the inner Gateway backoff is unchanged. On resume, older longer waits are shortened to 60 seconds after the recorded failure without resetting retry counts or extending earlier deadlines. Uncertain submissions are not blindly replayed. Nested requests share the parent report's deadline and revocation. Total outage waiting is otherwise unbounded while the controller remains active.
 
 ## Evidence and limits
 
