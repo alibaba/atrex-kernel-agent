@@ -1,0 +1,5 @@
+{
+  "api_version": 2,
+  "extends": "aka.legacy.workflow:profiles/workflow-base.json",
+  "composition": "workflow-no-wiki"
+}

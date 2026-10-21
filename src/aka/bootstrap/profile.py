@@ -27,6 +27,7 @@ class Selection:
     token_definitions: Mapping[str, str] = field(default_factory=dict)
     continuation_version: int = 1
     python_paths: tuple[Path, ...] = ()
+    agent_resources: Mapping[str, Any] | None = None
 
 
 def load_token_definitions(definitions: Mapping[str, str]) -> dict[str, ServiceKey]:

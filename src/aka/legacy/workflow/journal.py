@@ -855,6 +855,11 @@ def append_experiment(
     if not isinstance(experiment, dict) or not experiment:
         raise ValueError("experiment must be a non-empty JSON object")
     entry = dict(experiment)
+    if "attribution" in entry:
+        from .resource_evidence import apply_attribution
+        experiments = value.get("experiments", [])
+        apply_attribution(entry, experiment_id=f"episode-{value.get('episode', 'unknown')}:experiment-{len(experiments)+1}",
+                          workspace=path.resolve().parent.parent)
     normalize_wiki_attribution(entry)
     if "evaluation" in entry:
         entry["evaluation"], errors = normalize_experiment_evaluation(

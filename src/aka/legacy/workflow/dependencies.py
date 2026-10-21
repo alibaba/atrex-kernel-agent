@@ -136,3 +136,4 @@ class CampaignDependencies:
     workflow: Callable[[Campaign], str]
     execution: Callable[[Campaign], CampaignExecution]
     services: Callable[[Campaign], WorkflowServices]
+    agent_resources: Any = None

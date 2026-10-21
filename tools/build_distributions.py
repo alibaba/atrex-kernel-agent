@@ -23,6 +23,8 @@ OWNERS = {
     'atrex-aka-light': ('aka/light',),
     'atrex-aka-dashboard': ('aka/dashboard',),
     'atrex-aka-observation-long-horizon': ('aka/observation/long_horizon',),
+    'atrex-aka-resources': ('aka/resources',),
+    'atrex-aka-wiki': ('aka/wiki',),
 }
 
 

@@ -1,10 +1,19 @@
-# AKA local plugins
+# AKA plugins
 
-AKA loads the plugins selected by the Resources configuration. The default Workflow selects
-`plugins/gpu-wiki` from the checkout supplied with `--repo-root`.
-A custom configuration can select explicit `plugins` paths or a `plugin_dir` catalog; catalog mode
-discovers immediate subdirectories containing `plugin.json`. A plugin may contribute tools, Skills,
-instructions, and workspace resources.
+New campaigns use Core plugins and a frozen Agent resource plan. Public Wiki is
+selected by the default Workflow profile; `workflow-no-wiki.json` disables it.
+See [Core Agent resources and Wiki selection](core-agent-resources.md) for package
+ownership, profile commands, the new tools interface and legacy compatibility.
+
+## Standalone legacy manifest catalogs
+
+The following manifest format remains available for explicitly selected standalone
+legacy catalogs and matching historical campaigns. The default legacy Workflow
+selects `plugins/gpu-wiki` from the checkout supplied with `--repo-root`. Custom
+configurations can select explicit `plugins` paths or a `plugin_dir` catalog;
+catalog mode discovers immediate subdirectories containing `plugin.json`. A
+plugin may contribute tools, Skills, instructions, and workspace resources. These
+manifests do not participate in new Core Wiki composition.
 
 ## MicroAnalysis
 
@@ -47,7 +56,6 @@ Use the selected backend's tools for collection commands, counter definitions, a
 Plugin locks record fingerprints and Skill installations use symlinks; they do not preserve copies
 of the plugin files. Keep the original selected plugin directory available for existing campaigns.
 Use a new campaign to change plugin selection rather than modifying a running campaign's locks.
-
 ## Design and runtime flow
 
 ```mermaid

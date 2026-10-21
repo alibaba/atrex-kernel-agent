@@ -104,12 +104,19 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
             add(episode / "journal.json", "episode-journal")
             add(episode / "evaluations.jsonl", "episode-evaluation")
 
-    profile = workspace / ".gpu_wiki_profile"
-    add(profile / "run.json", "wiki-run-identity")
-    query_root = profile / "raw" / "query_events"
-    if query_root.is_dir():
-        for path in query_root.glob("*/*.json"):
-            add(path, "wiki-query-event")
+    from .resource_evidence import collect_artifacts
+    declared = collect_artifacts(workspace)
+    if declared is None:
+        # Existing legacy workspaces retain their original public Wiki layout.
+        profile = workspace / ".gpu_wiki_profile"
+        add(profile / "run.json", "wiki-run-identity")
+        query_root = profile / "raw" / "query_events"
+        if query_root.is_dir():
+            for path in query_root.glob("*/*.json"):
+                add(path, "wiki-query-event")
+    else:
+        for item in declared:
+            add(workspace / item["path"], item["role"])
 
     profiles = workspace / "profiles"
     if profiles.is_dir():

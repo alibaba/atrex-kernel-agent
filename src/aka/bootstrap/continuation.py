@@ -27,6 +27,43 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def base_payload(payload: str) -> str:
+    """Return the neutral selection; bound plans never reference the final digest."""
+    value = json.loads(payload)
+    if isinstance(value, dict) and value.get("version") == 3:
+        if type(value.get("base_version")) is not int or value["base_version"] not in (1, 2):
+            raise CompositionError("continuation", "invalid bound selection base version")
+        if "agent_resources" not in value:
+            raise CompositionError("continuation", "bound selection lacks resources")
+        value["version"] = value.pop("base_version")
+        value.pop("agent_resources")
+    return encode(value)
+
+
+def bind_resources(payload: str, binding: Mapping) -> str:
+    """Bind a validated business owner's tool plan to a neutral launch selection."""
+    required = {"schema", "workspace", "campaign_id", "plan", "digest"}
+    if (not isinstance(binding, dict) or set(binding) != required
+            or binding.get("schema") != "aka.bound-agent-resources.v1"
+            or not all(isinstance(binding.get(key), str) and binding[key]
+                       for key in ("workspace", "campaign_id", "plan", "digest"))
+            or not Path(binding["workspace"]).is_absolute()
+            or not Path(binding["plan"]).is_absolute()
+            or len(binding["digest"]) != 64
+            or any(c not in "0123456789abcdef" for c in binding["digest"])):
+        raise CompositionError("continuation", "invalid agent resource binding")
+    original = json.loads(payload)
+    if original.get("version") == 3 and original.get("agent_resources") != binding:
+        raise CompositionError("continuation", "cannot replace a bound resource selection")
+    value = json.loads(base_payload(payload))
+    if type(value.get("version")) is not int or value["version"] not in (1, 2):
+        raise CompositionError("continuation", "unsupported selection format")
+    value["base_version"] = value["version"]
+    value["version"] = 3
+    value["agent_resources"] = dict(binding)
+    return encode(value)
+
+
 def token_definition_identity(definitions) -> dict:
     """Pin declared token modules as code, including package resource membership."""
     identities = {}
@@ -79,7 +116,10 @@ def _capture(selection: Selection) -> tuple[Selection, str]:
         value["token_definition_identity"] = token_definition_identity(selection.token_definitions)
     if selection.python_paths:
         value["python_paths"] = [str(path) for path in selection.python_paths]
-    return replace(selection, composition=effective), encode(value)
+    payload = encode(value)
+    if selection.agent_resources is not None:
+        payload = bind_resources(payload, dict(selection.agent_resources))
+    return replace(selection, composition=effective), payload
 
 
 def read(environment: Mapping[str, str | None]) -> str | None:
@@ -101,6 +141,16 @@ def restore(payload: str, *, tokens: Sequence[ServiceKey] = ()) -> Selection:
     from .runtime import selection_runtime
     try:
         value = json.loads(payload)
+        if isinstance(value, dict) and value.get("version") == 3:
+            neutral = base_payload(payload)
+            binding = value["agent_resources"]
+            # Verify the complete old-format identity before importing any tool.
+            selection = restore(neutral, tokens=tokens)
+            if json.loads(bind_resources(neutral, binding)) != value:
+                raise ValueError("bound selection contains unknown or inconsistent fields")
+            from aka.resources import restore_bound
+            restore_bound(binding, base_selection=json.loads(neutral))
+            return replace(selection, agent_resources=dict(binding))
         environment = value["environment"]
         paths = value.get("python_paths", [])
         if (not isinstance(environment, dict) or any(not isinstance(key, str)
@@ -149,7 +199,9 @@ def _restore(payload: str, *, tokens: Sequence[ServiceKey] = ()) -> Selection:
         for token in recorded_tokens:
             if registry.get(token.name) is None or replace(registry[token.name], doc="") != token:
                 raise ValueError(f"token {token.name} is unavailable or changed")
-            selected.append(token)
+            # Documentation is excluded from the recorded semantic identity;
+            # use the verified live declaration when reconstructing the owner.
+            selected.append(registry[token.name])
         resources = tuple((Path(item["root"]), tuple(item["paths"])) for item in value["resources"])
         selection = Selection(composition, value["target"], tuple(selected),
                               tuple(value["required_services"]), resources,

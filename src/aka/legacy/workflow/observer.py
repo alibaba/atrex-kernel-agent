@@ -21,4 +21,20 @@ class DefaultWorkflowObserver:
 
 
 def apply(ctx, config):
+    contribute_phase_instructions(ctx)
     ctx.provide(WORKFLOW_OBSERVER, DefaultWorkflowObserver())
+
+
+def contribute_phase_instructions(ctx):
+    """Observation discipline remains available when every Wiki is disabled."""
+    from aka.contracts.agent_instructions import InstructionSpec
+    value = InstructionSpec(
+        name="workflow.phase-evidence",
+        phases=("setup", "episode", "fast_episode", "framework_baseline"),
+        template=("### Phase evidence discipline\n\n"
+                  "Run phase-start and phase-end while the work happens, as standalone tool calls. "
+                  "End the active phase before starting another. Start correctness before its full "
+                  "command and end it after the result; use the same order for benchmark. "
+                  "Each repeated evidence cycle owns its interval. Emit markers during that interval."),
+    )
+    ctx.contribute("instructions", value.name, value)

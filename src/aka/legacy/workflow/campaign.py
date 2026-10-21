@@ -245,8 +245,17 @@ class Campaign:
                 return
 
     @cached_property
-    def plugin_registry(self) -> PluginRegistry:
+    def agent_resources(self):
+        if self.dependencies.agent_resources is not None:
+            return self.dependencies.agent_resources
+        # Kept for direct legacy callers; Core-selected campaigns always borrow
+        # the bound public service supplied by their Workflow owner.
         return PluginRegistry()
+
+    @property
+    def plugin_registry(self):
+        """Compatibility alias for integrations predating Core resources."""
+        return self.agent_resources
 
     def plugin_directive(self, phase: str) -> str:
         registry = self.plugin_registry

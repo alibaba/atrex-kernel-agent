@@ -17,8 +17,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--plugin-dir", help="Select an independent local plugin catalog")
     parser.add_argument("--plugin", action="append", help="Include an explicit directory containing plugin.json")
     parser.add_argument(
-        "--workspace", default=("." if (Path.cwd() / ".atrex_plugins/lock.json").is_file()
-                                else os.environ.get("ATREX_PLUGIN_WORKSPACE", "."))
+        "--workspace", default=(os.environ.get("AKA_AGENT_WORKSPACE") or
+                                ("." if (Path.cwd() / ".atrex_plugins/lock.json").is_file()
+                                 else os.environ.get("ATREX_PLUGIN_WORKSPACE", ".")))
     )
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list")
@@ -49,7 +50,9 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(
                 {
                     "error": {
-                        "code": getattr(exc, "code", "invalid_input"),
+                        "code": {"selection_changed": "plugin_changed", "resource_changed": "plugin_changed",
+                                 "tool_output_limit": "invalid_output"}.get(
+                                     getattr(exc, "code", "invalid_input"), getattr(exc, "code", "invalid_input")),
                         "message": str(exc),
                     }
                 }

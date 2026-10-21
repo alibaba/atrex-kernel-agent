@@ -37,6 +37,7 @@ def check_profile(profile: Path, **options) -> int:
                       required_services=selection.required_services)
         try:
             report.verify_composition()
+            _freeze_resources(report, selection)
             entry = getattr(report.service(selection.target), "run", None)
             if not callable(entry):
                 raise TypeError("selected startup target must implement run(invocation)")
@@ -62,6 +63,7 @@ def _run_selection(selection, invocation: Invocation) -> int:
                       required_services=selection.required_services)
         try:
             report.verify_composition()
+            _freeze_resources(report, selection)
             target = report.service(selection.target)
             entry = getattr(target, "run", None)
             if not callable(entry):
@@ -73,3 +75,11 @@ def _run_selection(selection, invocation: Invocation) -> int:
             return result
         finally:
             report.dispose()
+
+
+def _freeze_resources(report, selection):
+    """Settle contributions without interpreting business arguments or binding a run."""
+    if not any(token.name == "agent_resources" for token in selection.tokens):
+        return
+    resources = report.service("agent_resources")
+    resources.freeze()
