@@ -18,6 +18,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+# Direct file launches are used by isolated Agents; normal Legacy launches
+# retain the package entrypoint.
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from aka.legacy.task.durable import durable_rmdir, durable_unlink, durable_write_json, durable_write_text
 
 HANDOFF_ID_ENV = "ATREX_ENVIRONMENT_RESTART_HANDOFF_ID"
@@ -201,6 +206,17 @@ def _current_process(pid: int) -> ProcessRecord | None:
     if darwin is not None or sys.platform == "darwin":
         return darwin
     return _process_table().get(pid)
+
+
+def session_process_snapshot() -> dict[int, ProcessRecord]:
+    """Read PID-reuse-safe identities for an owned Agent tree (Linux/macOS)."""
+    records = _process_table()
+    if sys.platform == "darwin":
+        # A PID can exit between ps and libproc. The ps fallback's second-level
+        # identity must not look like a different live owner in the pause scope.
+        records = {pid: record for pid, record in records.items()
+                   if record.start_token.startswith("darwin:")}
+    return records
 
 
 def _registry_path(state_dir: Path, handoff_id: str) -> Path:
@@ -525,11 +541,19 @@ def _kill_owned_wrapper(process: subprocess.Popen[Any]) -> None:
     process.wait()
 
 
+def _process_launcher() -> tuple[str, ...]:
+    if not __package__:
+        return (str(Path(sys.executable).resolve()), str(Path(__file__).resolve()))
+    return (sys.executable, "-m", "aka.legacy.execution.processes")
+
+
 def spawn_owned_session(
     command: Sequence[str | os.PathLike[str]],
     *,
     role: str,
     environment: Mapping[str, str] | None = None,
+    inherited_fds: tuple[int, ...] = (),
+    launcher: tuple[str, ...] | None = None,
     finalize_handoff: bool = False,
     registered_callback: Callable[[subprocess.Popen[Any]], None] | None = None,
     **popen_options: Any,
@@ -544,6 +568,11 @@ def spawn_owned_session(
     argv = [os.fspath(item) for item in command]
     if not argv:
         raise ValueError("owned session command must not be empty")
+    for descriptor in inherited_fds:
+        if isinstance(descriptor, bool) or not isinstance(descriptor, int) or descriptor <= 2:
+            raise ValueError("inherited session descriptors must be open non-stdio FDs")
+        os.fstat(descriptor)
+    inherited_fds = tuple(dict.fromkeys(inherited_fds))
     values = _values(environment)
     handoff_id = values.get(HANDOFF_ID_ENV, "")
     if not handoff_id:
@@ -552,6 +581,7 @@ def spawn_owned_session(
             env=environment,
             start_new_session=True,
             close_fds=True,
+            pass_fds=inherited_fds,
             **popen_options,
         )
     if _HANDOFF_ID_PATTERN.fullmatch(handoff_id) is None:
@@ -564,11 +594,12 @@ def spawn_owned_session(
     start_read, start_write = os.pipe()
     os.set_inheritable(start_read, True)
     wrapper = [
-        sys.executable, "-m", "aka.legacy.execution.processes",
+        *(launcher or _process_launcher()),
         "--owned-session",
         str(start_read),
         "1" if finalize_handoff else "0",
         role,
+        *([",".join(map(str, inherited_fds))] if inherited_fds else []),
         "--",
         *argv,
     ]
@@ -579,7 +610,7 @@ def spawn_owned_session(
             env=environment,
             start_new_session=True,
             close_fds=True,
-            pass_fds=(*handoff_fds, start_read),
+            pass_fds=(*handoff_fds, start_read, *inherited_fds),
             **popen_options,
         )
         _register_session_owner(process.pid, role, values)
@@ -899,16 +930,26 @@ def _cleanup_guardian_entry(argv: list[str]) -> int:
 
 
 def _owned_session_entry(argv: list[str]) -> int:
-    if len(argv) < 6 or argv[0] != "--owned-session" or argv[4] != "--":
+    if len(argv) < 6 or argv[0] != "--owned-session":
         print("invalid recovery owner invocation", file=sys.stderr, flush=True)
         return 125
     try:
         start_fd = int(argv[1])
-    except ValueError:
+        # Accept the previous no-FD launch grammar for persisted Legacy handoffs.
+        has_fds = argv[4] != "--"
+        separator = 5 if has_fds else 4
+        if len(argv) <= separator + 1 or argv[separator] != "--":
+            return 125
+        inherited_fds = tuple(int(value) for value in argv[4].split(",") if value) if has_fds else ()
+        for descriptor in inherited_fds:
+            if descriptor <= 2 or descriptor == start_fd:
+                return 125
+            os.fstat(descriptor)
+    except (ValueError, OSError):
         return 125
     finalize_handoff = argv[2] == "1"
     role = argv[3]
-    command = argv[5:]
+    command = argv[separator + 1:]
     if start_fd <= 2 or not command:
         return 125
     try:
@@ -938,7 +979,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     guardian_read, guardian_write = os.pipe()
     os.set_inheritable(guardian_read, True)
     guardian_command = [
-        sys.executable, "-m", "aka.legacy.execution.processes",
+        *_process_launcher(),
         "--cleanup-guardian",
         str(guardian_read),
         str(os.getpid()),
@@ -996,7 +1037,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     primary_read, primary_write = os.pipe()
     os.set_inheritable(primary_read, True)
     primary_command = [
-        sys.executable, "-m", "aka.legacy.execution.processes",
+        *_process_launcher(),
         "--owned-command",
         str(primary_read),
         "--",
@@ -1007,7 +1048,7 @@ def _owned_session_entry(argv: list[str]) -> int:
         child = subprocess.Popen(
             primary_command,
             close_fds=True,
-            pass_fds=(*recovery_pass_fds(), primary_read),
+            pass_fds=(*recovery_pass_fds(), primary_read, *inherited_fds),
         )
         _register_session_primary(child.pid, f"{role}-primary", os.getpid())
         state_dir = _root_state_dir()
@@ -1038,6 +1079,8 @@ def _owned_session_entry(argv: list[str]) -> int:
     finally:
         os.close(primary_read)
         os.close(primary_write)
+        for descriptor in inherited_fds:
+            os.close(descriptor)
 
     forwarded_signal = 0
     termination_deadline: float | None = None

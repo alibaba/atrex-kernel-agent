@@ -73,7 +73,7 @@ class EvaluationPlan:
 
 class GatewayEvaluation:
     def prepare(self, args, staged, environment, *, identity_key, mode, repetitions) -> EvaluationPlan:
-        from aka.light.supervisor.gateway import measurement_inputs, runtime_requirements
+        from aka.light.evaluation.gateway import measurement_inputs, runtime_requirements
         request, inputs = measurement_inputs(args, staged, environment, identity_key=identity_key)
         pins = {}
         if value := environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip():
@@ -91,8 +91,8 @@ class GatewayEvaluation:
         return EvaluationPlan(request, inputs, count, pins)
 
     def project(self, process, plan, *, generalized, environment, private_paths):
-        from aka.light.supervisor.gateway import public_dev_output
-        from aka.light.supervisor.projection import credential_values, project_response
+        from aka.light.evaluation.gateway import public_dev_output
+        from aka.light.evaluation.projection import credential_values, project_response
         return project_response(
             process, generalized=generalized, operation=plan.operation,
             public_dev=plan.operation == "dev" and public_dev_output(plan.request["options"]["command"]),
@@ -103,7 +103,7 @@ class GatewayEvaluation:
         return result_from_response(response, operation)
 
     def aggregate(self, samples, plan):
-        from aka.light.supervisor.gateway import metadata_speedup_mean
+        from aka.light.evaluation.gateway import metadata_speedup_mean
         value = aggregate(samples, plan.operation)
         if "metadata.json" in plan.inputs:
             sides = [value] if plan.operation == "evaluate" else [value["baseline"], value["candidate"]]

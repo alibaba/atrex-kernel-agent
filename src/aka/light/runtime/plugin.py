@@ -5,7 +5,7 @@ TOOL_RUNTIME = ServiceKey("tool_runtime", "ToolRuntimeFactory", module="aka.ligh
 name = "runtime"
 provide = ("tool_runtime",)
 inject = ("executor", "light_experiments", "light_acceptance", "light_journal")
-identity_packages = ("aka.light.runtime", "aka.light.supervisor", "aka.light.orchestrator", "aka.light.wiki")
+identity_packages = ("aka.light.runtime", "aka.light.evaluation", "aka.light.workspace", "aka.light.wiki")
 Config = {"type": "object", "properties": {
     "measurement_repetitions": {"type": "integer", "enum": [1, 3]},
     "wiki": {"type": "boolean"},

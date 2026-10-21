@@ -1,0 +1,35 @@
+{
+  "api_version": 1,
+  "entries": [
+    {
+      "id": "tool_runtime",
+      "name": "aka.light.runtime.plugin",
+      "required": true
+    },
+    {
+      "id": "executor",
+      "name": "aka.light.execution.plugin",
+      "required": true
+    },
+    {
+      "id": "light_evaluation",
+      "name": "aka.light.evaluation.plugin",
+      "required": true
+    },
+    {
+      "id": "light_experiments",
+      "name": "aka.light.experiment.plugin",
+      "required": true
+    },
+    {
+      "id": "light_acceptance",
+      "name": "aka.light.acceptance.plugin",
+      "required": true
+    },
+    {
+      "id": "light_journal",
+      "name": "aka.light.workflow.journal_plugin",
+      "required": true
+    }
+  ]
+}

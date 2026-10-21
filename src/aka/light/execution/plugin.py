@@ -1,6 +1,6 @@
 name = "execution"
 provide = ("executor",)
-identity_packages = ("aka.light.execution", "aka.light.supervisor", "aka.light.orchestrator")
+identity_packages = ("aka.light.execution", "aka.light.agent", "aka.legacy.execution")
 Config = {"type": "object", "properties": {}, "additionalProperties": False}
 
 

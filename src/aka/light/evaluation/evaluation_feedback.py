@@ -27,7 +27,7 @@ def _count(value: JsonValue) -> int:
 
 def _text(value: object) -> str:
     # Import lazily: projection also consumes this module's bounded feedback.
-    from aka.light.supervisor.projection import credential_values, redact_diagnostics
+    from aka.light.evaluation.projection import credential_values, redact_diagnostics
     text = redact_diagnostics(str(value), private_values=credential_values(dict(os.environ)))
     return text.encode("utf-8")[:8192].decode("utf-8", errors="ignore")
 

@@ -82,6 +82,18 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
+from aka.legacy.execution.gateway.request_values import (
+    safe_relative as _safe_relative,
+    is_fp4_dtype as _is_fp4_dtype,
+    parsed_command_parts as _parsed_command_parts,
+    command_parts as _command_parts,
+    option_value as _option_value,
+    option_values as _option_values,
+    parse_env_items as _parse_env_items,
+    python_inline_imports as _python_inline_imports,
+    metadata_has_fp4_dtype as _metadata_has_fp4_dtype,
+)
+
 from aka.legacy.task.durable import durable_write_json  # noqa: E402
 from aka.legacy.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
 from aka.legacy.execution.configuration import distributed_evaluation_world_size as _distributed_evaluation_world_size
@@ -239,6 +251,7 @@ NVIDIA_PROFILE_TOOL_INPUT_PATHS = frozenset(
     {
         "profiling/nvidia/profile_nvidia.sh",
         "profiling/nvidia/classify_ncu.py",
+        "profiling/nvidia/ncu_classification.py",
     }
 )
 AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"profiling/amd/profile_kernel.sh"})
@@ -271,16 +284,6 @@ PROFILE_ENVIRONMENT_KEYS = (
     "PROFILE_SHAPE_ID",
     "PROFILE_DEVICE",
 )
-
-
-def _safe_relative(value: str) -> str:
-    path = PurePosixPath(value)
-    if not value or path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"path must be relative to the workspace: {value!r}")
-    normalized = path.as_posix()
-    if normalized in ("", "."):
-        raise ValueError(f"path must not resolve to the workspace root: {value!r}")
-    return normalized
 
 
 def _find_agate() -> str | None:
@@ -462,6 +465,9 @@ def _evaluation_input_paths(
     for path in referenced:
         if "verification_artifacts" not in PurePosixPath(path).parts:
             continue
+        support = PurePosixPath(path).parent / "numerical_inputs.py"
+        if (workspace / support).is_file():
+            selected.add(support.as_posix())
         snapshots = PurePosixPath(path).parent / "snapshots"
         if (workspace / snapshots).is_dir():
             selected.update(_expand_workspace_input(workspace, snapshots.as_posix()))
@@ -489,42 +495,6 @@ def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
             for path in _walk_files(source)
         }
     raise ValueError(f"sandbox input does not exist: {value!r}")
-
-
-def _parsed_command_parts(parts: list[str]) -> tuple[list[str], bool]:
-    """Return command words and whether a single shell string stayed opaque."""
-    command = parts[1:] if parts and parts[0] == "--" else list(parts)
-    if len(command) != 1:
-        return command, False
-    try:
-        parsed = shlex.split(command[0])
-    except ValueError:
-        return command, True
-    if shlex.join(parsed) == command[0]:
-        return parsed, False
-    return command, True
-
-
-def _command_parts(parts: list[str]) -> list[str]:
-    return _parsed_command_parts(parts)[0]
-
-
-def _python_inline_imports(parts: list[str]) -> set[str]:
-    """Return top-level modules imported by a direct ``python -c`` command."""
-    if not parts or not re.fullmatch(r"python(?:[0-9.]+)?", Path(parts[0]).name):
-        return set()
-    try:
-        code_index = parts.index("-c") + 1
-        tree = ast.parse(parts[code_index])
-    except (ValueError, IndexError, SyntaxError):
-        return set()
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".", 1)[0])
-    return imported
 
 
 def _referenced_workspace_inputs(workspace: Path, parts: list[str]) -> set[str]:
@@ -1006,31 +976,6 @@ def _is_unsafe_target_command(parts: list[str]) -> bool:
     return any(_mentions_evaluator_target(token) for token in command)
 
 
-def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
-    """Read a simple ``--flag value``/``--flag=value`` option from command argv."""
-    command = _command_parts(parts)
-    for index, token in enumerate(command):
-        if token == name:
-            return command[index + 1] if index + 1 < len(command) else default
-        if token.startswith(name + "="):
-            return token.split("=", 1)[1]
-    return default
-
-
-def _option_values(parts: list[str], name: str) -> list[str]:
-    """Read every repeated ``--flag value``/``--flag=value`` option."""
-    command = _command_parts(parts)
-    values: list[str] = []
-    for index, token in enumerate(command):
-        if token == name:
-            if index + 1 >= len(command):
-                raise ValueError(f"{name} requires a value")
-            values.append(command[index + 1])
-        elif token.startswith(name + "="):
-            values.append(token.split("=", 1)[1])
-    return values
-
-
 def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
     if not path.is_file():
         if required:
@@ -1100,26 +1045,6 @@ def _workspace_num_gpus(workspace: Path) -> int:
         _evaluator_input_path(workspace, "metadata.json", required=False)
     )
     return _distributed_evaluation_world_size(metadata)
-
-
-def _is_fp4_dtype(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    normalized = value.casefold().replace("-", "").replace("_", "")
-    return "fp4" in normalized or "float4" in normalized
-
-
-def _metadata_has_fp4_dtype(metadata: object) -> bool:
-    if isinstance(metadata, dict):
-        if any(
-            _is_fp4_dtype(metadata.get(field))
-            for field in ("dtype", "dtype_compute")
-        ):
-            return True
-        return any(_metadata_has_fp4_dtype(value) for value in metadata.values())
-    if isinstance(metadata, list):
-        return any(_metadata_has_fp4_dtype(value) for value in metadata)
-    return False
 
 
 def _fp4_correctness_max_rel_l2(
@@ -1323,18 +1248,6 @@ def _requested_gateway_kind(requested: str, command: list[str]) -> str:
     if _is_profile_command(command):
         return "profile"
     return "dev"
-
-
-def _parse_env_items(items: Iterable[str]) -> dict[str, str]:
-    env_vars: dict[str, str] = {}
-    for item in items:
-        if "=" not in item or item.startswith("="):
-            raise ValueError(f"invalid --env {item!r}; expected KEY=VALUE")
-        key, value = item.split("=", 1)
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            raise ValueError(f"invalid --env key {key!r}")
-        env_vars[key] = value
-    return env_vars
 
 
 def _with_inherited_profile_environment(items: Iterable[str]) -> list[str]:

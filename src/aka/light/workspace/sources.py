@@ -15,8 +15,8 @@ import subprocess
 import tarfile
 import time
 
-from aka.light.orchestrator.session_tail import read_regular_bytes
-from aka.light.supervisor.workspace import publish
+from aka.light.agent.session_tail import read_regular_bytes
+from aka.light.workspace.files import publish
 
 POLICY = ".atrex_source.json"
 MAGIC = b"ATREX-SOURCE-TREE-v1\n"
@@ -220,7 +220,7 @@ def snapshot(workspace, *, policy=_DISCOVER):
 
 
 def from_git(workspace, revision):
-    from aka.light.long_horizon.git_episode import git_blob
+    from aka.light.workspace.git import git_blob
     result = subprocess.run(["git", "show", f"{revision}:{POLICY}"], cwd=workspace, capture_output=True)
     if result.returncode:
         return git_blob(workspace, revision, "kernel.py")
@@ -251,7 +251,7 @@ def install(workspace, source, *, replace=True):
             # Recovery may be replacing a partially published tree. Validate
             # the new snapshot, not the completeness of the obsolete one.
             for name in collect(workspace, previous, validate=False).keys() - files.keys():
-                from aka.light.orchestrator.agent_home import open_private_directory
+                from aka.light.agent.home import open_private_directory
                 with open_private_directory((workspace / name).parent) as parent:
                     os.unlink(Path(name).name, dir_fd=parent)
         publish(workspace, POLICY, (json.dumps(policy, sort_keys=True) + "\n").encode())
@@ -277,8 +277,13 @@ def allowed_changes(paths, policy):
 
 def commit_tree_candidate(handle, source):
     """Seal measured additions/modifications/deletions with a private Git index."""
-    from aka.light.long_horizon.git_episode import (
-        git_head, git_text, changed_paths, TIMELINE_PROBE_MARKERS, protected_violation, working_changes,
+    from aka.light.workspace.git import (
+        git_head,
+        git_text,
+        changed_paths,
+        TIMELINE_PROBE_MARKERS,
+        protected_violation,
+        working_changes,
     )
     import tempfile
     policy, files = unpack(source)
@@ -465,8 +470,8 @@ def import_tree(manifest_path, repository=None, *, directory=None):
 def initial_snapshot(workspace, options):
     """Seal once before V0; failed bootstrap/restarts never reread mutable inputs."""
     import fcntl
-    from aka.light.orchestrator.agent_home import open_private_directory
-    from aka.light.orchestrator.durable_state import durable_write_json
+    from aka.light.agent.home import open_private_directory
+    from aka.legacy.task.persistence import durable_write_json
     from aka.light.runtime.paths import supervisor_campaign_root
     validate_import_options(options)
     configuration = {key: os.path.abspath(Path(value).expanduser()) for key, value in options.items()}

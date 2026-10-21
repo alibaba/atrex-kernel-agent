@@ -14,8 +14,8 @@ import subprocess
 import sys
 import time
 
-from aka.light.supervisor.workspace import publish
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.light.workspace.files import publish
+from aka.light.agent.session_tail import read_regular_bytes
 from aka.light.wiki.config import WikiConfig
 
 MODEL_ENV = ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",

@@ -19,9 +19,11 @@ POLICY_END = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_END -->"
 
 
 def optimization_mode_directive(
-    mode: str, framework: str, *, source_checks_enabled: bool = True
+    mode: str, framework: str, *, source_checks_enabled: bool = True,
+    numerical_feedback_instruction: str | None = None,
+    candidate_submission_instruction: str = "Before committing",
 ) -> str:
-    """Self-contained policy block injected into every coding-agent prompt."""
+    """Shared policy; callers may adapt feedback/submission mechanics, not the gates."""
     if mode == "leaderboard":
         return (
             "## Optimization mode: leaderboard\n\n"
@@ -61,6 +63,11 @@ def optimization_mode_directive(
             "into the candidate, or replace the implementation with a prebuilt operator.\n"
         )
         candidate_framework = framework
+    if numerical_feedback_instruction is None:
+        numerical_feedback_instruction = (
+            "Read verification_artifacts/.atrex_long_horizon_verify/numerical_feedback.json, "
+            "fix the implementation, rerun ordinary validation and submit the updated candidate. "
+        )
     return (
         "## Optimization mode: production (hard gate)\n\n"
         "This generated section overrides any conflicting permissive framework or third-party-library "
@@ -80,11 +87,12 @@ def optimization_mode_directive(
         "tolerances and required random-seed coverage; correctness must pass before promotion.\n"
         "- Numerical review produces targeted supplemental tests, not subjective rejection verdicts. "
         "The supervisor executes those probes; measured failures return to the coding Agent for repair "
-        "before baseline admission or episode completion. Read verification_artifacts/"
-        ".atrex_long_horizon_verify/numerical_feedback.json, fix the implementation, rerun ordinary "
-        "validation and submit the updated candidate. Passing the same probes closes the suggestion. "
+        "before baseline admission or episode completion. "
+        f"{numerical_feedback_instruction}"
+        "Passing the same probes closes the suggestion. "
         "Incomplete probes remain validation blockers; never edit trusted inputs, probes or tolerances.\n"
-        "- Keep `solution.json` consistent with the implementation. Before committing, inspect `kernel.py` "
+        "- Keep `solution.json` consistent with the implementation. "
+        f"{candidate_submission_instruction}, inspect `kernel.py` "
         "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
         "evidence-backed production-policy verdict, even if it is faster and correct.\n"
     )

@@ -29,6 +29,8 @@ from aka.legacy.workflow.review_trace import ReviewTrace
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
 from aka.legacy.evaluation.numerical import _validate_review, _probe_status
 DRIVER = Path(remote_numerical.__file__)
+from aka.legacy.evaluation.drivers import numerical_inputs as probe_algorithms
+PROBE_ALGORITHMS = Path(probe_algorithms.__file__)
 PROMPT = PROMPTS_DIR / "numerical_review.md"
 
 
@@ -136,7 +138,7 @@ def _sources(campaign, workspace, *, harness=None):
     private = Path(campaign.private_reference_dir or workspace)
     if harness is None:
         raise ValueError('numerical validation requires the frozen Task harness')
-    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": harness}
+    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "numerical_inputs.py": PROBE_ALGORITHMS, "transport.py": harness}
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "README.md"):
@@ -242,6 +244,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
     )
     driver = directory / "test_kernel.py"
     _at_probe_stage("prepare_driver", shutil.copy2, DRIVER, driver)
+    _at_probe_stage("prepare_driver", shutil.copy2, PROBE_ALGORITHMS, directory / "numerical_inputs.py")
     native_harness = _at_probe_stage(
         "prepare_harness", _uses_native_harness, workspace / "test_kernel.py",
     )

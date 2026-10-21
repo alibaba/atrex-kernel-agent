@@ -12,7 +12,7 @@ from .experiment.provider import MeasurementEffects
 from .acceptance.provider import CandidateValidation
 
 if TYPE_CHECKING:
-    from .supervisor.measurement_records import MeasurementStore
+    from aka.light.experiment.store import MeasurementStore
 
 
 class Evaluation(Protocol):

@@ -13,10 +13,10 @@ import re
 import stat
 from pathlib import Path
 
-from aka.light.orchestrator.agent_home import open_private_directory
-from aka.light.orchestrator.durable_state import durable_write_json, fsync_directory
-from aka.light.orchestrator.session_tail import read_regular_bytes
-from aka.light.supervisor.workspace import publish
+from aka.light.agent.home import open_private_directory
+from aka.legacy.task.persistence import durable_write_json, fsync_directory
+from aka.light.agent.session_tail import read_regular_bytes
+from aka.light.workspace.files import publish
 
 TREES = ("skills", "tools")
 PROTECTED_PATHS_ENV = "ATREX_ADAPTIVE_PROTECTED_PATHS"
@@ -64,8 +64,8 @@ No custom tools yet.
 
 
 def reserved_paths(plugin_registry) -> tuple[str, ...]:
-    from aka.light.orchestrator.agent_skill_manifest import SKILL_MANIFEST
-    from aka.light.orchestrator.workspace_runtime import RETIRED_SKILL_NAMES
+    from aka.light.workspace.skill_manifest import SKILL_MANIFEST
+    from aka.light.workspace.assets import RETIRED_SKILL_NAMES
     names = set(SKILL_MANIFEST) | set(RETIRED_SKILL_NAMES)
     for plugin in plugin_registry.plugins:
         names.update(plugin.manifest.get("skills", {}))

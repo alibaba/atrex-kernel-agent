@@ -71,7 +71,7 @@ def archive_bytes(files):
 
 def _dev_archive(request):
     """Use Runtime's verified bootstrap for oversized Dev source payloads."""
-    from . import oss_remote
+    from aka.light.evaluation import oss_remote
     command = request.get("command")
     if not isinstance(command, str) or not command.strip():
         raise ValueError("OSS Dev transport requires a nonempty command")
@@ -94,7 +94,7 @@ def _dev_archive(request):
 
 
 def uploaded_request(request, wire_key, *, json_call, upload, kind="eval"):
-    from aka.light.supervisor.measurement_records import JOB_ROOT_ENV, read_json, private_write
+    from aka.light.experiment.store import JOB_ROOT_ENV, read_json, private_write
     files = request.get("files")
     large_dev = (kind == "dev" and isinstance(files, dict)
                  and all(isinstance(k, str) and isinstance(v, str) for k, v in files.items())
@@ -198,7 +198,7 @@ def run(gateway, args, request, kind, queue_wait_grace):
         timeout=args.timeout, queue_wait_grace=queue_wait_grace, max_device_retries=10, device_retry_delay=60)
     if diagnostic and process.returncode == 0:
         from .source_diagnostics import DIAGNOSTIC_PREFIX
-        from aka.light.supervisor.measurement_records import EvidenceUnavailable
+        from aka.light.experiment.store import EvidenceUnavailable
         job = gateway.parse_job_response(process.stdout)
         if not job or not isinstance(job.get("result"), dict):
             raise EvidenceUnavailable("Source-tree diagnostic returned no complete Job result")

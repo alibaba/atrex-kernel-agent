@@ -1,7 +1,7 @@
 {
   "api_version": 1,
   "bundles": [
-    "workflow"
+    "aka.legacy.workflow:profiles/compositions/bundles/workflow.json"
   ],
   "patches": [
     {
