@@ -9,7 +9,11 @@ participate in the measurement identity.
 CORRECTNESS_CASES = 6
 BENCH_ITERS = 100
 WARMUP_ITERS = 10
-CANDIDATE_TIMEOUT = 120
+# Some production shapes spend more than two minutes in the first candidate
+# touch (input materialization plus JIT compilation).  Keep this aligned with
+# the outer sandbox budget so a valid slow-to-initialize kernel is not rejected
+# before Agate can finish the evaluation.
+CANDIDATE_TIMEOUT = 600
 PERFORMANCE_TIMEOUT = 120
 SHAPE_BATCH_SIZE = 1
 BATCH_WORKERS = 16
