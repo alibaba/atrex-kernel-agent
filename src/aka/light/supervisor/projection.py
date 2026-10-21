@@ -763,13 +763,19 @@ NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
 
 
 def numerical_result(payload: dict) -> dict:
-    """Public probe receipts, never raw inputs, exception text or workload kwargs."""
+    """Probe receipts plus original failure diagnostics, bounded for Agent feedback.
+
+    Keep evaluator errors intact so the planner can repair the actual failure,
+    rather than guessing from a missing-receipt summary. Request inputs and the
+    complete private record are not copied; project_response scrubs credentials
+    and controller paths as for other Gateway diagnostics.
+    """
     public = {"schema_version": 1, "runs": [], "all_pass": payload.get("all_pass") is True}
     for row in payload.get("runs", [])[:3]:
         item = {key: row.get(key) for key in (
             "case_id", "passed", "exit_code", "expected_probes", "observed_probes",
             "failed_probes", "shape_count", "seeds", "world_size", "selection_digest")}
-        item["input_error"] = "input generation or evaluator execution incomplete; private diagnostics withheld" if row.get("input_error") else ""
+        item["input_error"] = bounded_text(row.get("input_error") or "", limit=8192)
         result = row.get("result")
         item["result"] = None
         if isinstance(result, dict):
@@ -784,7 +790,36 @@ def numerical_result(payload: dict) -> dict:
             }
         public["runs"].append(item)
     if payload.get("error"):
-        public["error"] = "numerical evaluator failed; private diagnostics withheld"
+        public["error"] = bounded_text(payload["error"], limit=8192)
+    diagnostics = payload.get("private_diagnostics", payload.get("diagnostics", []))
+    public["diagnostics"] = []
+    if isinstance(diagnostics, list):
+        failed = [row for row in diagnostics if isinstance(row, dict) and (
+            row.get("exit_code") not in (None, 0) or row.get("timed_out") or row.get("diagnosis")
+            or row.get("traceback") or row.get("capture_error"))]
+        for row in failed[-3:]:
+            item = {key: row[key] for key in (
+                "case_id", "shape_id", "seed", "stage", "exit_code", "timed_out",
+                "expected_probes", "observed_probes", "candidate_timeout_s") if key in row}
+            for key in ("diagnosis", "stdout", "stderr", "traceback", "input_error", "capture_error"):
+                if key in row:
+                    value = row[key]
+                    if isinstance(value, dict):
+                        item[key] = {"text": bounded_text(value.get("text", ""), limit=8192),
+                                     "bytes": value.get("bytes"), "truncated": bool(value.get("truncated"))}
+                    else:
+                        item[key] = bounded_text(value, limit=8192)
+            nested = row.get("evaluator")
+            if isinstance(nested, dict):
+                item["evaluator"] = {key: nested[key] for key in ("exit_code", "result_file_present") if key in nested}
+                for key in ("stdout", "stderr", "eval_result"):
+                    if isinstance(nested.get(key), dict):
+                        value = nested[key]
+                        item["evaluator"][key] = {
+                            "text": bounded_text(value.get("text", ""), limit=8192),
+                            "truncated": bool(value.get("truncated")),
+                        }
+            public["diagnostics"].append(item)
     return public
 
 

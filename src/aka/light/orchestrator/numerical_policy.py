@@ -16,11 +16,14 @@ import tempfile
 import uuid
 import threading
 import time
+import traceback
 from concurrent.futures import CancelledError
 
 from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.task.problem.resources import native_harness_script
+from aka.light.evaluation.policy import CANDIDATE_TIMEOUT
 from aka.light.supervisor.workspace import read_input, publish
+from aka.light.supervisor.projection import bounded_text, credential_values, redact_diagnostics
 from .session_tail import read_regular_bytes
 
 from aka.light.long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
@@ -299,6 +302,10 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         durable_write_json(request, {
             "suite": suite, "case_ids": [plan["case_id"]], "rotation": digest,
             "mode": "thorough", "per_case_timeout": 540,
+            # Model construction may JIT-compile before the first input receipt.
+            # Use the ordinary Evaluate budget, not the legacy harness's 20s
+            # default. This is part of the recorded request/dedup identity.
+            "candidate_timeout_s": CANDIDATE_TIMEOUT,
             "max_rel_l2": _fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2,
         })
 
@@ -328,12 +335,16 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
             elif line.startswith("[sandbox] RECORD_JSON="):
                 record_id = json.loads(line.split("=", 1)[1]).get("gateway_record_id")
         if not isinstance(batch, dict):
-            raise ValueError("Recorded numerical probe produced no valid receipt")
+            detail = response.get("stderr") or response.get("stdout") or "no executor output"
+            raise ValueError(
+                f"Recorded numerical probe produced no valid receipt (record={record_id}, "
+                f"exit={response.get('exit_code')}): {bounded_text(detail, limit=8192)}"
+            )
         if response["exit_code"]:
             batch["error"] = "probe transport did not complete"
         status = _probe_status(batch, plan, suite, shapes)
-        # Preserve comparison metrics and actual input-generation diagnostics, but
-        # never surface private workload kwargs or raw evaluator output to the agent.
+        # Include the original bounded errors in planner repair and Agent feedback.
+        # The Gateway has already projected/redacted the diagnostic fields.
         rows = batch.get("runs", [])
         result = (rows[0].get("result") or {}) if rows else {}
         results.append({
@@ -344,6 +355,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
             "observed_probes": rows[0].get("observed_probes") if rows else None,
             "failed_probes": rows[0].get("failed_probes", 0) if rows else 0,
             "exit_code": rows[0].get("exit_code") if rows else None,
+            "diagnostics": batch.get("diagnostics", []),
             "diagnosis": (
                 "non-finite output diagnostic has unknown roles; repair or verify the probe evaluator"
                 if "unknown" in result.get("nonfinite_outputs", []) else
@@ -430,17 +442,19 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
                 try:
                     evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial, cancel=cancel)
                 except (OSError, ValueError, TypeError, KeyError, subprocess.SubprocessError) as exc:
-                    # Evaluations also enter the planner's repair request. Keep
-                    # raw exception text (paths, commands and input details) in
-                    # a separate private record, never in either Agent's context.
+                    # Preserve the original exception privately and give both
+                    # Agents the same error, with only secrets/host paths scrubbed.
                     record.setdefault("probe_errors", []).append({
                         "attempt": attempt, "type": type(exc).__name__, "message": str(exc),
+                        "traceback": traceback.format_exc(),
                     })
                     evaluation = {
                         "status": "needs_validation",
-                        "diagnosis": "Supplemental probe could not complete. No Kernel failure was established. "
-                                     "Check the existing plan against the public input contract; if it remains valid, "
-                                     "ask the operator to inspect the private numerical validation record.",
+                        "diagnosis": bounded_text(redact_diagnostics(
+                            f"{type(exc).__name__}: {exc}",
+                            private_paths=(str(state_root), str(workspace), str(ROOT)),
+                            private_values=credential_values(os.environ),
+                        ), limit=8192),
                     }
                 record.setdefault("evaluations", []).append(evaluation)
                 record["status"] = evaluation["status"]
@@ -497,17 +511,18 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     durable_write_json(feedback_path, record, indent=2, ensure_ascii=False)
     status = record["status"]
     print(f"[numerical-supplement] {status}; evidence={feedback_path}", flush=True)
-    # Return a purpose-built projection, never planner transcripts, private paths,
-    # shape parameters, raw subprocess diagnostics or the complete internal record.
+    # Return the cases, observations and bounded Gateway diagnostics, not planner
+    # transcripts, private request snapshots or the complete internal record.
     public = {
         "status": status, "comparison": record["comparison"],
         "cases": [{key: case[key] for key in ("id", "purpose", "fields", "input_constraints") if key in case}
                   for case in (record.get("review", {}).get("suite") or {}).get("cases", [])],
-        "evaluations": [{"status": item["status"], "probes": item.get("probes", [])}
+        "evaluations": [{"status": item["status"], "probes": item.get("probes", []),
+                         **({"diagnosis": item["diagnosis"]} if item.get("diagnosis") else {})}
                         for item in record.get("evaluations", [])],
     }
-    # Planner exceptions can contain private data; diagnostics are retained only
-    # in numerical_result.json. Public probes already use the receipt allowlist.
+    # Probe errors already passed through the Gateway or the redaction above.
+    # Other planner exceptions remain in the private numerical_result.json.
     rendered = json.dumps(public, ensure_ascii=False, allow_nan=False)
     if status in {"passed", "advisory", "skipped_planner_timeout"}:
         feedback = ""

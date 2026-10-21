@@ -4800,6 +4800,9 @@ def _main(argv: list[str] | None = None) -> int:
             )
         return proc.returncode or 2
 
+    if _is_numerical_probe_command(args.command):
+        from aka.light.supervisor.numerical_diagnostics import record_probe_diagnostics
+        record_probe_diagnostics(job)
     result = job.get("result") or {}
     if job.get("status") != "succeeded" or job.get("error") is not None:
         emit_gateway_error(proc, "profile" if profile_command else "dev")
@@ -4837,7 +4840,7 @@ def _main(argv: list[str] | None = None) -> int:
         command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
         command_stdout = _hydrate_result_lines(workspace, command_stdout)
         _record_result_lines(workspace, command_stdout, gateway_kind="dev")
-    if hide_evaluator_details:
+    if hide_evaluator_details or _is_numerical_probe_command(args.command):
         projected = []
         for line in command_stdout.splitlines():
             if line.startswith(NUMERICAL_RESULT_PREFIX):
@@ -4854,7 +4857,7 @@ def _main(argv: list[str] | None = None) -> int:
                     # and remote exit code because one receipt is malformed.
                     continue
                 projected.append(line)
-            elif line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX)):
+            elif not hide_evaluator_details or line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX)):
                 projected.append(line)
         command_stdout = "\n".join(projected)
     if command_stdout:

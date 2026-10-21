@@ -30,6 +30,34 @@ FP4_MAX_REL_L2 = 0.2
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 
 
+def _save_numerical_diagnostics(completed, result_paths):
+    """Opt-in private probe evidence; ordinary evaluation/output is unchanged."""
+    target = os.environ.get("ATREX_NUMERICAL_DIAGNOSTICS_PATH")
+    if not target:
+        return
+
+    def bounded(value):
+        raw = value.encode("utf-8", errors="replace")
+        return {"text": raw[:8192].decode("utf-8", errors="ignore"),
+                "bytes": len(raw), "truncated": len(raw) > 8192}
+
+    evidence = {"schema_version": 1, "exit_code": completed.returncode,
+                "stdout": bounded(completed.stdout or ""), "stderr": bounded(completed.stderr or ""),
+                "result_file_present": bool(result_paths)}
+    try:
+        if result_paths:
+            with result_paths[-1].open("rb") as source:
+                raw = source.read(8193)
+            evidence["eval_result"] = {"text": raw[:8192].decode("utf-8", errors="replace"),
+                                       "truncated": len(raw) > 8192}
+        descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(evidence, stream, ensure_ascii=False)
+    except OSError as exc:
+        # Capturing diagnostics must not replace the evaluator's actual outcome.
+        print(f"numerical diagnostic capture failed: {type(exc).__name__}", file=sys.stderr)
+
+
 def _nonfinite_output_roles(error: object) -> tuple[str, ...]:
     """Parse runtime diagnostics without exposing private output details."""
     if not isinstance(error, str) or not error.strip().startswith("Non-finite output detected:"):
@@ -582,6 +610,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
 
         result_paths = sorted(output_dir.rglob("eval_result.json"))
+        _save_numerical_diagnostics(completed, result_paths)
         if not result_paths:
             result = {
                 "all_pass": False,

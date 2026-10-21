@@ -17,10 +17,46 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+import traceback
 
 PREFIX = "__ATREX_NUMERICAL_RESULT__="
 MAX_REL_L2 = 1e-3
 GENERATORS = {"uniform", "log_uniform", "sparse", "alternating", "constant", "ramp", "packed_bytes", "near_constant"}
+
+
+def diagnostic_text(value):
+    """Bound original process evidence for persistence and diagnostic feedback."""
+    raw = value if isinstance(value, bytes) else str(value or "").encode("utf-8", errors="replace")
+    return {"text": raw[:8192].decode("utf-8", errors="replace"),
+            "bytes": len(raw), "truncated": len(raw) > 8192}
+
+
+def evaluator_failure(diagnostic):
+    """Recover the actual pre-receipt failure, not an input-generation guess."""
+    nested = diagnostic.get("evaluator")
+    nested = nested if isinstance(nested, dict) else {}
+    saved = nested.get("eval_result") or {}
+    if isinstance(saved, dict) and not saved.get("truncated"):
+        try:
+            result = json.loads(saved.get("text", ""))
+        except (ValueError, TypeError):
+            result = None
+        if isinstance(result, dict):
+            passed = result.get("passed")
+            if isinstance(passed, dict):
+                for stage in ("compile", "correctness"):
+                    shapes = passed.get(stage)
+                    if isinstance(shapes, dict):
+                        for row in shapes.values():
+                            if isinstance(row, dict) and row.get("status") == "failed" and row.get("reason"):
+                                return diagnostic_text(row["reason"])["text"]
+            if result.get("error"):
+                return diagnostic_text(result["error"])["text"]
+    for source in (nested, diagnostic):
+        stream = source.get("stderr")
+        if isinstance(stream, dict) and stream.get("text"):
+            return diagnostic_text(stream["text"])["text"]
+    return ""
 
 
 def validate_suite(suite):
@@ -249,10 +285,13 @@ def install_inputs(namespace, case, seeds, receipts):
         rank = int(os.environ.get("RANK", "0"))
         try:
             inputs = numerical_inputs(original(**kwargs), case, seed, rank)
-        except (ValueError, TypeError, KeyError) as exc:
+        except Exception:
             # Preserve the generator error even when the privacy-preserving
             # evaluator suppresses its own traceback. No input values are logged.
-            Path(str(receipts) + ".error").write_text(f"{type(exc).__name__}: {exc}")
+            try:
+                Path(str(receipts) + ".error").write_text(traceback.format_exc())
+            except OSError:
+                pass  # Do not replace the original generator failure.
             raise
         row = json.dumps({"input_kwargs": kwargs, "seed": seed, "rank": rank}, separators=(",", ":")) + "\n"
         fd = os.open(receipts, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
@@ -273,7 +312,16 @@ def run(request_path):
     original = input_path.read_bytes()
     original_harness = harness.read_bytes()
     rows = []
+    diagnostics = []
     try:
+        # The standalone driver cannot import the Supervisor package. New
+        # requests carry ordinary Evaluate policy; omitted values retain the
+        # Legacy default for old standalone callers.
+        candidate_timeout = request.get("candidate_timeout_s")
+        if candidate_timeout is not None and (
+                type(candidate_timeout) not in {int, float}
+                or not math.isfinite(candidate_timeout) or candidate_timeout <= 0):
+            raise ValueError("candidate_timeout_s must be a positive finite number")
         shapes = json.loads((root / "shapes.json").read_text())
         schedule = validation_schedule(suite, shapes, request.get("rotation", ""), request.get("mode", "light"))
         # Native Atrex workspaces use the supervisor's current transport adapter.
@@ -306,6 +354,8 @@ def run(request_path):
                     receipts.unlink(missing_ok=True)
                     input_error = Path(str(receipts) + ".error")
                     input_error.unlink(missing_ok=True)
+                    evaluator_diagnostics = request_path.parent / "evaluator-diagnostics.json"
+                    evaluator_diagnostics.unlink(missing_ok=True)
                     tail = ("\nimport runpy as __numeric_runpy\n"
                             f"__numeric_runpy.run_path({str(Path(__file__).resolve())!r})['install_inputs'](globals(), {case!r}, {[seed]!r}, {str(receipts.resolve())!r})\n")
                     input_path.write_bytes(original + tail.encode())
@@ -315,15 +365,37 @@ def run(request_path):
                     command = [*evaluator, "--version", "vlong", "--no-memory", "--correctness-only",
                                "--correctness-max-rel-l2", str(request.get("max_rel_l2", MAX_REL_L2)),
                                "--multi-seed", "0", "--seed", str(seed), "--shape-id", shape_id]
+                    if candidate_timeout is not None:
+                        command += ["--candidate-timeout-s", str(candidate_timeout)]
+                    diagnostic = {"case_id": case["id"], "shape_id": shape_id, "seed": seed,
+                                  "stage": "evaluator", "timed_out": False,
+                                  "candidate_timeout_s": candidate_timeout}
+                    diagnostics.append(diagnostic)
                     try:
                         remaining = deadline - time.monotonic()
                         if remaining <= 0:
                             raise subprocess.TimeoutExpired(command, request["per_case_timeout"])
                         process = subprocess.run(command, cwd=root, capture_output=True, text=True,
-                                                 timeout=remaining)
-                    except subprocess.TimeoutExpired:
+                                                 timeout=remaining, env=os.environ | {
+                                                     "ATREX_NUMERICAL_DIAGNOSTICS_PATH": str(evaluator_diagnostics.resolve()),
+                                                 })
+                    except subprocess.TimeoutExpired as exc:
+                        diagnostic.update(timed_out=True, exit_code=None,
+                                          stdout=diagnostic_text(exc.stdout), stderr=diagnostic_text(exc.stderr))
                         diagnosis = "supplemental evaluator exceeded its case timeout"
+                        diagnostic["diagnosis"] = diagnosis
                         break
+                    diagnostic.update(exit_code=process.returncode, stdout=diagnostic_text(process.stdout),
+                                      stderr=diagnostic_text(process.stderr))
+                    if evaluator_diagnostics.is_file():
+                        try:
+                            with evaluator_diagnostics.open("rb") as source:
+                                raw_diagnostics = source.read(128 * 1024 + 1)
+                            if len(raw_diagnostics) > 128 * 1024:
+                                raise ValueError("nested evaluator diagnostics exceed limit")
+                            diagnostic["evaluator"] = json.loads(raw_diagnostics)
+                        except (OSError, ValueError, UnicodeError) as exc:
+                            diagnostic["capture_error"] = diagnostic_text(exc)
                     result = None
                     for line in process.stdout.splitlines():
                         if line.startswith("[test_kernel] RESULT_JSON="):
@@ -334,9 +406,16 @@ def run(request_path):
                                 for rank in range(suite["world_size"])}
                     seen.update(actual & expected)
                     if input_error.exists():
-                        diagnosis = input_error.read_text()
+                        with input_error.open("rb") as source:
+                            raw_error = source.read(8193)
+                        diagnostic["input_error"] = diagnostic_text(raw_error)
+                        diagnosis = raw_error[:8192].decode("utf-8", errors="replace")
                     elif actual != required:
-                        diagnosis = "evaluator did not generate the requested workload, seed and ranks"
+                        failure = evaluator_failure(diagnostic) if process.returncode else ""
+                        diagnosis = (
+                            f"evaluator exited {process.returncode} before the requested input receipts completed: {failure}"
+                            if failure else "evaluator did not generate the requested workload, seed and ranks"
+                        )
                     elif not isinstance(result, dict):
                         diagnosis = f"evaluator exited {process.returncode} without a result"
                     elif "unknown" in result.get("nonfinite_outputs", []):
@@ -347,6 +426,12 @@ def run(request_path):
                         failed_probes += 1
                     elif result.get("all_pass") is not True or process.returncode != 0:
                         diagnosis = f"evaluator returned an inconsistent result (exit={process.returncode})"
+                    diagnostic.update(diagnosis=diagnosis, observed_probes=len(actual),
+                                      expected_probes=len(required))
+                    if diagnosis:
+                        diagnostic["stage"] = ("input_generation" if input_error.exists() else
+                                               "evaluator" if actual != required and process.returncode else
+                                               "receipt_validation" if actual != required else "result_validation")
                     if isinstance(result, dict):
                         results.append(result)
                         nonfinite_outputs.update(result.get("nonfinite_outputs", []))
@@ -378,13 +463,17 @@ def run(request_path):
         payload = {"schema_version": 1, "runs": rows, "all_pass": bool(rows) and all(r.get("passed") is True for r in rows)}
     except Exception as exc:
         payload = {"schema_version": 1, "runs": rows, "all_pass": False, "error": f"{type(exc).__name__}: {exc}"}
+        diagnostics.append({"stage": "probe_driver", "traceback": diagnostic_text(traceback.format_exc())})
     finally:
         input_path.write_bytes(original)
         harness.write_bytes(original_harness)
         for stem in ("input", "test_kernel"):
             for cached in (root / "__pycache__").glob(f"{stem}.*.pyc"):
                 cached.unlink()
-    print(PREFIX + json.dumps(payload, allow_nan=False), flush=True)
+    # Persist all attempts at the Gateway; numerical_result() selects bounded
+    # failure diagnostics for both the probe planner and the optimization Agent.
+    payload["private_diagnostics"] = diagnostics
+    print(PREFIX + json.dumps(payload, allow_nan=False, ensure_ascii=False), flush=True)
     return 0
 
 
