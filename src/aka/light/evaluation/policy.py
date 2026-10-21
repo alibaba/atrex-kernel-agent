@@ -1,4 +1,4 @@
-"""Light's measurement defaults, aligned with Runtime's production policy.
+"""Light's measurement defaults, with Legacy-aligned timing and warmup counts.
 
 Keep these local to Light: selecting another AKA composition does not change
 its evaluator or acceptance policy. Explicit request/operator overrides still
@@ -7,8 +7,8 @@ participate in the measurement identity.
 
 # Preserve the legacy candidate gate: one base seed plus five additional seeds.
 CORRECTNESS_CASES = 6
-BENCH_ITERS = 100
-WARMUP_ITERS = 10
+BENCH_ITERS = 20
+WARMUP_ITERS = 5
 # Some production shapes spend more than two minutes in the first candidate
 # touch (input materialization plus JIT compilation).  Keep this aligned with
 # the outer sandbox budget so a valid slow-to-initialize kernel is not rejected

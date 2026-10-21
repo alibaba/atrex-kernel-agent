@@ -84,8 +84,9 @@ It also reports Runtime-owned measurement repetitions and allocation timeout; do
 them with repeated Agent requests or environment overrides. Other request/input changes can
 prevent reuse. A matching comparison is optional and does not replace the report's full Evaluate.
 
-Full Evaluate and ABBA default to 100 timing iterations and 10 warmup iterations, one Shape
-per batch and at most 16 concurrent batches. Promotion minimizes GeoMean latency versus the
+Full Evaluate and ABBA default to 20 timing iterations and 5 warmup iterations, matching
+Legacy's sampling counts. They use one Shape per batch and at most 16 concurrent batches.
+Promotion minimizes GeoMean latency versus the
 incumbent; `performance_score` is diagnostic. The returned `improvement_pct` is
 `(speedup - 1) * 100`, matching Runtime (100 us to 80 us means 1.25x and 25%).
 This is not the latency-reduction percentage used by the Supervisor's promotion threshold.
