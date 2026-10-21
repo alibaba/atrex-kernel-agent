@@ -1,18 +1,30 @@
-# Optional light implementations
+# Light modules and launch profiles
 
-The default `workflow` composition retains the upstream Agent, Task and Workflow. Installing `atrex-aka-light` does not activate isolation, capture, a private HTTP service, a different correctness policy, or simplified Episodes. These behaviors require an explicit profile or provider replacement.
+New `aka optimize` and `aka workflow` launches default to `light`: native Agent execution,
+session capture, managed drafts, private HTTP tools and unified Light Episodes. This is a
+launch-selection change, not a change to the Legacy providers. Use `--profile workflow`
+to retain the Legacy Agent, Task and Workflow, or `--profile light-sandbox` for Bubblewrap.
+Wiki, Direction/Experiment recording and generated memory remain default-off.
+
+Install the matching `atrex-aka-light` package together with its framework/legacy dependencies.
+If Light is unavailable, default startup fails with installation guidance; it never silently
+falls back to Legacy. Explicit `--profile workflow` still works without the Light package.
+`aka run` remains profile-explicit, and standalone Execution selection is unchanged.
+Recorded continuations restore their frozen selection before considering any new-launch
+default; an existing Legacy continuation is not converted to Light. For a manual restart
+of a Legacy workspace without continuation metadata, pass `--profile workflow` explicitly.
 
 ## Select a composition
 
 | Launch profile | Agent | Workspace / Workflow | Tool service |
 | --- | --- | --- | --- |
-| `workflow` (default; omit `--profile`) | Upstream | Upstream | Upstream behavior |
+| `workflow` (explicit Legacy) | Upstream | Upstream | Upstream behavior |
 | `observed` | Native, capture enabled | Upstream | Upstream behavior |
 | `sandbox` | Bubblewrap, capture disabled | Upstream | Upstream behavior |
-| `light` | Native, capture enabled | Managed drafts / light Episodes | Private HTTP measurements, records and Journal |
+| `light` (default; omit `--profile`) | Native, capture enabled | Managed drafts / light Episodes | Private HTTP measurements, records and Journal |
 | `light-sandbox` | Bubblewrap, capture enabled | Managed drafts / light Episodes | Same private service |
 
-The first two optional profiles replace only the Agent provider. They do not remove legacy Setup/Fast stages, take over Git, or hide evaluator inputs that the legacy Workflow requires. The two light profiles deliberately select the managed Workspace, Tool Runtime and light Workflow together. A report cannot be accepted without its evidence store and sealed source; turning off those dependencies is not a supported combination.
+The `observed` and `sandbox` profiles replace only the Agent provider. They do not remove legacy Setup/Fast stages, take over Git, or hide evaluator inputs that the legacy Workflow requires. The two light profiles deliberately select the managed Workspace, Tool Runtime and light Workflow together. A report cannot be accepted without its evidence store and sealed source; turning off those dependencies is not a supported combination.
 
 Configuration has two framework-defined layers: `profiles/<name>.json` is the
 launch manifest (services, resources and environment), and
@@ -925,7 +937,7 @@ testing. Neither compatibility mode is a network isolation boundary.
 
 `sandbox=none` is cooperative same-UID coordination, not a malicious-Agent security boundary. Private directory layout and HTTP capabilities do not stop a process with the operator's own OS privileges. With the legacy Workflow, even Bubblewrap must retain the Git/evaluator/credential access required by that workflow. Choose the complete `light-sandbox` composition for a Git-free draft and Supervisor-owned GPU/Wiki credentials. This is filesystem/process isolation, not network isolation or a separate OS account.
 
-Begin a new workspace when changing between upstream and light Workflows. Do not point two implementations at the same live workspace, or assume their checkpoints are interchangeable. Keep the previous revision and workspace backup for rollback. Omitting `--profile` (or selecting `workflow`) restores upstream behavior for a new run; selecting `observed` or `sandbox` changes only the Agent on an upstream Workflow. Preserve the selected composition and options when resuming.
+Begin a new workspace when changing between Legacy and Light Workflows. Do not point two implementations at the same live workspace, or assume their checkpoints are interchangeable. Keep the previous revision and workspace backup for rollback. Explicitly selecting `--profile workflow` restores Legacy behavior for a new run; omitting `--profile` now selects Light. Selecting `observed` or `sandbox` changes only the Agent on a Legacy Workflow. Preserve the selected composition and options when resuming; frozen continuations do not adopt the new-launch default.
 
 Light reuses the shared Workflow startup and records its own resource snapshot in
 the frozen launch context. The snapshot contains the selected plugin fingerprints;

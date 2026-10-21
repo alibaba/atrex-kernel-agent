@@ -67,7 +67,7 @@ configuration before applying plugins and rejects duplicate single providers. A 
 row must be active even if it was disabled. An explicitly requested missing row fails; a
 required service must exist in the root Realm. Removing a row removes its own
 declaration, so Bootstrap independently requires the launch profile's target service
-(named `startup` in the default legacy profile). There is no fallback to the default
+(named `startup` in the explicit Legacy `workflow` profile). There is no fallback to the default
 when selection fails. Still-mounted children declared with `ctx.plugin(...,
 required=True)` must also be active when boot finishes; a pending or failed required
 child fails boot and disposes the composition. Explicitly disposed children are no
@@ -107,7 +107,7 @@ adapter currently uses a durable `launch-selection.json` referenced by schema 4 
 metadata. The [launch selection variable reference](application-plugin-migration.md#launch-selection-environment-variables)
 defines the snapshot path, digest, paired transport, temporary/durable lifetime and
 explicit `aka run --resume` entrypoint. See the [current recovery constraints](application-plugin-migration.md#current-child-and-recovery-behavior): selection-free main schema 3
-records may use the built-in default legacy profile and be upgraded by the
+records may use the historical built-in Legacy profile (not the new-launch Light default) and be upgraded by the
 validated recovery owner; new launch records remain strict.
 
 ## Isolation and events

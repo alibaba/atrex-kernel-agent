@@ -4,6 +4,14 @@ AKA uses the installed `aka optimize` command. It converts the retained optimiza
 then uses a launch profile to select Workflow through Bootstrap and Core. Evaluation, Execution,
 Resources and recovery run from their installed owning modules.
 
+For fresh `aka optimize` and `aka workflow` launches, the default profile is now `light`.
+It requires the matching `atrex-aka-light` distribution and selects native (not Bubblewrap)
+Agent execution with capture and managed Light services. Use `--profile light-sandbox`
+for isolation, or `--profile workflow` for the previous Legacy behavior. Missing Light is
+an actionable startup error, not an implicit Legacy fallback. `aka run` remains explicit.
+Continuations use their saved selection regardless of this new-launch default; do not
+switch a live Legacy workspace to Light by omitting the profile on a manual restart.
+
 ## Checkout-backed installed interface
 
 Use Python 3.10 or later, install the matching distributions as described below, and keep the
@@ -61,8 +69,9 @@ AKA checkout and makes it importable during the call; it does not change the wor
 directory. `--op-dir` after the separator selects the problem. Without `--workspace`,
 the original current-directory workspace default applies.
 
-Framework options are `--repo-root`, optional `--execution-profile`, and repeatable
-`--execution-patch`. Relative paths resolve from the caller's working directory. Framework flags do
+Framework options are `--repo-root`, `--profile`, repeatable `--patch`, optional
+`--execution-profile`, and repeatable `--execution-patch`. Relative paths resolve from
+the caller's working directory. Framework flags do
 not replace similarly named optimization flags, which belong after `--`.
 
 Core owns the neutral command dispatcher. Bootstrap contributes `run`, and Optimization
@@ -156,10 +165,10 @@ host. Generic `aka run` does not add business checkouts to `sys.path`:
 
 ```python
 from pathlib import Path
-from aka.legacy.application.host import run_application
+from aka.legacy.compat.host import run_application
 from aka.contracts.application import ApplicationRequest
 
-exit_code = run_application(ApplicationRequest(Path("/path/to/aka"), ("--help",)))
+exit_code = run_application(ApplicationRequest(Path("/path/to/aka"), ("--help",)), profile="workflow")
 ```
 
 `argv=None` preserves the original `sys.argv[1:]` behavior; an explicit sequence is
@@ -237,7 +246,7 @@ or changed selection, tokens, implementations or resources fail before setup. Co
 identity locks remain opt-in and separate from business locks and recovery state.
 
 An existing main schema 3 recovery record without `launch_environment` or any
-`launch-selection.json` uses the built-in default legacy profile. Custom profiles,
+`launch-selection.json` uses the historical built-in Legacy profile, not the current Light launch default. Custom profiles,
 patches, variables, tokens and supplied continuation selections are rejected.
 All original resolved-configuration and state-path checks still apply. Only the
 recovery owner may persist the selection and upgrade the record to schema 4,
