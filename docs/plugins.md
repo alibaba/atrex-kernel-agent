@@ -1,9 +1,52 @@
 # AKA local plugins
 
-AKA discovers plugins automatically from immediate subdirectories of `plugins/` that contain a
-`plugin.json`. GPU Wiki ships as `plugins/gpu-wiki` and is therefore available to every campaign
-without another command-line option. A plugin may contribute tools, Skills, instructions, and
-workspace resources.
+AKA loads the plugins selected by the Resources configuration. The default Workflow selects
+`plugins/gpu-wiki` from the checkout supplied with `--repo-root`.
+A custom configuration can select explicit `plugins` paths or a `plugin_dir` catalog; catalog mode
+discovers immediate subdirectories containing `plugin.json`. A plugin may contribute tools, Skills,
+instructions, and workspace resources.
+
+## MicroAnalysis
+
+`plugins/micro-analysis` is an independent Skill-only plugin containing a methodology `SKILL.md`.
+It guides ISA inspection, layout probes, and controlled experiments across GPU backends. Agents
+construct experiments for the current kernel and toolchain; the plugin ships no probe executable,
+statistics script, or hardware-specific reference manual.
+For an unfamiliar operator or device, establish the operator's dataflow and exact target/toolchain.
+MicroAnalysis can be selected independently of GPUWiki. Use the workflow's enabled knowledge
+sources and available target documentation, following each source's lookup and attribution
+requirements and checking applicability. GPUWiki is one such source when enabled; selecting it
+alongside MicroAnalysis in a custom configuration does not create a plugin dependency. Use focused
+probes or A/B experiments to check existing knowledge or investigate unresolved observations.
+Keep unresolved facts explicit and distinguish contextual measurements from specifications.
+Backend documentation owns collection commands and metric meanings.
+
+MicroAnalysis is supplied as an independent plugin directory. It is not included in the Wiki
+resource export or the AKA Python packages. Select its directory explicitly in the Resources
+`plugins` list alongside any other required plugins, or select a `plugin_dir` catalog containing it.
+Keep this directory available to the campaign. AKA links the selected Skill directory into
+`.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`, and `.qoder/skills/micro-analysis`.
+In the campaign's Agent environment, list the enabled catalog:
+
+```bash
+python -m aka.legacy.resources.cli list
+```
+
+The Skill ID is `micro-analysis.micro-analysis`. Ask the Agent, for example:
+
+```text
+Use the micro-analysis Skill to investigate whether this kernel's load wait comes from addressing,
+layout, or data movement. Choose an experiment that distinguishes these explanations.
+```
+
+This is a Skill, not a Resources tool, so it has no `call micro-analysis.*` command. It adds no
+environment variables or per-phase instruction files. Backend profiling Skills remain independent:
+on PPU, use the selected `ppu-acu-joint-profile` Skill when ACU or timeline evidence is needed.
+Use the selected backend's tools for collection commands, counter definitions, and report formats.
+
+Plugin locks record fingerprints and Skill installations use symlinks; they do not preserve copies
+of the plugin files. Keep the original selected plugin directory available for existing campaigns.
+Use a new campaign to change plugin selection rather than modifying a running campaign's locks.
 
 ## Design and runtime flow
 
@@ -46,17 +89,30 @@ the usual way. Conflicting resource or Skill installation paths fail before anyt
 
 ## Discover and call tools
 
-From the repository or an initialized campaign workspace:
+In a campaign's Agent environment, list the plugins selected by that campaign:
 
 ```bash
 python -m aka.legacy.resources.cli list
 ```
 
-The command returns separate `tools` and `skills` catalogs. Each tool uses a namespaced name such as
+The campaign supplies the plugin-selection environment. Changing into the repository or a campaign
+workspace alone does not select plugins. For standalone discovery from the checkout root, in a shell
+without campaign plugin-selection variables, select the local catalog explicitly and use a fresh
+workspace outside the checkout:
+
+```bash
+aka_plugin_workspace=$(mktemp -d)
+python -m aka.legacy.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" list
+```
+
+This scans the specified catalog rather than resolving a Workflow's configured plugin selection.
+The separate workspace avoids conflicts with source directories such as `gpu-wiki` and with existing
+campaign locks.
+Both forms return separate `tools` and `skills` catalogs. Each tool uses a namespaced name such as
 `gpu-wiki.query`; each Skill has a namespaced catalog ID while retaining its native installation
 name.
 
-To query GPU Wiki, create `wiki_request.json`:
+To query GPU Wiki when that plugin is enabled, create `wiki_request.json`:
 
 ```json
 {
@@ -65,10 +121,17 @@ To query GPU Wiki, create `wiki_request.json`:
 }
 ```
 
-Then call:
+In the campaign's Agent environment, call:
 
 ```bash
 python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json
+```
+
+For a standalone call from the checkout root, retain the same catalog and workspace selection:
+
+```bash
+python -m aka.legacy.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" \
+  call gpu-wiki.query --input wiki_request.json
 ```
 
 `--input -` reads JSON from stdin. The response preserves the Wiki envelope: `query_id`, `records`,
@@ -142,8 +205,9 @@ text = (root / "data" / "reference.txt").read_text()
 print(json.dumps({"source": "reference.txt", "text": text}))
 ```
 
-Populate `data/reference.txt` and describe when to use the tool in `instructions.md`. The next
-campaign discovers it automatically; no orchestrator registration or startup argument is needed.
+Populate `data/reference.txt` and describe when to use the tool in `instructions.md`. Select the
+plugin directory in the Resources `plugins` list, or use a `plugin_dir` catalog containing it.
+The next campaign loads that selected configuration; no orchestrator code change is needed.
 
 ## Add a Skill-only plugin
 
