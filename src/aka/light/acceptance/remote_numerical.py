@@ -8,6 +8,7 @@ remain owned by the evaluator.
 """
 from __future__ import annotations
 
+import importlib.util
 import json
 import math
 import os
@@ -18,12 +19,24 @@ import sys
 import time
 import traceback
 
-# A remote bundle ships the shared module beside this script. Package imports
-# use the same owner without requiring an AKA installation on GPU workers.
+# A remote bundle ships the shared module beside this script. The evaluator
+# also loads this driver with runpy from a different directory, which does not
+# add the bundle to sys.path. Load the exact sibling, not a cwd/module-cache
+# match, without changing the evaluator's import path.
 if not __package__ and Path(__file__).with_name("numerical_inputs.py").is_file():
-    from numerical_inputs import (validation_schedule, matches_constraints, tensor_leaves, replace_leaves, numerical_inputs)
+    _inputs_spec = importlib.util.spec_from_file_location(
+        "_atrex_numerical_inputs", Path(__file__).resolve().with_name("numerical_inputs.py")
+    )
+    _inputs = importlib.util.module_from_spec(_inputs_spec)
+    _inputs_spec.loader.exec_module(_inputs)
 else:
-    from aka.legacy.evaluation.drivers.numerical_inputs import (validation_schedule, matches_constraints, tensor_leaves, replace_leaves, numerical_inputs)
+    from aka.legacy.evaluation.drivers import numerical_inputs as _inputs
+
+validation_schedule = _inputs.validation_schedule
+matches_constraints = _inputs.matches_constraints
+tensor_leaves = _inputs.tensor_leaves
+replace_leaves = _inputs.replace_leaves
+numerical_inputs = _inputs.numerical_inputs
 
 PREFIX = "__ATREX_NUMERICAL_RESULT__="
 MAX_REL_L2 = 1e-3
