@@ -1,10 +1,16 @@
 """Original supplemental numerical plan and receipt interpretation."""
 
+from __future__ import annotations
+
 import json
-from .drivers.remote_numerical import validate_suite
+import math
+from typing import Any, Mapping
+
+from aka.contracts.evaluation import NumericalProbeResult
+from .drivers.remote_numerical import PREFIX, validate_suite
 
 
-def _validate_review(value, digest):
+def validate_numerical_review(value, digest):
     if (
         not isinstance(value, dict)
         or value.get("schema_version") != 1
@@ -51,7 +57,9 @@ def _probe_verdict(status, reason, *, expected=None, observed=None, failed=0):
 def _probe_status(batch, plan, suite, shapes):
     """Classify one probe receipt without exposing private evaluator contents."""
     if not isinstance(batch, dict):
-        return _probe_verdict("needs_validation", "receipt_missing")
+        return _probe_verdict("needs_validation", "receipt_schema_mismatch")
+    if type(batch.get("schema_version")) is not int or batch["schema_version"] != 1:
+        return _probe_verdict("needs_validation", "receipt_schema_mismatch")
     rows = batch.get("runs")
     if batch.get("error"):
         return _probe_verdict("needs_validation", "batch_error")
@@ -96,14 +104,22 @@ def _probe_status(batch, plan, suite, shapes):
             failed=counts["failed"],
         )
     if (
-        row.get("shape_count") != len(plan["shape_ids"])
-        or row.get("seeds") != plan["seeds"]
+        type(row.get("shape_count")) is not int
+        or row.get("shape_count") != len(plan["shape_ids"])
+        or not isinstance(row.get("seeds"), list)
+        or any(type(seed) is not int for seed in row["seeds"])
+        or row["seeds"] != plan["seeds"]
+        or type(row.get("world_size")) is not int
         or row.get("world_size") != suite["world_size"]
+        or type(row.get("expected_probes")) is not int
         or row.get("expected_probes") != expected
         or type(observed) is not int
         or not 0 <= observed <= expected
         or type(failed) is not int
         or not 0 <= failed <= observed
+        or type(row.get("passed")) is not bool
+        or type(row.get("exit_code")) is not int
+        or not isinstance(row.get("input_error", ""), str)
         or not isinstance(row.get("result"), dict)
     ):
         return _probe_verdict(
@@ -120,8 +136,15 @@ def _probe_status(batch, plan, suite, shapes):
         )
     result = row["result"]
     nonfinite = result.get("nonfinite_outputs", [])
-    if not isinstance(nonfinite, list) or not all(
-        value in {"reference", "candidate", "unknown"} for value in nonfinite
+    metrics = result.get("numerical_metrics", {})
+    if (
+        not isinstance(nonfinite, list)
+        or not all(isinstance(value, str) and value in {"reference", "candidate", "unknown"}
+                   for value in nonfinite)
+        or type(result.get("all_pass")) is not bool
+        or not isinstance(metrics, dict)
+        or not all(value is None or type(value) in {int, float} and _finite_metric(value)
+                   for value in metrics.values())
     ):
         return _probe_verdict(
             "needs_validation", "receipt_schema_mismatch", expected=expected,
@@ -156,6 +179,7 @@ def _probe_status(batch, plan, suite, shapes):
         row.get("passed") is True
         and row.get("exit_code") == 0
         and result.get("all_pass") is True
+        and failed == 0
     ):
         return _probe_verdict(
             "passed", "passed", expected=expected,
@@ -169,4 +193,80 @@ def _probe_status(batch, plan, suite, shapes):
     return _probe_verdict(
         "needs_validation", "receipt_schema_mismatch", expected=expected,
         observed=observed, failed=failed,
+    )
+
+
+_METRIC_NAMES = frozenset({
+    "relative_l2", "max_row_relative_l2", "max_elementwise_abs_diff",
+    "max_elementwise_rel_diff", "max_abs_err", "max_rel_err",
+})
+
+
+def _finite_metric(value):
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def interpret_numerical_output(
+    stdout: str, plan: Mapping[str, Any], suite: Mapping[str, Any],
+    shapes: Mapping[str, Any], *, transport_returncode: int = 0,
+) -> NumericalProbeResult:
+    """Decode and interpret the first numerical receipt from captured output.
+
+    Missing/invalid receipts never constitute a measured candidate failure.
+    Shape/selection data are evaluator inputs; only bounded aggregate facts leave
+    this module. Transport retry remains the caller's responsibility.
+    """
+    receipt_status = "missing"
+    batch = {"schema_version": 1, "runs": []}
+    for line in stdout.splitlines():
+        if line.startswith(PREFIX):
+            try:
+                batch = json.loads(line[len(PREFIX):])
+            except (ValueError, RecursionError):
+                receipt_status = "invalid_json"
+                batch = {"schema_version": 1, "runs": "invalid"}
+            else:
+                receipt_status = "valid" if isinstance(batch, dict) else "invalid_schema"
+            break
+    if transport_returncode:
+        # Retain any safe aggregate diagnostics, but never admit this receipt.
+        batch = dict(batch) if isinstance(batch, dict) else {"schema_version": 1}
+        batch["error"] = "numerical probe transport failed"
+    verdict = _probe_status(batch, plan, suite, shapes)
+    rows = batch.get("runs") if isinstance(batch, dict) else None
+    row = (rows[0] if isinstance(rows, list) and len(rows) == 1
+           and isinstance(rows[0], dict) else {})
+    result = row.get("result") if isinstance(row.get("result"), dict) else {}
+    metrics = result.get("numerical_metrics")
+    metrics = {
+        name: value for name, value in (metrics.items() if isinstance(metrics, dict) else ())
+        if name in _METRIC_NAMES
+        and (value is None or type(value) in {int, float} and _finite_metric(value))
+    }
+    roles = result.get("nonfinite_outputs")
+    roles = tuple(role for role in ("reference", "candidate", "unknown")
+                  if isinstance(roles, list) and role in roles)
+    if "unknown" in roles:
+        diagnosis = "non-finite output diagnostic has unknown roles; repair or verify the probe evaluator"
+    elif "reference" in roles:
+        diagnosis = ("reference output is non-finite under the requested probe inputs; "
+                     "repair the input distribution or packed encoding, preserving the original risk case")
+    elif "candidate" in roles:
+        diagnosis = "candidate output is non-finite while the reference output is finite"
+    elif transport_returncode:
+        diagnosis = "numerical probe transport failed; private diagnostics withheld"
+    elif isinstance(batch, dict) and batch.get("error"):
+        diagnosis = "numerical evaluator failed; private diagnostics withheld"
+    elif row.get("input_error"):
+        diagnosis = "input generation or evaluator execution incomplete; private diagnostics withheld"
+    else:
+        diagnosis = ""
+    return NumericalProbeResult(
+        **verdict, receipt_status=receipt_status, metrics=metrics,
+        nonfinite_outputs=roles,
+        exit_code=row.get("exit_code") if type(row.get("exit_code")) is int else None,
+        diagnosis=diagnosis,
     )

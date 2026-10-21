@@ -4,11 +4,45 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Protocol, Sequence
+from types import MappingProxyType
+from typing import Any, Mapping, Protocol, Sequence
 
 from .execution import CommandSpec, JobResult
 from .workspace import CandidateWorkspace
 from .problem import EvaluationInput
+
+
+@dataclass(frozen=True)
+class NumericalProbeResult:
+    """Interpreted probe facts; no raw receipt, private inputs or exception text."""
+
+    status: str
+    reason: str
+    receipt_status: str
+    expected_probes: int | None = None
+    observed_probes: int | None = None
+    failed_probes: int = 0
+    metrics: Mapping[str, int | float | None] = field(default_factory=dict)
+    nonfinite_outputs: tuple[str, ...] = ()
+    exit_code: int | None = None
+    diagnosis: str = ""
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "metrics", MappingProxyType(dict(self.metrics)))
+        object.__setattr__(self, "nonfinite_outputs", tuple(self.nonfinite_outputs))
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "status": self.status,
+            "reason": self.reason,
+            "expected_probes": self.expected_probes,
+            "observed_probes": self.observed_probes,
+            "failed_probes": self.failed_probes,
+            "metrics": dict(self.metrics),
+            "nonfinite_outputs": list(self.nonfinite_outputs),
+            "exit_code": self.exit_code,
+            "diagnosis": self.diagnosis,
+        }
 
 
 @dataclass(frozen=True)

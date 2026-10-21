@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import uuid
 
-from aka.legacy.evaluation.drivers.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
+from aka.legacy.evaluation.drivers.remote_numerical import MAX_REL_L2, validation_schedule
 from aka.legacy.workflow.store import VERIFY_DIR
 from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
@@ -27,7 +27,7 @@ from aka.legacy.experiment.retry import retry_infrastructure
 from aka.legacy.workflow.review_trace import ReviewTrace
 
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
-from aka.legacy.evaluation.numerical import _validate_review, _probe_status
+from aka.legacy.evaluation.numerical import interpret_numerical_output, validate_numerical_review
 DRIVER = Path(remote_numerical.__file__)
 PROMPT = PROMPTS_DIR / "numerical_review.md"
 
@@ -194,7 +194,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
                 try:
                     value = json.loads(response.read_text())
                     record["response"] = value
-                    _validate_review(value, digest)
+                    validate_numerical_review(value, digest)
                 except (OSError, ValueError, TypeError, KeyError) as exc:
                     record["validation_error"] = str(exc)
                     if result.timed_out:
@@ -286,66 +286,27 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
                 "launch_probe", execute_command, command,
             )
 
-            def parse_receipt():
-                receipt_status = "missing"
-                batch = {"runs": []}
-                for line in process.stdout.splitlines():
-                    if line.startswith(PREFIX):
-                        try:
-                            batch = json.loads(line[len(PREFIX):])
-                        except json.JSONDecodeError:
-                            receipt_status = "invalid_json"
-                            batch = {"runs": "invalid"}
-                        else:
-                            if isinstance(batch, dict):
-                                receipt_status = "valid"
-                            else:
-                                receipt_status = "invalid_schema"
-                                batch = {"runs": "invalid"}
-                        break
-                return batch, receipt_status
-
-            batch, receipt_status = _at_probe_stage("parse_receipt", parse_receipt)
+            interpreted = _at_probe_stage(
+                "interpret_receipt", interpret_numerical_output,
+                process.stdout, plan, suite, shapes,
+                transport_returncode=process.returncode,
+            )
             transport_attempts.append(_at_probe_stage(
                 "record_transport",
                 _probe_transport_fact,
                 process,
-                receipt_status=receipt_status,
+                receipt_status=interpreted.receipt_status,
             ))
             check_transport(process)
-            if process.returncode:
-                batch["error"] = f"probe transport exited {process.returncode}"
-            return batch
+            return interpreted
 
-        batch = retry_infrastructure(workspace, f"numerical-probe:{digest}:{plan['case_id']}", probe_once)
-        verdict = _at_probe_stage(
-            "classify_result", _probe_status, batch, plan, suite, shapes
+        interpreted = retry_infrastructure(
+            workspace, f"numerical-probe:{digest}:{plan['case_id']}", probe_once
         )
-        status = verdict["status"]
-        # Preserve comparison metrics and actual input-generation diagnostics, but
-        # never surface private workload kwargs or raw evaluator output to the agent.
-        rows = batch.get("runs", [])
-        result = (rows[0].get("result") or {}) if rows else {}
         results.append({
-            "case_id": plan["case_id"], "status": status,
-            "reason": verdict["reason"],
-            "metrics": result.get("numerical_metrics", {}),
-            "nonfinite_outputs": result.get("nonfinite_outputs", []),
-            "expected_probes": verdict["expected_probes"],
-            "observed_probes": verdict["observed_probes"],
-            "failed_probes": verdict["failed_probes"],
+            "case_id": plan["case_id"],
+            **interpreted.as_dict(),
             "transport_attempts": transport_attempts,
-            "exit_code": rows[0].get("exit_code") if rows else None,
-            "diagnosis": (
-                "non-finite output diagnostic has unknown roles; repair or verify the probe evaluator"
-                if "unknown" in result.get("nonfinite_outputs", []) else
-                "reference output is non-finite under the requested probe inputs; "
-                "repair the input distribution or packed encoding, preserving the original risk case"
-                if "reference" in result.get("nonfinite_outputs", []) else
-                "candidate output is non-finite while the reference output is finite"
-                if "candidate" in result.get("nonfinite_outputs", []) else
-                batch.get("error") or (rows[0].get("input_error", "") if rows else "")
-            ),
         })
     # Repair invalid reference inputs before asking the coding agent to act on
     # any other failing case. All retained cases are measured again afterwards.
@@ -501,7 +462,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
             original_digest = review.get("evidence_digest")
             if not isinstance(original_digest, str) or len(original_digest) != 64:
                 raise ValueError("persisted supplemental plan has no evidence digest")
-            _validate_review(review, original_digest)
+            validate_numerical_review(review, original_digest)
         if review is None:
             review = _request_review(campaign, workspace, files, digest)
         record["review"] = review
