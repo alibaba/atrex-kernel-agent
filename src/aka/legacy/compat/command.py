@@ -23,6 +23,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         epilog="Example: aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform L20N --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
     )
     parser.add_argument("--repo-root", type=Path, required=True)
+    parser.add_argument(
+        "--profile",
+        default=None,
+        help=("optional launch profile: workflow, observed, sandbox, light, "
+              "light-sandbox, or an explicit profile JSON path"),
+    )
+    parser.add_argument("--patch", action="append", type=Path, default=[],
+                        help="apply an additional launch-composition patch")
     parser.add_argument("--execution-profile", default=None)
     parser.add_argument("--execution-patch", action="append", type=Path, default=[])
     options = parser.parse_args(argv[:boundary])
@@ -41,11 +49,17 @@ def main(argv: Sequence[str] | None = None) -> int:
             execution_selection["patches"] = [*execution_selection.get("patches", ()),
                 *read_execution_patches(options.execution_patch)]
     environment = {}
+    from aka.bootstrap.continuation import read
+    if read(os.environ) is not None and (options.profile is not None or options.patch):
+        parser.error("cannot override the launch profile during continuation")
     if execution_selection is not None:
-        from aka.bootstrap.continuation import read
         if read(os.environ) is not None:
             parser.error("cannot override Execution selection during continuation")
         import json
         environment["AKA_EXECUTION_SELECTION"] = json.dumps(execution_selection, sort_keys=True)
     with invocation_environment(environment):
-        return run_application(ApplicationRequest(root, argv[boundary + 1:]))
+        return run_application(
+            ApplicationRequest(root, argv[boundary + 1:]),
+            profile=options.profile,
+            patch_files=options.patch,
+        )

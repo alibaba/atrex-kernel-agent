@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atrex-aka-light"
+version = "0.1.0"
+description = "Optional managed AKA Workflow, Agent isolation, observation and reliable execution"
+requires-python = ">=3.10"
+dependencies = ["atrex-aka-legacy==0.1.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aka.light", "aka.light.*"]
+
+[tool.setuptools.package-data]
+"aka.light" = ["**/*.json", "**/*.md", "**/*.sh", "**/*.cu", "**/*.cuh", "**/*.h", "**/*.cpp", "**/*.c"]

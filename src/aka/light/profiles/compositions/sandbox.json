@@ -1,0 +1,23 @@
+{
+  "api_version": 1,
+  "bundles": [
+    "workflow"
+  ],
+  "patches": [
+    {
+      "id": "agent",
+      "remove": true
+    },
+    {
+      "id": "agent",
+      "insert": {
+        "name": "aka.light.agent.plugin",
+        "required": true,
+        "config": {
+          "sandbox": "bwrap",
+          "capture": false
+        }
+      }
+    }
+  ]
+}

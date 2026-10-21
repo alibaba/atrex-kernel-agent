@@ -372,7 +372,29 @@ ncu --metrics \
     python profile_driver.py
 ```
 
-### Viewing Profile Data (CLI)
+### Reading Profile Results
+
+For Agent sessions, use the structured `PROFILE_JSON` response. Dev Profile
+also synchronizes `profile.json` and `analysis/metrics.csv`; `--source` adds
+`analysis/source.txt`. Collection and parsing run together on the GPU worker.
+If CUDA line information is unavailable, the collector retries the source export
+as SASS-only from the same report, with `source_view: sass` and an explicit warning;
+this does not recollect the kernel or claim CUDA source correlation. A report
+without actual assembly still fails explicitly.
+Neither NCU nor `ncu_report` is required on the Agent host. Missing/oversized
+exports are reported explicitly; narrow the kernel filter or launch count.
+Binary reports are not transferred unless explicitly requested.
+
+Structured traffic accepts both legacy and `dram__bytes_op_read/write.sum`
+metric names. L2 traffic prefers `lts__t_bytes.sum`, falling back to
+`lts__t_sectors.sum * 32` bytes when only the sector counter is present. Missing
+or invalid counters stay absent, not zero; Memory SOL is not DRAM utilization.
+
+The Dev wrapper's `--diff PREV_DIR` compares dominant-launch scalar metrics in
+`analysis/diff_metrics.json`. Source evidence is the NCU CLI's CUDA/SASS text;
+the standard path does not generate the older `ncu_report` per-PC JSON envelopes.
+
+The commands below describe worker-side NCU exports, not local Agent steps:
 
 ```bash
 # View full report
@@ -514,13 +536,13 @@ Step 3: If utilization < 90%, run ncu profile
   └─ ⚠️ Confirm kernel name is target, not PyTorch internal kernel
 
 Step 4: View key metrics
-  └─ ncu --import profiles/v<N>/ncu.ncu-rep --page raw
+  └─ Read PROFILE_JSON or profiles/v<N>/profile.json and analysis/metrics.csv
 
 Step 5: Analyze warp stall reasons
   └─ smsp__warp_issue_stalled_* → Locate bottleneck type
 
 Step 6: View SASS (optional, deeper)
-  └─ ncu --import profiles/v<N>/ncu.ncu-rep --page source --print-source sass
+  └─ Request remote --source; read analysis/source.txt
 
 Step 7: Execute optimization based on diagnosis
 ```

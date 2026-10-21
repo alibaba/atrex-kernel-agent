@@ -88,6 +88,34 @@ def _record_revision(workspace, path, memory):
     return None
 
 
+def _version_records(workspace):
+    """Read retained version facts without requiring optional Agent summaries.
+
+    Light writes the same measurement/commit contract to .atrex_versions even
+    when memory generation is disabled. Those controller facts take precedence
+    over a summary of the same version; older memory-only campaigns still work.
+    Neither source bypasses the existing Git/content verification below.
+    """
+    records = {}
+    for directory in ('memory', '.atrex_versions'):
+        root = workspace / directory
+        if root.is_symlink():
+            raise ValueError('Workflow version directory must not be a symlink')
+        for path in sorted(root.glob('v*.json')):
+            if not re.fullmatch(r'v\d+', path.stem):
+                continue
+            if path.is_symlink():
+                raise ValueError('Workflow version record must not be a symlink')
+            value = document(path)
+            if value is None:
+                continue
+            version = int(path.stem[1:])
+            if directory == '.atrex_versions' and value.get('version') != f'v{version}':
+                raise ValueError('Workflow version record identity does not match')
+            records[version] = (version, value, path)
+    return sorted(records.values())
+
+
 def _result(memory, attempt, expected):
     perf = memory.get('performance') or {}
     correctness = (memory.get('correctness') or {}).get('status')
@@ -453,10 +481,7 @@ class RetainedWorkflowExport:
                 raise ValueError('Workflow attempt has no episode identity')
             attempts[row['episode']] = row
         by_version = {row.get('version'): row for row in attempts.values()}
-        memories = []
-        for path in sorted((workspace / 'memory').glob('v*.json')):
-            if re.fullmatch(r'v\d+', path.stem):
-                memories.append((int(path.stem[1:]), document(path), path))
+        memories = _version_records(workspace)
         baseline_memory = next((m for n,m,_ in memories if n == 0), {}) or {}
         expected = tuple(sorted(str(k) for k in (baseline_memory.get('performance') or {}).get('latency_us_by_shape', {})))
         candidates = []
