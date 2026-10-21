@@ -21,6 +21,7 @@ from concurrent.futures import CancelledError
 
 from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.task.problem.resources import native_harness_script
+from aka.legacy.evaluation.drivers import numerical_inputs as probe_algorithms
 from aka.light.evaluation.policy import CANDIDATE_TIMEOUT
 from aka.light.workspace.files import read_input, publish
 from aka.light.evaluation.projection import bounded_text, credential_values, redact_diagnostics
@@ -33,11 +34,10 @@ from aka.light.execution.retry import (check_review_service, retry_infrastructur
 
 ROOT = Path(__file__).resolve().parents[1]
 DRIVER = Path(__file__).resolve().parent / "remote_numerical.py"
-from aka.legacy.evaluation.drivers import numerical_inputs as probe_algorithms
-PROBE_ALGORITHMS = Path(probe_algorithms.__file__)
 # Trusted package assets may be imported through a virtualenv's lib64 -> lib
 # alias. Canonicalize them here, not in _digest/read_input: candidate and
 # reviewer-owned evidence must still reject symlinks in every path component.
+PROBE_ALGORITHMS = Path(probe_algorithms.__file__).resolve(strict=True)
 PROMPT = ROOT / "workflow" / "prompts" / "numerical_review.md"
 HARNESS = native_harness_script().resolve(strict=True)
 
