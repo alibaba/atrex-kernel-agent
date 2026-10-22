@@ -2,10 +2,6 @@
 from __future__ import annotations
 
 import json
-from aka.legacy.resources.prompts import render_prompt
-from .resources import ROOT
-SANDBOX_FULL_WORKFLOW_PROMPT = ROOT / "prompts/sandbox_full_workflow.md"
-SANDBOX_SAFETY_BOUNDARY_PROMPT = ROOT / "prompts/sandbox_safety_boundary.md"
 import os
 import subprocess
 import sys
@@ -36,50 +32,6 @@ def _status_is(value: object, expected: str) -> bool:
     return current == expected
 
 
-def _sandbox_endpoint(profile: str = "", url: str = "", ssh: str = "") -> str:
-    """Render the endpoint clause shared by sandbox directives."""
-    if ssh:
-        return f" using OpenSSH target `{ssh}`"
-    if url:
-        return f" using gateway URL `{url}`"
-    if profile:
-        return f" using gateway profile `{profile}`"
-    return " using agate's configured gateway"
-
-
-def sandbox_directive(
-    hardware: str,
-    profile: str = "",
-    url: str = "",
-    ssh: str = "",
-) -> str:
-    """Mandatory safety boundary plus full-mode workflow for full episodes."""
-    endpoint = _sandbox_endpoint(profile, url, ssh)
-    safety = render_prompt(
-        SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
-    workflow = render_prompt(
-        SANDBOX_FULL_WORKFLOW_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint
-    )
-    return f"{safety.rstrip()}\n\n{workflow.strip()}\n"
-
-
-def fast_sandbox_directive(
-    hardware: str,
-    profile: str = "",
-    url: str = "",
-    ssh: str = "",
-) -> str:
-    """Mandatory safety boundary for fast episodes.
-
-    The fast episode prompt already describes the fast-specific execution
-    contract (single evaluator, no multi-seed, no profile, supervisor-owned
-    memory), so only the invariant safety boundary is injected here.
-    """
-    endpoint = _sandbox_endpoint(profile, url, ssh)
-    return render_prompt(SANDBOX_SAFETY_BOUNDARY_PROMPT, HARDWARE=hardware, ENDPOINT=endpoint)
-
-
 def sandbox_command(
     workspace: Path,
     hardware: str,
@@ -106,7 +58,7 @@ def sandbox_command(
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     request = runtime.SandboxRequest(
-        workspace=workspace, launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
+        workspace=workspace, launcher=(sys.executable, "-m", "aka.legacy.compat.gateway"),
         hardware=hardware, profile=profile, url=url, timeout=timeout,
         command=tuple(command), environment=execution.execution_environment(environment),
         ssh=ssh, ssh_init=ssh_init, health_command=health_command, sync=sync,

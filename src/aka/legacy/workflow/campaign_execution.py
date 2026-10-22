@@ -1,7 +1,7 @@
 """Workflow host for Agent sessions and campaign execution instructions."""
 
 from aka.legacy.agent.session import run_session
-from aka.legacy.execution.sandbox import sandbox_directive, fast_sandbox_directive
+from .execution_instructions import sandbox_directive, fast_sandbox_directive
 
 
 class CampaignExecution:

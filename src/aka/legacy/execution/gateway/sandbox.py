@@ -62,13 +62,11 @@ import hashlib
 import fcntl
 import io
 import json
-import math
 import os
 import re
 import shlex
 import shutil
 import signal
-import statistics
 import subprocess
 import sys
 import tarfile
@@ -82,12 +80,10 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
-from aka.legacy.task.durable import durable_write_json  # noqa: E402
+from aka.legacy._filesystem import durable_write_json  # noqa: E402
 from aka.legacy.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
-from aka.legacy.execution.configuration import distributed_evaluation_world_size as _distributed_evaluation_world_size
 from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
 
-from aka.legacy.evaluation.gateway_measurement import GatewayMeasurement, prepare_dev_output
 from aka.legacy.execution.outcomes import emit_fact, emit_diagnostic, backend_attempt
 
 
@@ -156,7 +152,6 @@ OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
 DEFAULT_COMMAND_TIMEOUT = 600
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
-FP4_MAX_REL_L2 = 0.2
 MAX_COMMAND_TIMEOUT = 600
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
@@ -1006,20 +1001,6 @@ def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
     return default
 
 
-def _option_values(parts: list[str], name: str) -> list[str]:
-    """Read every repeated ``--flag value``/``--flag=value`` option."""
-    command = _command_parts(parts)
-    values: list[str] = []
-    for index, token in enumerate(command):
-        if token == name:
-            if index + 1 >= len(command):
-                raise ValueError(f"{name} requires a value")
-            values.append(command[index + 1])
-        elif token.startswith(name + "="):
-            values.append(token.split("=", 1)[1])
-    return values
-
-
 def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
     if not path.is_file():
         if required:
@@ -1082,44 +1063,6 @@ def _runtime_requirements(
         line.strip() for line in contents.splitlines()
         if line.strip() and not line.lstrip().startswith("#")
     ]
-
-
-def _workspace_num_gpus(workspace: Path) -> int:
-    metadata = _json_object(
-        _evaluator_input_path(workspace, "metadata.json", required=False)
-    )
-    return _distributed_evaluation_world_size(metadata)
-
-
-def _is_fp4_dtype(value: object) -> bool:
-    if not isinstance(value, str):
-        return False
-    normalized = value.casefold().replace("-", "").replace("_", "")
-    return "fp4" in normalized or "float4" in normalized
-
-
-def _metadata_has_fp4_dtype(metadata: object) -> bool:
-    if isinstance(metadata, dict):
-        if any(
-            _is_fp4_dtype(metadata.get(field))
-            for field in ("dtype", "dtype_compute")
-        ):
-            return True
-        return any(_metadata_has_fp4_dtype(value) for value in metadata.values())
-    if isinstance(metadata, list):
-        return any(_metadata_has_fp4_dtype(value) for value in metadata)
-    return False
-
-
-def _fp4_correctness_max_rel_l2(
-    metadata: dict[str, Any] | None,
-    operator: object = None,
-) -> float | None:
-    return (
-        FP4_MAX_REL_L2
-        if _metadata_has_fp4_dtype(metadata) or _is_fp4_dtype(operator)
-        else None
-    )
 
 
 def _is_generalized_workspace(workspace: Path) -> bool:
@@ -1354,143 +1297,6 @@ def _profile_command_environment(items: Iterable[str]) -> tuple[list[str], list[
         else:
             gateway_environment.append(item)
     return command_environment, gateway_environment
-
-
-def _typed_request(
-    workspace: Path,
-    hardware: str,
-    timeout: int,
-    env_items: list[str],
-    command: list[str],
-    kind: str,
-    *,
-    profiler: str | None = None,
-    profile_level: str = "sol",
-    counters: Iterable[str] = (),
-    kernel_regex: str | None = None,
-    top_kernels: int | None = None,
-) -> dict[str, Any]:
-    """Build the public run/profile request without importing the agate package."""
-    shapes = _json_object(
-        _evaluator_input_path(workspace, "shapes.json", required=True), required=True
-    )
-    assert shapes is not None
-    requested_shape_ids = _option_values(command, "--shape-id")
-    if requested_shape_ids:
-        unknown_shape_ids = [
-            shape_id for shape_id in requested_shape_ids if shape_id not in shapes
-        ]
-        if unknown_shape_ids:
-            raise ValueError(
-                "unknown --shape-id values: " + ", ".join(unknown_shape_ids)
-            )
-        # Preserve command order while dropping accidental duplicates. The typed
-        # gateway must honor the adapter's targeted-smoke contract instead of
-        # silently expanding a one-shape request back to the complete workload.
-        requested_shape_ids = list(dict.fromkeys(requested_shape_ids))
-        shapes = {shape_id: shapes[shape_id] for shape_id in requested_shape_ids}
-    try:
-        multi_seed = int(_option_value(command, "--multi-seed", 0))
-        bench_iters = int(_option_value(command, "--timed-runs", 20))
-        atol = float(_option_value(command, "--atol", 1e-2))
-        rtol = float(_option_value(command, "--rtol", 0.05))
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"invalid evaluator command option: {exc}") from exc
-    if multi_seed < 0 or bench_iters < 1:
-        raise ValueError(
-            "--multi-seed must be non-negative and --timed-runs must be positive"
-        )
-
-    solution = _json_object(workspace / "solution.json") or {}
-    candidate = (workspace / "kernel.py").read_text(encoding="utf-8")
-    languages = _candidate_languages(solution, candidate_sources=(candidate,))
-    reference: dict[str, Any] = {
-        "operator": workspace.name,
-        "reference_py": (workspace / "reference.py").read_text(encoding="utf-8"),
-        "input_py": (workspace / "input.py").read_text(encoding="utf-8"),
-        "shapes": shapes,
-    }
-    for filename, field in (
-        ("metadata.json", "metadata"),
-        ("roofline.json", "roofline"),
-    ):
-        value = _json_object(_evaluator_input_path(workspace, filename, required=False))
-        if value is not None:
-            if requested_shape_ids and isinstance(value.get("shapes"), dict):
-                value = dict(value)
-                value["shapes"] = {
-                    shape_id: value["shapes"][shape_id]
-                    for shape_id in requested_shape_ids
-                    if shape_id in value["shapes"]
-                }
-                if filename == "metadata.json" and "num_shapes" in value:
-                    value["num_shapes"] = len(requested_shape_ids)
-            reference[field] = value
-
-    spec: dict[str, Any] = {
-        "languages": [str(value) for value in languages],
-        "target_hardware": [hardware],
-    }
-    num_gpus = _distributed_evaluation_world_size(reference.get("metadata"))
-    if num_gpus > 1:
-        spec["num_gpus"] = num_gpus
-    request: dict[str, Any] = {
-        "name": f"{workspace.name}_{kind}",
-        "spec": spec,
-        "candidate": candidate,
-        "reference": reference,
-        "options": {
-            "num_correctness_cases": 1 + multi_seed,
-            "bench_iters": bench_iters,
-            "atol": atol,
-            "rtol": rtol,
-            "timeout_s": timeout,
-        },
-        "env_vars": _parse_env_items(env_items),
-    }
-    correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(
-        reference.get("metadata")
-        if isinstance(reference.get("metadata"), dict)
-        else None,
-        reference.get("operator"),
-    )
-    runtime_version = os.environ.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip()
-    if runtime_version:
-        request["atrex_bench_version"] = runtime_version
-    requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
-    if requirements_file:
-        requirements = _runtime_requirements(
-            requirements_file, candidate_languages=languages
-        )
-        if requirements:
-            request["requirements"] = requirements
-    if kind == "run" and correctness_max_rel_l2 is not None:
-        request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
-    if kind == "run":
-        version = str(_option_value(command, "--version", "v0"))
-        request["mode"] = (
-            "correctness_only"
-            if multi_seed > 0 and version not in {"v0", "v1"}
-            else "full"
-        )
-        if request["mode"] != "correctness_only":
-            from aka.legacy.task.problem.inputs import validate_performance_baseline
-
-            validate_performance_baseline(
-                shapes, reference.get("metadata"), hardware
-            )
-    else:
-        if profiler:
-            request["profiler"] = profiler
-        if profile_level:
-            request["level"] = profile_level
-        if counters:
-            request["counters"] = list(counters)
-        if kernel_regex:
-            request["kernel_regex"] = kernel_regex
-        if top_kernels is not None:
-            request["top_kernels"] = top_kernels
-    return request
 
 
 def _make_atrex_bench_runtime_bundle(
@@ -3261,10 +3067,6 @@ def _typed_fallback_allowed(detail: object) -> bool:
     return any(reason in text for reason in TYPED_FALLBACK_REASONS)
 
 
-PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
-
-
-
 def _record_profile_job(
     job: dict[str, Any], workspace: Path, sync_paths: list[str]
 ) -> None:
@@ -3289,239 +3091,7 @@ def _record_profile_job(
             _download_oss_artifact(artifact, output_dir / artifact_name)
 
 
-def _run_typed_gateway(
-    args: argparse.Namespace,
-    workspace: Path,
-    command_parts: list[str],
-    kind: str,
-    sync_paths: list[str],
-    queue_wait_grace: int,
-) -> int | None:
-    """Run agate run/profile, returning None only for a documented dev fallback."""
-    generalized = _is_generalized_workspace(workspace)
-    from aka.legacy.task.problem.inputs import PerformanceBaselineError
-
-    try:
-        request = _typed_request(
-            workspace,
-            args.hardware,
-            args.timeout,
-            args.env,
-            command_parts,
-            kind,
-            profiler=args.profiler,
-            profile_level=args.profile_level,
-            counters=args.profile_counter,
-            kernel_regex=args.kernel_regex,
-            top_kernels=args.top_kernels,
-        )
-    except PerformanceBaselineError as exc:
-        diagnostic = {
-            "schema": "optimization.gateway-protocol-failure/v1",
-            "agate_return_code": 2,
-            "response_type": "local-validation",
-            "reason": "invalid-performance-baseline",
-            "failure_class": "request",
-            "metadata_invalid": True,
-            "metadata_reason": exc.reason,
-            "shape_id": exc.shape_id,
-            "hardware": exc.hardware,
-        }
-        emit_diagnostic(diagnostic)
-        print(f"[sandbox] {exc}; GPU submission skipped", file=sys.stderr)
-        print(
-            "[sandbox] gateway_protocol_failure="
-            + json.dumps(diagnostic, sort_keys=True),
-            file=sys.stderr,
-            flush=True,
-        )
-        return 2
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        print(
-            f"[sandbox] {kind} interface unsupported for this workspace: {exc}; using dev",
-            file=sys.stderr,
-        )
-        return None
-
-    measurement = GatewayMeasurement(request, workspace=workspace, hardware=args.hardware,
-        private=generalized, batch_size=getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
-        profiling=kind != "run")
-    shape_batches = measurement.batches
-    batched = len(shape_batches) > 1
-
-    if args.dry_run:
-        print(
-            json.dumps(
-                {
-                    "hardware": args.hardware,
-                    "url": args.url or None,
-                    "gateway_profile": args.gateway_profile,
-                    "workspace": str(workspace),
-                    "kind": kind,
-                    "num_gpus": request.get("spec", {}).get("num_gpus", 1),
-                    "fallback_kind": "dev",
-                    "candidate_bytes": len(request["candidate"].encode("utf-8")),
-                    "shape_count": (
-                        "private"
-                        if _is_generalized_workspace(workspace)
-                        else len(request["reference"]["shapes"])
-                    ),
-                    "shape_batch_count": len(shape_batches),
-                    "mode": request.get("mode"),
-                    "options": request["options"],
-                    "sync": sync_paths,
-                },
-                indent=2,
-            )
-        )
-        return 0
-
-    agate_executable = _find_agate()
-    try:
-        with tempfile.TemporaryDirectory(prefix="atrex-shape-batches-") as temp_dir:
-            batch_root = Path(temp_dir)
-
-            def run_batch(
-                item: tuple[int, list[str]],
-            ) -> subprocess.CompletedProcess[str]:
-                batch_index, shape_ids = item
-                batch_request = measurement.request_for(batch_index)
-                if args.url and agate_executable is None:
-                    return _run_direct_job(
-                        url=args.url,
-                        kind="eval" if kind == "run" else kind,
-                        payload=batch_request,
-                        timeout=args.timeout,
-                        queue_wait_grace=queue_wait_grace,
-                    )
-                if agate_executable is None:
-                    raise FileNotFoundError("agate")
-                reference_dir = None
-                if kind == "run":
-                    # Even a single targeted batch needs its filtered reference
-                    # directory. Otherwise the agate CLI would reload the original
-                    # full shapes.json and defeat --shape-id smoke selection.
-                    reference_dir = batch_root / f"batch-{batch_index:04d}"
-                    measurement.write_reference(batch_index, reference_dir)
-                agate = _typed_agate_command(
-                    agate_executable,
-                    args,
-                    workspace,
-                    kind,
-                    batch_request,
-                    queue_wait_grace,
-                    reference_dir,
-                )
-                return _run_agate_with_cancel_retry(
-                    agate=agate,
-                    executable=agate_executable,
-                    url=args.url,
-                    gateway_profile=args.gateway_profile,
-                    command_timeout=_gateway_job_timeout(
-                        args.timeout, queue_wait_grace
-                    ),
-                    wait_budget=args.timeout + queue_wait_grace,
-                )
-
-            batch_items = list(enumerate(shape_batches))
-            if batched:
-                print(
-                    f"[sandbox] running {len(shape_batches)} shape batches "
-                    f"with {min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))} workers",
-                    file=sys.stderr,
-                    flush=True,
-                )
-            from aka.legacy.execution.dispatch import run_batches
-            processes = run_batches(
-                batch_items, run_batch, max_workers=DEFAULT_EVAL_BATCH_WORKERS,
-            )
-    except GatewayHTTPError as exc:
-        if _typed_fallback_allowed(exc):
-            print(
-                f"[sandbox] gateway {kind} interface unavailable ({exc}); using dev",
-                file=sys.stderr,
-            )
-            return None
-        if exc.status in {429, 502, 503, 504}:
-            emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})
-            print(INFRASTRUCTURE_MARKER, file=sys.stderr)
-            return ENVIRONMENT_TEMPFAIL
-        if generalized:
-            raise SystemExit(
-                f"sandbox: generalized {kind} gateway request failed; "
-                "hidden-case details withheld"
-            ) from exc
-        raise SystemExit(f"sandbox: {kind} gateway request failed: {exc}") from exc
-    except FileNotFoundError as exc:
-        raise SystemExit(
-            "sandbox: agate not found and no explicit --url was provided; "
-            "install atrex-gateway-client first"
-        ) from exc
-
-    jobs: list[dict[str, Any]] = []
-    for proc in processes:
-        job = _job_response(proc.stdout or "")
-        if job is not None and _report_cancellation(job):
-            return proc.returncode or 1
-        detail = (proc.stderr or "") + (proc.stdout or "")
-        if proc.returncode and _typed_fallback_allowed(detail):
-            print(
-                f"[sandbox] gateway {kind} interface rejected this request; using dev",
-                file=sys.stderr,
-            )
-            return None
-        if proc.stderr and not generalized:
-            print("\n".join(line for line in proc.stderr.rstrip().splitlines()
-                              if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
-        if job is None:
-            if _report_agate_transport_failure(proc):
-                return ENVIRONMENT_TEMPFAIL
-            if proc.stdout and not generalized:
-                print(proc.stdout.rstrip())
-            elif generalized:
-                print(
-                    "[sandbox] generalized gateway response unavailable; evaluator details withheld",
-                    file=sys.stderr,
-                )
-            return proc.returncode or 2
-        if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
-            if _report_infrastructure_failure(job):
-                return ENVIRONMENT_TEMPFAIL
-            if generalized:
-                print(
-                    "[sandbox] generalized evaluation failed; hidden-case details withheld; "
-                    f"job_id={job.get('job_id')}",
-                    file=sys.stderr,
-                )
-            else:
-                print(json.dumps(job, ensure_ascii=False))
-            return proc.returncode or 1
-        jobs.append(job)
-
-    print(
-        f"[sandbox] gateway_kind={kind} "
-        + (
-            f"job_ids={','.join(str(job.get('job_id')) for job in jobs)}"
-            if batched
-            else f"job_id={jobs[0].get('job_id')}"
-        ),
-        file=sys.stderr,
-    )
-    if kind == "run":
-        result = measurement.interpret(jobs)
-        emit_fact({"event": "result_available"})
-
-        print(
-            TEST_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False)
-        )
-        return 0 if result["all_pass"] else 1
-
-    _record_profile_job(jobs[0], workspace, sync_paths)
-    print(PROFILE_RESULT_PREFIX + json.dumps(jobs[0]["result"], ensure_ascii=False))
-    return 0
-
-
-def _main(argv: list[str] | None = None) -> int:
+def _main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
     args = build_parser().parse_args(argv)
     if not args.hardware:
         raise SystemExit("sandbox: --hardware or ATREX_SANDBOX_GPU is required")
@@ -3660,7 +3230,9 @@ def _main(argv: list[str] | None = None) -> int:
     num_gpus = 1
     if gateway_kind in TYPED_KINDS or evaluator_command or profile_request:
         try:
-            num_gpus = _workspace_num_gpus(workspace)
+            if measurement_adapter is None:
+                raise ValueError("measurement commands require the Legacy CLI measurement adapter")
+            num_gpus = measurement_adapter.num_gpus(workspace)
         except ValueError as exc:
             raise SystemExit(
                 f"sandbox: invalid distributed evaluator contract: {exc}"
@@ -3690,7 +3262,7 @@ def _main(argv: list[str] | None = None) -> int:
             except ValueError as exc:
                 typed_limitation = str(exc)
         if typed_limitation is None:
-            typed_result = _run_typed_gateway(
+            typed_result = measurement_adapter.run_typed(
                 args,
                 workspace,
                 args.command,
@@ -4174,8 +3746,9 @@ def _main(argv: list[str] | None = None) -> int:
             print(remote_stderr.rstrip(), file=sys.stderr)
         print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
         return int(result.get("exit_code") or proc.returncode or 2)
-    command_stdout = prepare_dev_output(workspace, command_stdout,
-        evaluator=evaluator_command, private=hide_evaluator_details)
+    if measurement_adapter is not None:
+        command_stdout = measurement_adapter.dev_output(workspace, command_stdout,
+            evaluator=evaluator_command, private=hide_evaluator_details)
 
     if command_stdout:
         print(command_stdout)
@@ -4218,7 +3791,7 @@ def _append_sandbox_telemetry(event: str, **fields: object) -> None:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
     arguments = list(argv if argv is not None else sys.argv[1:])
     operation_id = f"sandbox-{os.getpid()}-{time.monotonic_ns()}"
     category = _sandbox_telemetry_category(arguments)
@@ -4233,7 +3806,7 @@ def main(argv: list[str] | None = None) -> int:
         category=category,
     )
     try:
-        returncode = _main(argv)
+        returncode = _main(argv, measurement_adapter=measurement_adapter)
     except BaseException as exc:
         _cancel_active_agate_jobs()
         _append_sandbox_telemetry(
@@ -4275,4 +3848,5 @@ def _run_agate_once(*args, **kwargs):
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    from aka.legacy.compat.gateway import main as compatibility_main
+    raise SystemExit(compatibility_main())

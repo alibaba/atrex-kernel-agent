@@ -60,7 +60,7 @@ from .plan_reviewers import (
     plan_reviewer_environment,
 )
 from .review_trace import ReviewTrace
-from aka.legacy.execution.configuration import distributed_evaluation_world_size, evaluator_num_gpus
+from aka.legacy.evaluation.metadata import distributed_evaluation_world_size, evaluator_num_gpus
 from aka.legacy.resources.plugins import PluginRegistry
 from aka.legacy.agent.session import SessionResult
 from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review

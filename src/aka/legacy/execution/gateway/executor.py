@@ -7,6 +7,8 @@ from aka.legacy.execution.configuration import queue_wait_grace
 
 
 class GatewayExecutor:
+    sandbox_cli_options = True
+    sandbox_cli_endpoint_environment = True
     def __init__(self, configuration=None):
         self.configuration = dict(configuration or {})
         if "requirements_file" in self.configuration:
@@ -18,7 +20,7 @@ class GatewayExecutor:
         self.capabilities.require(command)
         if type(command.timeout) is not int or command.timeout <= 0:
             raise ValueError("execution timeout must be a positive integer")
-        argv = [sys.executable, "-m", "aka.legacy.execution.gateway.entrypoint",
+        argv = [sys.executable, "-m", "aka.legacy.compat.gateway_entrypoint",
                 "--workspace", str(command.workspace), "--hardware", command.hardware,
                 "--kind", command.operation, "--timeout", str(command.timeout)]
         for artifact in command.artifacts:

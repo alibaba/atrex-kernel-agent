@@ -5,7 +5,7 @@ from aka.legacy.execution.resources import PROFILING_CONFIG, contribute, validat
 EXECUTOR = ServiceKey("executor", "Executor", module="aka.contracts.execution", protocol_version=2)
 name = "gateway"
 provide = ("executor",)
-identity_packages = ("aka.legacy.execution", "aka.legacy.evaluation", "aka.contracts.execution")
+identity_packages = ("aka.legacy.execution", "aka.legacy.evaluation", "aka.legacy.compat", "aka.contracts.execution")
 Config = {"type":"object", "properties":{
     "url":{"type":"string"}, "profile":{"type":"string"},
     "warmup_iters":{"type":"string"},

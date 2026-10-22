@@ -63,7 +63,7 @@ def default_binding(context):
     from aka.legacy.execution.recovery import raise_if_environment_blocked
     settings = legacy_settings()
     request = SandboxRequest(
-        workspace=Path("."), launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
+        workspace=Path("."), launcher=(sys.executable, "-m", "aka.legacy.compat.gateway"),
         hardware=context.hardware, timeout=context.timeout, command=(),
         environment=context.environment, profile=settings.profile, url=settings.url,
         ssh=settings.ssh, ssh_init=settings.ssh_init, health_command=settings.health_command,

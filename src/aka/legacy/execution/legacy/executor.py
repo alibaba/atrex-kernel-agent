@@ -15,6 +15,8 @@ from .runtime import ExecutionHooks, SandboxRequest, current_transport_arguments
 
 
 class LegacyExecutor:
+    sandbox_cli_options = True
+    sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
         operations=frozenset(("auto", "run", "profile", "dev", "preflight")), cancellation=True,
     )
@@ -61,8 +63,10 @@ class LegacyExecutor:
         cancel_event = request.cancel_event
         if sum(bool(value) for value in (ssh, url, profile)) > 1:
             raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
+        if not request.launcher or any(not isinstance(item, str) or not item for item in request.launcher):
+            raise ValueError("sandbox launcher must be a non-empty argument vector")
         cmd = [
-            request.launcher[0], "-m", "aka.legacy.execution.gateway.sandbox",
+            *request.launcher,
             "--kind",
             gateway_kind,
             "--hardware",
