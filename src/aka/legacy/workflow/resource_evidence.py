@@ -348,14 +348,18 @@ def normalize_attribution(value, resources, *, experiment_id):
     }
 
 
-def apply_attribution(entry, *, experiment_id, workspace=None):
+_UNSELECTED = object()
+
+
+def apply_attribution(entry, *, experiment_id, workspace=None, resources=_UNSELECTED):
     """Canonical facts are written once; old Wiki fields are a compatibility view."""
     if "attribution" not in entry:
         return
-    try:
-        resources = _selected_resources(workspace)
-    except Exception:  # noqa: BLE001 - preserve the business verdict when auxiliary evidence fails
-        resources = None
+    if resources is _UNSELECTED:
+        try:
+            resources = _selected_resources(workspace)
+        except Exception:  # noqa: BLE001 - preserve the business verdict when auxiliary evidence fails
+            resources = None
     normalized = normalize_attribution(
         entry["attribution"], resources, experiment_id=experiment_id
     )

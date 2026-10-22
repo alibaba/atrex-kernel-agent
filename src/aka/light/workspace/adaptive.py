@@ -67,8 +67,14 @@ def reserved_paths(plugin_registry) -> tuple[str, ...]:
     from aka.light.orchestrator.agent_skill_manifest import SKILL_MANIFEST
     from aka.light.orchestrator.workspace_runtime import RETIRED_SKILL_NAMES
     names = set(SKILL_MANIFEST) | set(RETIRED_SKILL_NAMES)
-    for plugin in plugin_registry.plugins:
+    for plugin in getattr(plugin_registry, "plugins", ()):
         names.update(plugin.manifest.get("skills", {}))
+    skill_catalog = getattr(plugin_registry, "skill_catalog", None)
+    if callable(skill_catalog):
+        for row in skill_catalog():
+            name = row.get("install_name")
+            if isinstance(name, str) and name and "/" not in name and name not in {".", ".."}:
+                names.add(name)
     return ("tools/sandbox.py", "tools/plugin.py", *(f"skills/{name}" for name in sorted(names)))
 
 

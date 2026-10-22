@@ -37,26 +37,10 @@ class LegacyWorkflow:
 
     def _resources_for(self, request):
         """Business owns target binding; Bootstrap never decodes Workflow argv."""
-        owner = self._dependencies.agent_resources
-        if owner is None:
-            return None  # Explicit legacy/in-process compatibility path.
-        import json
-        import os
-        from aka.bootstrap.continuation import base_payload, read
-        from aka.resources import restore_bound
-        payload = read(os.environ)
-        value = json.loads(payload) if payload else None
-        if value and value.get("version") == 3:
-            binding = value["agent_resources"]
-            if (binding["workspace"] != str(request.workspace.resolve())
-                    or binding["campaign_id"] != request.name):
-                raise ValueError("campaign differs from its frozen agent resources")
-            bound = restore_bound(binding, base_selection=json.loads(base_payload(payload)))
-            # Reconstructed providers must describe the same frozen collection.
-            if owner.freeze() != bound.resource_snapshot():
-                raise ValueError("selected agent resource contributions changed")
-            return bound
-        return owner.bind(request.workspace, request.name, base_selection=value)
+        from aka.resources.binding import bind_campaign_resources
+        return bind_campaign_resources(
+            self._dependencies.agent_resources, request.workspace, request.name
+        )
 
     def _load_problem(self, request: CampaignRequest) -> LoadedProblem:
         """Capture or restore run inputs before campaign-specific preparation."""

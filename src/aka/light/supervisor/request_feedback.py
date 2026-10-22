@@ -70,7 +70,8 @@ def journal_schema(operation, body, *, research_records=False, supervisor_git=Tr
         properties.update(direction_id={"type": "string", "pattern": "^direction_[0-9a-f]{32}$"},
                           gateway_record_ids=_ids("gateway-", minimum=1), action={"enum": sorted(EXPERIMENT_ACTIONS)},
                           wiki_usage={"type": "array"}, wiki_query_ids={"type": "array"},
-                          wiki_usage_status={"type": "string"})
+                          wiki_usage_status={"type": "string"},
+                          attribution={"type": ["object", "array"]})
         return _object(properties, EXPERIMENT_FIELDS)
     if operation == "direction_update":
         action = body.get("action")

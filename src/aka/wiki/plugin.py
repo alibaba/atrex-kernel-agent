@@ -49,6 +49,11 @@ def apply(ctx, config):
         spec = InstructionSpec(name="gpu-wiki-" + key.replace("_", "-"), phases=phases, template=text, variables=variables)
         ctx.contribute("instructions", spec.name, spec)
     skill_source = root / "3rdparty" / "KernelWiki"
+    if not (skill_source.is_dir() and (skill_source / "SKILL.md").is_file()):
+        # Small/frozen Wiki data bundles may omit the upstream companion Skill.
+        # Keep the Core contribution usable without restoring Light's legacy
+        # runtime-specific Wiki command or exposing store implementation paths.
+        skill_source = Path(str(files("aka.wiki").joinpath("skills", "KernelWiki")))
     if skill_source.is_dir() and (skill_source / "SKILL.md").is_file():
         skill = AgentSkill("kernel-wiki", skill_source,
                            "Query the selected public GPU Wiki and retain its source attribution.")

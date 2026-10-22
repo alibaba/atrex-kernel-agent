@@ -117,6 +117,21 @@ class ToolResult:
 
 
 @runtime_checkable
+class ToolEntryExecutor(Protocol):
+    """Trusted host execution boundary; never serialized into a tool plan.
+
+    Managed runtimes supply this callback to retain ownership of process
+    isolation, deadlines and cancellation for every tool/provider subprocess.
+    """
+
+    def __call__(
+        self, entrypoint: str, value: Any, context: Mapping[str, Any], timeout: float,
+        *, env_extra: Mapping[str, str] | None = None, cwd: Path | None = None,
+        python_paths: tuple[str, ...] = (),
+    ) -> tuple[Any, str]: ...
+
+
+@runtime_checkable
 class BoundAgentResources(Protocol):
     """Borrowed, target-bound operations; calls return finite JSON projections."""
 
@@ -129,12 +144,14 @@ class BoundAgentResources(Protocol):
         workspace: Path | None = None,
         *,
         cwd: Path | None = None,
+        executor: ToolEntryExecutor | None = None,
     ) -> Mapping[str, Any]: ...
     def instructions(self, phase: str, **values: str) -> str: ...
     def environment(
         self, workspace: Path | None = None, campaign_id: str | None = None
     ) -> Mapping[str, str]: ...
     def install(self, workspace: Path | None = None) -> Any: ...
+    def record_binding(self, workspace: Path | None = None) -> None: ...
     def resource_snapshot(self) -> Mapping[str, Any]: ...
     def call_evidence(self, call_id: str) -> Mapping[str, Any]: ...
     def validate_declaration(
@@ -166,6 +183,7 @@ __all__ = [
     "BoundAgentResources",
     "ToolContext",
     "ToolDescriptor",
+    "ToolEntryExecutor",
     "ToolReceipt",
     "ToolResult",
     "ToolSpec",

@@ -1028,7 +1028,20 @@ class BoundAgentResources:
                 continue
             target.parent.mkdir(parents=True, exist_ok=True)
             target.symlink_to(source.resolve(), target_is_directory=source.is_dir())
-        state = workspace / ".atrex_plugins"
+        self.record_binding(workspace)
+        if ignored != original_ignore.rstrip("\n"):
+            _atomic_text(ignore, ignored + "\n")
+        return self.resource_result()
+
+    def record_binding(self, workspace=None):
+        """Persist the trusted evidence owner without mounting host resources.
+
+        Isolated consumers copy their public projection separately and retain
+        this descriptor only in the canonical controller workspace.
+        """
+        target = Path(workspace).resolve() if workspace is not None else self.workspace
+        self.check_lock(target)
+        state = target / ".atrex_plugins"
         state.mkdir(parents=True, exist_ok=True)
         _atomic_json(
             state / "agent-resources.json",
@@ -1041,9 +1054,6 @@ class BoundAgentResources:
                 "campaign_id": self.campaign_id,
             },
         )
-        if ignored != original_ignore.rstrip("\n"):
-            _atomic_text(ignore, ignored + "\n")
-        return self.resource_result()
 
     def resource_result(self, workspace=None):
         if workspace is not None:
@@ -1309,8 +1319,23 @@ class BoundAgentResources:
             ) from exc
 
     def call_result(
-        self, name: str, request: Any, workspace=None, *, cwd=None
+        self, name: str, request: Any, workspace=None, *, cwd=None, executor=None
     ) -> dict[str, Any]:
+        if executor is not None and not callable(executor):
+            raise TypeError("tool executor must be a trusted callable")
+
+        def execute(entrypoint, value, context, timeout, *, env_extra=None, cwd=None):
+            if executor is None:
+                return self._run_entry(
+                    entrypoint, value, context, timeout, env_extra=env_extra, cwd=cwd
+                )
+            selected = json.loads(self.launch_payload).get("python_paths", []) if self.launch_payload else []
+            paths = tuple(dict.fromkeys(str(Path(p).resolve()) for p in [*selected, *sys.path] if p))
+            return executor(
+                entrypoint, value, context, timeout, env_extra=env_extra,
+                cwd=cwd, python_paths=paths,
+            )
+
         if workspace is not None and Path(workspace).resolve() != self.workspace:
             return {
                 "schema": "aka.tool-result.v1",
@@ -1367,7 +1392,7 @@ class BoundAgentResources:
                 raise ResourcesError("schema_validation", str(exc)) from exc
             context = self._context(call_id, row)
             context["config"] = row["config"]
-            data, stderr = self._run_entry(
+            data, stderr = execute(
                 row["entrypoint"], request, context, row["timeout_seconds"], cwd=cwd
             )
             try:
@@ -1384,7 +1409,7 @@ class BoundAgentResources:
                         for x in plan["attribution_providers"]
                         if x["name"] == provider
                     )
-                    extracted, _ = self._run_entry(
+                    extracted, _ = execute(
                         spec["extract_entrypoint"],
                         {"result": data, "call_id": call_id, "config": spec["config"]},
                         context,
@@ -1403,7 +1428,10 @@ class BoundAgentResources:
                             )
                         refs.append(asdict(ref))
                     references, ref_coverage = tuple(refs), "complete"
-                except Exception as exc:  # noqa: BLE001 - attribution extraction is deliberately fail-open.
+                except Exception as exc:
+                    if (executor is not None and isinstance(exc, ResourcesError)
+                            and exc.code in {"tool_cancelled", "tool_timeout"}):
+                        raise
                     diagnostics.append(
                         {
                             "code": "attribution_failed",
@@ -1650,7 +1678,7 @@ class BoundAgentResources:
                             "artifact path is missing or escapes workspace"
                         )
                     actual = _sha_file(target)
-                    if item.sha256 and item.sha256 != actual:
+                    if item.sha256 and item.sha256.removeprefix("sha256:") != actual:
                         raise ValueError("artifact digest mismatch")
                     result.append(
                         asdict(

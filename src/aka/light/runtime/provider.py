@@ -5,7 +5,7 @@ from aka.light.wiki.config import WikiConfig
 
 
 class ToolRuntimeFactory(Protocol):
-    def open(self, configuration, *, workspace_provider): ...
+    def open(self, configuration, *, workspace_provider, agent_resources=None): ...
 
 
 @dataclass(frozen=True)
@@ -21,7 +21,7 @@ class ManagedRuntimeFactory:
     def research_records(self) -> bool:
         return self.services.journal.research_records if self.services is not None else False
 
-    def open(self, configuration, *, workspace_provider):
+    def open(self, configuration, *, workspace_provider, agent_resources=None):
         from aka.light.orchestrator.supervisor_runtime import SupervisorRuntime
         return SupervisorRuntime(replace(configuration,
             measurement_repetitions=self.measurement_repetitions,
@@ -29,4 +29,4 @@ class ManagedRuntimeFactory:
             wiki_options=WikiConfig(**(self.wiki_options or {})),
             request_timeout=self.request_timeout if self.request_timeout is not None else configuration.request_timeout,
             queue_timeout=self.queue_timeout), workspace_provider=workspace_provider,
-            services=self.services)
+            services=self.services, agent_resources=agent_resources)

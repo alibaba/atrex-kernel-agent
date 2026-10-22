@@ -40,7 +40,10 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
             publish(workspace, name, (reference_dir / name).read_bytes())
         publish(workspace, "profile_driver.py", profile_driver_script().read_bytes())
         publish(workspace, "README.md", b"# Kernel optimization workspace\n")
-        publish(workspace, ".gitignore", b"__pycache__/\n*.pyc\n/scratch\n")
+        # The resource host is installed after source initialization. Establish
+        # the stable private Core paths before any baseline Git commit; the
+        # runtime linker adds the selected descriptor's dynamic destinations.
+        publish(workspace, ".gitignore", b"__pycache__/\n*.pyc\n/scratch\n/.aka\n/.atrex_plugins\n")
         (workspace / "memory").mkdir(exist_ok=True)
         if not (workspace / ".git").exists():
             subprocess.run(["git", "init", "-q", str(workspace)], check=True)

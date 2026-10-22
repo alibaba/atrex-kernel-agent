@@ -18,4 +18,4 @@ where = ["src"]
 include = ["aka.wiki*"]
 
 [tool.setuptools.package-data]
-"aka.wiki" = ["instructions/*.md", "schemas/*.json", "profiles/compositions/bundles/*.json"]
+"aka.wiki" = ["instructions/*.md", "schemas/*.json", "skills/KernelWiki/*.md", "profiles/compositions/bundles/*.json"]

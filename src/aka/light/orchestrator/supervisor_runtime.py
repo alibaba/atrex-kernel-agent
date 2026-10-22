@@ -172,9 +172,11 @@ def filter_options(argv: list[str], owned: frozenset[str], forbidden: frozenset[
 def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if
             not key.startswith(("AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_", "ATREX_GPU_WIKI_"))
+            and not key.startswith(("AKA_AGENT_", "AKA_LAUNCH_"))
             and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, JOB_ROOT_ENV, "ATREX_AKA_MEASUREMENT_REPETITIONS",
                             "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT",
-                            "ATREX_AKA_IDENTITY_KEY"}}
+                            "ATREX_AKA_IDENTITY_KEY", "ATREX_AKA_REPO_ROOT",
+                            "ATREX_INTERNAL_RESOURCES_ROOT"}}
 
 
 @dataclass(frozen=True)
@@ -384,14 +386,20 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class SupervisorRuntime:
-    def __init__(self, config: RuntimeConfig, *, workspace_provider=None, services=None):
+    def __init__(self, config: RuntimeConfig, *, workspace_provider=None, services=None,
+                 agent_resources=None):
         self.config = config
         from aka.light.runtime.services import builtin_services
         services = services if services is not None else builtin_services()
         self.executor, self.acceptance = services.executor, services.acceptance
         self.journal_factory = services.journal
-        from .plugins import PluginRegistry
-        self.plugins = PluginRegistry(enabled=config.wiki_enabled)
+        self.agent_resources = agent_resources
+        if agent_resources is not None:
+            from .core_resources import CoreResourceProjection
+            self.plugins = CoreResourceProjection(agent_resources)
+        else:
+            from .plugins import PluginRegistry
+            self.plugins = PluginRegistry(enabled=config.wiki_enabled)
         self.workspace_provider = workspace_provider
         self.environment = {k: v for k, v in os.environ.items() if k not in {OWNER_ENV, URL_ENV, TOKEN_ENV}}
         self.gateway_queue_wait_grace = configured_queue_wait_grace(self.environment)
@@ -420,10 +428,14 @@ class SupervisorRuntime:
         self.measurements = self.experiments.store
         # The lock is private and survives restarts; never read an Agent-supplied lock.
         plugin_lock = (self.audit_root or self.root) / "plugins"
-        self.plugins.check_lock(plugin_lock)
-        publish(plugin_lock, ".atrex_plugins/lock.json", json.dumps(self.plugins.snapshot()).encode())
+        if self.agent_resources is not None:
+            self.plugins.check_lock()
+        else:
+            self.plugins.check_lock(plugin_lock)
+        plugin_snapshot = self.plugins.snapshot()
+        publish(plugin_lock, ".atrex_plugins/lock.json", json.dumps(plugin_snapshot).encode())
         self.wiki = WikiService((self.audit_root or self.root) / "wiki", config.wiki_options,
-                                self.plugins.snapshot())
+                                plugin_snapshot)
         self.server = _Server(("127.0.0.1", 0), _Handler)
         self.server.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -522,17 +534,31 @@ class SupervisorRuntime:
                     episode=episode,
                     episodes_root=self.config.workspace.resolve() / ".atrex_long_horizon/episodes",
                 ) if self.config.workspace else None)
-                view = (self.workspace_provider.open_draft if self.workspace_provider else EpisodeWorkspace)(workspace, evidence / "agent",
-                                        is_ppu=hardware_vendor(self.config.hardware) == "ppu",
-                                        research_records=self.journal_factory.research_records,
-                                        plugin_registry=self.plugins,
-                                        adaptive_root=(self.audit_root or self.root) / "adaptive-state",
-                                        episode=episode, history=history)
+                workspace_options = {
+                    "is_ppu": hardware_vendor(self.config.hardware) == "ppu",
+                    "research_records": self.journal_factory.research_records,
+                    "plugin_registry": self.plugins,
+                    "adaptive_root": (self.audit_root or self.root) / "adaptive-state",
+                    "episode": episode,
+                    "history": history,
+                }
+                if self.agent_resources is not None:
+                    workspace_options["agent_resources"] = self.agent_resources
+                view = (
+                    self.workspace_provider.open_draft
+                    if self.workspace_provider else EpisodeWorkspace
+                )(workspace, evidence / "agent", **workspace_options)
                 agent_workspace = view.prepare()
-            binding = JournalBinding(self.journal_factory.open(
-                workspace=agent_workspace, git_workspace=workspace,
-                campaign_root=self.journals_root, evidence_root=evidence,
-                supervisor_git=supervisor_git), view=view)
+            journal_options = {
+                "workspace": agent_workspace,
+                "git_workspace": workspace,
+                "campaign_root": self.journals_root,
+                "evidence_root": evidence,
+                "supervisor_git": supervisor_git,
+            }
+            if self.agent_resources is not None:
+                journal_options["agent_resources"] = self.agent_resources
+            binding = JournalBinding(self.journal_factory.open(**journal_options), view=view)
             self.journals[workspace] = binding
             self.journals[agent_workspace] = binding
             return agent_workspace
@@ -622,15 +648,17 @@ class SupervisorRuntime:
             capability.deadline, capability.request_id = None, ""
             capability.lock.release()
 
-    def run_executor(self, command, cwd, environment, capability):
+    def run_executor(self, command, cwd, environment, capability, *, deadline=None, request_id=None):
         from aka.light.execution.process import ExecutionControl
-        deadline = capability.deadline or (time.monotonic() + self.request_timeout_seconds)
+        deadline = deadline or capability.deadline or (time.monotonic() + self.request_timeout_seconds)
         return self.executor.run_gateway(command, cwd, environment, ExecutionControl(
-            deadline, capability.request_id, lambda: self._live(capability),
+            deadline, request_id or capability.request_id, lambda: self._live(capability),
             lambda: self._acquire(self.slots, capability, deadline), self.slots.release,
         ))
 
     def is_wiki_request(self, route, request):
+        if self.agent_resources is not None:
+            return False
         if route == "/v1/wiki/query":
             return True
         if route == "/v1/plugins/execute" and request.get("action") == "call":
@@ -660,6 +688,8 @@ class SupervisorRuntime:
     def execute(self, capability: Capability, route: str, request: dict, *,
                 reuse_completed=False, reuse_correctness=False, candidate_source: bytes | None = None,
                 execution_timeout: int | None = None, reference_snapshot: Path | None = None) -> dict:
+        if self.agent_resources is not None and route == "/v1/wiki/query":
+            return self._execute_core_wiki_compat(capability, request)
         if route == "/v1/plugins/execute":
             return self.execute_plugin(capability, request)
         if route == "/v1/journal/execute":
@@ -902,6 +932,25 @@ class SupervisorRuntime:
             if not isinstance(request["tool"], str):
                 raise ValueError("tool must be a catalog name")
             tool = self.plugins.validate_call(request["tool"], request["input"])
+        if self.agent_resources is not None:
+            result = self.plugins.call_result(
+                request["tool"], request["input"], capability.workspace,
+                cwd=capability.workspace,
+                executor=lambda entrypoint, value, context, timeout, **kwargs: self._run_core_entry(
+                    capability, request["tool"], entrypoint, value, context, timeout,
+                    cwd=kwargs.get("cwd") or capability.workspace,
+                    env_extra={
+                        **(context.get("environment", {}) if isinstance(context, dict) else {}),
+                        **(kwargs.get("env_extra") or {}),
+                    },
+                    python_paths=kwargs.get("python_paths", ()),
+                ),
+            )
+            receipt = result.get("receipt", {})
+            status = receipt.get("status") if isinstance(receipt, dict) else None
+            exit_code = 0 if status == "ok" else (75 if status in {"tool_cancelled", "tool_timeout"} else 1)
+            return {"exit_code": exit_code,
+                    "stdout": json.dumps(result, ensure_ascii=False) + "\n", "stderr": ""}
         if tool.get("runtime_tool") == "wiki-query":
             # Reuse the existing scoped, bounded Wiki executor and private audit.
             value = request["input"]
@@ -948,6 +997,154 @@ class SupervisorRuntime:
                 raise RuntimeError("Plugin execution failed; inspect private request diagnostics")
             rendered = project_plugin_output(request["tool"], tool["output_schema"], process.stdout)
             return {"exit_code": 0, "stdout": rendered, "stderr": ""}
+
+    def _run_core_entry(self, capability, tool_name, entrypoint, value, context, timeout, *,
+                        env_extra=None, cwd=None, python_paths=()):
+        """Run one Core tool stage inside Light's cancellable process group."""
+        from aka.resources import ResourcesError
+
+        call_id = context.get("call_id", "") if isinstance(context, dict) else ""
+        stage = "extract" if isinstance(value, dict) and "result" in value else "tool"
+        now = time.monotonic()
+        light_deadline = capability.deadline or (now + self.request_timeout_seconds)
+        deadline = min(light_deadline, now + float(timeout))
+        if not self._live(capability):
+            raise ResourcesError("tool_cancelled", "Light Session was cancelled")
+        if deadline <= now:
+            raise ResourcesError("tool_timeout", "Core tool exceeded its execution deadline")
+
+        with tempfile.TemporaryDirectory(dir=self.root, prefix="core-tool-") as temporary:
+            staged = Path(temporary)
+            request_path = staged / "request.json"
+            paths = [str(path) for path in python_paths if isinstance(path, (str, Path)) and str(path)]
+            publish(staged, "request.json", json.dumps({
+                "entrypoint": entrypoint, "input": value, "context": context,
+                "python_paths": list(dict.fromkeys(paths)),
+            }, ensure_ascii=False, allow_nan=False).encode())
+            environment = scrub_environment(self.environment)
+            environment.update(capability.context)
+            if env_extra:
+                environment.update(env_extra)
+            # Ignore cwd, PYTHONPATH, user site configuration and sitecustomize
+            # from the Agent workspace. Only the binding's frozen launch paths
+            # and trusted host paths are inserted by the private shim.
+            environment.pop("PYTHONPATH", None)
+            environment["PYTHONIOENCODING"] = "utf-8"
+            runner = (
+                "import json,runpy,sys; "
+                "request=json.load(open(sys.argv[1], encoding='utf-8')); "
+                "sys.path[:0]=request['python_paths']; "
+                "sys.stdin=open(sys.argv[1], encoding='utf-8'); "
+                "runpy.run_module('aka.resources.runner', run_name='__main__')"
+            )
+            try:
+                process = self.run_executor(
+                    [sys.executable, "-I", "-c", runner, str(request_path)],
+                    Path(cwd or capability.workspace), environment, capability,
+                    deadline=deadline,
+                    request_id=f"{call_id}:{stage}" if call_id else f"{tool_name}:{stage}",
+                )
+            except SessionRevokedError as error:
+                raise ResourcesError("tool_cancelled", "Light Session was cancelled") from error
+            except RequestDispatchTimeout as error:
+                if not self._live(capability):
+                    raise ResourcesError("tool_cancelled", "Light Session was cancelled") from error
+                raise ResourcesError("tool_timeout", "Core tool did not start before its deadline") from error
+            except GatewayExecutionUnavailable as error:
+                if not self._live(capability):
+                    raise ResourcesError("tool_cancelled", "Light Session was cancelled") from error
+                if time.monotonic() >= deadline:
+                    raise ResourcesError("tool_timeout", "Core tool exceeded its execution deadline") from error
+                raise ResourcesError("tool_failed", "Core tool execution was interrupted") from error
+            except Exception as error:
+                raise ResourcesError("tool_failed", "Core tool execution failed") from error
+            self.audit_process(capability, "core-tool", [tool_name, entrypoint, stage], process)
+            if process.returncode:
+                raise ResourcesError("tool_failed", "Core tool entrypoint failed")
+            try:
+                result = json.loads(process.stdout)
+            except (TypeError, ValueError) as error:
+                raise ResourcesError("invalid_output", "Core tool entrypoint returned invalid JSON") from error
+            if not self._live(capability):
+                raise ResourcesError("tool_cancelled", "Light Session was cancelled")
+            return result, ""
+
+    def _execute_core_wiki_compat(self, capability, request):
+        """Preserve query_nl's raw CLI projection without opening legacy stores."""
+        with _validating_request():
+            if set(request) != {"tool", "argv"}:
+                raise ValueError("Wiki request must contain tool and argv")
+            if request.get("tool") != "query_nl":
+                raise AgentRequestError(
+                    "This legacy Wiki command is not available in the selected Core profile.",
+                    code="tool_not_found", repairable=False,
+                    next_action="Use python3 tools/plugin.py list and call an enabled Core Wiki tool.",
+                )
+            argv = validated_argv(request["argv"])
+            values: dict[str, object] = {}
+            query_parts = []
+            query_file = None
+            index = 0
+            while index < len(argv):
+                item = argv[index]
+                if item == "--":
+                    raise ValueError("Wiki requests do not accept a '--' option terminator")
+                option, equals, inline = item.partition("=")
+                key = {"--max-records": "max_records", "--max-bytes": "max_bytes",
+                       "--exclude": "exclude"}.get(option)
+                if key is not None:
+                    if equals:
+                        raw = inline
+                    else:
+                        index += 1
+                        raw = argv[index] if index < len(argv) else ""
+                    if not raw:
+                        raise ValueError(f"{option} requires a value")
+                    values[key] = int(raw) if key in {"max_records", "max_bytes"} else raw
+                elif option == "--file":
+                    if equals:
+                        raw = inline
+                    else:
+                        index += 1
+                        raw = argv[index] if index < len(argv) else ""
+                    if not raw or query_file is not None:
+                        raise ValueError("--file requires one workspace-relative file")
+                    query_file = read_input(capability.workspace, raw, limit=128 * 1024).decode("utf-8")
+                elif option == "--brief" and not equals:
+                    pass
+                elif item.startswith("-"):
+                    raise ValueError(f"Unsupported option for Core Wiki compatibility: {option}")
+                else:
+                    query_parts.append(item)
+                index += 1
+            if query_file is not None and query_parts:
+                raise ValueError("Use either query text or --file, not both")
+            query = query_file if query_file is not None else " ".join(query_parts)
+            if not query:
+                raise ValueError("Wiki query text is required")
+            values["request"] = query
+
+        tool_name = "gpu-wiki.query"
+        if not any(row.get("name") == tool_name for row in self.plugins.catalog()):
+            raise AgentRequestError(
+                "The selected Core profile does not enable the public GPU Wiki.",
+                code="tool_not_found", repairable=False,
+                next_action="Use python3 tools/plugin.py list and call an enabled Core Wiki tool.",
+            )
+        self.plugins.validate_call(tool_name, values)
+        response = self.execute_plugin(capability, {"action": "call", "tool": tool_name, "input": values})
+        result = json.loads(response["stdout"])
+        receipt = result.get("receipt", {})
+        if receipt.get("status") != "ok":
+            diagnostics = result.get("diagnostics", [])
+            message = diagnostics[0].get("message", "Core Wiki query failed") if diagnostics else "Core Wiki query failed"
+            status = receipt.get("status")
+            return {"exit_code": 75 if status in {"tool_cancelled", "tool_timeout"} else 1,
+                    "stdout": "", "stderr": str(message)[:2000]}
+        output = json.dumps(result.get("data"), ensure_ascii=False) + "\n"
+        if len(output.encode("utf-8")) > MAX_OUTPUT_BYTES:
+            return {"exit_code": 1, "stdout": "", "stderr": "Core Wiki result exceeds the Light output limit"}
+        return {"exit_code": 0, "stdout": output, "stderr": ""}
 
     def _wiki_command(self, capability, tool, argv, staged, environment):
         if not self.config.wiki_enabled:

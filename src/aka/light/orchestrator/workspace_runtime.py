@@ -134,6 +134,13 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     if plugin_registry is None:
         from .plugins import PluginRegistry
         plugin_registry = PluginRegistry()
+    managed_paths = ()
+    managed = getattr(plugin_registry, "managed_paths", None)
+    is_core_projection = callable(managed)
+    if is_core_projection:
+        managed_paths = tuple(managed())
+        from aka.light.workspace.sources import register_managed_paths
+        register_managed_paths(workspace, managed_paths)
     names = ["gpu-measurement", "runtime-records", "autonomous-gpu-kernel-timeline"]
     if any(plugin.id == "gpu-wiki" for plugin in plugin_registry.plugins):
         names.append("KernelWiki")
@@ -149,7 +156,29 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
             if name == "runtime-records" and not research_records and filename != "references/records.md":
                 source = REPO_ROOT / "skills/runtime-report" / filename
             publish(workspace, f"skills/{name}/{filename}", source.read_bytes())
-    names.extend(plugin_registry.install_agent_skills(workspace))
+    installed_plugin_skills = plugin_registry.install_agent_skills(workspace)
+    names.extend(installed_plugin_skills)
+    # Core Wiki Skills are host-neutral; Light Agents use the capability bridge
+    # instead of Legacy's resources CLI. Rewrite only these selected Skill files
+    # in the Light projection, leaving the packaged Core source unchanged.
+    for name in (installed_plugin_skills if is_core_projection else ()):
+        skill_file = workspace / "skills" / name / "SKILL.md"
+        if name not in {"KernelWiki", "InternalKernelWiki"} or not skill_file.is_file():
+            continue
+        from .session_tail import read_regular_bytes
+        content = read_regular_bytes(skill_file, limit=1024 * 1024).decode("utf-8")
+        content = content.replace(
+            "python -m aka.legacy.resources.cli list",
+            "python3 tools/plugin.py list",
+        )
+        content = content.replace(
+            "python -m aka.legacy.resources.cli call ",
+            "python3 tools/plugin.py call ",
+        )
+        content = content.replace(
+            "--input request.json", "--input scratch/wiki_request.json"
+        )
+        publish(workspace, f"skills/{name}/SKILL.md", content.encode("utf-8"))
     for backend in (".claude", ".qoder", ".agents"):
         _remove_legacy_link(workspace / backend / "agents")
         root = workspace / backend / "skills"
@@ -176,11 +205,12 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
         existing = read_regular_bytes(gi, limit=1024 * 1024).decode()
     except FileNotFoundError:
         existing = ""
-    ignores = ("/tools", "/skills", "/reference", "/reference-projects", "/gpu-wiki", "/.claude", "/.qoder", "/.agents", "/" + STALL_STATE_FILE)
+    ignores = ("/tools", "/skills", "/reference", "/reference-projects", "/gpu-wiki", "/.claude", "/.qoder", "/.agents", "/.aka", "/.atrex_plugins", "/" + STALL_STATE_FILE)
     # Preserve the committed ignore file of resumed SOL workspaces, which never
     # installed Atrex-Bench. Episode-boundary dirty checks must remain strict.
     if atrex_bench_root is not None:
         ignores += ("/atrex-bench",)
+    ignores += tuple("/" + path.rstrip("/") for path in managed_paths)
     missing = [name for name in ignores if name not in existing.splitlines()]
     if missing:
         publish(workspace, ".gitignore", (existing.rstrip() + "\n" + "\n".join(missing) + "\n").encode())

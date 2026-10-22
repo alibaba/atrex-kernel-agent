@@ -79,3 +79,38 @@ the canonical repository or its registered episode worktrees. Shared Wiki data
 is borrowed and is never deleted by disposal. New resource-bound checkpoints use
 Workflow checkpoint v2; legacy checkpoint v1 and continuation v1/v2 readers remain
 separate. Keep the original matching engine and artifacts for existing campaigns.
+
+## Light
+
+Install `atrex-aka-light` with the matching runtime distributions. Light uses the
+same Core host and Wiki plugin; the Supervisor retains the frozen plan and data.
+The Agent receives copied Skills, phase instructions, a tool catalog and a scoped
+HTTP capability. Tool execution and reference extraction share Light's process
+group, execution slot, request deadline and cancellation control. Runtime plans,
+host resource paths and credentials are excluded from Agent projections.
+
+The public `light.json` and `light-sandbox.json` defaults select public Wiki.
+Select the no-Wiki profile without installing the Wiki package or data:
+
+```sh
+LIGHT_PROFILES="$(python -c 'from importlib.resources import files; print(files("aka.light").joinpath("profiles"))')"
+aka run --profile "$LIGHT_PROFILES/light-no-wiki.json" \
+  --var "repo_root=/opt/aka" --check --
+aka run --profile "$LIGHT_PROFILES/light-public-wiki.json" \
+  --var "repo_root=/opt/aka/public-resources" --check --
+```
+
+The internal distribution supplies the corresponding no/public/internal/both
+profiles and retains both Wiki providers as its default. The selected Agent
+sandbox is independent of Wiki selection. Inside a Light session use
+`python3 tools/plugin.py list` and
+`python3 tools/plugin.py call gpu-wiki.query --input scratch/request.json`.
+Calls return the complete `aka.tool-result.v1` envelope. Journal experiments
+accept generic `attribution` declarations verified against the Supervisor's
+campaign receipts and retain the old Wiki fields as a compatibility projection.
+
+Frozen launch recovery uses the original code/data and selection. Light's own
+Episode Journal and sealed candidate recovery remain authoritative; this bridge
+does not add Legacy Agent session checkpoint export to Light. Existing manifest
+integrations can select `light-legacy-resources.json`; Core mode does not mix an
+independently discovered manifest registry into the selected tool catalog.
