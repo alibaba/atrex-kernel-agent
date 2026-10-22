@@ -109,7 +109,7 @@ class LightWorkflow:
             raise ValueError("light Workflow deterministic V0 requires native Atrex-Bench or SOL; use legacy for custom setup")
         evaluation = self._evaluation_settings(request)
         campaign = ManagedCampaign.create(request, problem, self, evaluation)
-        from aka.legacy.execution.campaign_runtime import CampaignExecution
+        from aka.legacy.workflow.campaign_execution import CampaignExecution
         campaign.execution = CampaignExecution(evaluation)
         if self.workflow_observer is not None:
             try:

@@ -4,7 +4,7 @@ import argparse, json, os, re, sys
 from pathlib import Path
 from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S, GATEWAY_CANDIDATE_RECOVERY_MODES
 from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT, MAX_SANDBOX_TIMEOUT
-from aka.legacy.execution.recovery import DEFAULT_SSH_HEALTH_COMMAND
+from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND
 from aka.legacy.task.hardware import _workspace_slug
 from aka.legacy.workflow.policy import OPTIMIZATION_MODE_CHOICES
 from aka.legacy.agent.adapter import codex_settings_args, pi_settings_args

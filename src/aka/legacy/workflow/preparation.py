@@ -23,7 +23,7 @@ def prepare_request(launch, problem, *, frozen=False):
     settings, runtime = request.settings, request.runtime
     hardware = runtime.hardware or settings.platform
     base = launch.workspace_base
-    from aka.legacy.execution.configuration import prepare_runtime
+    from .runtime_preparation import prepare_runtime
     arch, endpoint = prepare_runtime(launch, problem)
     suffix = launch.workspace_suffix or (framework_workspace_suffix(
         settings.framework, settings.platform, settings.optimization_mode) if settings.framework else "")

@@ -1,4 +1,4 @@
-"""Map retained sandbox settings to invocation environment for Workflow."""
+"""Workflow host for Agent sessions and campaign execution instructions."""
 
 from aka.legacy.agent.session import run_session
 from aka.legacy.execution.sandbox import sandbox_directive, fast_sandbox_directive
@@ -9,7 +9,7 @@ class CampaignExecution:
         self.settings = settings
         from aka.legacy.execution.configuration import selected_ssh, legacy_settings
         self.uses_ssh = selected_ssh()
-        from .selection import selected_execution
+        from aka.legacy.execution.selection import selected_execution
         self.connection = legacy_settings() if selected_execution().get("profile", "legacy") == "legacy" else None
 
     def environment(self):

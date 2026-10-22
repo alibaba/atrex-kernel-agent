@@ -25,7 +25,7 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                                 workflow_observer=workflow_observer)
 
     def execution(campaign):
-        from aka.legacy.execution.campaign_runtime import CampaignExecution
+        from aka.legacy.workflow.campaign_execution import CampaignExecution
         return CampaignExecution(campaign.services.settings)
 
     dependencies = CampaignDependencies(

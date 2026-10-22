@@ -5,7 +5,8 @@ import sys
 
 from aka.legacy.execution.selection import execution_scope
 from aka.legacy.workflow.process_environment import invocation_environment, use_launch_environment
-from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked, launch_recovery_monitor, signal_restart_ready
+from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked
+from .recovery_runtime import launch_recovery_monitor, signal_restart_ready
 from aka.legacy.workflow.trace_retention import write_trace_retention_manifest
 from .invocation import decode_launch
 from .preparation import prepare_request
