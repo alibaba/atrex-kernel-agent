@@ -38,6 +38,7 @@ class GatewayCommandEvaluator:
                    "evaluator": evaluator, "measurement": None}
         if command.operation == "preflight" or not (evaluator or kind == "profile"):
             context["kind"] = "dev"
+            command = replace(command, operation="run") if command.operation == "auto" else command
             return PreparedEvaluation((command,), 1, context)
         reference = Path(environment.get("ATREX_PRIVATE_REFERENCE_DIR") or command.workspace)
         # Validate public/private association before any submission.
