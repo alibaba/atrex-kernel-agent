@@ -90,6 +90,13 @@ class WorkflowServices:
         from aka.legacy.execution.binding import task_environment
         return task_environment(self.evaluation_input().worker_requirements)
 
+    def _measurement_environment(self):
+        import os
+        environment = {**os.environ, **self.task_environment()}
+        if self.campaign.private_reference_dir is not None:
+            environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(self.campaign.private_reference_dir)
+        return environment
+
     def create_evaluator(self):
         s = self.settings
         from aka.legacy.execution.configuration import selected_ssh
@@ -101,6 +108,7 @@ class WorkflowServices:
                 max_parallelism=1 if selected_ssh() else 4,
                 private_reference_dir=self.campaign.private_reference_dir,
                 native=bool(self.campaign.atrex_bench_root),
+                hardware=s.hardware, environment=self._measurement_environment(),
             ),
             candidate_workspace=self.campaign.candidate_workspace,
             evaluation_input=self.evaluation_input(),
@@ -153,7 +161,7 @@ class WorkflowServices:
     def sandbox_command(self, command):
         import shlex
         import sys
-        argv = [sys.executable, "-m", "aka.legacy.execution.cli", "--kind", "run"]
+        argv = [sys.executable, "-m", "aka.legacy.experiment.cli", "--kind", "run"]
         if self.settings.hardware:
             argv += ["--hardware", self.settings.hardware]
         return shlex.join([*argv, "--no-sync", "--", *command])

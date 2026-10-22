@@ -227,9 +227,20 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
 
 
 def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
-              cancel_event=None, spawn=None, check_environment=lambda: None):
+              cancel_event=None, spawn=None, check_environment=lambda: None, input_payload=None):
     """Return operational failures with cleanup evidence; preserve host interrupts."""
     channel = FactChannel()
+    import tempfile
+    from .gateway.returned_files import FILES_FD, read as read_files
+    returned = tempfile.TemporaryFile()
+    payload = tempfile.TemporaryFile() if input_payload is not None else None
+    if payload is not None:
+        payload.write(input_payload)
+        payload.seek(0)
+        argv = [*argv]
+        position = argv.index("--") if "--" in argv else len(argv)
+        argv[position:position] = ["--prepared-request-fd", str(payload.fileno())]
+    descriptors = (channel.writer, returned.fileno()) + ((payload.fileno(),) if payload is not None else ())
     process = None
     stdout = stderr = ""
     status = None
@@ -240,16 +251,17 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
     try:
         check_environment()
         if cancel_event is not None and cancel_event.is_set():
+            returned.close()
             return JobResult(1, resource=resource, hardware=hardware, transport_status="cancelled",
                 facts=ExecutionFacts("not_submitted", cancellation_requested=True,
                     local_stopped=True, cleanup="not_required", basis=("cancelled-before-spawn",)))
-        environment = {**environment, FACTS_FD: str(channel.writer)}
+        environment = {**environment, FACTS_FD: str(channel.writer), FILES_FD: str(returned.fileno())}
         options = dict(cwd=str(workspace), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                        text=True)
         if spawn is None:
-            process = subprocess.Popen(argv, env=environment, start_new_session=True, pass_fds=(channel.writer,), **options)
+            process = subprocess.Popen(argv, env=environment, start_new_session=True, pass_fds=descriptors, **options)
         else:
-            process = spawn(argv, role="sandbox", environment=environment, inherited_descriptors=(channel.writer,), **options)
+            process = spawn(argv, role="sandbox", environment=environment, inherited_descriptors=descriptors, **options)
         deadline = time.monotonic() + timeout
         while True:
             if cancel_event is not None and cancel_event.is_set():
@@ -292,11 +304,22 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
                     cleanup = "failed"
                     cleanup_errors.append(ExecutionDiagnostic("cleanup", type(fallback).__name__))
         channel.close()
+        if payload is not None:
+            payload.close()
     code = process.returncode if process is not None and process.returncode is not None else 1
     result = captured_result(subprocess.CompletedProcess(argv, code, stdout, stderr),
         resource=resource, hardware=hardware, records=channel.records, status=status,
         cancelled=cancelled, cleanup=cleanup, cleanup_errors=cleanup_errors,
         local_stopped=process is None or process.poll() is not None, decode_output=False)
+    try:
+        try:
+            result = replace(result, files=read_files(returned))
+        except (ValueError, KeyError, TypeError):
+            result = replace(result, diagnostics=(*result.diagnostics,
+                ExecutionDiagnostic("protocol", "invalid-returned-files")), transport_status="protocol",
+                transport_returncode=result.returncode or 2)
+    finally:
+        returned.close()
     if process is None:
         result = replace(result, facts=replace(result.facts, disposition="not_submitted"))
     if interruption is not None:

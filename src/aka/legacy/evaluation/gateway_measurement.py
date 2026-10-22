@@ -1,7 +1,7 @@
 """Measurement policy for the retained typed/dev CLI adapter.
 
 Execution supplies raw typed receipts in planned batch order. This adapter owns
-shape slicing, scoring, privacy and measurement records, and never submits jobs.
+shape slicing, scoring and privacy, and never submits jobs or writes records.
 The legacy CLI input inference remains a separate compatibility boundary.
 """
 from pathlib import Path
@@ -9,8 +9,7 @@ from typing import Any
 
 from .transport_results import (
     _request_shape_ids, _shape_batches, _shape_batch_request, _shape_batch_reference,
-    _optimizer_result_from_eval, _merge_optimizer_results, _record_episode_evaluation,
-    _record_result_lines, _with_workspace_performance_score, _hydrate_result_lines,
+    _optimizer_result_from_eval, _merge_optimizer_results, _with_workspace_performance_score, _hydrate_result_lines,
     _public_numerical_result_line, _hydrate_abba_result_lines,
     TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX,
 )
@@ -29,8 +28,8 @@ class GatewayMeasurement:
         return (_shape_batch_request(self.request, self.batches[index])
                 if len(self.batches) > 1 else self.request)
 
-    def write_reference(self, index, directory):
-        _shape_batch_reference(self.request_for(index)["reference"], directory)
+    def reference_content(self, index):
+        return _shape_batch_reference(self.request_for(index)["reference"])
 
     def interpret(self, jobs):
         if len(jobs) != len(self.batches):
@@ -44,8 +43,6 @@ class GatewayMeasurement:
             require_performance=performance, hardware=self.hardware)
             if len(results) > 1 else results[0])
         result = _mask_generalized_result(self.workspace, result, private=self.private)
-        _record_episode_evaluation(self.workspace, result, gateway_kind="run",
-            job_id=",".join(str(job.get("job_id")) for job in jobs))
         return result
 
 
@@ -53,7 +50,6 @@ def prepare_dev_output(workspace, stdout, *, evaluator, private):
     if evaluator:
         stdout = _hydrate_abba_result_lines(workspace, stdout)
         stdout = _hydrate_result_lines(workspace, stdout)
-        _record_result_lines(workspace, stdout, gateway_kind="dev")
     if private:
         stdout = "\n".join(
             _public_numerical_result_line(line) if line.startswith(NUMERICAL_RESULT_PREFIX) else line

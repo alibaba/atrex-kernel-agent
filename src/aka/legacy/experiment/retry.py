@@ -8,7 +8,7 @@ from aka.legacy.execution.transport import InfrastructureUnavailable
 import hashlib
 import json
 from pathlib import Path
-from aka.legacy.task.durable import durable_write_json
+from aka.legacy._filesystem import durable_write_json
 
 
 POLL_SECONDS = 30 * 60

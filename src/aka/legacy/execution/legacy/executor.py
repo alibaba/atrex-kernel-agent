@@ -18,7 +18,7 @@ class LegacyExecutor:
     sandbox_cli_options = True
     sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
-        operations=frozenset(("auto", "run", "profile", "dev", "preflight")), cancellation=True,
+        operations=frozenset(("auto", "run", "profile", "dev", "preflight")), cancellation=True, prepared_requests=True,
     )
     resource_identity = ResourceIdentity("legacy")
 
@@ -43,7 +43,7 @@ class LegacyExecutor:
             timeout=command.timeout, environment=command.environment, hardware=command.hardware,
             sync=command.artifacts,
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
-            preflight=command.operation == "preflight", cancel_event=command.cancel_event)
+            preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus)
         return self._run_sandbox(request, hooks=self.hooks)
 
     def _run_sandbox(self, request: SandboxRequest, *, hooks: ExecutionHooks) -> JobResult:
@@ -91,7 +91,7 @@ class LegacyExecutor:
                 cmd += ["--sync", path]
         else:
             cmd.append("--no-sync")
-        cmd += current_transport_arguments()
+        cmd += ["--num-gpus", str(request.num_gpus), *current_transport_arguments()]
         if preflight:
             cmd.append("--preflight")
         else:
@@ -109,4 +109,5 @@ class LegacyExecutor:
         from aka.legacy.execution.outcomes import run_owned
         return run_owned(cmd, environment=environment, workspace=workspace,
             timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
-            cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment)
+            cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment,
+            input_payload=request.submission)

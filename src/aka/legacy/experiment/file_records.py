@@ -16,7 +16,7 @@ import uuid
 
 from aka.contracts.execution import (
     ExecutionAttempt, ExecutionDiagnostic, ExecutionFacts, JobResult,
-    ResourceIdentity,
+    ResourceIdentity, ExecutionFileReceipt,
 )
 from aka.contracts.experiment import (
     ExperimentArtifact, ExperimentAttempt, ExperimentFailure, ExperimentRecord,
@@ -46,6 +46,7 @@ def _job(value):
     if value is None:
         return None
     data = dict(value)
+    data["file_receipts"] = tuple(ExecutionFileReceipt(**item) for item in data.get("file_receipts", ()))
     data["resource"] = ResourceIdentity(**data["resource"]) if data["resource"] else None
     facts = dict(data["facts"])
     facts["cleanup_diagnostics"] = tuple(map(_diagnostic, facts["cleanup_diagnostics"]))
@@ -255,7 +256,8 @@ class FileExperimentRecords:
                       for index, command in enumerate(commands))
         # Environment values affect identity but are not persisted as credentials.
         plan = [{**step.as_dict(), "environment_digest": _digest(dict(command.environment)),
-                 "artifacts": list(command.artifacts)} for step, command in zip(steps, commands)]
+                 "artifacts": list(command.artifacts), "num_gpus": command.num_gpus, "submission_sha256":
+                 hashlib.sha256(command.submission).hexdigest() if command.submission is not None else None} for step, command in zip(steps, commands)]
         identity = {"steps": plan, "inputs": [
             {"path": item.path, "sha256": hashlib.sha256(item.content).hexdigest(),
              "mode": item.mode, "content_type": item.content_type} for item in inputs

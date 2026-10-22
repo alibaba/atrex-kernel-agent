@@ -82,21 +82,12 @@ def _shape_batch_request(
     return batched
 
 
-def _shape_batch_reference(reference: dict[str, Any], destination: Path) -> None:
-    destination.mkdir()
-    for filename, field in (
-        ("reference.py", "reference_py"),
-        ("input.py", "input_py"),
-        ("shapes.json", "shapes"),
-        ("metadata.json", "metadata"),
-        ("roofline.json", "roofline"),
-    ):
-        value = reference.get(field)
-        if value is not None:
-            (destination / filename).write_text(
-                value if isinstance(value, str) else json.dumps(value),
-                encoding="utf-8",
-            )
+def _shape_batch_reference(reference):
+    """Return frozen reference file content without filesystem effects."""
+    return {filename: (value if isinstance(value, str) else json.dumps(value)).encode("utf-8")
+            for filename, field in (("reference.py", "reference_py"), ("input.py", "input_py"),
+                ("shapes.json", "shapes"), ("metadata.json", "metadata"), ("roofline.json", "roofline"))
+            if (value := reference.get(field)) is not None}
 
 
 def _compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]:
@@ -533,67 +524,6 @@ def _merge_optimizer_results(
         merged["evaluation_failure"] = evaluation_failure
     return merged
 
-
-def _record_episode_evaluation(
-    workspace: Path,
-    result: dict[str, Any],
-    *,
-    gateway_kind: str,
-    job_id: object = None,
-) -> None:
-    """Persist exact optimizer-facing results for terminal memory construction.
-
-    Long-horizon workers use ``--no-memory`` because canonical memory belongs to the
-    supervisor.  Keep their complete evaluator results in excluded episode runtime
-    state so a pivot or interruption can still record this round's real per-shape
-    performance without parsing model-authored journal prose.
-    """
-    runtime = workspace / ".atrex_long_horizon"
-    if not (runtime / "journal.json").is_file():
-        return
-    try:
-        kernel_sha256 = hashlib.sha256(
-            (workspace / "kernel.py").read_bytes()
-        ).hexdigest()
-    except OSError:
-        kernel_sha256 = None
-    manifest = workspace / "solution.json"
-    solution_sha256 = (
-        hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.exists() else None
-    )
-    payload = {
-        "schema_version": 3,
-        "solution_sha256": solution_sha256,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "gateway_kind": gateway_kind,
-        "job_id": str(job_id) if job_id else None,
-        "kernel_sha256": kernel_sha256,
-        "result": result,
-    }
-    path = workspace / EPISODE_EVALUATIONS_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode(
-        "utf-8"
-    )
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.write(descriptor, line)
-    finally:
-        os.close(descriptor)
-
-
-def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> None:
-    """Record the last ordinary RESULT_JSON emitted by a dev evaluator command."""
-    for line in reversed(stdout.splitlines()):
-        if not line.startswith(TEST_RESULT_PREFIX):
-            continue
-        try:
-            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
-        except json.JSONDecodeError:
-            return
-        if isinstance(result, dict):
-            _record_episode_evaluation(workspace, result, gateway_kind=gateway_kind)
-        return
 
 
 def _positive_number(value: object) -> float | None:

@@ -23,17 +23,26 @@ class CommandSpec:
     artifacts: tuple[str, ...] = ()
     operation: str = "run"
     cancel_event: Cancellation | None = None
+    submission: bytes | None = field(default=None, repr=False)
+    num_gpus: int = 1
 
 
 @dataclass(frozen=True)
 class BackendCapabilities:
     operations: frozenset[str] = frozenset(("run",))
     cancellation: bool = False
+    prepared_requests: bool = False
 
     def require(self, command: CommandSpec) -> None:
         if type(command.timeout) is not int or command.timeout <= 0:
             raise UnsupportedExecution("execution timeout must be a positive integer")
-        if not command.command and command.operation != "preflight":
+        if command.submission is not None and not self.prepared_requests:
+            raise UnsupportedExecution("executor does not support prepared requests")
+        if type(command.num_gpus) is not int or command.num_gpus < 1:
+            raise UnsupportedExecution("execution GPU count must be positive")
+        if command.submission is not None and not isinstance(command.submission, bytes):
+            raise UnsupportedExecution("prepared submission must be immutable bytes")
+        if not command.command and command.submission is None and command.operation != "preflight":
             raise UnsupportedExecution("execution command must contain argv")
         if command.operation not in self.operations:
             raise UnsupportedExecution(f"unsupported execution operation: {command.operation}")
@@ -128,6 +137,39 @@ class ExecutionBinder(Protocol):
 
 
 @dataclass(frozen=True)
+class ExecutionFile:
+    """Retrieved workspace-relative content; the caller owns publication."""
+    path: str
+    content: bytes = field(repr=False)
+    mode: int = 0o600
+
+    def __post_init__(self):
+        path = Path(self.path)
+        if not self.path or path.is_absolute() or ".." in path.parts or path == Path("."):
+            raise ValueError("execution file requires a workspace-relative path")
+        if not isinstance(self.content, bytes):
+            raise TypeError("execution file content must be immutable bytes")
+        if type(self.mode) is not int or not 0 <= self.mode <= 0o777:
+            raise ValueError("invalid execution file permissions")
+
+
+@dataclass(frozen=True)
+class ExecutionFileReceipt:
+    path: str
+    mode: int
+    size_bytes: int
+    sha256: str
+
+    def __post_init__(self):
+        import re
+        path = Path(self.path)
+        if path.is_absolute() or ".." in path.parts or path == Path("."):
+            raise ValueError("file receipt requires a workspace-relative path")
+        if type(self.size_bytes) is not int or self.size_bytes < 0 or re.fullmatch(r"[0-9a-f]{64}", self.sha256) is None:
+            raise ValueError("invalid file receipt integrity metadata")
+
+
+@dataclass(frozen=True)
 class JobResult:
     """Captured transport output; a command exit code may remain unknown."""
 
@@ -143,10 +185,17 @@ class JobResult:
     diagnostics: tuple[ExecutionDiagnostic, ...] = ()
     hardware: str = ""
     environment_identity: str | None = None
+    files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
+    file_receipts: tuple[ExecutionFileReceipt, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "attempts", tuple(self.attempts))
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
+        object.__setattr__(self, "files", tuple(self.files))
+        import hashlib
+        receipts = tuple(ExecutionFileReceipt(item.path, item.mode, len(item.content),
+                         hashlib.sha256(item.content).hexdigest()) for item in self.files)
+        object.__setattr__(self, "file_receipts", receipts or tuple(self.file_receipts))
 
     def as_dict(self) -> dict:
         """Return independent JSON-compatible facts for explicit archival."""
@@ -158,7 +207,9 @@ class JobResult:
             if isinstance(value, tuple):
                 return [encode(item) for item in value]
             return value
-        return encode(self)
+        value = encode(self)
+        value.pop("files", None)
+        return value
 
     @property
     def primary_diagnostic(self) -> ExecutionDiagnostic | None:

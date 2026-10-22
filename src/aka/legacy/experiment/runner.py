@@ -29,6 +29,7 @@ class LegacyExperiment:
         stage: Callable[[EvaluationRequest, int, CommandSpec], str] | None = None,
         records=None,
         purpose: str = "development",
+        command_evaluator=None,
     ):
         self.executor = executor
         self.evaluator = evaluator
@@ -37,6 +38,10 @@ class LegacyExperiment:
         self.stage = stage
         self.records = records
         self.purpose = purpose
+        if command_evaluator is None:
+            from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
+            command_evaluator = GatewayCommandEvaluator()
+        self.command_evaluator = command_evaluator
         if purpose not in {"development", "formal"}:
             raise ValueError("unsupported experiment purpose")
         if retry is not None and stage is None:
@@ -46,7 +51,7 @@ class LegacyExperiment:
         if self.records is not None:
             import uuid
             return self._recorded(command, uuid.uuid4().hex)[1]
-        return self.executor.run(command)
+        return self._run_command(command)
 
     def run(self, request: EvaluationRequest) -> VerificationResult:
         if self.records is not None:
@@ -79,10 +84,11 @@ class LegacyExperiment:
             import hashlib
             import json
             return {"workspace": str(request.workspace.resolve()), "argv": list(request.command),
-                    "operation": request.operation, "timeout": request.timeout, "hardware": request.hardware,
+                    "operation": request.operation, "timeout": request.timeout, "hardware": request.hardware, "num_gpus": request.num_gpus,
                     "artifacts": list(request.artifacts), "environment_keys": sorted(request.environment),
                     "environment_digest": hashlib.sha256(json.dumps(dict(request.environment),
-                        sort_keys=True).encode()).hexdigest(), "cancellation": request.cancel_event is not None}
+                        sort_keys=True).encode()).hexdigest(), "cancellation": request.cancel_event is not None, "submission_sha256":
+                    hashlib.sha256(request.submission).hexdigest() if request.submission is not None else None}
         data = asdict(request)
         data.pop("experiment_ref", None)
         for name in ("workspace", "canonical_workspace"):
@@ -106,14 +112,7 @@ class LegacyExperiment:
                 raise ExperimentRecordError("experiment_incomplete", ref)
             try:
                 if isinstance(request, CommandSpec):
-                    records.prepared(ref, (request,))
-                    attempt_id = records.intent(ref, 0)
-                    try:
-                        result = self.executor.run(request)
-                    except BaseException as error:
-                        records.observed(ref, attempt_id, error=error)
-                        raise
-                    records.observed(ref, attempt_id, result=result)
+                    result = self._run_command(request, records=records, ref=ref)
                     for relative in request.artifacts:
                         artifact_path = Path(relative)
                         if artifact_path.is_absolute() or ".." in artifact_path.parts:
@@ -123,9 +122,21 @@ class LegacyExperiment:
                             raise ValueError("experiment artifact escapes its workspace")
                         if path.is_file():
                             records.publish(ref, path, "command")
+                        elif path.is_dir() and any(item.path.startswith(relative.rstrip("/") + "/") for item in result.files):
+                            pass
                         else:
                             records.artifact_missing(ref)
-                    record = records.completed(ref)
+                    from aka.legacy.evaluation.evaluator import result_from_stdout
+                    evaluation = None
+                    try:
+                        payload = result_from_stdout(result.stdout)
+                    except (RuntimeError, json.JSONDecodeError):
+                        pass
+                    else:
+                        evaluation = VerificationResult("PASS" if payload.get("all_pass") else "FAIL",
+                            payload.get("latency_us_geomean"), None, None, experiment_ref=ref).as_dict()
+                        records.publish_content(ref, json.dumps(payload, allow_nan=False).encode(), "evaluation")
+                    record = records.completed(ref, evaluation)
                     return record, result
                 if request.experiment_ref is not None and request.experiment_ref != ref:
                     raise ValueError("evaluation experiment reference mismatch")
@@ -166,6 +177,71 @@ class LegacyExperiment:
                     pass
                 raise
 
+    def _run_command(self, command, *, records=None, ref=None):
+        from .measurement_files import record_result_lines
+        evaluator = self.command_evaluator
+        prepared = evaluator.prepare(command)
+        if records is not None:
+            records.prepared(ref, (*prepared.steps, *prepared.fallback_steps))
+            for step in prepared.steps:
+                if step.submission is not None:
+                    records.publish_content(ref, step.submission, "evaluation_input")
+        commands = (*prepared.steps, *prepared.fallback_steps)
+        cancel = Event()
+        def attempt(index):
+            if cancel.is_set():
+                from concurrent.futures import CancelledError
+                raise CancelledError("experiment batch cancelled before submission")
+            attempt_id = records.intent(ref, index) if records is not None else None
+            try:
+                capabilities = getattr(self.executor, "capabilities", None)
+                if capabilities is not None:
+                    capabilities.require(commands[index])
+                result = self.executor.run(commands[index])
+            except BaseException as error:
+                if records is not None:
+                    records.observed(ref, attempt_id, error=error)
+                raise
+            if records is not None:
+                records.observed(ref, attempt_id, result=result)
+                for output in evaluator.observe_step(prepared, index, result).artifacts:
+                    records.publish_content(ref, output.content, output.role)
+            if not isinstance(prepared.context, dict) or prepared.context.get("kind") != "profile" or prepared.context.get("measurement") is None:
+                self._publish_files(command, result.files, records, ref)
+            elif records is not None:
+                for item in result.files:
+                    records.publish_content(ref, item.content, "execution_output")
+            try:
+                result.require_transport()
+            except BaseException:
+                cancel.set()
+                raise
+            return result
+        with ThreadPoolExecutor(max_workers=prepared.max_parallelism) as pool:
+            futures = [pool.submit(copy_context().run, attempt, index) for index in range(len(prepared.steps))]
+            results = tuple(future.result() for future in futures)
+        if evaluator.fallback(prepared, results):
+            results = tuple(attempt(len(prepared.steps) + index) for index in range(len(prepared.fallback_steps)))
+        result = evaluator.interpret(prepared, results)
+        if isinstance(prepared.context, dict) and prepared.context.get("measurement") is not None:
+            self._publish_files(command, result.files, records, ref)
+        if isinstance(prepared.context, dict) and prepared.context.get("evaluator"):
+            job_ids = ",".join(str(json.loads(item.stdout).get("job_id", "")) for item in results
+                if item.stdout.lstrip().startswith("{") and prepared.context["measurement"] is not None)
+            record_result_lines(command.workspace, result.stdout, gateway_kind=prepared.context["kind"], job_id=job_ids)
+        return result
+
+    def _publish_files(self, request, files, records, ref):
+        from aka.contracts.evaluation import PreparedEvaluation, PreparationFile
+        if not files:
+            return
+        prepared = PreparedEvaluation((), 1, None, inputs=tuple(
+            PreparationFile(item.path, item.content, item.mode) for item in files))
+        self._write_inputs(request, prepared, None, ref)
+        if records is not None:
+            for item in files:
+                records.publish_content(ref, item.content, "execution_output")
+
     def _run(self, request: EvaluationRequest, *, records=None, ref=None) -> VerificationResult:
         if self.evaluator is None:
             raise ValueError("evaluation requires an injected Evaluator")
@@ -175,7 +251,11 @@ class LegacyExperiment:
             raise ValueError("evaluation parallelism must be positive")
         self._write_inputs(request, prepared, records, ref)
         if records is not None:
-            records.prepared(ref, steps, prepared.inputs)
+            for command in steps:
+                if command.submission is not None:
+                    records.publish_content(ref, command.submission, "evaluation_input")
+        if records is not None:
+            records.prepared(ref, (*steps, *prepared.fallback_steps), prepared.inputs)
         if not steps:
             if records is not None:
                 records.phase(ref, "interpret")
@@ -195,6 +275,9 @@ class LegacyExperiment:
                     raise
                 if records is not None:
                     records.observed(ref, attempt_id, result=result)
+                self._publish_files(request, result.files, records, ref)
+                if records is not None and command.submission is not None:
+                    records.publish_content(ref, result.stdout.encode("utf-8"), "measurement_receipt")
                 result.require_transport()
                 if self.check_result is not None:
                     self.check_result(result)
@@ -220,6 +303,11 @@ class LegacyExperiment:
             for future in completed:
                 future.result()
             results = tuple(future.result() for future in futures)
+            fallback = getattr(self.evaluator, "fallback", lambda plan, receipts: ())(prepared, results)
+            if fallback:
+                initial_count = len(steps)
+                steps = (*steps, *prepared.fallback_steps)
+                results = tuple(run_step(initial_count + index) for index in range(len(fallback)))
         except BaseException as error:
             cancel.set()
             for future in futures:
@@ -306,6 +394,11 @@ class LegacyExperiment:
 
     def _interpret(self, request, prepared, results, ref):
         result = self.evaluator.interpret(prepared, results)
+        from .measurement_files import record_episode_evaluation
+        if request.mode in {"v0", "framework"}:
+            for run in result.runs:
+                if run.result is not None:
+                    record_episode_evaluation(request.workspace, run.result, gateway_kind="run")
         if not isinstance(result, VerificationResult):
             raise TypeError("Evaluator.interpret must return VerificationResult")
         names = [output.name for output in result.artifacts]

@@ -13,14 +13,14 @@ class GatewayExecutor:
         self.configuration = dict(configuration or {})
         if "requirements_file" in self.configuration:
             raise ValueError("worker requirements belong to Task, not gateway provider configuration")
-    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile")), True)
+    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile")), True, True)
     resource_identity = ResourceIdentity("gateway")
 
     def run(self, command):
         self.capabilities.require(command)
         if type(command.timeout) is not int or command.timeout <= 0:
             raise ValueError("execution timeout must be a positive integer")
-        argv = [sys.executable, "-m", "aka.legacy.compat.gateway_entrypoint",
+        argv = [sys.executable, "-m", "aka.legacy.execution.gateway.entrypoint",
                 "--workspace", str(command.workspace), "--hardware", command.hardware,
                 "--kind", command.operation, "--timeout", str(command.timeout)]
         for artifact in command.artifacts:
@@ -28,7 +28,7 @@ class GatewayExecutor:
         if not command.artifacts:
             argv += ["--no-sync"]
         from aka.legacy.execution.legacy.runtime import current_transport_arguments
-        argv += current_transport_arguments()
+        argv += ["--num-gpus", str(command.num_gpus), *current_transport_arguments()]
         argv += ["--", *command.command]
         environment = dict(command.environment)
         if self.configuration.get("profile") or self.configuration.get("url"):
@@ -57,4 +57,4 @@ class GatewayExecutor:
         from aka.legacy.execution.outcomes import run_owned
         return run_owned(argv, environment=environment, workspace=command.workspace,
             timeout=command.timeout + grace + 240, resource=self.resource_identity,
-            hardware=command.hardware, cancel_event=command.cancel_event)
+            hardware=command.hardware, cancel_event=command.cancel_event, input_payload=command.submission)

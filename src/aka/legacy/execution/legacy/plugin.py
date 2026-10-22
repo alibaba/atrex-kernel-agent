@@ -8,7 +8,7 @@ from aka.legacy.execution.resources import PROFILING_CONFIG, contribute, validat
 name = "legacy"
 provide = ("executor",)
 identity_files = ("plugin.py", "executor.py", "runtime.py")
-identity_packages = ("aka.legacy.execution", "aka.legacy.evaluation", "aka.legacy.compat", "aka.contracts.execution")
+identity_packages = ("aka.legacy.execution", "aka.contracts.execution")
 Config = {"type": "object", "properties": {"gateway_skill_path": {"type": "string"}, "profiling": PROFILING_CONFIG},
           "additionalProperties": False}
 Defaults = {"gateway_skill_path": "", "profiling": []}

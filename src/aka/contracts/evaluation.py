@@ -189,9 +189,11 @@ class PreparedEvaluation:
     retry_keys: tuple[str, ...] = ()
     output_directory: Path | None = None
     inputs: tuple[PreparationFile, ...] = ()
+    fallback_steps: tuple[CommandSpec, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "steps", tuple(self.steps))
+        object.__setattr__(self, "fallback_steps", tuple(self.fallback_steps))
         inputs = tuple(self.inputs)
         if any(not isinstance(item, PreparationFile) for item in inputs):
             raise TypeError("prepared inputs must be PreparationFile values")
@@ -200,12 +202,22 @@ class PreparedEvaluation:
 
 class Evaluator(Protocol):
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation: ...
+    # Implementations may offer fallback(prepared, results) for a prepared alternative.
+    # Hosts invoke it only after all original receipts have been observed.
     def observe_step(
         self, prepared: PreparedEvaluation, index: int, result: JobResult
     ) -> StepEvaluation: ...
     def interpret(
         self, prepared: PreparedEvaluation, results: Sequence[JobResult]
     ) -> VerificationResult: ...
+
+class CommandEvaluator(Protocol):
+    """Prepare a command measurement and interpret raw receipts for Experiment."""
+    def prepare(self, command: CommandSpec) -> PreparedEvaluation: ...
+    def observe_step(self, prepared: PreparedEvaluation, index: int, result: JobResult) -> StepEvaluation: ...
+    def fallback(self, prepared: PreparedEvaluation, results: Sequence[JobResult]) -> tuple[CommandSpec, ...]: ...
+    def interpret(self, prepared: PreparedEvaluation, results: Sequence[JobResult]) -> JobResult: ...
+
 
 @dataclass(frozen=True)
 class EvaluationConfiguration:
@@ -216,6 +228,11 @@ class EvaluationConfiguration:
     max_parallelism: int = 4
     private_reference_dir: Path | None = None
     native: bool = False
+    hardware: str = ""
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
 
 
 class EvaluatorFactory(Protocol):

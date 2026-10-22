@@ -61,6 +61,7 @@ class _Plan:
     schedule: tuple[dict, ...] = ()
     shape_ids: tuple[str, ...] = ()
     error: str = ""
+    gateway: object = None
 
 
 class LegacyEvaluator:
@@ -79,6 +80,14 @@ class LegacyEvaluator:
 
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         prepared = self._prepare(request)
+        if request.mode in {"v0", "framework"} and self.configuration.hardware:
+            from .gateway_command import GatewayCommandEvaluator
+            command = replace(prepared.steps[0], hardware=self.configuration.hardware,
+                              environment={**self.configuration.environment,
+                                  "ATREX_EVAL_SHAPE_BATCH_SIZE": str(self.configuration.shape_batch_size)})
+            gateway = GatewayCommandEvaluator().prepare(command)
+            prepared = replace(prepared, steps=gateway.steps, max_parallelism=gateway.max_parallelism,
+                               context=replace(prepared.context, gateway=gateway), fallback_steps=gateway.fallback_steps)
         if request.mode == "abba":
             config = self.configuration
             return replace(prepared, retry_keys=tuple(
@@ -118,6 +127,10 @@ class LegacyEvaluator:
             )
         if request.mode != "abba":
             raise ValueError(f"unsupported evaluation mode: {request.mode}")
+        from .metadata import distributed_evaluation_world_size
+        metadata_path = (config.private_reference_dir or request.workspace) / "metadata.json"
+        metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else None
+        num_gpus = distributed_evaluation_world_size(metadata)
         schedule = verification_schedule(config.repeats)
         if config.per_run_timeout * len(schedule) + 30 > config.timeout:
             return PreparedEvaluation(
@@ -178,6 +191,7 @@ class LegacyEvaluator:
                     ),
                     timeout=config.timeout,
                     operation="dev",
+                    num_gpus=num_gpus,
                 )
             )
         return PreparedEvaluation(
@@ -197,11 +211,21 @@ class LegacyEvaluator:
             inputs=tuple(inputs),
         )
 
+    def fallback(self, prepared, results):
+        gateway = getattr(prepared.context, "gateway", None)
+        if gateway is None:
+            return ()
+        from .gateway_command import GatewayCommandEvaluator
+        return GatewayCommandEvaluator().fallback(gateway, results)
+
     def observe_step(
         self, prepared: PreparedEvaluation, index: int, result: JobResult
     ) -> StepEvaluation:
         """Return completed ABBA content for immediate Experiment persistence."""
         plan = prepared.context
+        if getattr(plan, "gateway", None) is not None:
+            from .gateway_command import GatewayCommandEvaluator
+            return GatewayCommandEvaluator().observe_step(plan.gateway, index, result)
         if plan.request.mode in {"v0", "framework"}:
             from .baseline import BaselinePreparation
             BaselinePreparation.print_v0_evaluator_output(result)
@@ -210,7 +234,7 @@ class LegacyEvaluator:
                                + (result.stdout + "\n" + result.stderr)[-3000:])
         if plan.request.mode == "abba" and result.returncode == 0:
             return StepEvaluation((self._artifact(f"result-{index:04d}.json",
-                _payload_from_stdout(result.stdout), "measurement_batch"),))
+                _payload_from_stdout(self._dev_stdout(plan.request, result.stdout)), "measurement_batch"),))
         return StepEvaluation()
 
     def interpret(
@@ -220,12 +244,22 @@ class LegacyEvaluator:
         request = plan.request
         if plan.error:
             return VerificationResult("ERROR", None, None, None, error=plan.error)
-        if len(results) != len(prepared.steps):
+        if len(results) != len(prepared.steps) and not (prepared.fallback_steps and len(results) == 1):
             raise ValueError("evaluation requires one result per planned step")
         if request.mode == "fast":
             return self._fast_result(request)
         if request.mode in {"v0", "framework"}:
-            return self._baseline_result(request, results[0])
+            if getattr(plan, "gateway", None) is not None:
+                from .gateway_command import GatewayCommandEvaluator
+                result = GatewayCommandEvaluator().interpret(plan.gateway, results)
+            else:
+                from .gateway_measurement import prepare_dev_output
+                result = replace(results[0], stdout=prepare_dev_output(request.workspace, results[0].stdout,
+                    evaluator=True, private=False))
+            from .baseline import BaselinePreparation
+            if getattr(plan, "gateway", None) is not None:
+                BaselinePreparation.print_v0_evaluator_output(result)
+            return self._baseline_result(request, result)
         payloads = []
         for index, result in enumerate(results):
             if result.returncode != 0:
@@ -233,7 +267,7 @@ class LegacyEvaluator:
                     f"gateway ABBA command exited {result.returncode}: "
                     + (result.stdout + "\n" + result.stderr)[-3000:]
                 )
-            payloads.append(_payload_from_stdout(result.stdout))
+            payloads.append(_payload_from_stdout(self._dev_stdout(request, result.stdout)))
         payload = _merge_batch_payloads(
             payloads, list(plan.schedule), list(plan.shape_ids)
         )
@@ -244,6 +278,11 @@ class LegacyEvaluator:
             artifact="result.json",
         )
         return replace(result, artifacts=(self._artifact("result.json", payload, "evaluation"),))
+
+    @staticmethod
+    def _dev_stdout(request, stdout):
+        from .gateway_measurement import prepare_dev_output
+        return prepare_dev_output(request.workspace, stdout, evaluator=True, private=False)
 
     @staticmethod
     def _artifact(name, payload, role):

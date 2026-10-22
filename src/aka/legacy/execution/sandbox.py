@@ -58,7 +58,7 @@ def sandbox_command(
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     request = runtime.SandboxRequest(
-        workspace=workspace, launcher=(sys.executable, "-m", "aka.legacy.compat.gateway"),
+        workspace=workspace, launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
         hardware=hardware, profile=profile, url=url, timeout=timeout,
         command=tuple(command), environment=execution.execution_environment(environment),
         ssh=ssh, ssh_init=ssh_init, health_command=health_command, sync=sync,

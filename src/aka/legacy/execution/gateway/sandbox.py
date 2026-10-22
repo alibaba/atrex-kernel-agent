@@ -1157,95 +1157,6 @@ def _private_profile_case(
     )
 
 
-def _typed_workspace_limitation(
-    workspace: Path, command: list[str], kind: str
-) -> str | None:
-    """Explain why the typed run/profile source contract cannot represent a workspace."""
-    required = ("kernel.py", "reference.py", "input.py")
-    missing = [name for name in required if not (workspace / name).is_file()]
-    if missing:
-        return "missing " + ", ".join(missing)
-    try:
-        _evaluator_input_path(workspace, "shapes.json", required=True)
-    except ValueError as exc:
-        return str(exc)
-    if (
-        kind == "run"
-        and _is_test_kernel_command(command)
-        and _test_kernel_script_index(command, typed_launcher=True) is None
-    ):
-        return "evaluator launcher semantics require the dev route"
-    if kind == "profile" and _is_generalized_workspace(workspace):
-        return "generalized tasks inject one private real shape through the dev profile route"
-    if (workspace / "workload.jsonl").is_file():
-        return (
-            "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
-        )
-
-    solution = _json_object(workspace / "solution.json")
-    if solution is not None:
-        sources = solution.get("sources")
-        if isinstance(sources, list):
-            source_paths = {
-                str(item.get("path"))
-                for item in sources
-                if isinstance(item, dict) and item.get("path")
-            }
-            if source_paths - {"kernel.py"}:
-                return "solution.json declares auxiliary candidate sources"
-
-    try:
-        tree = ast.parse((workspace / "kernel.py").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, SyntaxError):
-        tree = None
-    if tree is not None:
-        imported_roots: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported_roots.update(
-                    alias.name.split(".", 1)[0] for alias in node.names
-                )
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported_roots.add(node.module.split(".", 1)[0])
-        local_imports = sorted(
-            root
-            for root in imported_roots
-            if root not in {"input", "reference", "kernel"}
-            and (
-                (workspace / f"{root}.py").is_file()
-                or (workspace / root / "__init__.py").is_file()
-            )
-        )
-        if local_imports:
-            return "candidate imports local auxiliary modules: " + ", ".join(
-                local_imports
-            )
-
-    # These test-harness controls do not exist in the typed request contract.
-    # Preserve their exact semantics through dev instead of silently dropping them.
-    unsupported_options = (
-        "--seed",
-        "--workspace",
-        "--candidate-timeout-s",
-        "--perf-timeout-s",
-    )
-    for option in unsupported_options:
-        if _option_value(command, option) is not None:
-            return f"{option} is not supported by the typed API"
-    warmup = _option_value(command, "--warmup")
-    if warmup is not None and str(warmup) != "5":
-        return "non-default --warmup is not supported by the typed API"
-    for option, default in (("--atol", 1e-2), ("--rtol", 0.05)):
-        value = _option_value(command, option)
-        if value is not None:
-            try:
-                matches_default = float(value) == default
-            except (TypeError, ValueError):
-                matches_default = False
-            if not matches_default:
-                return f"non-default {option} is not exposed by agate run"
-    return None
-
 
 def _requested_gateway_kind(requested: str, command: list[str]) -> str:
     if requested != "auto":
@@ -1466,9 +1377,10 @@ exit $command_status
 """
 
 
-def _extract_output_tar(tf: tarfile.TarFile, workspace: Path) -> None:
+def _extract_output_tar(tf: tarfile.TarFile, workspace: Path) -> list:
     """Safely extract a sandbox-owned output archive into ``workspace``."""
     workspace_root = workspace.resolve()
+    files = []
     for member in tf.getmembers():
         path = PurePosixPath(member.name)
         if path.is_absolute() or ".." in path.parts:
@@ -1487,24 +1399,21 @@ def _extract_output_tar(tf: tarfile.TarFile, workspace: Path) -> None:
                 f"sandbox artifact resolves outside workspace: {member.name!r}"
             ) from exc
         if member.isdir():
-            target.mkdir(parents=True, exist_ok=True)
             continue
         if not member.isfile():
             continue
         source = tf.extractfile(member)
         if source is None:
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(source.read())
-        try:
-            target.chmod(member.mode & 0o777)
-        except OSError:
-            pass
+        files.append((path.as_posix(), source.read(), member.mode & 0o777))
 
+
+    return files
 
 def _extract_output_archive(archive: Path, workspace: Path) -> None:
     with tarfile.open(archive, mode="r:gz") as tf:
-        _extract_output_tar(tf, workspace)
+        from .returned_files import emit
+        emit(_extract_output_tar(tf, workspace))
 
 
 def _extract_outputs(stdout: str, workspace: Path) -> str:
@@ -1517,7 +1426,8 @@ def _extract_outputs(stdout: str, workspace: Path) -> str:
         command_stdout += trailing
     payload = base64.b64decode("".join(encoded.split()), validate=True)
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as tf:
-        _extract_output_tar(tf, workspace)
+        from .returned_files import emit
+        emit(_extract_output_tar(tf, workspace))
     return command_stdout.rstrip("\n")
 
 
@@ -1604,6 +1514,8 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    parser.add_argument("--prepared-request-fd", type=int, help=argparse.SUPPRESS)
+    parser.add_argument("--num-gpus", type=int, default=1, help=argparse.SUPPRESS)
     parser.add_argument(
         "--hardware",
         default=os.environ.get("ATREX_SANDBOX_GPU", ""),
@@ -2982,6 +2894,7 @@ def _typed_agate_command(
     request: dict[str, Any],
     queue_wait_grace: int,
     reference_dir: Path | None = None,
+    *, requirements_file: Path | None = None,
 ) -> list[str]:
     """Build an agate run/profile invocation for a typed request."""
     command = [executable, kind]
@@ -3002,7 +2915,7 @@ def _typed_agate_command(
         command += ["--num-gpus", str(num_gpus)]
     if request.get("atrex_bench_version"):
         command += ["--atrex-bench-version", request["atrex_bench_version"]]
-    requirements_file = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
+    requirements_file = str(requirements_file) if requirements_file is not None else os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if requirements_file:
         requirements = _runtime_requirements(
             requirements_file,
@@ -3067,31 +2980,8 @@ def _typed_fallback_allowed(detail: object) -> bool:
     return any(reason in text for reason in TYPED_FALLBACK_REASONS)
 
 
-def _record_profile_job(
-    job: dict[str, Any], workspace: Path, sync_paths: list[str]
-) -> None:
-    """Persist the typed profile response where the local optimization session expects it."""
-    for relative in sync_paths:
-        path = PurePosixPath(relative)
-        if not path.parts or path.parts[0] != "profiles":
-            continue
-        output_dir = workspace / path.as_posix()
-        output_dir.mkdir(parents=True, exist_ok=True)
-        target = output_dir / "gateway_profile.json"
-        target.write_text(
-            json.dumps(job, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        for artifact in (job.get("result") or {}).get("artifacts") or []:
-            if not isinstance(artifact, dict):
-                continue
-            try:
-                artifact_name = _safe_relative(str(artifact.get("name") or ""))
-            except ValueError as exc:
-                raise RuntimeError(f"invalid profile artifact name: {exc}") from exc
-            _download_oss_artifact(artifact, output_dir / artifact_name)
 
-
-def _main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
+def _main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.hardware:
         raise SystemExit("sandbox: --hardware or ATREX_SANDBOX_GPU is required")
@@ -3212,7 +3102,10 @@ def _main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
             "with separate arguments after --"
         )
 
-    gateway_kind = _requested_gateway_kind(args.kind, args.command)
+    if args.prepared_request_fd is not None:
+        from .submission import run_prepared
+        return run_prepared(args, workspace, sync_paths, queue_wait_grace)
+    gateway_kind = "dev"
     evaluator_command = _is_test_kernel_command(args.command)
     if evaluator_command:
         command = (
@@ -3225,81 +3118,14 @@ def _main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
             args.env = _with_inherited_profile_environment(args.env)
         except ValueError as exc:
             raise SystemExit(f"sandbox: {exc}") from exc
-    typed_limitation: str | None = None
-    typed_fallback_kind: str | None = None
-    num_gpus = 1
-    if gateway_kind in TYPED_KINDS or evaluator_command or profile_request:
-        try:
-            if measurement_adapter is None:
-                raise ValueError("measurement commands require the Legacy CLI measurement adapter")
-            num_gpus = measurement_adapter.num_gpus(workspace)
-        except ValueError as exc:
-            raise SystemExit(
-                f"sandbox: invalid distributed evaluator contract: {exc}"
-            ) from exc
-    if gateway_kind in TYPED_KINDS:
-        if args.ssh:
-            typed_limitation = "SSH uses the portable sandbox command runner"
-        elif (
-            gateway_kind == "profile"
-            and args.profile_level == "deep"
-            and not args.kernel_regex
-        ):
-            raise SystemExit("sandbox: --profile-level deep requires --kernel-regex")
-        elif args.keep_pod:
-            typed_limitation = "--keep-pod is only supported by dev"
-        elif args.input:
-            typed_limitation = "custom --input files are only supported by dev"
-        elif gateway_kind == "profile" and args.include_raw_profile:
-            typed_limitation = (
-                "--include-raw-profile requires the custom dev profiler wrapper"
-            )
-        else:
-            try:
-                typed_limitation = _typed_workspace_limitation(
-                    workspace, args.command, gateway_kind
-                )
-            except ValueError as exc:
-                typed_limitation = str(exc)
-        if typed_limitation is None:
-            typed_result = measurement_adapter.run_typed(
-                args,
-                workspace,
-                args.command,
-                gateway_kind,
-                sync_paths,
-                queue_wait_grace,
-            )
-            if typed_result is not None:
-                return typed_result
-            typed_limitation = f"gateway {gateway_kind} route unavailable or rejected the source contract"
-        typed_fallback_kind = gateway_kind
-        gateway_kind = "dev"
-
-    if gateway_kind == "dev" and profile_request and num_gpus > 1:
-        limitation = f" ({typed_limitation})" if typed_limitation else ""
-        raise SystemExit(
-            "sandbox: distributed profile commands require the typed profile route"
-            f"{limitation}; "
-            "the dev route does not launch ranks"
-        )
+    num_gpus = args.num_gpus
+    typed_limitation = None
+    if num_gpus < 1:
+        raise SystemExit("sandbox: --num-gpus must be positive")
+    if profile_request and num_gpus > 1:
+        raise SystemExit("sandbox: distributed profile commands require the typed profile route")
     if args.ssh and evaluator_command and num_gpus > 1:
-        raise SystemExit(
-            "sandbox: distributed evaluator commands are not supported by the SSH "
-            "runner; it exposes only one GPU"
-        )
-    if typed_fallback_kind is not None:
-        if args.ssh:
-            print(
-                f"[sandbox] {typed_fallback_kind} kind uses the isolated OpenSSH runner",
-                file=sys.stderr,
-            )
-        else:
-            print(
-                f"[sandbox] {typed_fallback_kind} interface unsupported "
-                f"({typed_limitation}); using dev",
-                file=sys.stderr,
-            )
+        raise SystemExit("sandbox: distributed evaluator commands are not supported by the SSH runner")
 
     if evaluator_command:
         selected = set(_evaluation_input_paths(workspace, args.command))
@@ -3746,9 +3572,6 @@ def _main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
             print(remote_stderr.rstrip(), file=sys.stderr)
         print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
         return int(result.get("exit_code") or proc.returncode or 2)
-    if measurement_adapter is not None:
-        command_stdout = measurement_adapter.dev_output(workspace, command_stdout,
-            evaluator=evaluator_command, private=hide_evaluator_details)
 
     if command_stdout:
         print(command_stdout)
@@ -3791,7 +3614,7 @@ def _append_sandbox_telemetry(event: str, **fields: object) -> None:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     arguments = list(argv if argv is not None else sys.argv[1:])
     operation_id = f"sandbox-{os.getpid()}-{time.monotonic_ns()}"
     category = _sandbox_telemetry_category(arguments)
@@ -3806,7 +3629,7 @@ def main(argv: list[str] | None = None, *, measurement_adapter=None) -> int:
         category=category,
     )
     try:
-        returncode = _main(argv, measurement_adapter=measurement_adapter)
+        returncode = _main(argv)
     except BaseException as exc:
         _cancel_active_agate_jobs()
         _append_sandbox_telemetry(
@@ -3848,5 +3671,4 @@ def _run_agate_once(*args, **kwargs):
 
 
 if __name__ == "__main__":
-    from aka.legacy.compat.gateway import main as compatibility_main
-    raise SystemExit(compatibility_main())
+    raise SystemExit(main())
