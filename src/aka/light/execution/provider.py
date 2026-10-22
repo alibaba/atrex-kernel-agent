@@ -21,8 +21,8 @@ class ReliableExecutor(LegacyExecutor):
 
     def _run_sandbox(self, request, *, hooks):
         from aka.light.runtime.paths import supervisor_campaign_root
-        from aka.light.supervisor.measurement_records import JOB_ROOT_ENV
-        from aka.light.orchestrator.agent_home import open_private_directory
+        from aka.light.experiment.store import JOB_ROOT_ENV
+        from aka.light.agent.home import open_private_directory
         from aka.light.runtime.paths import legacy_resource_root
         evidence = supervisor_campaign_root(request.workspace) / "execution"
         with open_private_directory(evidence):
@@ -33,5 +33,5 @@ class ReliableExecutor(LegacyExecutor):
         source_root = str(Path(__file__).resolve().parents[3])
         environment["PYTHONPATH"] = os.pathsep.join(filter(None, (source_root, environment.get("PYTHONPATH"))))
         return super()._run_sandbox(replace(request,
-            launcher=(sys.executable, "-m", "aka.light.supervisor.gateway"),
+            launcher=(sys.executable, "-m", "aka.light.evaluation.gateway"),
             environment=environment), hooks=hooks)

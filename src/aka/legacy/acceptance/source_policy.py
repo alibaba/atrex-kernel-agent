@@ -13,7 +13,7 @@ import subprocess
 ProductionReviewer = Callable[[Path, str, bool], list[str]]
 
 
-_SUPPORTED_PRODUCTION_FRAMEWORKS = frozenset(
+SUPPORTED_PRODUCTION_FRAMEWORKS = frozenset(
     {"triton", "gluon", "cutedsl", "cuda", "flydsl", "tilelang"}
 )
 
@@ -74,7 +74,7 @@ def production_structure_violations(
     those questions from the complete candidate.
     """
     key = framework_key(framework)
-    if key not in _SUPPORTED_PRODUCTION_FRAMEWORKS:
+    if key not in SUPPORTED_PRODUCTION_FRAMEWORKS:
         return [f"unsupported production framework: {framework}"]
     kernel_path = workspace / "kernel.py"
     if not kernel_path.is_file():
@@ -100,14 +100,18 @@ def production_kernel_violations(
     *,
     require_gluon: bool = False,
     production_reviewer: ProductionReviewer | None = None,
+    structure_validator: Callable[..., list[str]] | None = None,
 ) -> list[str]:
     """Return production-policy violations for the current candidate.
 
     Mechanically certain structure stays local. Every otherwise viable candidate is
     delegated in full through ``production_reviewer`` and fails closed when no reviewer
     is supplied. Runtime correctness and performance still use the normal sandbox.
+    A source-tree owner may supply its structural validator; reviewer acceptance
+    and failure handling remain shared with the default single-file path.
     """
-    errors = production_structure_violations(
+    validate_structure = structure_validator or production_structure_violations
+    errors = validate_structure(
         workspace,
         framework,
         require_gluon=require_gluon,

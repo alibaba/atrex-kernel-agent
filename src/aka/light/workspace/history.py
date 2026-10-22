@@ -14,9 +14,9 @@ import re
 import tempfile
 from pathlib import Path
 
-from aka.light.orchestrator.agent_home import open_private_directory
-from aka.light.orchestrator.session_tail import read_regular_bytes
-from aka.light.supervisor.workspace import publish
+from aka.light.agent.home import open_private_directory
+from aka.light.agent.session_tail import read_regular_bytes
+from aka.light.workspace.files import publish
 
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_CONVERSATION_BYTES = 256 * 1024 * 1024

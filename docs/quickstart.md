@@ -5,6 +5,28 @@ unattended, budget-bounded Workflow selected by the packaged profile. For intera
 recommended launch method is to ask a coding agent in this checkout to translate the task into that
 command and start the campaign.
 
+## Default Light launch
+
+Install the matching framework, legacy and light distributions using the build/install
+commands below. A new launch without `--profile` selects native Light:
+
+```bash
+aka optimize --repo-root "$PWD" -- \
+    --op-dir /path/to/problem --platform L20N --framework Cuda \
+    --agent-cli claude --workspace /path/to/new-light-runs --max-iters 20
+```
+
+Light uses managed drafts, session capture, private HTTP measurements and unified Episodes.
+Bubblewrap is **not** enabled by this default; choose `--profile light-sandbox` explicitly
+on Linux. Wiki, Direction/Experiment records and generated memory remain disabled unless
+configured. See [Light options and workflow](optional-light-modules.md) for the full interface.
+Missing `atrex-aka-light` causes an installation error, not a silent Legacy fallback.
+
+The detailed Fast/Full workflow and command examples below are the **Legacy reference**:
+they use `--profile workflow`. Keep that explicit selection when manually resuming an old
+Legacy workspace. Recorded continuations retain their frozen selection automatically;
+start a separate workspace when switching implementations.
+
 ## Prerequisites
 
 - `bash`
@@ -84,11 +106,11 @@ memory points to the stable source SHA. A setup Agent is retained only for deriv
 Open Claude Code, Codex, or Qoder in the repository and provide a concrete task prompt. For example:
 
 ```text
-Use the installed `aka optimize` command with this checkout as `--repo-root` to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+Use the installed `aka optimize --profile workflow` command with this checkout as `--repo-root` to start one Legacy optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
 ```
 
 The coding agent should resolve the requested values into optimization arguments after the mandatory
-`aka optimize --repo-root /path/to/checkout --` boundary, verify the local prerequisites, and launch
+`aka optimize --repo-root /path/to/checkout --profile workflow --` boundary, verify the local prerequisites, and launch
 that command. This prompt-driven path is a convenience
 layer over the same orchestrator, not a separate optimization workflow.
 
@@ -97,7 +119,7 @@ layer over the same orchestrator, not a separate optimization workflow.
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
+aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
     --agent-cli qodercli \
@@ -112,7 +134,7 @@ to run `bwrap` and access only the intended GPU devices; do not attach cloud cre
 service secrets to it. Runtime trees outside `/usr` must be exposed explicitly as read-only binds:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
+aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform H20 --sandbox-hardware H20 --framework Triton \
     --sandbox-ssh user@gpu-host \
@@ -272,7 +294,7 @@ Omit `--agent-cli` to use Claude. Provider-specific settings can be supplied thr
 To use Codex, pass `--agent-cli codex`:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
+aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli codex --max-iters 20 --token-budget 8000000
@@ -302,7 +324,7 @@ To use Pi, select it as the backend and optionally configure its provider and mo
 
 ```bash
 export ATREX_PI_SESSION_SETTINGS='{"provider":"anthropic","model":"claude-opus"}'  # optional
-aka optimize --repo-root "$PWD" -- \
+aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli pi --max-iters 20 --token-budget 8000000
@@ -318,7 +340,7 @@ leaving provider credentials in Pi's normal auth/config files. `ATREX_PI_SESSION
 Omit `--framework` to run every framework supported by the detected GPU concurrently:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
+aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --workspace /path/to/runs --max-iters 20
@@ -338,7 +360,7 @@ libraries and evidence-backed framework changes are allowed. Use production mode
 framework-pure implementation:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
+aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --optimization-mode production --framework Triton \
@@ -421,7 +443,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --arch ARCH                      Override runtime architecture detection
 ```
 
-Run `aka optimize --repo-root "$PWD" -- --help` for the complete current interface. Some Qoder models
+Run `aka optimize --repo-root "$PWD" --profile workflow -- --help` for the Legacy interface. Some Qoder models
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
 

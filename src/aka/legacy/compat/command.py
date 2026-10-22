@@ -10,6 +10,7 @@ from typing import Sequence
 from aka.contracts.application import ApplicationRequest
 
 from .host import run_application
+from .profiles import DEFAULT_LAUNCH_PROFILE, launch_profile_path
 from aka.legacy.workflow.process_environment import invocation_environment
 
 
@@ -26,8 +27,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--profile",
         default=None,
-        help=("optional launch profile: workflow, observed, sandbox, light, "
-              "light-sandbox, or an explicit profile JSON path"),
+        help=(f"launch profile (default: {DEFAULT_LAUNCH_PROFILE}): light, light-sandbox, "
+              "observed, sandbox, workflow (Legacy), or an explicit profile JSON path"),
     )
     parser.add_argument("--patch", action="append", type=Path, default=[],
                         help="apply an additional launch-composition patch")
@@ -50,16 +51,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                 *read_execution_patches(options.execution_patch)]
     environment = {}
     from aka.bootstrap.continuation import read
-    if read(os.environ) is not None and (options.profile is not None or options.patch):
+    continuing = read(os.environ) is not None
+    if continuing and (options.profile is not None or options.patch):
         parser.error("cannot override the launch profile during continuation")
+    profile = options.profile
+    if not continuing:
+        try:
+            profile = launch_profile_path(profile)
+        except ValueError as exc:
+            parser.error(str(exc))
     if execution_selection is not None:
-        if read(os.environ) is not None:
+        if continuing:
             parser.error("cannot override Execution selection during continuation")
         import json
         environment["AKA_EXECUTION_SELECTION"] = json.dumps(execution_selection, sort_keys=True)
     with invocation_environment(environment):
         return run_application(
             ApplicationRequest(root, argv[boundary + 1:]),
-            profile=options.profile,
+            profile=profile,
             patch_files=options.patch,
         )

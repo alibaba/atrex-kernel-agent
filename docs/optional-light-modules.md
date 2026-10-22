@@ -1,24 +1,94 @@
-# Optional light implementations
+# Light modules and launch profiles
 
-The default `workflow` composition retains the upstream Agent, Task and Workflow. Installing `atrex-aka-light` does not activate isolation, capture, a private HTTP service, a different correctness policy, or simplified Episodes. These behaviors require an explicit profile or provider replacement.
+New `aka optimize` and `aka workflow` launches default to `light`: native Agent execution,
+session capture, managed drafts, private HTTP tools and unified Light Episodes. This is a
+launch-selection change, not a change to the Legacy providers. Use `--profile workflow`
+to retain the Legacy Agent, Task and Workflow, or `--profile light-sandbox` for Bubblewrap.
+Wiki, Direction/Experiment recording and generated memory remain default-off.
+
+Install the matching `atrex-aka-light` package together with its framework/legacy dependencies.
+If Light is unavailable, default startup fails with installation guidance; it never silently
+falls back to Legacy. Explicit `--profile workflow` still works without the Light package.
+`aka run` remains profile-explicit, and standalone Execution selection is unchanged.
+Recorded continuations restore their frozen selection before considering any new-launch
+default; an existing Legacy continuation is not converted to Light. For a manual restart
+of a Legacy workspace without continuation metadata, pass `--profile workflow` explicitly.
 
 ## Select a composition
 
 | Launch profile | Agent | Workspace / Workflow | Tool service |
 | --- | --- | --- | --- |
-| `workflow` (default; omit `--profile`) | Upstream | Upstream | Upstream behavior |
+| `workflow` (explicit Legacy) | Upstream | Upstream | Upstream behavior |
 | `observed` | Native, capture enabled | Upstream | Upstream behavior |
 | `sandbox` | Bubblewrap, capture disabled | Upstream | Upstream behavior |
-| `light` | Native, capture enabled | Managed drafts / light Episodes | Private HTTP measurements, records and Journal |
+| `light` (default; omit `--profile`) | Native, capture enabled | Managed drafts / light Episodes | Private HTTP measurements, records and Journal |
 | `light-sandbox` | Bubblewrap, capture enabled | Managed drafts / light Episodes | Same private service |
 
-The first two optional profiles replace only the Agent provider. They do not remove legacy Setup/Fast stages, take over Git, or hide evaluator inputs that the legacy Workflow requires. The two light profiles deliberately select the managed Workspace, Tool Runtime and light Workflow together. A report cannot be accepted without its evidence store and sealed source; turning off those dependencies is not a supported combination.
+The `observed` and `sandbox` profiles replace only the Agent provider. They do not remove legacy Setup/Fast stages, take over Git, or hide evaluator inputs that the legacy Workflow requires. The two light profiles deliberately select the managed Workspace, Tool Runtime and light Workflow together. A report cannot be accepted without its evidence store and sealed source; turning off those dependencies is not a supported combination.
+
+Configuration has two framework-defined layers: `profiles/<name>.json` is the
+launch manifest (services, resources and environment), and
+`profiles/compositions/<name>.json` selects implementations and their options.
+Both managed Light compositions reuse the upstream Workflow bundle and a single
+`compositions/bundles/light-services.json` containing the six additional Light
+services. Only the necessary Agent/Workspace/Workflow replacements remain in
+each composition; the two variants differ in `agent.config.sandbox`. Bundles are
+additive, so those replacements cannot be moved into a bundle without copying
+upstream entries or changing Core. `observed` and `sandbox` still reference the
+upstream bundle directly. Profile names, service IDs, defaults and `--patch`
+overrides are unchanged; Core resolves initialization order from dependencies,
+not JSON row order.
 
 Agent shell tools retain the launching Python environment, including symlink-based virtual
-environments. On an upstream Workflow, the optional Agent's process guard recognizes the
-installed `aka.legacy.execution` transport selected by the controller. The bundled
-`tools/sandbox.py` client remains the only script entrypoint trusted inside an HTTP Light
-session; arbitrary same-named scripts are not authorized.
+environments. Every launched Light Agent runs Legacy's dependency-policy watchdog,
+including `observed`, `sandbox`, `light` and `light-sandbox`. Activation is independent
+of `production`/`leaderboard`, capture, Bubblewrap and outage-marker configuration;
+this is an execution-boundary rule, not the production candidate acceptance gate.
+The shared watcher uses Legacy's polling and SIGTERM/SIGKILL policy for confirmed
+local installers, GPU/JIT execution or shared-Gateway mutations. Legacy's default
+classification and launch behavior are unchanged. Linux procfs provides process
+inspection; on hosts without procfs this watcher cannot inspect local commands.
+Bubblewrap mounts, protected assets, HTTP authorization, active-time limits and
+cancellation remain separate. The outage-marker path still returns environment
+tempfail (75), while dependency violations carry an explicit policy diagnostic.
+Auxiliary outputs from policy-terminated sessions are not published, even if the
+child catches SIGTERM and exits zero. The existing shell wrappers also remain.
+This restores guard activation, not the old free-form-stderr resume prohibition:
+SIGTERM recovery still does not depend on matching dependency-policy text in stderr.
+
+Light supplies its corrected HTTP-aware classifier to the shared watcher. Relative transport paths
+require the inspected process's own working directory; the Supervisor's directory
+is never a substitute. A missing/inaccessible cwd or client read is inconclusive,
+not an unregistered-client violation. Only a successful content comparison can
+reject a workspace copy of the HTTP client. Verified client arguments are remote
+request data, not local install/build/import commands; separate local shell
+commands are still classified individually. Missing evidence is not a policy
+violation or a grant of Runtime authority; the authenticated Runtime remains the
+authority boundary. Verified remote requests do not trigger local-policy termination.
+
+### Shared production policy
+
+Light reuses Legacy's production prompt rules, single-file structural checks,
+fail-closed reviewer gate, reviewer prompt and verdict validation. Production
+still requires self-authored computation in the selected framework: a prebuilt
+FlashInfer operator is not an acceptable replacement, while toolchain/header/ABI/
+launch support is judged by actual use rather than package name. A missing,
+invalid or rejecting policy verdict prevents candidate acceptance. Legacy's
+default prompt, gate and scoring behavior are unchanged.
+
+Light adapts only the workflow-facing instructions (Supervisor report submission
+instead of Agent commits; returned numerical feedback instead of a private file)
+and the bounded multi-file source contract. A tree candidate retains fixed-file
+and editable-root checks and the same semantic review, with citations restricted
+to the supplied candidate files. The reviewer prompt has a single Legacy owner.
+The existing multi-GPU Agate source-policy exception remains; it does not disable
+correctness, numerical or performance checks. Light keeps its own GeoMean-based
+promotion path and optional features.
+
+Local GPU/JIT imports remain prohibited by the execution instructions, including
+FlashInfer and similar packages; remote probes do not waive production candidate
+restrictions. Candidate acceptance and the always-on dependency-process watchdog
+are separate gates; passing one never bypasses the other.
 
 Supplemental numerical validation canonicalizes its trusted installed Prompt and
 Harness paths, including virtual environments imported through `lib64 -> lib`.
@@ -38,6 +108,20 @@ aka optimize --repo-root /path/to/aka --profile light -- --op-dir /path/to/probl
 Use `--profile light-sandbox` on a Linux coordinator with Bubblewrap. macOS supports the native profiles; selecting Bubblewrap there fails explicitly. There is no silent native fallback.
 
 The independent Execution selection is `--execution-profile reliable`, or `aka execution --profile reliable`. It preserves the public Execution contract and uses the hardened Gateway submission/checkpoint implementation. It affects prepared controller calls routed through Execution; it does **not** replace the standard Workflow transport. Light profiles additionally select that same provider for their Tool Runtime's executor dependency. These are separately owned composition instances, not an implicit shared singleton.
+
+Prepared controller calls preserve the selected provider's complete launcher:
+`legacy` uses `aka.legacy.execution.gateway.sandbox`, while `reliable` uses
+`aka.light.evaluation.gateway`. Both retain the shared argv, deadline and cancellation
+mechanics. The Light HTTP path continues to use its bounded `run_gateway` extension.
+
+Campaign outage recovery is single-sourced in `aka.legacy.execution.recovery`, also
+exported through `aka.light.execution.recovery`. Composed launches persist the exact
+module selection in `launch-selection.json` and bind its digest in schema-4 restart
+metadata. Restart/monitor replay uses that selection rather than fresh defaults;
+missing, changed or inconsistent selection evidence is rejected. Selection-free
+schema-3 state follows Legacy's explicit owner-validated migration rules. This shares
+campaign restart metadata only: Light's persisted Job IDs, idempotency keys, short
+transport backoff and 60-second validation-infrastructure retry loop are unchanged.
 
 ## Options
 
@@ -125,6 +209,18 @@ Patches replace a module's whole configuration; omitted fields receive that prov
 
 Capture can be switched without enabling isolation. Wiki disabling removes its mounted Skill and required-query prompt fragments as well as rejecting the endpoint. Disabling supplemental numerical planning does not disable ordinary evaluator correctness, six-case Atrex-Bench validation, full SOL workload coverage, production constraints, or ABBA acceptance. Three-repetition aggregation is opt-in; untimed correctness checks are not repeated three times.
 
+### Projected-proc compiler preflight
+
+For `proc_mode: projected`, run `python -m aka.light.agent.preflight` in the
+Linux container that will execute the Agent. This public, model-free command
+checks the packaged C shim, compiler/development headers and temporary storage,
+returning `{"check": "projected_proc_compile", "status": "ready"}` on success
+and a nonzero exit with fixed guidance on failure. CI consumers should use this
+entry point instead of importing private process-view helpers. It neither
+installs system packages nor launches an Agent/GPU job, and it does not certify
+Bubblewrap namespace permissions. Packages installed in a separate CI container
+are not evidence that this execution container has a working compiler.
+
 ### Agent active-time limit and blocking Runtime calls
 
 Light defaults to **28,800 seconds (8 hours) of Agent active time per Episode**,
@@ -172,7 +268,7 @@ Workflow. A matching root-session API-error assistant event followed by a final
 error result can start a **new provider session in the same Episode/draft**.
 Child errors, quoted text, a `max_tokens` stop reason alone, and incomplete streams
 cannot trigger it. A valid terminal Report still wins before recovery. Other exit
-codes and dependency-policy violations do not enter this recovery path.
+codes do not enter this output-limit recovery path.
 
 `output_limit_recovery_retries` defaults to **2**, accepts 0–10, and **0 disables**
 it. Its allowance is separate from ordinary same-session handoff repairs, including
@@ -628,6 +724,12 @@ flowchart LR
 ```
 
 - **Agent:** ordinary calls and native resumable sessions share the selected sandbox/capture policy. Bubblewrap uses scoped provider Homes, minimal installation mounts, argument FDs and auxiliary input/output allowlists. The Workflow owns continuation decisions. Native session Home cannot change after its ledger observer is bound. Capture remains diagnostic: persistence limits do not truncate the functional process stream.
+  A sandboxed native Session prepares its Home before the shared session constructor
+  binds ledger observation. Initial launch, same-session continuation and close-time
+  checkpoint capture use that same Home; per-invocation telemetry IDs do not create
+  new Homes. Home/config-root or sandbox-mode changes require a new Session. Native
+  (`sandbox=none`) sessions keep their configured provider Homes. This does not
+  reconstruct transcripts missing from checkpoints produced by older revisions.
   Ordinary calls also publish normalized Agent-visible conversation and usage through
   the shared public observation format. This includes V1 and recovery sessions before
   the first Episode, independently of optional private Capture. CI exporters can
@@ -643,7 +745,58 @@ flowchart LR
 
 Core disposes selected providers. The light Workflow closes the private servers it creates, but does not close its borrowed Agent or Task services; the composition owns them. Closing the Agent prevents further invocation. Stateless Evaluation/Acceptance/Journal factories are composition-owned; Experiment stores and Journals are scoped to Campaigns and Episodes. The private HTTP host owns Session capabilities and request concurrency.
 
-`src/aka/light/orchestrator`, `long_horizon`, `supervisor` and `plugin_runtime` are private compatibility implementation details copied from the hardened integration branch. Their names are retained to keep proven error/recovery paths recognizable. They are not additional public startup commands or alternate upstream defaults. The optional package owns its prompts, reviewed Skill files, HTTP clients, evaluator harnesses and profiler helpers. GPU Wiki data stays in the explicitly selected checkout; it is not duplicated into the wheel or Agent draft.
+Light has one implementation layout. The old `orchestrator`, `long_horizon`,
+`supervisor` and `plugin_runtime` source trees have been removed, not retained as
+parallel implementations or import aliases:
+
+| Owner under `src/aka/light/` | Implementation |
+| --- | --- |
+| `agent/` | CLI adapters, sessions/capture, provider Homes, Bubblewrap, projected-proc shim and process lifetime |
+| `workspace/` | Auxiliary/draft views, source snapshots, private Git, inheritance and resource installation |
+| `execution/` | Dispatch, Gateway-job recovery, infrastructure retry and configuration |
+| `evaluation/` | Gateway CLI, native Eval/ABBA, Profile, result projection and measurement policy |
+| `experiment/` | Exact-source/measurement store, task identity, deduplication, checkpoints and history queries |
+| `acceptance/` | Correctness/numerical validation, recorded verification, promotion audit and repair |
+| `workflow/` | Bootstrap, Episode loop, search, Journal/report transaction, memory and prompts |
+| `runtime/` | HTTP host, capabilities, request feedback, thin clients and private plugin execution |
+
+The existing `wiki/` service and `profiles/` configuration remain separate modules.
+Light policy is not replaced with Legacy policy. Shared, identical files have one
+owner: `workspace/resource_catalog.py` resolves the SOL harness, schemas, selected
+prompts, profiler helpers and timeline/PPU scripts from their existing Legacy
+modules. Light-specific instructions remain Light assets. The installed Skill and
+remote bundle layouts are unchanged; the publisher composes them from these
+sources without checking generated copies back into the repository. Routed Wiki
+schemas come from the public Wiki plugin and are included in the private catalog
+fingerprint. GPU Wiki data remains in the explicitly selected checkout.
+
+### Upgrade of source-level integrations
+
+Public profile names, module providers, Agent tool commands and persisted state
+filenames are unchanged. Pause at an Episode boundary before upgrading code;
+regenerate module/source locks for the new package identity. Private Python module
+paths are not compatibility APIs. Update direct integrations to the new owners,
+notably `aka.light.agent.proc_view` for projected-proc compilation preflight,
+`aka.light.evaluation.gateway` for the executor CLI and
+`aka.light.acceptance.audit_recovery` for operator repair. Historical
+`.atrex_long_horizon/`, `.atrex-supervisor-runtime/`, Record IDs and public
+`tools/`, `skills/`, `scratch/` paths are deliberately retained. This change does
+not silently restart running Agents or rewrite existing Campaign artifacts.
+
+Refactor verification covers 224 local regression cases (220 passed; four
+Linux-only cases skipped on macOS), including real local subprocess/HTTP Episode
+handoffs, SOL initialization, multi-file source sealing, history, deduplication,
+numerical diagnostics and pooled-search recovery. The four profile compositions
+retain the same selected providers and configuration values. The directory-move
+checks compared the 80 published assets against their previous sources. The
+subsequent shared-code extraction described below additionally checks standalone
+CLI behavior and the new helper-file dependency closure. The three distributions build
+from sdist; an isolated installation passes the eight layout/resource/entrypoint
+checks without the source tree on `PYTHONPATH`. A separate Lima Linux run checks
+projected-proc Bubblewrap isolation, shim compilation, writable candidate files,
+read-only contracts and the mounted shell guard. These are local regressions,
+not a new live-model/GPU campaign or an internal CI run. No test fixtures or
+generated distribution files are installed into the Agent workspace.
 
 The private Gateway remains a sizable compatibility executor: Evaluation request construction and the physical Agate adapters still reuse it. Importing light services must not add their private directory to global `sys.path` or shadow upstream modules.
 
@@ -655,16 +808,43 @@ Identical mechanics are implemented in the legacy business modules, not duplicat
 | --- | --- | --- |
 | `aka.legacy.agent` | Backend registry, CLI command/settings handling, Pi/Codex adapters, usage/marker parsing, environment construction and native-session lifecycle/resume bookkeeping | Claude `result.usage` accounting, Qoder transcript persistence, prepared Homes, sandbox/capture selection, capture-vs-ledger reconciliation and restrictions on changing Home/restarting a Session |
 | `aka.legacy.evaluation.abba` / `models` | ABBA schedule, batch-result merge and verification values | GeoMean-latency promotion scoring, native Eval acquisition, record reuse, Gateway Record IDs and `reused` fields |
-| `aka.legacy.evaluation.shapes` / `results` | Shape slicing, typed-eval result decoding, compile diagnostics, per-Shape metrics and batch aggregation | Default seed/repetition policy, task identity, exact-source records, safe retries and public result projection |
+| `aka.legacy.evaluation.shapes` | Shape IDs, slicing and input-kwargs helpers | Typed result decoding/aggregation, scoring, seed/repetition policy, task identity, exact-source records, retries and public projection remain Light-owned |
 | `aka.legacy.evaluation.resources` | Profile driver script; the upstream standalone ABBA driver remains packaged for upstream callers | Each caller's staging and authorization; Light ABBA uses native Eval, not the standalone driver |
 | `aka.legacy.task.problem.resources` | Canonical Atrex-Bench harness selected by both runtimes | Each caller's staging and authorization; Light keeps its own ABBA/GeoMean promotion policy outside the harness |
 | `aka.legacy.task.persistence` / `execution.config` | Durable writes, fsync and existing evaluator/queue configuration parsing | Light's no-follow reads, private snapshots, execution limits and capability checks |
+| `aka.legacy.workflow.phase_tokens` | Phase/Attempt token aggregation | Provider capture, `result.usage` accounting and capture-vs-ledger reconciliation remain Light-owned |
+| `aka.legacy.execution.profiling` | Utilization math, AMD assembly extraction and the NCU classification engine | Light retains its CSV-oriented CLI, source attribution and Agent-facing guidance; only the classification calculations are shared with the binary-report CLI |
+| `aka.legacy.execution.processes` | Process identity, registry, guardian and owned-session lifecycle | Light selects a direct-file launcher and passes Bubblewrap argument FDs; Legacy keeps its default module launcher and existing no-FD handoff grammar |
+| `aka.legacy.task.git` / `task.candidate_workspace.state` | Git queries, dirty/change detection and baseline/commit facts | Light source sealing, multi-file constraints, version facts, promotion audits and optional memory remain local |
+| `aka.legacy.execution.gateway.request_values` | Relative-path normalization, syntactic argv/env parsing, inline-import inspection and FP4 detection | Each Gateway keeps its own routing, authorization, submission, retry, timeout and idempotency policies |
+| `aka.legacy.evaluation.drivers.numerical_inputs` | Probe scheduling, constraints, tensor-leaf ABI traversal and input generation | Suite validation, remote evaluator execution, diagnostics, planner repair and acceptance remain caller-owned |
+| `aka.legacy.evaluation.evidence_fields` | Pure Wiki attribution, evaluation and PPU field normalization | Journal storage, locks, evidence authorization, report gates and Workflow stay independent |
 
 The Agent reuses its base lifecycle through policy hooks; it does not replace Light's capture-aware invocation with main's default runner. The two Gateway executors share calculations, not transport/retry policy. Light adds recovery and diagnostic projection at its own boundaries; selecting the main executor does not enable them. Light promotion uses GeoMean latency reduction; the upstream provider retains its `performance_score` rule.
 
 Journal, Tool Runtime and Workflow remain separate Light implementations. CandidateWorkspace and Execution retain their existing upstream provider inheritance and Light overrides. Experiment owns private store/dedup/checkpoint policy; it consumes shared evaluator calculations through the selected Evaluation service. No shared module imports Light, and selecting the upstream composition does not activate Light policies.
 
-Builds copy `long_horizon/remote_abba.py` and `reference/profile_driver.py` verbatim into the legacy wheel's evaluation assets. These root files are the only maintained script sources. Light no longer keeps duplicate script bodies, and installed resource lookup does not require those scripts to exist in the checkout.
+Standalone scripts are maintained in their owning package, including
+`aka.legacy.evaluation.drivers.remote_abba` and
+`aka.legacy.execution.profiling.profile_driver`. Light publishes the shared
+resources through its catalog instead of maintaining duplicate script bodies.
+Installed resource lookup does not depend on checkout-level copies.
+
+Shared imports must not require AKA on a GPU worker. Profile bundles therefore
+ship `ncu_classification.py` beside the classifier. Numerical probes ship
+`numerical_inputs.py` beside their driver; both callers include that helper in
+the validation digest and transport inputs. Package-side imports and standalone
+remote scripts use the same implementation.
+
+The reuse pass preserves the four profile configurations and Light's policy,
+public projection, execution retry, Journal service, Tool Runtime and Workflow
+implementations. Offline before/after checks cover argv/error handling, token and
+Journal fields, numerical scheduling and standalone scripts. All 18 reuse checks
+pass on macOS and Lima Linux, including actual direct/handoff subprocesses and
+FD transfer. The 224-case local suite passes with four platform-specific skips;
+Lima also passes the nine dependency/sandbox checks, including private and
+projected-proc Bubblewrap. These checks do not claim new model/GPU performance or
+live Campaign evidence, and the test fixtures remain outside the repository.
 
 ## Infrastructure recovery and Agent feedback
 
@@ -715,7 +895,7 @@ finite GeoMean/per-Shape latencies and full V0 Shape coverage. Historical reads
 retain their passing-status, Shape-coverage and Episode source-binding checks,
 and carry a valid reference score when present. The Legacy gates are unchanged.
 
-Light's shared defaults are defined in `aka.light.evaluation.policy`. Timing and execution controls remain aligned with Runtime production: 100 timing iterations, 10 warmup iterations, 120-second candidate/performance limits, clock locking, and a 600-second default allocation timeout. Correctness instead preserves the legacy candidate gate: full Evaluate and candidate correctness use 6 cases (base plus 5 additional). Full Bootstrap/V1 measurements use the same sampling defaults; explicitly targeted bring-up smoke remains one case. Evaluate and ABBA split into one Shape per batch, with up to 16 batches in parallel. Explicit operator/request overrides remain part of task identity.
+Light's shared defaults are defined in `aka.light.evaluation.policy`. Performance sampling matches Legacy: 20 timing iterations and 5 warmup iterations. Execution controls retain a 600-second candidate initialization limit, a 120-second performance limit, clock locking, and a 600-second default allocation timeout. Correctness preserves the legacy candidate gate: full Evaluate and candidate correctness use 6 cases (base plus 5 additional). Full Bootstrap/V1 measurements use the same sampling defaults; explicitly targeted bring-up smoke remains one case. Evaluate and ABBA split into one Shape per batch, with up to 16 batches in parallel. Explicit operator/request overrides remain part of task identity. Changing these defaults changes measurement identity, so records made with the previous 100/10 sampling policy remain readable but are not reused for new default requests.
 
 ABBA submits native `Eval` requests with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Agent exploration defaults to 6 correctness cases; the exact Supervisor retention request uses 1 case after the separate six-case candidate gate. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume; the former Dev-driver fallback is removed. SOL/SSH comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
 
@@ -769,7 +949,7 @@ testing. Neither compatibility mode is a network isolation boundary.
 
 `sandbox=none` is cooperative same-UID coordination, not a malicious-Agent security boundary. Private directory layout and HTTP capabilities do not stop a process with the operator's own OS privileges. With the legacy Workflow, even Bubblewrap must retain the Git/evaluator/credential access required by that workflow. Choose the complete `light-sandbox` composition for a Git-free draft and Supervisor-owned GPU/Wiki credentials. This is filesystem/process isolation, not network isolation or a separate OS account.
 
-Begin a new workspace when changing between upstream and light Workflows. Do not point two implementations at the same live workspace, or assume their checkpoints are interchangeable. Keep the previous revision and workspace backup for rollback. Omitting `--profile` (or selecting `workflow`) restores upstream behavior for a new run; selecting `observed` or `sandbox` changes only the Agent on an upstream Workflow. Preserve the selected composition and options when resuming.
+Begin a new workspace when changing between Legacy and Light Workflows. Do not point two implementations at the same live workspace, or assume their checkpoints are interchangeable. Keep the previous revision and workspace backup for rollback. Explicitly selecting `--profile workflow` restores Legacy behavior for a new run; omitting `--profile` now selects Light. Selecting `observed` or `sandbox` changes only the Agent on a Legacy Workflow. Preserve the selected composition and options when resuming; frozen continuations do not adopt the new-launch default.
 
 Light reuses the shared Workflow startup and records its own resource snapshot in
 the frozen launch context. The snapshot contains the selected plugin fingerprints;
@@ -835,6 +1015,25 @@ reserved-client restoration while custom edits survive.
 Runtime-policy alignment was checked on 2026-10-19 with 33 targeted offline regressions: environment recovery, timeout classification, SDK request/CLI compatibility, native ABBA parsing and resume, exact measurement defaults, and latency-based promotion. The combined regression run contains 150 checks: 146 passed and four Linux-only checks were skipped on macOS. Request construction was checked against the installed Agate SDK 0.14.3 and native result parsing against Runtime. The framework/legacy/light wheels were rebuilt from sdists and installed into a fresh environment; profile, Gateway entrypoint, service/asset and controlled capture smoke checks passed. No live GPU or model task was submitted for this alignment.
 
 Validation uses external temporary fixtures, not committed test modules. It covers module boot/dispose, independent capture selection, native session resume, revoked HTTP capabilities, report correction, Direction/Experiment evidence, sealed candidates surviving later edits, stable Kernel IDs, record reads and duplicate detection after reopening the store, per-Shape median aggregation, confirmed-rejection classification and unknown-submission recovery.
+
+On 2026-10-21, 21 targeted Execution/recovery checks passed on macOS and Lima/Linux.
+They cover full launcher preservation, unchanged Legacy default argv, the public
+`reliable` execution path, shared outage exception identity, schema-4 selection
+persistence, clean-process Light service reconstruction, missing/corrupt/changed
+selection rejection, explicit schema-3 migration and interrupted-migration replay.
+Linux checks all four Light profile selections; macOS checks the two native profiles.
+The checks also retain same-ID polling, persisted idempotency keys, confirmed-rejection
+handling and the 60-second validation retry policy. Fourteen existing targeted
+Gateway/environment recovery regressions passed separately. These are offline
+fault-injection and local-process checks, not live model/GPU or outage-monitor runs.
+
+The native Session Home binding was checked with eight targeted regressions on
+macOS and with real Bubblewrap in Lima/Linux in both private and projected proc
+modes. Controlled CLI subprocesses write root and subagent transcripts, continue
+after a simulated SIGTERM exit, and close/export/restore their checkpoints. The
+checks also cover constructor-time Codex observer binding, per-Session isolation,
+unchanged native/Legacy Homes and rejection of mid-Session Home changes. These
+are lifecycle checks with synthetic provider output, not live model/GPU runs.
 
 The research-recording switch adds coverage for composition patches, frozen Episode settings,
 disabled-write errors, direct report citations, incorrect/mismatched evidence rejection, failed

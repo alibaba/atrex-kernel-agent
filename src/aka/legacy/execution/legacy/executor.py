@@ -52,8 +52,12 @@ class LegacyExecutor:
         cancel_event = request.cancel_event
         if sum(bool(value) for value in (ssh, url, profile)) > 1:
             raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
+        if not request.launcher:
+            raise ValueError("sandbox launcher must not be empty")
         cmd = [
-            request.launcher[0], "-m", "aka.legacy.execution.gateway.sandbox",
+            # The controller-selected provider owns the launcher. Preserve its
+            # complete prefix so reliable Execution can select Light's Gateway.
+            *request.launcher,
             "--kind",
             gateway_kind,
             "--hardware",

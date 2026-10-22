@@ -7,10 +7,10 @@ from pathlib import Path
 import subprocess
 import tempfile
 
-from aka.light.orchestrator.durable_state import durable_write_json
-from aka.light.supervisor.workspace import publish
-from aka.light.orchestrator.session_tail import read_regular_bytes
-from aka.light.long_horizon.git_episode import git_blob, git_head
+from aka.legacy.task.persistence import durable_write_json
+from aka.light.workspace.files import publish
+from aka.light.agent.session_tail import read_regular_bytes
+from aka.light.workspace.git import git_blob, git_head
 from .search import read_state
 
 
@@ -78,7 +78,7 @@ def commit_files(workspace: Path, transaction: Path, files: dict[str, bytes | No
             raise RuntimeError(f"Refusing to replace unexpected content during search publication: {name}")
     for name, data in files.items():
         if data is None:
-            from aka.light.orchestrator.agent_home import open_private_directory
+            from aka.light.agent.home import open_private_directory
             with open_private_directory((workspace / name).parent) as parent:
                 try:
                     os.unlink(Path(name).name, dir_fd=parent)

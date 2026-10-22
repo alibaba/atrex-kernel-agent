@@ -50,5 +50,5 @@
     "light_acceptance",
     "light_journal"
   ],
-  "doc": "Opt-in AKA-light services with native Agent execution; the default Workflow profile is unchanged."
+  "doc": "Default optimizer launch: managed AKA-light services with native Agent execution; Bubblewrap is not enabled."
 }

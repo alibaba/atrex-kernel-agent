@@ -13,7 +13,7 @@ import subprocess
 import threading
 import time
 
-from aka.light.orchestrator.recovery_processes import session_process_snapshot
+from aka.light.agent.recovery_processes import session_process_snapshot
 
 DEFAULT_TIMEOUT_SECONDS = 8 * 60 * 60
 _BUDGET = ContextVar("aka_agent_active_budget", default=None)

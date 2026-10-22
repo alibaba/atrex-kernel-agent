@@ -5,10 +5,10 @@ from collections.abc import Callable
 import hashlib
 import json
 
-from aka.light.orchestrator.constants import SOL_HARNESS
-from aka.light.supervisor.workspace import read_input
+from aka.light.workflow.constants import SOL_HARNESS
+from aka.light.workspace.files import read_input
 from aka.light.evaluation.policy import CORRECTNESS_CASES
-from aka.light.supervisor.errors import AgentRequestError, RuntimeStateError
+from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError
 
 SOL_ACCEPTANCE_INPUTS = frozenset({
     "reference.py",
@@ -83,7 +83,7 @@ class CandidateValidation:
 
 class RecordedAcceptance:
     def verifier(self, **options):
-        from aka.light.long_horizon.recorded_verifier import RecordedABBAValidator
+        from aka.light.acceptance.recorded_verifier import RecordedABBAValidator
         return RecordedABBAValidator(**options)
 
     def validate_candidate(self, context: CandidateValidation, source: bytes) -> dict:
@@ -100,7 +100,7 @@ class RecordedAcceptance:
         response = context.measure(candidate_acceptance_argv(atrex_bench=atrex_bench),
                                    source, atrex_bench)
         context.ensure_live()
-        from aka.light.supervisor.projection import source_error_from_stdout
+        from aka.light.evaluation.projection import source_error_from_stdout
         source_error = source_error_from_stdout(response["stdout"])
         if source_error is not None:
             error = source_error["error"]
@@ -185,7 +185,7 @@ class RecordedAcceptance:
             feedback = validator(source)
             context.ensure_live()
             if feedback:
-                from aka.light.orchestrator.constants import SUPPLEMENTAL_REPAIR_PREFIX
+                from aka.light.workflow.constants import SUPPLEMENTAL_REPAIR_PREFIX
                 if feedback.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
                     raise AgentRequestError(
                         "The candidate failed a measured supplemental numerical probe; report not accepted.",

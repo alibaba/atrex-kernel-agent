@@ -16,10 +16,10 @@ import uuid
 
 from aka.light.execution.process import ExecutionControl
 from aka.light.runtime.errors import GatewayExecutionUnavailable, SessionRevokedError
-from aka.light.supervisor.errors import RuntimeStateError
-from aka.light.supervisor.workspace import publish
-from aka.light.orchestrator.agent_home import open_private_directory
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.light.runtime.request_errors import RuntimeStateError
+from aka.light.workspace.files import publish
+from aka.light.agent.home import open_private_directory
+from aka.light.agent.session_tail import read_regular_bytes
 
 
 def digest(value):
@@ -157,7 +157,7 @@ class WikiService:
                 # Use a request-local identity; never mutate capability.deadline/request_id.
                 from dataclasses import replace
                 owner.audit_process(replace(capability, request_id=request_id), "wiki", argv, process)
-                from aka.light.supervisor.projection import credential_values, project_response
+                from aka.light.evaluation.projection import credential_values, project_response
                 response = project_response(process, generalized=owner.config.private_reference_dir is not None,
                     private_values=credential_values(dict(environment, **redaction_values)), wiki=True,
                     private_paths=(str(staged), str(owner.root), str(owner.audit_root or ""), policy.settings_file, policy.base_url))

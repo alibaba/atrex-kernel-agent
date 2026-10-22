@@ -5,5 +5,5 @@
   "environment_values": {
     "AKA_LEGACY_REPO_ROOT": "${aka:repo_root}"
   },
-  "doc": "Opt-in session capture on the standard Workflow; the default Workflow profile is unchanged."
+  "doc": "Explicit Legacy Workflow with Light session capture; no managed Light Workflow."
 }

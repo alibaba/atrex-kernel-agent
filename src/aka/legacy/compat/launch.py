@@ -13,26 +13,7 @@ from aka.contracts.workflow_launch import decode_launch
 from aka.legacy.workflow.process_environment import (
     pending_recovery_directory, requires_default_recovery,
 )
-
-PROFILES_DIR = Path(__file__).parents[1] / "workflow" / "profiles"
-OPTIONAL_PROFILES = frozenset({"observed", "sandbox", "light", "light-sandbox"})
-
-
-def _profile_path(value):
-    if value in (None, "", "workflow"):
-        return PROFILES_DIR / "workflow.json"
-    if value in OPTIONAL_PROFILES:
-        try:
-            from importlib.resources import files
-            return Path(str(files("aka.light").joinpath("profiles", f"{value}.json")))
-        except (ImportError, ModuleNotFoundError) as exc:
-            raise RuntimeError(
-                f"launch profile {value!r} requires the optional atrex-aka-light package"
-            ) from exc
-    path = Path(value).expanduser().resolve()
-    if not path.is_file():
-        raise ValueError(f"launch profile does not exist: {path}")
-    return path
+from .profiles import launch_profile_path
 
 
 def run_workflow(repo_root, argv, *, profile=None, patch_files=()):
@@ -54,7 +35,7 @@ def run_workflow(repo_root, argv, *, profile=None, patch_files=()):
         configured = os.environ.get(SELECTION_ENV)
         patches = [{"id": "execution", "config": json.loads(configured)}] if configured else []
         selection = resolve_profile(
-            _profile_path(profile),
+            launch_profile_path(profile),
             variables={"repo_root": str(root)},
             patches=patches,
             patch_files=patch_files,

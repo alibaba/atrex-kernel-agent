@@ -14,9 +14,9 @@ import math
 import os
 from pathlib import Path
 
-from aka.light.orchestrator.agent_home import open_private_directory
-from aka.light.orchestrator.durable_state import durable_write_json
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.light.agent.home import open_private_directory
+from aka.legacy.task.persistence import durable_write_json
+from aka.light.agent.session_tail import read_regular_bytes
 
 
 @dataclass(frozen=True)

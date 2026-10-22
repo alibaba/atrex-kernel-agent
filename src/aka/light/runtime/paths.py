@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 
-SESSION_SHELL_GUARD = Path(__file__).resolve().parents[1] / "tools" / "session_shell_guard.sh"
+SESSION_SHELL_GUARD = Path(__file__).resolve().parents[1] / "agent" / "session_shell_guard.sh"
 
 
 def supervisor_campaign_root(workspace: Path) -> Path:

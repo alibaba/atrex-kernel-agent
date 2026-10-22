@@ -7,13 +7,14 @@ from aka.legacy.agent.native import (
     supports_same_session_resume, session_id_from_stream,
 )
 from aka.contracts.agent import AgentRuntimeCapabilities, NormalizedAgentEvent, TokenUsage
-from aka.light.orchestrator.agent_runtime.adapter import DEFAULT_BACKEND_REGISTRY
-from aka.light.orchestrator.agent_runtime.runtime import (
-    build_agent_runtime, build_session_environment, terminal_usage_from_stream,
+from aka.light.agent.home import HOST_HOME_ENV, PREPARED_ENV, prepare_agent_environment
+from aka.light.agent.runtime.adapter import DEFAULT_BACKEND_REGISTRY
+from aka.light.agent.runtime.runtime import (
+    build_agent_runtime,
+    build_session_environment,
+    terminal_usage_from_stream,
 )
-from aka.light.orchestrator.agent_runtime.codex_ledger import (
-    CodexSessionLedgerObserver, codex_home, observe_codex_usage,
-)
+from aka.light.agent.runtime.codex_ledger import CodexSessionLedgerObserver, observe_codex_usage
 
 
 def fresh_session_command(prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None):
@@ -56,7 +57,7 @@ def normalize_stream(
         adapter.capabilities,
         usage_delta_observed=any(event.kind == "usage_delta" for event in events),
     )
-    from aka.light.orchestrator.session_capture import captured_observation
+    from aka.light.agent.session_capture import captured_observation
 
     captured = captured_observation(stdout, events, capabilities)
     if agent_cli == "codex" and codex_observer is not None and session_id:
@@ -79,46 +80,55 @@ def normalize_stream(
     return events, terminal_usage, capabilities, observation_errors
 
 
-
 class NativeSession(LegacyNativeSession):
-    _build_runtime = staticmethod(build_agent_runtime)
+    _HOME_BINDING_KEYS = (
+        "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR",
+        "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+        "XDG_DATA_HOME", "XDG_STATE_HOME", HOST_HOME_ENV, PREPARED_ENV,
+        "ATREX_AGENT_SANDBOX",
+    )
 
-    def _prepare_environment(self, environment, overrides, session_id):
-        from aka.light.orchestrator.agent_home import prepare_agent_environment
-        for key, value in (overrides or {}).items():
-            if value is None:
-                environment.pop(key, None)
-            else:
-                environment[str(key)] = str(value)
-        return prepare_agent_environment(self.workspace, environment, session_id)
+    def __init__(
+        self, runtime_id, workspace, session_id, executor,
+        environment_overrides=None, check_open=None, *, runtime=None,
+        output_directory=None,
+    ):
+        # The shared constructor has no environment-preparation hook. Prepare
+        # explicitly before it binds the ledger observer, and retain this exact
+        # Home for process launch, continuation and close/checkpoint capture.
+        environment = session_environment(runtime_id)
+        environment["IS_SANDBOX"] = "1"
+        environment.update({
+            str(key): str(value) for key, value in (environment_overrides or {}).items()
+        })
+        environment = prepare_agent_environment(workspace, environment, session_id)
+        super().__init__(
+            runtime_id, workspace, session_id, executor, environment, check_open,
+            runtime=runtime if runtime is not None else build_agent_runtime(runtime_id),
+            output_directory=output_directory,
+        )
+        self._home_binding = {
+            key: self.environment.get(key) for key in self._HOME_BINDING_KEYS
+        }
 
     def _invocation_environment(self, overrides):
         environment = dict(self.environment)
         for key, value in (overrides or {}).items():
-            # Capture and the ledger remain bound to the Home chosen at creation.
-            if key in {"HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR"}:
-                if value != self.environment.get(key):
-                    raise ValueError(f"Cannot change {key} inside an open Agent session")
             if value is None:
                 environment.pop(key, None)
             else:
                 environment[str(key)] = str(value)
+        for key, value in self._home_binding.items():
+            if environment.get(key) != value:
+                raise ValueError(f"Cannot change {key} inside an open Agent session")
         return environment
 
-    @staticmethod
-    def _new_codex_observer(environment):
-        return CodexSessionLedgerObserver(codex_home(environment))
-
-    def _stream_usage(self, stdout):
-        return terminal_usage_from_stream(stdout, backend=self.runtime_id)
-
-    def _observe(self, stdout):
-        return normalize_stream(
-            self.runtime_id, stdout, session_id=self._session_id,
-            codex_observer=self._observer if self._ledger_usable else None,
-            adapter=self._runtime._adapter,
-        )
-
-    def _check_invocation(self, resume):
+    def invoke(self, prompt, *, resume=False, reasoning_effort="max", environment=None):
+        if self._check_open is not None:
+            self._check_open()
+        if self._closed:
+            raise RuntimeError("native session has been closed")
         if not resume and self._invoked:
             raise RuntimeError("Session already invoked; use resume=True or open a new Session")
+        self.environment = self._invocation_environment(environment)
+        return super().invoke(prompt, resume=resume, reasoning_effort=reasoning_effort)

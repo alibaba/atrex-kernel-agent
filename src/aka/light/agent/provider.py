@@ -6,9 +6,9 @@ import uuid
 from weakref import WeakSet
 
 from aka.contracts.agent import AgentRunResult
-from aka.light.orchestrator.agent_runtime.model import AgentRunRequest as LegacyRequest
-from aka.light.orchestrator.agent_runtime.runtime import build_agent_runtime
-from aka.light.orchestrator.agent_runtime.process import run_bounded
+from aka.light.agent.runtime.model import AgentRunRequest as LegacyRequest
+from aka.light.agent.runtime.runtime import build_agent_runtime
+from aka.light.agent.runtime.process import run_bounded
 from aka.light.runtime.paths import SESSION_SHELL_GUARD
 
 

@@ -3,9 +3,8 @@ from dataclasses import fields
 
 from aka.contracts.agent import AgentRunRequest
 from aka.contracts.workspace import SourceRequest
-from aka.light.orchestrator.campaign import Campaign
-from aka.light.orchestrator.constants import REPO_ROOT
-from aka.light.orchestrator.session_io import SessionResult
+from aka.light.workflow.bootstrap import Campaign
+from aka.light.workflow.session_io import SessionResult
 
 
 class ManagedCampaign(Campaign):
@@ -64,32 +63,25 @@ class ManagedCampaign(Campaign):
         return super().start_runtime()
 
     def run(self):
-        from aka.light.orchestrator.environment_recovery import EnvironmentUnavailable as LightEnvironmentUnavailable
-
-        try:
-            from aka.light.runtime.paths import supervisor_campaign_root
-            search_root = supervisor_campaign_root(self.workspace) / "search"
-            if self.module_options.search is not None:
-                if not self.atrex_bench_root or self.sandbox_ssh:
-                    raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA; SOL/SSH search is not supported")
-                from .search import PooledSearch
-                from .search_driver import EpisodeSearchDriver
-                driver = EpisodeSearchDriver(self, search_root)
-                try:
-                    reason = PooledSearch(search_root, self.module_options.search, driver,
-                                          token_budget=self.token_budget).run()
-                    return self._finish(reason)
-                finally:
-                    driver.close()
-            if (search_root / "state.json").exists():
-                raise ValueError("This workspace uses pooled search; restore its search configuration to resume")
-            return super().run()
-        except LightEnvironmentUnavailable as exc:
-            # WorkflowStartup owns the shared recovery monitor. Translate at
-            # this module boundary without reviving the retired Application.
-            from aka.legacy.execution.recovery import EnvironmentUnavailable
-
-            raise EnvironmentUnavailable(str(exc)) from exc
+        # EnvironmentUnavailable is shared with WorkflowStartup; preserve the
+        # original exception and traceback through both serial and pooled runs.
+        from aka.light.runtime.paths import supervisor_campaign_root
+        search_root = supervisor_campaign_root(self.workspace) / "search"
+        if self.module_options.search is not None:
+            if not self.atrex_bench_root or self.sandbox_ssh:
+                raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA; SOL/SSH search is not supported")
+            from .search import PooledSearch
+            from .search_driver import EpisodeSearchDriver
+            driver = EpisodeSearchDriver(self, search_root)
+            try:
+                reason = PooledSearch(search_root, self.module_options.search, driver,
+                                      token_budget=self.token_budget).run()
+                return self._finish(reason)
+            finally:
+                driver.close()
+        if (search_root / "state.json").exists():
+            raise ValueError("This workspace uses pooled search; restore its search configuration to resume")
+        return super().run()
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude",
                      reasoning_effort="max", extra_environment=None, **legacy):
@@ -127,15 +119,14 @@ class ManagedCampaign(Campaign):
             raise ValueError("Selected SourceProvider must supply kernel.py")
         if initial.kind == "sol":
             self.candidate_workspace.prepare_sol(self.workspace, content,
-                problem_files=self.problem.agent.files, reference_dir=REPO_ROOT / "reference")
-            self.candidate_workspace.commit_sol(self.workspace)
+                problem_files=self.problem.agent.files)
             self._link_runtime()
-            from aka.light.orchestrator.workspace_state import v0_baseline_commit
+            from aka.light.workspace.state import v0_baseline_commit
             result = self._run_v0_evaluator_with_correctness_prefetch()
             self._finalize_v0_measurement(result, v0_baseline_commit(self.workspace),
                                          extra_paths=("CLAUDE.md", ".gitignore"))
             return
-        self.candidate_workspace.initialize_at(self.workspace, content, REPO_ROOT / "reference")
+        self.candidate_workspace.initialize_at(self.workspace, content)
         self.candidate_workspace.install_files(self.workspace, self.problem.agent.files)
         self._ensure_agent_problem()
         self._link_runtime()

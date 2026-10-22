@@ -7,17 +7,22 @@ import logging
 import subprocess
 from pathlib import Path
 
-from aka.light.supervisor.gateway_jobs import cacheable_job, job_from_process
-from aka.light.supervisor.measurement_records import (
-    JOB_ROOT_ENV, DuplicateTask, RecordNotFound, private_write, private_write_bytes, read_json,
+from aka.light.execution.gateway_jobs import cacheable_job, job_from_process
+from aka.light.experiment.store import (
+    JOB_ROOT_ENV,
+    DuplicateTask,
+    RecordNotFound,
+    private_write,
+    private_write_bytes,
+    read_json,
 )
-from aka.light.supervisor.workspace import MAX_FILE_BYTES, publish, relative_path
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.light.workspace.files import MAX_FILE_BYTES, publish, relative_path
+from aka.light.agent.session_tail import read_regular_bytes
 
 from aka.light.evaluation.provider import PREFIXES, result_from_response
 from aka.light.evaluation.public_result import seal_response
-from aka.light.supervisor.errors import AgentRequestError, RuntimeStateError, error_response, field_error
-from aka.light.supervisor.identifiers import GATEWAY_RECORD_ID_RE, KERNEL_RECORD_ID_RE
+from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError, error_response, field_error
+from aka.light.experiment.identifiers import GATEWAY_RECORD_ID_RE, KERNEL_RECORD_ID_RE
 QUERY_KINDS = {"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier"}
 
 
@@ -160,8 +165,10 @@ def _typed_correctness_evidence(store, record_id: str) -> bool:
 def execute(store, evaluation, effects, staged, args, argv, environment, command, *,
             reuse_completed=False, reuse_correctness=False) -> dict:
     from aka.light.runtime.errors import RequestDispatchTimeout
-    from aka.light.supervisor.projection import (
-        GATEWAY_ERROR_PREFIX, SOURCE_ERROR_PREFIX, candidate_source_rejection,
+    from aka.light.evaluation.projection import (
+        GATEWAY_ERROR_PREFIX,
+        SOURCE_ERROR_PREFIX,
+        candidate_source_rejection,
         source_error_from_stdout,
     )
     try:
@@ -212,7 +219,7 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     process = effects.run(command, staged, env)
                 except RequestDispatchTimeout as error:
                     if repetition or any(task.directory.glob("repetition-*/jobs/*/state.json")):
-                        from aka.light.orchestrator.infrastructure_retry import InfrastructureUnavailable
+                        from aka.light.execution.retry import InfrastructureUnavailable
                         raise InfrastructureUnavailable(
                             "Measurement partially dispatched; durable job recovery required"
                         ) from error
@@ -276,8 +283,8 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                 for state in states
             )
             if reuse_completed and not cacheable and not source_rejected:
-                from aka.light.supervisor.gateway_jobs import retry_kind
-                from aka.light.orchestrator.infrastructure_retry import InfrastructureUnavailable
+                from aka.light.execution.gateway_jobs import retry_kind
+                from aka.light.execution.retry import InfrastructureUnavailable
 
                 if states and all(state.get("phase") == "terminal" for state in states) and any(
                     retry_kind(job_from_process(subprocess.CompletedProcess(
@@ -289,7 +296,7 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     "Acceptance measurement is incomplete or uncertain; inspect its private Gateway Record"
                 )
             if operation == "evaluate" and repetitions > 1 and samples:
-                from aka.light.supervisor.gateway import EPISODE_EVALUATIONS_PATH
+                from aka.light.evaluation.gateway import EPISODE_EVALUATIONS_PATH
                 # The old report compiler must see the same aggregate as the
                 # Agent, not whichever repetition happened to finish last.
                 log = read_regular_bytes(staged / EPISODE_EVALUATIONS_PATH, limit=MAX_FILE_BYTES + 1)

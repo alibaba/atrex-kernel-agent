@@ -3,7 +3,7 @@ from aka.legacy.agent.plugin import AGENT
 
 name = "agent"
 provide = ("agent",)
-identity_packages = ("aka.light.agent", "aka.light.orchestrator", "aka.contracts.agent")
+identity_packages = ("aka.light.agent", "aka.light.workspace", "aka.contracts.agent", "aka.legacy.agent")
 Config = {"type": "object", "properties": {
     "sandbox": {"type": "string", "enum": ["none", "bwrap"]},
     "capture": {"type": "boolean"},
@@ -17,7 +17,7 @@ Defaults = {"sandbox": "none", "capture": False, "bwrap_executable": "bwrap", "r
 
 def validate_config(config):
     from pathlib import Path
-    from aka.light.orchestrator.agent_sandbox import sandbox_executable
+    from aka.light.agent.sandbox import sandbox_executable
     from .provider import AgentOptions
     for value in config["read_only_paths"]:
         path = Path(value).expanduser()

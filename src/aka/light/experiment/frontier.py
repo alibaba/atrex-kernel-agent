@@ -5,7 +5,7 @@ import logging
 import math
 
 from aka.light.evaluation.provider import result_from_response
-from aka.light.supervisor.measurement_records import MeasurementStore, RECORD_ID, read_record_header
+from aka.light.experiment.store import MeasurementStore, RECORD_ID, read_record_header
 
 
 def kernel_pareto_frontier(store: MeasurementStore) -> dict:

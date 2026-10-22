@@ -2,6 +2,12 @@
 
 ## Overview
 
+New launches default to Light; its module ownership, managed Episode lifecycle and optional
+features are documented in [Light modules and launch profiles](optional-light-modules.md).
+The Fast/Full workflow details below describe the explicit Legacy `--profile workflow`
+selection. They are not the default Light lifecycle. Existing frozen continuations retain
+their selected workflow; changing the launch default does not migrate workspaces.
+
 Atrex Kernel Agent is an orchestrated system for GPU kernel implementation, profiling, and
 iterative optimization. The installed `aka optimize` command is the supported entry point. The
 selected Workflow module owns the optimization lifecycle and launches isolated episodes through

@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 import subprocess
 
-from aka.light.supervisor.measurement_records import MeasurementStore
+from aka.light.experiment.store import MeasurementStore
 
 
 @dataclass(frozen=True)

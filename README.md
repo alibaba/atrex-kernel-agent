@@ -20,10 +20,12 @@ isolation, recovery, and final packaging while keeping acceptance and terminatio
 supervisor control.
 
 The optimization application is launched through the installed `aka optimize` command.
-It selects the application through Core, and the installed Workflow module supplies its
-episode engine.
+New launches default to the **Light** profile: native Agent execution with session capture,
+managed candidate workspaces, a private HTTP Tool Runtime and Supervisor-owned acceptance.
+Use `--profile light-sandbox` for Bubblewrap, or `--profile workflow` for the Legacy workflow.
+Core selects the implementation, and the installed Workflow module supplies its episode engine.
 The supervisor establishes an evaluator-backed V0 and, when enabled, a framework-native V1. Coding
-agents then explore fast, full, or goal episodes in isolated Git worktrees. The supervisor owns
+agents then explore unified Light Episodes (Legacy retains fast/full/goal modes). The supervisor owns
 correctness, production policy, performance verification, and promotion; every outcome is recorded
 without letting an unverified candidate replace the incumbent.
 
@@ -94,7 +96,7 @@ Use the installed `aka optimize` command with this checkout as `--repo-root` to 
 | [Architecture Design](docs/design.md) | Components, authority boundaries, state machine, verification, and recovery |
 | [GPU Wiki](gpu-wiki/README.md) | Structured hardware/kernel knowledge, queries, and trace mining |
 | [Local plugins](docs/plugins.md) | Extend AKA tools and Skills through automatically discovered local plugins |
-| [Optional light modules](docs/optional-light-modules.md) | Select capture, sandboxing, reliable execution or the managed light Workflow without changing upstream defaults |
+| [Light modules and launch profiles](docs/optional-light-modules.md) | Default Light workflow, explicit Legacy selection, sandboxing and optional module configuration |
 | [Optimization dashboard](docs/optimization-dashboard.md) | Optional Core plugin for local progress, performance history and settled token usage |
 | [v0.3.0 release notes](docs/releases/v0.3.0.md) | New features, correctness and measurement changes, and upgrade guidance |
 
@@ -159,7 +161,7 @@ If AKA is useful in your work, please cite the [Atrex paper](https://arxiv.org/a
 
 ## Application framework
 
-After installing the Core, Contracts, Bootstrap and Optimization packages, run:
+After installing the matching framework, legacy and light packages, run:
 
 ```sh
 aka optimize --repo-root /path/to/aka -- \
@@ -167,7 +169,11 @@ aka optimize --repo-root /path/to/aka -- \
 ```
 
 `--repo-root` selects the matching AKA checkout; `--op-dir` selects the native
-Atrex-Bench or SOL problem. See the [installation and application selection
+Atrex-Bench or SOL problem. Omitting `--profile` selects native Light, not Bubblewrap.
+Wiki, Direction/Experiment recording and generated memory remain disabled by default.
+For a new Legacy campaign, add `--profile workflow` before `--`; existing recorded
+continuations retain their original selection. Do not reuse a Legacy workspace as
+a Light workspace. See the [installation and application selection
 guide](docs/application-plugin-migration.md) and [Core interface](docs/plugin-framework.md).
 
 ## License

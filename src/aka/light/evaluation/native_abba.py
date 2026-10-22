@@ -15,13 +15,13 @@ from aka.legacy.evaluation.shapes import batch_shape_ids, shape_batch_request
 from aka.light.evaluation.evaluation_feedback import evaluation_feedback
 from aka.light.evaluation.policy import BATCH_WORKERS, validate_abba_repeats
 from aka.light.evaluation.public_result import correctness_summary
-from aka.light.supervisor.abba_checkpoints import AbbaBatchStore, validate_batch
-from aka.light.supervisor.measurement_records import JOB_ROOT_ENV, EvidenceUnavailable
+from aka.light.experiment.abba_checkpoints import AbbaBatchStore, validate_batch
+from aka.light.experiment.store import JOB_ROOT_ENV, EvidenceUnavailable
 
 
 def _summarize(raw: dict, shapes: list[str]) -> dict:
     """Same per-Shape median (ms -> us) and GeoMean as Runtime's ABBA ledger."""
-    from aka.light.supervisor.gateway_jobs import complete_evaluation
+    from aka.light.execution.gateway_jobs import complete_evaluation
     if not complete_evaluation(raw, {"reference": {"shapes": dict.fromkeys(shapes)}}):
         raise ValueError("Native ABBA run has incomplete evaluator evidence")
     passed = raw.get("passed") or {}
@@ -76,10 +76,10 @@ def parse_native_abba(job: dict, repeats: int, shapes: list[str]) -> dict:
 
 
 def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
-    from aka.light.supervisor.operations import validate_comparison, comparison_run_timeout
-    from aka.light.long_horizon.verifier import merge_abba_batch_payloads
-    from aka.light.supervisor.projection import abba, emit_gateway_error
-    from aka.light.supervisor.gateway_jobs import eval_retry_kind, payload_identity
+    from aka.light.evaluation.operations import validate_comparison, comparison_run_timeout
+    from aka.light.acceptance.verifier import merge_abba_batch_payloads
+    from aka.light.evaluation.projection import abba, emit_gateway_error
+    from aka.light.execution.gateway_jobs import eval_retry_kind, payload_identity
 
     validate_comparison(args)
     if args.ssh or (workspace / "workload.jsonl").exists():

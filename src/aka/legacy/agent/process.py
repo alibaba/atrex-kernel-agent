@@ -10,7 +10,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Protocol
+from typing import Callable, Protocol
 
 from aka.legacy.execution.processes import spawn_owned_session
 
@@ -416,8 +416,14 @@ def dependency_guard(
     violations: list[str],
     environment_state_file: str = "",
     environment_failures: list[str] | None = None,
+    *,
+    classify_process: Callable[[int, list[str]], str | None] | None = None,
 ) -> None:
-    """Kill a coding session on a policy violation or environment failure."""
+    """Kill a coding session on a policy violation or environment failure.
+
+    Alternate Agent transports may supply process-aware classification without
+    changing the polling, termination or environment-recovery policy.
+    """
     while not stop.wait(DEPENDENCY_GUARD_POLL_SECONDS):
         if proc.poll() is not None:
             return
@@ -433,7 +439,8 @@ def dependency_guard(
             signal_process_groups(process_groups, signal.SIGKILL)
             return
         for pid, argv in descendant_process_commands(proc.pid):
-            reason = dependency_process_violation(argv)
+            reason = (dependency_process_violation(argv) if classify_process is None
+                      else classify_process(pid, argv))
             if reason is None:
                 continue
             rendered = " ".join(argv)

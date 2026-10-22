@@ -1,7 +1,8 @@
 {
   "api_version": 1,
   "bundles": [
-    "workflow"
+    "aka.legacy.workflow:profiles/compositions/bundles/workflow.json",
+    "light-services"
   ],
   "patches": [
     {
@@ -42,48 +43,6 @@
         "config": {
           "startup": true
         }
-      }
-    },
-    {
-      "id": "tool_runtime",
-      "insert": {
-        "name": "aka.light.runtime.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "executor",
-      "insert": {
-        "name": "aka.light.execution.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_evaluation",
-      "insert": {
-        "name": "aka.light.evaluation.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_experiments",
-      "insert": {
-        "name": "aka.light.experiment.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_acceptance",
-      "insert": {
-        "name": "aka.light.acceptance.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_journal",
-      "insert": {
-        "name": "aka.light.workflow.journal_plugin",
-        "required": true
       }
     }
   ]

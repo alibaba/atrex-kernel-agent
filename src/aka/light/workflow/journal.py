@@ -1,6 +1,11 @@
 """Bind the existing durable Journal protocol to one controller-owned Episode."""
 from dataclasses import dataclass
-from aka.light.supervisor.journal import SupervisorJournalService, initialize_journal, load_journal, journal_lock
+from aka.light.workflow.journal_service import (
+    SupervisorJournalService,
+    initialize_journal,
+    load_journal,
+    journal_lock,
+)
 
 
 @dataclass(frozen=True)
