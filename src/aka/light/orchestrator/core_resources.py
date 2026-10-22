@@ -170,6 +170,11 @@ class CoreResourceProjection:
             source = Path(source_value)
             if source.is_symlink() or not source.is_dir():
                 raise ValueError(f"Core Agent Skill source is unavailable: {name}")
+            # This controller-selected source may have a stable installation
+            # prefix alias (for example /tmp -> /private/tmp on macOS). Resolve
+            # that prefix before descriptor-based, no-follow reads of the tree.
+            # Agent workspace paths and Skill descendants remain no-follow.
+            source = source.resolve(strict=True)
             for relative, content in bounded_tree_entries(source):
                 publish(workspace, f"skills/{name}/{relative}", content)
             installed.append(name)
