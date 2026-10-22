@@ -1,5 +1,5 @@
 """Replace the existing Agent service, never the startup or Workflow service."""
-from aka.legacy.agent.plugin import AGENT
+from aka.agent.plugin import AGENT
 
 name = "agent"
 provide = ("agent",)

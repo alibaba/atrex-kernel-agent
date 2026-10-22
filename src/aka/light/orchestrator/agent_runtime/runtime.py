@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from aka.legacy.agent.runtime import (
+from aka.agent.runtime import (
     CliAgentRuntime as SharedCliAgentRuntime,
     build_session_environment as shared_session_environment,
 )
@@ -49,12 +49,17 @@ REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 def build_session_environment(runtime_id: str) -> dict[str, str]:
     environment = shared_session_environment(runtime_id)
+    for name in ("ATREX_PRIVATE_REFERENCE_DIR", "ATREX_SANDBOX_REQUIREMENTS_FILE", "AKA_GATEWAY_DEV_DEPENDENCIES"):
+        environment.pop(name, None)
     # HTTP sandboxes mount the Light guard, not the Legacy package resources.
     # Keep the shared environment policy while selecting the visible tool route.
     if not SESSION_SHELL_GUARD.is_file():
         raise ValueError("selected Agent shell guard resource is unavailable")
     environment["BASH_ENV"] = str(SESSION_SHELL_GUARD)
-    return environment
+    screen, state = protected_gateway_identity(environment)
+    environment["ATREX_PROTECTED_GATEWAY_SCREEN"] = screen
+    environment["ATREX_PROTECTED_GATEWAY_STATE_DIR"] = state
+    return DEFAULT_BACKEND_REGISTRY.create(runtime_id).configure_environment(environment)
 
 
 def terminal_usage_from_stream(stdout: str, *, backend: str = "") -> TokenUsage:
@@ -267,7 +272,7 @@ class CliAgentRuntime(SharedCliAgentRuntime):
         # WorkflowExportReader consumes normalized public observations, not the
         # private capture/native transcript tree. Include setup/V1 invocations,
         # even when no Episode was reached or the optional capture is disabled.
-        from aka.legacy.agent.public_output import record_invocation
+        from aka.agent.public_output import record_invocation
 
         try:
             record_invocation(

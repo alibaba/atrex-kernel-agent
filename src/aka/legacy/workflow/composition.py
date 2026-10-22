@@ -6,13 +6,13 @@ from .dependencies import CampaignDependencies
 def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      evaluator_factory=None,
                      workflow_observer=None):
-    from aka.legacy.agent.selection import LegacyAgent
+    from .agent_host import create_agent
     from aka.legacy.task.problem.legacy import LegacyProblemProvider
     from aka.legacy.task.source.legacy import LegacySourceProvider
     from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
 
     owned_agent = agent is None
-    agent = agent if agent is not None else LegacyAgent()
+    agent = agent if agent is not None else create_agent()
     task = task if task is not None else dict(
         problem=LegacyProblemProvider(optimization_mode),
         source=LegacySourceProvider(), workspace=GitCandidateWorkspace(),

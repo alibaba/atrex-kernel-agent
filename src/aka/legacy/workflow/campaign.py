@@ -20,7 +20,7 @@ from typing import Optional
 
 from aka.contracts.problem import LoadedProblem
 from aka.contracts.evaluation import EvaluationUnavailable
-from aka.legacy.agent.runtime import auth_hint
+from aka.agent.runtime import auth_hint
 
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, DEPENDENCY_REVIEW_SCHEMA_VERSION, DEPENDENCY_REVIEW_TIMEOUT_S, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
 from .resources import DEPENDENCY_REVIEW_PROMPT, PROMPTS_DIR
@@ -62,7 +62,7 @@ from .plan_reviewers import (
 from .review_trace import ReviewTrace
 from aka.legacy.execution.configuration import distributed_evaluation_world_size, evaluator_num_gpus
 from aka.legacy.resources.plugins import PluginRegistry
-from aka.legacy.agent.session import SessionResult
+from aka.legacy.workflow.agent_session import SessionResult
 from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
 from aka.legacy.evaluation.local_results import _record_local_test_result
 from aka.legacy.resources.prompts import render_prompt
@@ -426,7 +426,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
-        from aka.legacy.agent.availability import check_review_service
+        from aka.agent.availability import check_review_service
 
         candidate_digest = _production_review_digest(
             workspace, framework, require_gluon

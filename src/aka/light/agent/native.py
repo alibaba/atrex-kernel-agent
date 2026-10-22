@@ -1,6 +1,6 @@
 """Light session policy over the shared Agent lifecycle and resume mechanics."""
 from dataclasses import replace
-from aka.legacy.agent.native import (
+from aka.agent.native import (
     NativeSession as LegacyNativeSession,
     fresh_session_command as _fresh_session_command,
     resume_session_command as _resume_session_command,

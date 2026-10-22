@@ -1,2 +1,4 @@
-"""Agent implementation uses the shared invocation contract."""
-from aka.contracts.agent import *  # noqa: F403
+"""Compatibility alias; implementation belongs to aka.agent."""
+import sys
+from importlib import import_module
+sys.modules[__name__] = import_module("aka.agent.model")

@@ -20,7 +20,7 @@ from aka.legacy.workflow.store import VERIFY_DIR
 from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.legacy.task.durable import durable_write_json
-from aka.legacy.agent.availability import check_review_service
+from aka.agent.availability import check_review_service
 from aka.legacy.experiment.retry import retry_infrastructure
 from aka.contracts.execution import ExecutionPending
 from aka.legacy.workflow.review_trace import ReviewTrace
@@ -149,7 +149,7 @@ def _sources(campaign, workspace, *, harness=None):
 
 
 def _request_review(campaign, workspace, files, digest, previous=None):
-    from aka.legacy.agent.session import run_session
+    from aka.legacy.workflow.agent_session import run_session
 
     def review_once():
         timeout = campaign.production_review_timeout

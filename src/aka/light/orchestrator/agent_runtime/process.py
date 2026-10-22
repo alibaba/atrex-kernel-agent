@@ -9,10 +9,25 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from aka.legacy.agent.process import (
-    ProcessRunner, protected_gateway_identity,
-    DEFAULT_PROTECTED_GATEWAY_SCREEN, DEFAULT_PROTECTED_GATEWAY_STATE_NAME,
-)
+from aka.agent.process import ProcessRunner
+
+DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
+DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
+def protected_gateway_identity(
+    environment: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Resolve shared gateway protection targets without embedding host paths."""
+    values = os.environ if environment is None else environment
+    screen = values.get(
+        "ATREX_PROTECTED_GATEWAY_SCREEN", DEFAULT_PROTECTED_GATEWAY_SCREEN
+    )
+    state_dir = values.get("ATREX_PROTECTED_GATEWAY_STATE_DIR")
+    if not state_dir:
+        cache_home = values.get("XDG_CACHE_HOME")
+        cache_root = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+        state_dir = str(cache_root / DEFAULT_PROTECTED_GATEWAY_STATE_NAME)
+    return screen, state_dir
+
 
 from ..recovery_processes import spawn_owned_session
 

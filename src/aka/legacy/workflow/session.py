@@ -9,7 +9,7 @@ from typing import Callable
 
 from aka.legacy.execution.recovery import raise_if_environment_blocked
 
-from aka.contracts.agent import Agent, NativeInvocation
+from aka.contracts.agent import Agent, AgentAccess, NativeInvocation
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
 from .protocol import handoff_diagnosis, read_handoff
 
@@ -80,17 +80,21 @@ class LongSessionRunner:
         telemetry_environment: Mapping[str, str] | None = None,
         record_usage: Callable[[int], None] | None = None,
         output_directory: Path | None = None,
+        access: AgentAccess | None = None,
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
         is_codex = self.agent_cli == "codex"
         active_session_id = "" if is_codex else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
+        access_options = {"access": access} if access is not None else {}
         native = self.agent.open_session(
             self.agent_cli,
             workspace,
             session_id=session_id,
-            environment=telemetry_environment, output_directory=output_directory,
+            environment=telemetry_environment,
+            output_directory=output_directory,
+            **access_options,
         )
         try:
             telemetry_attempt_prefix = native.environment.get(
@@ -243,6 +247,6 @@ def budget_tokens(turn, agent_cli):
         return turn.terminal_usage.total_tokens
     if agent_cli == "codex":
         return 0
-    from aka.legacy.agent.runtime import terminal_usage_from_stream
+    from aka.agent.runtime import terminal_usage_from_stream
 
     return terminal_usage_from_stream(turn.stdout).total_tokens or 0

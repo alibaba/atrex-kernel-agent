@@ -140,6 +140,37 @@ class AgentRuntimeCapabilities:
 
 
 @dataclass(frozen=True)
+class AgentMount:
+    """One host-authorized path visible at an explicit absolute sandbox path."""
+    source: Path
+    target: Path
+    writable: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.source, Path) or not isinstance(self.target, Path):
+            raise TypeError("Agent mounts require Path source and target")
+        if type(self.writable) is not bool:
+            raise TypeError("Agent mount writable flag must be boolean")
+
+
+@dataclass(frozen=True)
+class AgentAccess:
+    """Workspace view additions; CLI environment values never grant filesystem access."""
+    mounts: tuple[AgentMount, ...] = ()
+    hidden_paths: tuple[Path, ...] = ()
+    read_only_paths: tuple[Path, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "mounts", tuple(self.mounts))
+        object.__setattr__(self, "hidden_paths", tuple(self.hidden_paths))
+        object.__setattr__(self, "read_only_paths", tuple(self.read_only_paths))
+        if any(not isinstance(item, AgentMount) for item in self.mounts):
+            raise TypeError("Agent access mounts must be AgentMount values")
+        if any(not isinstance(path, Path) for path in (*self.hidden_paths, *self.read_only_paths)):
+            raise TypeError("Agent access restrictions require Path values")
+
+
+@dataclass(frozen=True)
 class AgentRunRequest:
     workspace: Path
     prompt: str
@@ -148,6 +179,7 @@ class AgentRunRequest:
     session_id: str | None = None
     environment: Mapping[str, str | None] | None = None
     observation_directory: Path | None = None
+    access: AgentAccess | None = None
 
 
 @dataclass(frozen=True)
@@ -193,6 +225,7 @@ class Agent(Protocol):
         session_id: str = "",
         environment: Mapping[str, str] | None = None,
         output_directory: Path | None = None,
+        access: AgentAccess | None = None,
     ) -> "AgentSession": ...
 
 

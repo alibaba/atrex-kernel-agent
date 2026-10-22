@@ -20,7 +20,7 @@ from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
 WORKFLOW_EXPORT = ServiceKey('workflow_export', 'WorkflowExportReader', module='aka.contracts.workflow_export')
 name = 'export'
 provide = ('workflow_export',)
-identity_packages = ('aka.legacy.workflow', 'aka.legacy.agent')
+identity_packages = ('aka.legacy.workflow', 'aka.agent')
 Config = {'type': 'object', 'properties': {}, 'additionalProperties': False}
 Defaults = {}
 RUNTIME = '.atrex_long_horizon'
@@ -465,7 +465,7 @@ class RetainedWorkflowExport:
 
     def read(self, workspace):
         from .public_state import writer_active
-        from aka.legacy.agent.public_output import read_sessions
+        from aka.agent.public_output import read_sessions
         workspace = Path(workspace).resolve()
         if not (workspace/RUNTIME).exists() and (workspace/'workflow-export.json').is_file():
             return snapshot_from_document(document(workspace/'workflow-export.json'))

@@ -7,7 +7,7 @@ from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT, MAX_SANDBOX_T
 from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND
 from aka.legacy.task.hardware import _workspace_slug
 from aka.legacy.workflow.policy import OPTIMIZATION_MODE_CHOICES
-from aka.legacy.agent.adapter import codex_settings_args, pi_settings_args
+from aka.agent.adapter import codex_settings_args, pi_settings_args
 from aka.legacy.workflow.invocation import WorkflowLaunch, encode_launch
 from .cli_problem import problem_request
 from .cli_request import campaign_request

@@ -1,7 +1,7 @@
 """Workflow constants implementation and callable interface."""
 from __future__ import annotations
 
-from aka.legacy.agent.adapter import DEFAULT_BACKEND_REGISTRY
+from aka.agent.adapter import DEFAULT_BACKEND_REGISTRY
 
 
 from aka.legacy.acceptance.policy import CONVERT_PERF_TOL

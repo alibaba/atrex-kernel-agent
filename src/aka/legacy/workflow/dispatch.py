@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os, signal, sys, time
 import traceback
-from aka.legacy.agent.process import descendant_process_commands
+from aka.agent.process import descendant_process_commands
 from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, environment_is_blocked
 
 
