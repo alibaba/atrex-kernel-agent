@@ -34,9 +34,31 @@ WORKSPACE_ONLY = {"tools", "skills", "scratch", "memory", "input", "profiles", "
     "solution.json", "config.json", "test_kernel.py", "profile_driver.py", "evaluations.jsonl",
     "numerical_probe.py", "probe-request.json", "policy_review_request.json",
     ".gitignore", ".claude", ".codex", ".qoder", ".agents", ".pi", ".orchestrator_mode.json",
-    ".gpu_wiki_profile", ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins",
+    ".gpu_wiki_profile", ".aka", ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins",
     ".atrex_stall_state.json", ".orchestrator_state.json", "framework_baseline.json",
     "baseline_report.md", "trace-retention-manifest.json", ".atrex_environment", ".qodersec", ".venv", "node_modules", POLICY}
+
+# Runtime-selected Core destinations are registered from the trusted bound
+# descriptor by the controller. Keep the registry workspace-scoped so one
+# Campaign's dynamic mounts never change another Campaign's source policy.
+_MANAGED_PATHS: dict[str, frozenset[str]] = {}
+
+
+def register_managed_paths(workspace, paths):
+    root = Path(workspace).resolve()
+    safe = set()
+    for value in paths:
+        relative(value)
+        safe.add(value)
+    _MANAGED_PATHS[str(root)] = frozenset(safe)
+
+
+def _managed_paths(workspace):
+    return _MANAGED_PATHS.get(str(Path(workspace).resolve()), frozenset())
+
+
+def _managed(name, paths):
+    return any(name == root or name.startswith(root + "/") for root in paths)
 
 
 def relative(value: str, *, dot=False) -> str:
@@ -185,21 +207,25 @@ def unpack(source):
 
 
 def collect(workspace, policy, *, validate=True):
+    managed = _managed_paths(workspace)
     files = {}
     for parent, dirs, names in os.walk(workspace, followlinks=False):
         rel = Path(parent).relative_to(workspace)
         for name in (*dirs, *names):
             key = (rel / name).as_posix()
+            if _managed(key, managed):
+                continue
             if (key.split("/")[0] not in WORKSPACE_ONLY | {".git"}
                     and (Path(parent) / name).is_symlink()):
                 raise ValueError("Source tree cannot contain symlinks")
-        dirs[:] = [n for n in dirs if source_name((rel / n).as_posix())]
+        dirs[:] = [n for n in dirs if source_name((rel / n).as_posix())
+                   and not _managed((rel / n).as_posix(), managed)]
         for name in dirs:
             if (Path(parent) / name).is_symlink():
                 raise ValueError("Source tree cannot contain symlink directories")
         for name in names:
             relative_name = (rel / name).as_posix()
-            if not source_name(relative_name):
+            if not source_name(relative_name) or _managed(relative_name, managed):
                 continue
             files[relative_name] = read_regular_bytes(Path(parent) / name, limit=MAX_FILE + 1)
             if len(files) > 4096 or sum(map(len, files.values())) > MAX_TOTAL:
@@ -227,12 +253,13 @@ def from_git(workspace, revision):
     policy = validate_policy(json.loads(result.stdout))
     listing = subprocess.run(["git", "ls-tree", "-r", "-z", revision], cwd=workspace, capture_output=True, check=True).stdout
     files = {}
+    managed = _managed_paths(workspace)
     for entry in listing.split(b"\0"):
         if not entry:
             continue
         meta, name = entry.split(b"\t", 1)
         name = name.decode()
-        if source_name(name):
+        if source_name(name) and not _managed(name, managed):
             if meta.split()[0] not in {b"100644", b"100755"}:
                 raise ValueError("Committed source contains a link or special object")
             files[name] = git_blob(workspace, revision, name)

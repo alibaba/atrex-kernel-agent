@@ -14,9 +14,7 @@
       "name": "aka.legacy.resources.plugin",
       "required": true,
       "config": {
-        "plugins": [
-          "${aka:repo_root}/plugins/gpu-wiki"
-        ]
+        "plugins": []
       }
     },
     {

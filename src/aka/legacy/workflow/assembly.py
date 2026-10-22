@@ -31,7 +31,15 @@ class LegacyWorkflow:
         from .campaign import Campaign
 
         return Campaign(
-            request, replace(self._dependencies, workflow=self._run_campaign), problem
+            request, replace(self._dependencies, workflow=self._run_campaign,
+                             agent_resources=self._resources_for(request)), problem
+        )
+
+    def _resources_for(self, request):
+        """Business owns target binding; Bootstrap never decodes Workflow argv."""
+        from aka.resources.binding import bind_campaign_resources
+        return bind_campaign_resources(
+            self._dependencies.agent_resources, request.workspace, request.name
         )
 
     def _load_problem(self, request: CampaignRequest) -> LoadedProblem:

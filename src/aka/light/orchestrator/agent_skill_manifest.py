@@ -19,7 +19,6 @@ SKILL_MANIFEST = {
         "references/journal.md",
         "references/records.md",
     )),
-    "KernelWiki": SkillManifest("skills/KernelWiki", ("SKILL.md",)),
     "autonomous-gpu-kernel-timeline": SkillManifest("skills/autonomous-gpu-kernel-timeline", (
         "SKILL.md",
         "references/cuda-backend.md",

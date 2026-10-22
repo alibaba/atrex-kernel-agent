@@ -69,6 +69,10 @@ class EpisodeWorkspace:
         self.is_ppu = is_ppu
         self.research_records = research_records
         self.plugin_registry = plugin_registry
+        managed = getattr(plugin_registry, "managed_paths", None)
+        if callable(managed):
+            from aka.light.workspace.sources import register_managed_paths
+            register_managed_paths(self.worktree, managed())
         self.inherit_state = inherit_state
         self.history = history
         from aka.light.workspace.adaptive import AdaptiveState, reserved_paths

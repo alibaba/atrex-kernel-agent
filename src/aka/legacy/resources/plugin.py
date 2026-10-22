@@ -12,6 +12,9 @@ interpolate = ("plugin_dir", "plugins")
 
 
 def apply(ctx, config):
+    if ctx.get("agent_resources") is not None:
+        raise ValueError("legacy tool catalogs cannot be combined with Core Agent resources")
+    ctx.contribute("tool_catalog_owners", "legacy-manifest", "independent")
     from .contributions import _selected_scope
     from .plugins import _selected_catalog, _selected_plugins
     value = config.get("plugin_dir", "")

@@ -1,0 +1,68 @@
+{
+  "api_version": 1,
+  "entries": [
+    {
+      "id": "execution",
+      "name": "aka.legacy.execution.plugin",
+      "required": true,
+      "config": {
+        "profile": "legacy"
+      }
+    },
+    {
+      "id": "resources",
+      "name": "aka.resources.plugin",
+      "required": true,
+      "config": {
+        "known_phases": [
+          "common",
+          "setup",
+          "episode",
+          "fast_episode",
+          "framework_baseline"
+        ]
+      }
+    },
+    {
+      "id": "problem",
+      "name": "aka.legacy.task.problem.plugin",
+      "required": true,
+      "config": {
+        "worker_requirements": "${env:ATREX_SANDBOX_REQUIREMENTS_FILE}"
+      }
+    },
+    {
+      "id": "source",
+      "name": "aka.legacy.task.source.plugin",
+      "required": true
+    },
+    {
+      "id": "candidate",
+      "name": "aka.legacy.task.candidate_workspace.plugin",
+      "required": true
+    },
+    {
+      "id": "agent",
+      "name": "aka.legacy.agent.plugin",
+      "required": true
+    },
+    {
+      "id": "evaluation",
+      "name": "aka.legacy.evaluation.plugin",
+      "required": true
+    },
+    {
+      "id": "workflow-observer",
+      "name": "aka.legacy.workflow.observer",
+      "required": true
+    },
+    {
+      "id": "workflow",
+      "name": "aka.legacy.workflow.plugin",
+      "required": true,
+      "config": {
+        "startup": true
+      }
+    }
+  ]
+}

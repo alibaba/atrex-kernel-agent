@@ -506,10 +506,11 @@ class LongHorizonCampaign:
             )
             acceptance_request = selected_verifier.agent_instructions(**context)
         research_records = self.base_campaign.research_records
+        core_resources = self.base_campaign._uses_core_resources()
         fragments = {
             "RESEARCH_WORKFLOW": "episode_research.md" if research_records else "episode_unrecorded.md",
             "RUNTIME_JOURNAL_CONTRACT": "runtime_journal.md" if research_records else "runtime_report.md",
-            "WIKI_DIRECTIVE": "episode_wiki.md" if self.base_campaign.tool_runtime.wiki else "",
+            "WIKI_DIRECTIVE": "",
             "CONVERSION_DIRECTIVE": "",
             "PPU_DIRECTIVE": "",
         }
@@ -537,8 +538,7 @@ class LongHorizonCampaign:
                 (PROMPTS_DIR / name).read_text(encoding="utf-8").strip() if name else "",
             )
         template = template.replace("{{CONVERSION_RESEARCH}}", (
-            (PROMPTS_DIR / "conversion_research.md").read_text(encoding="utf-8").strip()
-            if self.base_campaign.tool_runtime.wiki else
+            self.base_campaign.plugin_directive("episode") if core_resources else
             "Wiki is disabled. Use supplied public conversion knowledge and compiler evidence; "
             "do not guess architecture-specific layouts. Report a blocker if necessary information is unavailable."
         ))

@@ -7,7 +7,7 @@ name = "atrex-aka-light"
 version = "0.1.0"
 description = "Optional managed AKA Workflow, Agent isolation, observation and reliable execution"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-legacy==0.1.0"]
+dependencies = ["atrex-aka-legacy==0.1.0", "atrex-aka-resources==0.1.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

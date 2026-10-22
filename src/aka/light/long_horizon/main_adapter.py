@@ -87,7 +87,7 @@ def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(
             campaign.agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
-            wiki=campaign.tool_runtime.wiki,
+            wiki=campaign._uses_core_resources() and campaign._wiki_enabled_for_agent(),
         ),
     }
 

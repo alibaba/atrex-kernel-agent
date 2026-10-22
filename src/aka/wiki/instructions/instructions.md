@@ -1,9 +1,5 @@
 GPU Wiki provides isolated hardware facts and benchmark-falsifiable optimization experience.
-Use `python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json` with a JSON object:
-
-```json
-{"request": "Target hardware B200, DSL triton. Optimize operator rmsnorm and retrieve techniques and pitfalls.", "max_records": 6}
-```
+Use the selected Core tool `gpu-wiki.query` with its declared input schema. For example, ask about B200, Triton, and rmsnorm optimization techniques with a six-record limit.
 
 For detailed questions include the exact true product, authoritative runtime architecture, operator,
 DSL, shapes/dtypes, measured symptoms, failed attempts and remaining hypotheses. Never substitute

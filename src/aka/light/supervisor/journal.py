@@ -806,13 +806,15 @@ def record_experiment(
     path: Path,
     campaign_root: Path,
     request: Mapping[str, object],
+    *,
+    agent_resources=None,
 ) -> dict[str, object]:
     value = dict(request)
     current = _mutable_journal(path)
     require_fields(
         value,
         EXPERIMENT_FIELDS,
-        optional={"wiki_usage", "wiki_query_ids", "wiki_usage_status"},
+        optional={"wiki_usage", "wiki_query_ids", "wiki_usage_status", "attribution"},
         label="Experiment",
     )
     direction_id = _text(value["direction_id"], "Experiment Direction ID")
@@ -847,16 +849,19 @@ def record_experiment(
         "analysis": _text(value["analysis"], "Experiment analysis"),
         "action": action,
     }
-    if any(key in value for key in ("wiki_usage", "wiki_query_ids", "wiki_usage_status")):
+    experiment.update({key: value[key] for key in
+                       ("wiki_usage", "wiki_query_ids", "wiki_usage_status") if key in value})
+    if "attribution" in value:
+        from aka.legacy.workflow.resource_evidence import apply_attribution
+
+        experiment["attribution"] = value["attribution"]
+        # The Runtime supplies the frozen campaign owner. Agent input cannot
+        # choose a plan, evidence directory or another campaign's resources.
+        apply_attribution(experiment, experiment_id=experiment["experiment_id"],
+                          resources=agent_resources)
+    if any(key in experiment for key in ("wiki_usage", "wiki_query_ids", "wiki_usage_status")):
         from aka.light.long_horizon.journal import normalize_wiki_attribution
 
-        experiment.update(
-            {
-                key: value[key]
-                for key in ("wiki_usage", "wiki_query_ids", "wiki_usage_status")
-                if key in value
-            }
-        )
         normalize_wiki_attribution(experiment)
     current["experiments"].append(experiment)
     _save_journal(path, campaign_root, current)
@@ -981,6 +986,7 @@ class SupervisorJournalService:
         evidence_root: Path,
         git_workspace: Path | None = None,
         supervisor_git: bool = False,
+        agent_resources=None,
     ) -> None:
         self.workspace = workspace
         self.git_workspace = git_workspace or workspace
@@ -988,6 +994,7 @@ class SupervisorJournalService:
         self.evidence_root = evidence_root
         self.path = evidence_root / "journal.json"
         self.supervisor_git = supervisor_git
+        self.agent_resources = agent_resources
 
     def sealed_source(self) -> bytes | None:
         if not self.supervisor_git:
@@ -1042,7 +1049,8 @@ class SupervisorJournalService:
             body = request.get("request")
             if not isinstance(body, Mapping):
                 raise ValueError("experiment_record requires a request object")
-            return record_experiment(self.path, self.campaign_root, body)
+            return record_experiment(self.path, self.campaign_root, body,
+                                     agent_resources=self.agent_resources)
         if operation == "experiments_list":
             experiments = [
                 {

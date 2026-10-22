@@ -38,6 +38,7 @@ def apply(ctx, config):
         task=dict(problem=ctx.problem, source=ctx.source, workspace=ctx.candidate),
         evaluator_factory=ctx.evaluator_factory,
         workflow_observer=ctx.workflow_observer,
+        agent_resources=ctx.get("agent_resources"),
     )
     ctx.effect(workflow.close, label="close Workflow selection")
     ctx.provide(WORKFLOW, workflow)

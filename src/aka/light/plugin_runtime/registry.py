@@ -18,7 +18,8 @@ from .schema import PluginError, check_schema, read_json, validate_schema
 
 NAME = re.compile(r"[a-z][a-z0-9-]*")
 STATE_DIR = ".atrex_plugins"
-RUNTIME_TOOLS = {"gpu-wiki.query": "wiki-query"}
+RUNTIME_TOOLS = {}
+RETIRED_PLUGIN_IDS = frozenset({"gpu-wiki", "internal-gpu-wiki"})
 ENV_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}")
 SKILL_ROOTS = (".claude/skills", ".qoder/skills", ".agents/skills")
 RESERVED_MOUNTS = frozenset(
@@ -70,12 +71,16 @@ class PluginRegistry:
                  resource_root: Path | None = None, enabled: bool = True):
         self.resource_root = resource_root
         self.plugin_dir = Path(plugin_dir).resolve()
+        self.plugins: list[Plugin] = []
+        self.file_budget = FileBudget()
         if not self.plugin_dir.is_dir():
+            # The default packaged registry may legitimately have no plugins.
+            # A specifically pinned root still requires its parent directory.
+            if plugin_root is None:
+                return
             raise PluginError(
                 "invalid_config", f"missing plugin directory: {self.plugin_dir}"
             )
-        self.plugins: list[Plugin] = []
-        self.file_budget = FileBudget()
         if not enabled:
             return
         seen = set()
@@ -143,6 +148,11 @@ class PluginRegistry:
         ):
             raise PluginError(
                 "invalid_manifest", f"invalid plugin identity/API: {manifest_path}"
+            )
+        if manifest["id"] in RETIRED_PLUGIN_IDS:
+            raise PluginError(
+                "plugin_retired",
+                f"Light plugin {manifest['id']} is retired; select its Wiki through an aka.core profile",
             )
         for key in optional:
             if key in manifest and not isinstance(manifest[key], dict):

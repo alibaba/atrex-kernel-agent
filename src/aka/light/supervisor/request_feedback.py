@@ -70,7 +70,8 @@ def journal_schema(operation, body, *, research_records=False, supervisor_git=Tr
         properties.update(direction_id={"type": "string", "pattern": "^direction_[0-9a-f]{32}$"},
                           gateway_record_ids=_ids("gateway-", minimum=1), action={"enum": sorted(EXPERIMENT_ACTIONS)},
                           wiki_usage={"type": "array"}, wiki_query_ids={"type": "array"},
-                          wiki_usage_status={"type": "string"})
+                          wiki_usage_status={"type": "string"},
+                          attribution={"type": ["object", "array"]})
         return _object(properties, EXPERIMENT_FIELDS)
     if operation == "direction_update":
         action = body.get("action")
@@ -265,7 +266,6 @@ def augment_error(response, *, route, request, research_records=False, superviso
                                     "instruction": "Use the enabled tool's declared input schema; do not bypass the Runtime."})
     elif route == "/v1/wiki/query":
         result["recovery"].append({"instruction":
-            "Use python3 tools/sandbox.py --kind wiki-query --help (or wiki-search/wiki-hardware). "
-            "Pass only workspace-relative input files and bounded max-bytes/max-records; "
-            "do not specify private Wiki stores."})
+            "The legacy Light Wiki route is retired. Ask the operator to select the required Wiki in a Core profile, "
+            "then use `python3 tools/plugin.py list` and call only an enabled Core Wiki tool."})
     return result

@@ -60,9 +60,10 @@ Prompt lists mounted resources. These Skills are always available:
   This Skill reflects the Episode's research-recording setting; when disabled, cite Gateway Records
   directly in the report instead of creating Directions or Experiments.
 
-When Wiki is enabled, `skills/KernelWiki/SKILL.md` describes knowledge queries. If it is not
-listed in the session Prompt, use the supplied public information and measured evidence;
-do not invoke a disabled knowledge service or invent missing hardware facts.
+When a Core Wiki provider is selected, follow the installed `KernelWiki` or
+`InternalKernelWiki` Skill and discover its tools with `python3 tools/plugin.py list`.
+If neither Skill is listed, use supplied public information and measured evidence; do not
+invoke a disabled knowledge service or invent missing hardware facts.
 
 Reuse saved results and exact source when applicable. Runtime persists measurements, retries
 infrastructure failures, and returns concise results; do not implement another retry loop or

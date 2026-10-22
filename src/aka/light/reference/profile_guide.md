@@ -1,6 +1,6 @@
 # Profile Tool Usage Guide
 
-> Source: gpu-wiki (`gpu-wiki/docs/<vendor>/<architecture>/ref-docs/`)
+> Source: selected Core Wiki tool references (public provider data originates from `gpu-wiki/docs/<vendor>/<architecture>/ref-docs/`)
 > - AMD: `amd/common/rocprofv3-profiling-guide.md`, `amd/gluon/gfx942/profiling_guide.md`
 > - NVIDIA: `nvidia/common/ncu-profiling-guide.md`, `nvidia/gluon/sm90/profiling_guide.md`
 

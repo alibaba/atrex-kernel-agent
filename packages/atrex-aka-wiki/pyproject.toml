@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atrex-aka-wiki"
+version = "0.1.0"
+description = "Optional public GPU Wiki Core plugin"
+requires-python = ">=3.10"
+dependencies = ["atrex-aka-framework==0.1.0", "atrex-aka-resources==0.1.0"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aka.wiki*"]
+
+[tool.setuptools.package-data]
+"aka.wiki" = ["instructions/*.md", "schemas/*.json", "skills/KernelWiki/*.md", "profiles/compositions/bundles/*.json"]

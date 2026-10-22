@@ -554,11 +554,19 @@ class RetainedWorkflowExport:
                 attempt.get('candidate_commit'), attempt.get('session_id'), attempt.get('summary'),
                 (attempt.get('verification') or {}).get('gate'), public_experiments, phases,
                 attempt.get('mode'), attempt.get('violation'), final_candidate))
-        for path in sorted((workspace/'.gpu_wiki_profile/raw/query_events').glob('*/*.json')):
-            if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(workspace):
-                relative = path.relative_to(workspace).as_posix()
-                artifacts.append(_artifact('wiki_'+hashlib.sha256(relative.encode()).hexdigest(),
-                    'wiki/'+path.parent.name+'/'+path.name,'wiki-query-event',path.read_bytes()))
+        from .resource_evidence import artifact_export_name, collect_artifacts
+        declared = collect_artifacts(workspace)
+        if declared is None:
+            for path in sorted((workspace/'.gpu_wiki_profile/raw/query_events').glob('*/*.json')):
+                if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(workspace):
+                    relative = path.relative_to(workspace).as_posix()
+                    artifacts.append(_artifact('wiki_'+hashlib.sha256(relative.encode()).hexdigest(),
+                        'wiki/'+path.parent.name+'/'+path.name,'wiki-query-event',path.read_bytes()))
+        else:
+            for item in declared:
+                identity = item['provider'] + ':' + item['path']
+                artifacts.append(_artifact('resource_'+hashlib.sha256(identity.encode()).hexdigest(),
+                    artifact_export_name(item), item['role'], (workspace/item['path']).read_bytes()))
         sessions = list(read_sessions(workspace))
         for directory in sorted(runtime.glob('episodes/e*/agent_observations')):
             sessions.extend(read_sessions(directory, direct=True))

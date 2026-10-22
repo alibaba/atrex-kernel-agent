@@ -1,0 +1,93 @@
+{
+  "api_version": 1,
+  "bundles": [
+    "workflow-core"
+  ],
+  "patches": [
+    {
+      "id": "agent",
+      "remove": true
+    },
+    {
+      "id": "agent",
+      "insert": {
+        "name": "aka.light.agent.plugin",
+        "required": true,
+        "config": {
+          "sandbox": "none",
+          "capture": true
+        }
+      }
+    },
+    {
+      "id": "candidate",
+      "remove": true
+    },
+    {
+      "id": "candidate",
+      "insert": {
+        "name": "aka.light.workspace.plugin",
+        "required": true
+      }
+    },
+    {
+      "id": "workflow",
+      "remove": true
+    },
+    {
+      "id": "workflow",
+      "insert": {
+        "name": "aka.light.workflow.plugin",
+        "required": true,
+        "config": {
+          "startup": true
+        },
+        "inject": [
+          "agent_resources"
+        ]
+      }
+    },
+    {
+      "id": "tool_runtime",
+      "insert": {
+        "name": "aka.light.runtime.plugin",
+        "required": true
+      }
+    },
+    {
+      "id": "executor",
+      "insert": {
+        "name": "aka.light.execution.plugin",
+        "required": true
+      }
+    },
+    {
+      "id": "light_evaluation",
+      "insert": {
+        "name": "aka.light.evaluation.plugin",
+        "required": true
+      }
+    },
+    {
+      "id": "light_experiments",
+      "insert": {
+        "name": "aka.light.experiment.plugin",
+        "required": true
+      }
+    },
+    {
+      "id": "light_acceptance",
+      "insert": {
+        "name": "aka.light.acceptance.plugin",
+        "required": true
+      }
+    },
+    {
+      "id": "light_journal",
+      "insert": {
+        "name": "aka.light.workflow.journal_plugin",
+        "required": true
+      }
+    }
+  ]
+}

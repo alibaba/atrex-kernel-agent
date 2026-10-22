@@ -39,7 +39,7 @@ class WorkflowOptions:
 
 class LightWorkflow:
     def __init__(self, agent, problem, source, candidate, tool_runtime,
-                 *, workflow_observer=None, options=WorkflowOptions()):
+                 *, workflow_observer=None, agent_resources=None, options=WorkflowOptions()):
         if not getattr(agent, "supports_tool_runtime", False):
             raise ValueError("light Workflow requires aka.light.agent.plugin (sandbox may remain none)")
         if not getattr(candidate, "managed_drafts", False):
@@ -48,6 +48,7 @@ class LightWorkflow:
         self.options = options
         self.tool_runtime = tool_runtime
         self.workflow_observer = workflow_observer
+        self._agent_resources = agent_resources
         self._closed = False
         self._campaigns = WeakSet()
 
@@ -75,6 +76,12 @@ class LightWorkflow:
         if not isinstance(request.problem, ProblemSource):
             raise TypeError("CampaignRequest.problem must be a ProblemSource")
         return self._campaign(request, self._load_problem(request))
+
+    def _resources_for(self, request):
+        from aka.resources.binding import bind_campaign_resources
+        return bind_campaign_resources(
+            self._agent_resources, request.workspace, request.name
+        )
 
     @staticmethod
     def _evaluation_settings(request):
@@ -108,7 +115,9 @@ class LightWorkflow:
         if problem.initial_source.kind != "sol" and problem.evaluation.runtime_root is None:
             raise ValueError("light Workflow deterministic V0 requires native Atrex-Bench or SOL; use legacy for custom setup")
         evaluation = self._evaluation_settings(request)
+        resources = self._resources_for(request)
         campaign = ManagedCampaign.create(request, problem, self, evaluation)
+        campaign._agent_resources = resources
         from aka.legacy.execution.campaign_runtime import CampaignExecution
         campaign.execution = CampaignExecution(evaluation)
         if self.workflow_observer is not None:

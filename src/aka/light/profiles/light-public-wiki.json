@@ -1,0 +1,57 @@
+{
+  "extends": "aka.legacy.workflow:profiles/workflow-base.json",
+  "api_version": 2,
+  "token_definitions": {
+    "problem": "aka.legacy.task.problem.plugin:PROBLEM",
+    "source": "aka.legacy.task.source.plugin:SOURCE",
+    "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
+    "agent": "aka.legacy.agent.plugin:AGENT",
+    "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
+    "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
+    "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER",
+    "tool_runtime": "aka.light.runtime.plugin:TOOL_RUNTIME",
+    "executor": "aka.legacy.execution.assembly:EXECUTOR",
+    "light_evaluation": "aka.light.evaluation.plugin:EVALUATION",
+    "light_experiments": "aka.light.experiment.plugin:EXPERIMENTS",
+    "light_acceptance": "aka.light.acceptance.plugin:ACCEPTANCE",
+    "light_journal": "aka.light.workflow.journal_plugin:JOURNAL",
+    "agent_resources": "aka.resources.plugin:AGENT_RESOURCES"
+  },
+  "composition": "light",
+  "environment_values": {
+    "AKA_LEGACY_REPO_ROOT": "${aka:repo_root}"
+  },
+  "required_services": [
+    "problem",
+    "source",
+    "candidate",
+    "agent",
+    "evaluator_factory",
+    "workflow_observer",
+    "workflow",
+    "tool_runtime",
+    "executor",
+    "light_evaluation",
+    "light_experiments",
+    "light_acceptance",
+    "light_journal",
+    "agent_resources"
+  ],
+  "tokens": [
+    "problem",
+    "source",
+    "candidate",
+    "agent",
+    "evaluator_factory",
+    "workflow_observer",
+    "workflow",
+    "tool_runtime",
+    "executor",
+    "light_evaluation",
+    "light_experiments",
+    "light_acceptance",
+    "light_journal",
+    "agent_resources"
+  ],
+  "doc": "Opt-in AKA-light services with the shared public Core Wiki plugin."
+}

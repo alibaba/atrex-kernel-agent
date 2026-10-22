@@ -6,7 +6,7 @@ evidence creates a materially different question:
 
 Create `wiki_request.json` containing a JSON object with a `request` string, then run:
 ```bash
-python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json
+the selected Core tool `gpu-wiki.query`
 ```
 
 Use this exact request string (preserve the operator identifier):

@@ -1,5 +1,5 @@
 {
-  "extends": "aka.legacy.workflow:profiles/workflow.json",
+  "extends": "aka.legacy.workflow:profiles/workflow-base.json",
   "api_version": 2,
   "token_definitions": {
     "problem": "aka.legacy.task.problem.plugin:PROBLEM",
@@ -14,7 +14,8 @@
     "light_evaluation": "aka.light.evaluation.plugin:EVALUATION",
     "light_experiments": "aka.light.experiment.plugin:EXPERIMENTS",
     "light_acceptance": "aka.light.acceptance.plugin:ACCEPTANCE",
-    "light_journal": "aka.light.workflow.journal_plugin:JOURNAL"
+    "light_journal": "aka.light.workflow.journal_plugin:JOURNAL",
+    "agent_resources": "aka.resources.plugin:AGENT_RESOURCES"
   },
   "composition": "light",
   "environment_values": {
@@ -33,7 +34,8 @@
     "light_evaluation",
     "light_experiments",
     "light_acceptance",
-    "light_journal"
+    "light_journal",
+    "agent_resources"
   ],
   "tokens": [
     "problem",
@@ -48,7 +50,8 @@
     "light_evaluation",
     "light_experiments",
     "light_acceptance",
-    "light_journal"
+    "light_journal",
+    "agent_resources"
   ],
   "doc": "Opt-in AKA-light services with native Agent execution; the default Workflow profile is unchanged."
 }

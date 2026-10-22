@@ -152,10 +152,11 @@ direct host GPU execution, and profiler use outside the sandbox.
 ### Workspace runtime assets
 
 Resources installs explicitly selected tools, Skills, profiling content and optional reference
-projects inside each campaign workspace. AKA discovers the configured plugin manifests; the bundled
-GPU Wiki plugin provides `gpu-wiki.query` through `python -m aka.legacy.resources.cli`. Plugin
-manifests own resources and phase instructions; campaign locks check versions and content fingerprints
-on resume. See [Local plugins](plugins.md).
+projects inside each campaign workspace. Core profiles select the public and internal Wiki
+contributions, including tools, phase instructions, Skills and attribution providers. Frozen campaign
+plans check code, configuration and resource identities on resume. The old Wiki manifest implementations
+are retired; the old resources CLI forwards to the selected Core tools for compatibility. Other local
+manifest plugins remain supported. See [Core resources](core-agent-resources.md) and [Local plugins](plugins.md).
 It also prepares backend-specific project-local discovery trees:
 
 - `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;

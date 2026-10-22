@@ -22,6 +22,7 @@ from .export import document, RetainedWorkflowExport
 from .public_state import campaign_lease, writer_active
 
 SCHEMA = 'aka.workflow.checkpoint.v1'
+CORE_SCHEMA = 'aka.workflow.checkpoint.v2'
 CONTEXT = '.atrex_long_horizon/checkpoint-context.json'
 CAPTURED_FACTS = '.atrex_long_horizon/checkpoint-facts.json'
 
@@ -48,8 +49,32 @@ def record_context(campaign):
 
 
 @contextmanager
-def _services(payload):
+def _services(payload, *, retained_root=None, metadata=None):
     from aka.bootstrap.recovery_metadata import restored_services
+    from aka.bootstrap.continuation import base_payload, bind_resources
+    value = json.loads(payload)
+    if value.get('version') == 3:
+        neutral = base_payload(payload)
+        binding = value['agent_resources']
+        if json.loads(bind_resources(neutral, binding)) != value:
+            raise ValueError('checkpoint resource selection has inconsistent fields')
+        with restored_services(neutral, ('problem', 'candidate', 'agent', 'agent_resources')) as services:
+            problem, candidate, agent, owner = services
+            documents = None
+            if retained_root is not None:
+                snapshot = CandidateWorkspaceSnapshot(retained_root/'workspace', metadata['workspace_identity'])
+                workspace = Path(binding['workspace'])
+                plan = Path(binding['plan'])
+                names = tuple(str(path.relative_to(workspace)) for path in
+                              (plan, plan.with_name('resource-snapshot.json'), plan.with_name('launch-selection.json')))
+                data = candidate.checkpoint_files(snapshot, names)
+                documents = {str(workspace/name): content for name, content in data.items()}
+            from aka.resources import restore_bound
+            bound = restore_bound(binding, base_selection=json.loads(neutral), documents=documents)
+            if owner.freeze() != bound.resource_snapshot():
+                raise ValueError('checkpoint resource contributions differ from recorded selection')
+            yield problem, candidate, agent, bound
+        return
     with restored_services(payload, ('problem', 'candidate', 'agent')) as services:
         from aka.legacy.resources.plugins import PluginRegistry
         yield (*services, PluginRegistry())
@@ -90,8 +115,11 @@ def _unpack(content, root):
         if len(by_name) != len(members) or 'checkpoint.json' not in by_name or not by_name['checkpoint.json'].isfile():
             raise ValueError('invalid checkpoint members')
         metadata = json.load(archive.extractfile('checkpoint.json'))
-        if metadata.get('schema') != SCHEMA:
+        if metadata.get('schema') not in (SCHEMA, CORE_SCHEMA):
             raise ValueError('unsupported Workflow checkpoint')
+        selection_version = json.loads(metadata['context']['selection']).get('version')
+        if (metadata['schema'] == CORE_SCHEMA) != (selection_version == 3):
+            raise ValueError('Workflow checkpoint schema differs from resource selection')
         rows = metadata['entries']
         if {r['path'] for r in rows} != set(by_name)-{'checkpoint.json'} or len(rows) != len(members)-1:
             raise ValueError('checkpoint membership differs')
@@ -166,7 +194,8 @@ def generate(workspace):
                 ps=problem.export_snapshot(loaded,root/'problem')
                 ws=candidate.export_checkpoint(workspace,root/'workspace')
                 ag=agent.export_checkpoint(workspace,root/'agent')
-                metadata={'schema':SCHEMA,'workspace':str(workspace),'campaign_id':facts.campaign.id,
+                schema = CORE_SCHEMA if json.loads(context['selection']).get('version') == 3 else SCHEMA
+                metadata={'schema':schema,'workspace':str(workspace),'campaign_id':facts.campaign.id,
                           'context':context,'problem_identity':ps.identity,'workspace_identity':ws.identity,
                           'agent_identity':ag.identity,'tokens':facts.progress.observed_tokens,
                           'episodes':facts.progress.completed_episodes,'incumbent_version':facts.incumbent.version,
@@ -227,7 +256,7 @@ def _validate(root, metadata, expected_workspace, expected_campaign_id, services
 def validate(content, *, workspace, campaign_id):
     with tempfile.TemporaryDirectory(prefix='aka-checkpoint-validate-') as raw:
         root=Path(raw).resolve(); metadata=_unpack(content,root)
-        with _services(metadata['context']['selection']) as services:
+        with _services(metadata['context']['selection'], retained_root=root, metadata=metadata) as services:
             if writer_active(workspace):
                 raise ValueError('campaign has an active writer')
             _validate(root,metadata,workspace,campaign_id,services)
@@ -237,7 +266,7 @@ def validate(content, *, workspace, campaign_id):
 def restore(content, *, workspace, campaign_id):
     with tempfile.TemporaryDirectory(prefix='aka-checkpoint-restore-') as raw:
         root=Path(raw).resolve();metadata=_unpack(content,root)
-        with _services(metadata['context']['selection']) as services:
+        with _services(metadata['context']['selection'], retained_root=root, metadata=metadata) as services:
             _validate(root,metadata,workspace,campaign_id,services)
             with campaign_lease(workspace):
                 ps,ws,ag,target=_validate(root,metadata,workspace,campaign_id,services)

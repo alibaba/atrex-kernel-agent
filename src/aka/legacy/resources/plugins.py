@@ -15,6 +15,18 @@ _selected_plugins = ContextVar("aka_explicit_tool_plugins", default=None)
 
 
 class PluginRegistry(AgentSkillsRegistryMixin, Registry):
+    def __new__(cls, plugin_dir=None, *, plugins=None, resources=None, agent_skills=None):
+        if cls is PluginRegistry:
+            from .core_adapter import CoreResourcesFacade, selected_core_resources
+            bound = selected_core_resources()
+            if bound is not None:
+                if (plugin_dir is not None or plugins is not None or resources is not None
+                        or agent_skills is not None or os.environ.get("ATREX_PLUGIN_DIR")
+                        or os.environ.get("ATREX_PLUGIN_PATHS") not in (None, "", "[]")):
+                    raise PluginError("plugin_changed", "cannot override a frozen Core tool selection")
+                return CoreResourcesFacade(bound)
+        return super().__new__(cls)
+
     def __init__(self, plugin_dir: Path | str | None = None, *, plugins=None, resources=None, agent_skills=None):
         scoped = _selected_scope.get() is not None
         if plugin_dir is None:

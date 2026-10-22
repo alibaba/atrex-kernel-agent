@@ -265,10 +265,14 @@ Retain those inputs and do not rewrite locks to bypass identity checks.
 | --- | --- | --- |
 | `atrex-aka-framework` | `aka`, neutral dispatcher, `aka.core`, `aka.contracts`, `aka.bootstrap`, generic `aka run` command | 3.10+ |
 | `atrex-aka-legacy` | `aka.legacy`, Application and Task implementations, default profiles, `aka optimize` command | 3.10+ |
+| `atrex-aka-resources` | `aka.resources`, generic Agent tools, instructions, attribution and `aka tools` command | 3.10+ |
+| `atrex-aka-wiki` | `aka.wiki`, optional public Wiki Core plugin; data is a separate artifact | 3.10+ |
 | `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |
 | `atrex-aka-observation-long-horizon` | `aka.observation.long_horizon`, workflow-specific observation adapter | 3.10+ |
 
-Framework has no runtime package dependencies. Legacy and both optional distributions
+Framework has no runtime package dependencies. Resources depends on Framework;
+Legacy depends on Framework and Resources. Public Wiki depends on Framework and
+Resources. These dependencies pin `0.1.0`. Dashboard and the observation adapter
 depend on `atrex-aka-framework==0.1.0`; Dashboard's `long-horizon` extra adds
 `atrex-aka-observation-long-horizon==0.1.0`. Neither optional distribution requires
 Legacy. Although the observation adapter imports only Contracts interfaces, its
@@ -278,7 +282,7 @@ packages into Framework and Legacy; module interfaces remain separate within the
 
 The consolidated packages replace the old Core, Contracts, Bootstrap and Optimization
 distributions. Remove the old distributions before installing their replacements to
-avoid overlapping files. The four current distributions own disjoint files and pin
+avoid overlapping files. The six current public distributions own disjoint files and pin
 matching dependency versions. Distribution boundaries define installation ownership;
 they do not require a separate distribution for every future module. Build tooling
 stages owned files, builds sdists, then builds wheels from those sdists.
@@ -288,6 +292,9 @@ adapter distribution owns its leaf package, such as `aka.observation.long_horizo
 there is no shared parent `__init__.py` for independently installed adapters to overwrite.
 The long-horizon package's discovery include and the build tool's `OWNERS` entry both
 select that leaf. The `aka.contracts` module package belongs to the Framework distribution.
+
+See [Core Agent resources](core-agent-resources.md) for Wiki selection and the
+separate frozen tool plan. Legacy does not depend on the optional Wiki implementation.
 
 Dashboard injects the versioned `observation_source` seam. Its default profile combines
 the viewer with the separately packaged long-horizon adapter, without importing the

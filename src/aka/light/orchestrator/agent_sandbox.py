@@ -31,7 +31,6 @@ PUBLIC_ASSETS = (
     "agents",
     "reference",
     "reference-projects",
-    "gpu-wiki",
     "3rdparty",
     "orchestrator",
     "long_horizon",

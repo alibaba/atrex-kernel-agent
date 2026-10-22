@@ -116,9 +116,6 @@ from .workspace_state import (
 )
 
 
-_WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
-_WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
-
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 4
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
@@ -382,18 +379,20 @@ class Campaign:
             queue_timeout = _runtime_timeout_from_environment("ATREX_AKA_QUEUE_TIMEOUT_SECONDS", 60)
         except ValueError as error:
             raise SystemExit(f"orchestrator: {error}") from None
+        resources = getattr(self, "_agent_resources", None)
+        resource_options = {"agent_resources": resources} if resources is not None else {}
         self._supervisor_runtime = self.tool_runtime.open(RuntimeConfig(
             hardware=self.sandbox_hardware or self.platform, timeout=self.sandbox_timeout,
             url=self.sandbox_url, profile=self.sandbox_profile, ssh=self.sandbox_ssh,
             ssh_init=self.sandbox_ssh_init, ssh_gpu=self.sandbox_ssh_gpu,
             health_command=self.sandbox_health_command, private_reference_dir=self.private_reference_dir,
             atrex_bench_root=Path(self.atrex_bench_root).resolve() if self.atrex_bench_root else None,
-            wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
+            task_id=self.campaign_name,
             optimization_mode=self.optimization_mode,
             workspace=self.workspace,
             request_timeout=request_timeout,
             queue_timeout=queue_timeout,
-        ), workspace_provider=self.candidate_workspace)
+        ), workspace_provider=self.candidate_workspace, **resource_options)
         self._supervisor_runtime.numerical_validator = self.supplemental_numerical_feedback
 
     def supplemental_numerical_feedback(self, workspace: Path, source: bytes | None = None, *, parent=None,
@@ -410,6 +409,19 @@ class Campaign:
     def plugin_registry(self):
         self.start_runtime()
         return self._supervisor_runtime.plugins
+
+    def _wiki_enabled_for_agent(self) -> bool:
+        """Use the frozen Core tool selection when this is a Core profile."""
+        registry = self.plugin_registry
+        if getattr(registry, "bound", None) is not None:
+            return any(
+                str(row.get("name", "")).endswith("gpu-wiki.query")
+                for row in registry.catalog()
+            )
+        return False
+
+    def _uses_core_resources(self) -> bool:
+        return getattr(self.plugin_registry, "bound", None) is not None
 
     def plugin_directive(self, phase: str) -> str:
         return self.plugin_registry.instructions(
@@ -530,17 +542,6 @@ class Campaign:
         state_file = environment_state_file()
         if state_file is not None:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
-        # Query events from disposable episode worktrees must land in the
-        # incumbent workspace, where the completion hook can retain them.
-        wiki_profile_root = self.workspace / ".gpu_wiki_profile"
-        # Preserve lexical paths for bwrap's mount validation; native sessions
-        # retain the existing symlink and '..' canonicalization.
-        environment[_WIKI_PROFILE_ROOT_ENV] = str(
-            wiki_profile_root.absolute()
-            if self.agent_sandbox == "bwrap"
-            else wiki_profile_root.resolve()
-        )
-        environment[_WIKI_TASK_ID_ENV] = self.campaign_name
         return environment
 
 
@@ -1010,13 +1011,19 @@ class Campaign:
         )
         runtime_arch = self.arch or "unknown (use the runtime GPU API before choosing codegen)"
         notes = self.notes.strip() or "none"
-        hardware_evidence = (
-            "Before an optimization plan uses a hardware limit, source it through "
-            "`--kind wiki-query` and cite the returned record. "
-            if self.tool_runtime.wiki else
-            "Wiki queries are disabled. Use supplied, attributable hardware evidence; "
-            "do not guess missing peak specifications. "
-        )
+        if self._uses_core_resources():
+            hardware_evidence = (
+                "If a selected Core Wiki tool is available, use its declared schema via "
+                "`python3 tools/plugin.py` and retain returned source attribution. "
+                if self._wiki_enabled_for_agent() else
+                "Wiki queries are disabled. Use supplied, attributable hardware evidence; "
+                "do not guess missing peak specifications. "
+            )
+        else:
+            hardware_evidence = (
+                "Wiki queries are disabled. Use supplied, attributable hardware evidence; "
+                "do not guess missing peak specifications. "
+            )
         return (
             f"# kernel_opt_{self.campaign_name}\n\n"
             "Evidence-backed optimization of one native Atrex-Bench operator.\n\n"
@@ -2263,13 +2270,12 @@ class Campaign:
             AGENT_RUNTIME=_agent_runtime_directive(
                 self.agent_cli,
                 is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-                wiki=self.tool_runtime.wiki,
+                wiki=self._uses_core_resources() and self._wiki_enabled_for_agent(),
             ),
             KNOWLEDGE_RESEARCH=(
-                (PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8")
-                .replace("{{PLATFORM}}", self.platform).replace("{{ARCH}}", self.arch)
-                .replace("{{FRAMEWORK}}", self.framework)
-                if self.tool_runtime.wiki else
+                "Use only selected Core Wiki tools described in PLUGINS; call each enabled store "
+                "separately via tools/plugin.py and preserve returned source attribution."
+                if self._uses_core_resources() and self._wiki_enabled_for_agent() else
                 "Wiki is disabled. Use the supplied public contract and compiler/measurement evidence. "
                 "If an essential fact is unavailable, report the blocker instead of inventing it."
             ),

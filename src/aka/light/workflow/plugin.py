@@ -39,6 +39,7 @@ def apply(ctx, config):
     from .provider import LightWorkflow, WorkflowOptions
     workflow = LightWorkflow(ctx.agent, ctx.problem, ctx.source, ctx.candidate,
                              ctx.tool_runtime, workflow_observer=ctx.workflow_observer,
+                             agent_resources=ctx.get("agent_resources"),
                              options=WorkflowOptions(**{
                                  key: value for key, value in config.items() if key != "startup"
                              }))

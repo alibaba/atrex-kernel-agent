@@ -29,6 +29,8 @@ def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
         "/trace-retention-manifest.json",
     )
     agent_runtime_rules = (
+        "/.aka/",
+        "/.atrex_plugins/",
         "/.aka-agent-observations/",
         "/.aka-agent-sessions/",
         "/.aka-agent-session-errors/",

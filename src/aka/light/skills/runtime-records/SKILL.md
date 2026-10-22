@@ -29,8 +29,8 @@ Legacy Journals are not automatically converted into Direction/Experiment IDs.
 
 - [Journal requests and worked example](references/journal.md): seven Journal/report commands.
 - [Saved results and source](references/records.md): measurement readers, per-Shape historical best, and errors.
-- For new measurements use `skills/gpu-measurement/SKILL.md`; for knowledge queries use
-  `skills/KernelWiki/SKILL.md`.
+- For new measurements use `skills/gpu-measurement/SKILL.md`; for knowledge queries follow the
+  selected `KernelWiki` or `InternalKernelWiki` Skill and call tools through `tools/plugin.py`.
 
 Never invent IDs or measured results. Read an existing result instead of repeating an identical
 task. If a transport failure leaves a mutation's outcome unknown, inspect records before retrying.

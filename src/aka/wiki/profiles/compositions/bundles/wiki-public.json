@@ -1,0 +1,13 @@
+{
+  "api_version": 1,
+  "entries": [
+    {
+      "id": "wiki-public",
+      "name": "aka.wiki.plugin",
+      "required": true,
+      "config": {
+        "store_root": "${aka:repo_root}/gpu-wiki"
+      }
+    }
+  ]
+}

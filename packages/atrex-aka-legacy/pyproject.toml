@@ -7,7 +7,7 @@ name = "atrex-aka-legacy"
 version = "0.1.0"
 description = "AKA Task, Agent, Workflow and Execution implementations"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-framework==0.1.0"]
+dependencies = ["atrex-aka-framework==0.1.0", "atrex-aka-resources==0.1.0"]
 
 [project.entry-points."aka.commands"]
 optimize = "aka.legacy.compat.command:main"

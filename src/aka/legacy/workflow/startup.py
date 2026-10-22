@@ -4,7 +4,7 @@ import signal
 import sys
 
 from aka.legacy.execution.selection import execution_scope
-from aka.legacy.workflow.process_environment import invocation_environment, use_launch_environment
+from aka.legacy.workflow.process_environment import child_environment, invocation_environment, use_launch_environment
 from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked, launch_recovery_monitor, signal_restart_ready
 from aka.legacy.workflow.trace_retention import write_trace_retention_manifest
 from .invocation import decode_launch
@@ -96,29 +96,35 @@ class WorkflowStartup:
                 # Each selected DSL keeps its own trusted preflight, without
                 # reloading Task or rebuilding the selected modules.
                 from aka.legacy.execution.configuration import selected_ssh, legacy_settings
-                if selected_ssh():
-                    from aka.legacy.execution.health import runtime_health_command
-                    from aka.legacy.execution.sandbox import check_ssh_environment
-                    os.environ["ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND"] = runtime_health_command(
-                        sol=problem.initial_source.kind == "sol", framework=framework)
-                    connection = legacy_settings()
-                    check_ssh_environment(launch.workspace_base,
-                        request.runtime.hardware or request.settings.platform,
-                        connection.ssh, connection.ssh_init, connection.health_command)
+                def preflight():
+                    if selected_ssh():
+                        from aka.legacy.execution.health import runtime_health_command
+                        from aka.legacy.execution.sandbox import check_ssh_environment
+                        os.environ["ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND"] = runtime_health_command(
+                            sol=problem.initial_source.kind == "sol", framework=framework)
+                        connection = legacy_settings()
+                        check_ssh_environment(launch.workspace_base,
+                            request.runtime.hardware or request.settings.platform,
+                            connection.ssh, connection.ssh_init, connection.health_command)
                 suffix = framework_workspace_suffix(framework, request.settings.platform, request.settings.optimization_mode)
                 child_request = replace(request, settings=replace(request.settings, framework=framework))
                 child_request = replace(child_request,
                     workspace=launch.workspace_base / f"kernel_opt_{problem.name}_{suffix}",
                     name=problem.name + "_" + suffix)
-                return self._run_campaign(child_request, problem)
+                return self._run_campaign(child_request, problem, preflight=preflight)
 
             return dispatch_framework_campaigns(frameworks, run_framework)
         return self._run_campaign(request, problem)
 
-    def _run_campaign(self, request, problem):
+    def _run_campaign(self, request, problem, *, preflight=None):
         from .public_state import campaign_lease
-        with campaign_lease(request.workspace, writer=True):
-            return self._run_campaign_with_lease(request, problem)
+        resources = self._workflow._resources_for(request)
+        values = resources.environment(request.workspace, request.name) if resources is not None else {}
+        with invocation_environment(values), use_launch_environment({**child_environment(), **values}):
+            if preflight is not None:
+                preflight()
+            with campaign_lease(request.workspace, writer=True):
+                return self._run_campaign_with_lease(request, problem)
 
     def _run_campaign_with_lease(self, request, problem):
         campaign = self._workflow._campaign(request, problem)

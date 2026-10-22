@@ -1,7 +1,8 @@
 {
   "api_version": 1,
   "bundles": [
-    "workflow"
+    "workflow-core",
+    "aka.wiki:profiles/compositions/bundles/wiki-public.json"
   ],
   "patches": [
     {
@@ -41,7 +42,10 @@
         "required": true,
         "config": {
           "startup": true
-        }
+        },
+        "inject": [
+          "agent_resources"
+        ]
       }
     },
     {
