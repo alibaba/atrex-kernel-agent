@@ -95,4 +95,3 @@ def _typed_workspace_limitation(
             if not matches_default:
                 return f"non-default {option} is not exposed by agate run"
     return None
-

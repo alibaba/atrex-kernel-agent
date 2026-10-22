@@ -75,4 +75,3 @@ def record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str, job_
         if isinstance(result, dict):
             record_episode_evaluation(workspace, result, gateway_kind=gateway_kind, job_id=job_id)
         return
-

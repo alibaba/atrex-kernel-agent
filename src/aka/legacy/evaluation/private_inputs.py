@@ -27,4 +27,3 @@ def private_reference_dir(workspace: Path, environment) -> Path | None:
             "workspace agent_problem.json does not match the evaluator-owned public contract"
         )
     return private_dir
-
