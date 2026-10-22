@@ -2,7 +2,7 @@
 
 from contextlib import contextmanager
 
-from aka.legacy.evaluation import LegacyEvaluator, EvaluationConfiguration
+from aka.legacy.evaluation import EvaluationConfiguration
 from aka.legacy.evaluation.baseline import (
     BaselineInputs,
     BaselineResources,
@@ -10,8 +10,6 @@ from aka.legacy.evaluation.baseline import (
 )
 from aka.legacy.evaluation import records
 from aka.legacy.experiment import LegacyExperiment
-from aka.legacy.experiment.runner import abba_stage
-from aka.legacy.experiment.transport import ABBAExecutor, check_abba_result
 from aka.legacy.acceptance import LegacyAcceptancePolicy
 from aka.legacy.execution.selection import execution_scope
 from aka.legacy.execution.binding import sandbox_executor
@@ -31,60 +29,6 @@ class BorrowedExperiment:
     def run_command(self, command):
         with self.services.experiment() as experiment:
             return experiment.run_command(command)
-
-
-class BaselineEvaluator:
-    """Print the retained transport output before interpreting baseline results."""
-
-    def __init__(self, evaluator, bound):
-        self.evaluator = evaluator
-        self.bound = bound
-
-    def prepare(self, request):
-        return self.evaluator.prepare(request)
-
-    def record_step(self, prepared, index, result):
-        # V0/framework historically print immediately after their single command.
-        # This hook avoids making the consumer inspect executor-private state.
-        process = self.bound.completed_process
-        if process is None:
-            from subprocess import CompletedProcess
-
-            process = CompletedProcess(
-                (), result.transport_returncode, result.stdout, result.stderr
-            )
-        BaselinePreparation.print_v0_evaluator_output(process)
-        return self.evaluator.record_step(prepared, index, result)
-
-    def interpret(self, prepared, results):
-        from dataclasses import replace
-        from aka.legacy.execution.selection import _completed_process
-
-        # Preserve the old baseline's command-code projection while the original
-        # JobResult returned by the executor remains intact.
-        projected = tuple(
-            replace(
-                result,
-                transport_returncode=_completed_process(command, result).returncode,
-            )
-            for command, result in zip(prepared.steps, results)
-        )
-        return self.evaluator.interpret(prepared, projected)
-
-
-class BaselineExperiment(LegacyExperiment):
-    """Retain the baseline's synchronous single-attempt and exception boundary."""
-
-    def run(self, request):
-        prepared = self.evaluator.prepare(request)
-        result = self.run_command(prepared.steps[0])
-        self.evaluator.record_step(prepared, 0, result)
-        try:
-            return self.evaluator.interpret(prepared, (result,))
-        except (RuntimeError, ValueError, KeyError, TypeError) as error:
-            from aka.contracts.experiment import ExperimentExecutionError
-
-            raise ExperimentExecutionError(str(error)) from error
 
 
 class WorkflowServices:
@@ -180,22 +124,9 @@ class WorkflowServices:
                 worker_requirements=self.evaluation_input().worker_requirements,
             )
             evaluator = self.create_evaluator()
-            if not isinstance(evaluator, LegacyEvaluator):
-                if formal:
-                    from aka.legacy.experiment.runner import evaluation_stage
-                    yield LegacyExperiment(bound, evaluator, retry=retry_infrastructure, stage=evaluation_stage)
-                else:
-                    yield LegacyExperiment(bound, evaluator)
-            elif formal:
-                yield LegacyExperiment(
-                    ABBAExecutor(bound),
-                    evaluator,
-                    retry=retry_infrastructure,
-                    check_result=check_abba_result,
-                    stage=abba_stage(s.verify_repeats, s.shape_batch_size),
-                )
-            else:
-                yield BaselineExperiment(bound, BaselineEvaluator(evaluator, bound))
+            from aka.legacy.experiment.runner import evaluation_stage
+            yield LegacyExperiment(bound, evaluator,
+                retry=retry_infrastructure if formal else None, stage=evaluation_stage)
 
     def sandbox_command(self, command):
         import shlex
@@ -218,10 +149,7 @@ class WorkflowServices:
         )
 
     def numerical_command(self, command):
-        from aka.legacy.execution.selection import _completed_process
-
-        result = self.baseline_experiment.run_command(command)
-        return _completed_process(command, result)
+        return self.baseline_experiment.run_command(command)
 
     def baseline(self):
         from aka.legacy.workflow.baseline import WorkflowBaseline

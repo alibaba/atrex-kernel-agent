@@ -125,6 +125,7 @@ class PreparedEvaluation:
     steps: tuple[CommandSpec, ...]
     max_parallelism: int
     context: object
+    retry_keys: tuple[str, ...] = ()
 
 
 class Evaluator(Protocol):

@@ -7,14 +7,11 @@ it does not interpret evaluator output or classify candidate correctness.
 from __future__ import annotations
 
 import os
-import signal
-import subprocess
-import time
 from dataclasses import replace
 from pathlib import Path
 
 from aka.contracts.execution import BackendCapabilities, CommandSpec, JobResult, ResourceIdentity
-from .runtime import ExecutionHooks, SandboxRequest, current_invocation, current_transport_arguments
+from .runtime import ExecutionHooks, SandboxRequest, current_transport_arguments
 
 
 class LegacyExecutor:
@@ -23,19 +20,31 @@ class LegacyExecutor:
     )
     resource_identity = ResourceIdentity("legacy")
 
+    def __init__(self, request=None, hooks=None):
+        self.request = request
+        self.hooks = hooks
+
+    def bind(self, context):
+        from .runtime import default_binding
+        request, hooks = default_binding(context)
+        return self.bind_sandbox(request, hooks)
+
+    def bind_sandbox(self, request, hooks):
+        return type(self)(request, hooks)
+
     def run(self, command: CommandSpec) -> JobResult:
         self.capabilities.require(command)
-        invocation = current_invocation()
-        request = replace(invocation.request, workspace=command.workspace, command=command.command,
+        if self.request is None:
+            from aka.contracts.execution import ExecutionContext
+            return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout)).run(command)
+        request = replace(self.request, workspace=command.workspace, command=command.command,
             timeout=command.timeout, environment=command.environment, hardware=command.hardware,
             sync=command.artifacts,
-            gateway_kind=invocation.request.gateway_kind if command.operation == "preflight" else command.operation,
+            gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
             preflight=command.operation == "preflight", cancel_event=command.cancel_event)
-        result = self._run_sandbox(request, hooks=invocation.hooks)
-        invocation.result = result
-        return JobResult(result.returncode, result.stdout, result.stderr, resource=self.resource_identity)
+        return self._run_sandbox(request, hooks=self.hooks)
 
-    def _run_sandbox(self, request: SandboxRequest, *, hooks: ExecutionHooks) -> subprocess.CompletedProcess[str]:
+    def _run_sandbox(self, request: SandboxRequest, *, hooks: ExecutionHooks) -> JobResult:
         workspace = request.workspace
         hardware = request.hardware
         profile = request.profile
@@ -93,64 +102,7 @@ class LegacyExecutor:
             uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
             grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
             effective_timeout = timeout + grace + 240
-        hooks.check_environment()
-        process = hooks.spawn(
-            cmd,
-            role="sandbox",
-            environment=environment,
-            cwd=str(workspace),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-
-        def stop_process_group() -> tuple[str, str]:
-            if process.poll() is None:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            try:
-                return process.communicate(timeout=20)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                return process.communicate()
-
-        deadline = time.monotonic() + effective_timeout
-        try:
-            while True:
-                if cancel_event is not None and cancel_event.is_set():
-                    raise subprocess.SubprocessError("sandbox command cancelled")
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    stdout, stderr = stop_process_group()
-                    raise subprocess.TimeoutExpired(
-                        cmd, effective_timeout, output=stdout, stderr=stderr
-                    )
-                try:
-                    stdout, stderr = process.communicate(timeout=min(0.25, remaining))
-                except subprocess.TimeoutExpired:
-                    hooks.check_environment()
-                    continue
-                break
-        except BaseException:
-            try:
-                stop_process_group()
-            except BaseException:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-            raise
-        result = subprocess.CompletedProcess(
-            args=cmd,
-            returncode=process.returncode,
-            stdout=stdout,
-            stderr=stderr,
-        )
-        hooks.check_environment()
-        return result
+        from aka.legacy.execution.outcomes import run_owned
+        return run_owned(cmd, environment=environment, workspace=workspace,
+            timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
+            cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment)

@@ -531,6 +531,7 @@ def spawn_owned_session(
     role: str,
     environment: Mapping[str, str] | None = None,
     finalize_handoff: bool = False,
+    inherited_descriptors: tuple[int, ...] = (),
     registered_callback: Callable[[subprocess.Popen[Any]], None] | None = None,
     **popen_options: Any,
 ) -> subprocess.Popen[Any]:
@@ -544,7 +545,13 @@ def spawn_owned_session(
     argv = [os.fspath(item) for item in command]
     if not argv:
         raise ValueError("owned session command must not be empty")
-    values = _values(environment)
+    values = dict(_values(environment))
+    for descriptor in inherited_descriptors:
+        if type(descriptor) is not int or descriptor <= 2:
+            raise ValueError("invalid owned child descriptor")
+        os.fstat(descriptor)
+    values["AKA_OWNED_CHILD_FDS"] = json.dumps(inherited_descriptors)
+    environment = values
     handoff_id = values.get(HANDOFF_ID_ENV, "")
     if not handoff_id:
         return subprocess.Popen(
@@ -552,6 +559,7 @@ def spawn_owned_session(
             env=environment,
             start_new_session=True,
             close_fds=True,
+            pass_fds=inherited_descriptors,
             **popen_options,
         )
     if _HANDOFF_ID_PATTERN.fullmatch(handoff_id) is None:
@@ -579,7 +587,7 @@ def spawn_owned_session(
             env=environment,
             start_new_session=True,
             close_fds=True,
-            pass_fds=(*handoff_fds, start_read),
+            pass_fds=(*handoff_fds, *inherited_descriptors, start_read),
             **popen_options,
         )
         _register_session_owner(process.pid, role, values)
@@ -1007,7 +1015,7 @@ def _owned_session_entry(argv: list[str]) -> int:
         child = subprocess.Popen(
             primary_command,
             close_fds=True,
-            pass_fds=(*recovery_pass_fds(), primary_read),
+            pass_fds=(*recovery_pass_fds(), *json.loads(os.environ.get("AKA_OWNED_CHILD_FDS", "[]")), primary_read),
         )
         _register_session_primary(child.pid, f"{role}-primary", os.getpid())
         state_dir = _root_state_dir()

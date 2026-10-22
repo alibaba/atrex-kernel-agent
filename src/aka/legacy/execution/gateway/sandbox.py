@@ -87,20 +87,9 @@ from aka.legacy.execution.configuration import queue_wait_grace as configured_qu
 from aka.legacy.execution.configuration import distributed_evaluation_world_size as _distributed_evaluation_world_size
 from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
 
-from aka.legacy.evaluation.transport_results import (
-    _request_shape_ids,
-    _shape_batches,
-    _shape_batch_request,
-    _shape_batch_reference,
-    _optimizer_result_from_eval,
-    _merge_optimizer_results,
-    _record_episode_evaluation,
-    _record_result_lines,
-    _with_workspace_performance_score,
-    _hydrate_result_lines,
-    _public_numerical_result_line,
-    _hydrate_abba_result_lines,
-)
+from aka.legacy.evaluation.gateway_measurement import GatewayMeasurement, prepare_dev_output
+from aka.legacy.execution.outcomes import emit_fact, emit_diagnostic, backend_attempt
+
 
 DEFAULT_SYNC_PATHS = ("profiles",)
 INPUT_SKIP_DIRS = {
@@ -2549,6 +2538,7 @@ def _run_ssh_job(
         except ValueError as exc:
             raise SSHTransportError(str(exc)) from exc
         try:
+            emit_fact({"event": "submitted", "identifier": remote_dir, "backend": "ssh", "operation": "dev"})
             result = subprocess.run(
                 [*_ssh_base(ssh, target), remote_command],
                 capture_output=True,
@@ -2557,6 +2547,10 @@ def _run_ssh_job(
             )
         except subprocess.TimeoutExpired as exc:
             raise SSHTransportError(f"SSH command wait timed out: {exc}") from exc
+        # An SSH client exit is a command observation, not proof of remote process-tree termination.
+        emit_fact({"event": "attempt", "identifier": remote_dir, "backend": "ssh", "operation": "dev",
+                   "disposition": "unknown", "termination": None,
+                   "exit_code": result.returncode if result.returncode != 255 else None, "diagnostics": []})
 
         if sync_outputs:
             local_archive = temp / "ssh_outputs.tar.gz"
@@ -2605,6 +2599,8 @@ def _run_ssh_job(
         raise SSHTransportError(f"SSH transfer failed: {exc}") from exc
     finally:
         cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
+        emit_fact({"event": "cleanup", "status": "completed" if cleanup_succeeded else "failed",
+                   "code": "ssh-workspace-cleanup"})
         if not cleanup_succeeded:
             _record_pending_ssh_cleanup(target=target, remote_dir=remote_dir)
     if not cleanup_succeeded:
@@ -2723,10 +2719,20 @@ def _run_direct_job(
     """Submit and wait for any public gateway job kind through HTTP."""
     prior_note = ""
     for submission in range(2):
-        accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
+        import uuid
+        attempt_id = uuid.uuid4().hex
+        emit_fact({"event": "attempt_started", "attempt_id": attempt_id, "operation": kind, "backend": "gateway"})
+        try:
+            accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
+        except GatewayHTTPError as error:
+            from aka.legacy.execution.outcomes import observe_attempt
+            observe_attempt(subprocess.CompletedProcess((), 1, "", f"agate: [{error.status}]"),
+                            operation=kind, attempt_id=attempt_id)
+            raise
         job_id = accepted.get("job_id")
         if not isinstance(job_id, str) or not job_id:
             raise RuntimeError(f"gateway submission returned no job_id: {accepted}")
+        emit_fact({"event": "submitted", "attempt_id": attempt_id, "identifier": job_id, "operation": kind, "backend": "gateway"})
         deadline = time.monotonic() + timeout + queue_wait_grace
         try:
             while True:
@@ -2742,6 +2748,10 @@ def _run_direct_job(
                     wait_for + 10,
                 )
                 if job.get("status") in ("succeeded", "failed", "cancelled"):
+                    from aka.legacy.execution.outcomes import observe_attempt
+                    observe_attempt(subprocess.CompletedProcess(
+                        (), 0 if job.get("status") == "succeeded" else 1, json.dumps(job), ""),
+                        operation=kind, attempt_id=attempt_id)
                     if submission == 0 and _cancelled_without_outcome(job):
                         prior_note = (
                             f"[sandbox] gateway cancelled job_id={job_id} without a "
@@ -2837,6 +2847,7 @@ def _report_infrastructure_failure(job: dict) -> bool:
     error = job.get("error")
     if (isinstance(error, dict) and (error.get("error_class") or error.get("class")) == "infra"
             or _queue_timeout_before_start(job) or _cancelled_without_outcome(job)):
+        emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})
         print(INFRASTRUCTURE_MARKER, file=sys.stderr)
         return True
     return False
@@ -2849,6 +2860,7 @@ def _report_cancellation(job: dict) -> bool:
         return False
     diagnostic = protocol_failure(
         subprocess.CompletedProcess([], 1, json.dumps(job), ""), lambda _: None)
+    emit_diagnostic(diagnostic)
     print("[sandbox] gateway_protocol_failure=" + json.dumps(diagnostic, sort_keys=True),
           file=sys.stderr, flush=True)
     return True
@@ -2863,6 +2875,7 @@ def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
             or re.search(r"\bHTTP(?: Error)?\s*[:=]?\s*(429|502|503|504)\b", detail)
             or any(message in detail for message in (
                 "Connection refused", "Connection reset by peer", "Temporary failure in name resolution"))):
+        emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})
         print(INFRASTRUCTURE_MARKER, file=sys.stderr)
         return True
     return False
@@ -2892,18 +2905,6 @@ def _queue_timeout_before_start(job: dict | None) -> bool:
     )
 
 
-def _l20n_failover_command(agate: list[str]) -> list[str] | None:
-    try:
-        gpu_index = agate.index("--gpu") + 1
-    except (ValueError, IndexError):
-        return None
-    if agate[gpu_index].casefold() != "l20n":
-        return None
-    fallback = list(agate)
-    fallback[gpu_index] = "l20n-ray"
-    return fallback
-
-
 def _submitted_job_id(proc: subprocess.CompletedProcess[str]) -> str | None:
     """Recover the job id printed by agate before it starts polling."""
     match = SUBMITTED_JOB_RE.search((proc.stderr or "") + "\n" + (proc.stdout or ""))
@@ -2911,8 +2912,9 @@ def _submitted_job_id(proc: subprocess.CompletedProcess[str]) -> str | None:
 
 
 def _track_agate_job(
-    job_id: str, executable: str, url: str, gateway_profile: str | None
+    job_id: str, executable: str, url: str, gateway_profile: str | None, operation: str = "unknown"
 ) -> None:
+    emit_fact({"event": "submitted", "identifier": job_id, "backend": "gateway", "operation": operation})
     with ACTIVE_AGATE_JOBS_LOCK:
         ACTIVE_AGATE_JOBS[job_id] = (executable, url, gateway_profile)
 
@@ -2932,6 +2934,7 @@ def _cancel_active_agate_jobs() -> None:
         elif gateway_profile:
             command += ["--profile", gateway_profile]
         command += ["--http-timeout", "10", job_id]
+        emit_fact({"event": "cancel_requested", "identifier": job_id})
         try:
             subprocess.run(
                 command,
@@ -3070,9 +3073,9 @@ def _run_agate_once_unchecked(
     if submitted.returncode or not job:
         return submitted
     job_id = job["job_id"]
-    _track_agate_job(job_id, executable, url, gateway_profile)
+    _track_agate_job(job_id, executable, url, gateway_profile, agate[1])
     try:
-        return _resume_interrupted_agate_wait(
+        completed = _resume_interrupted_agate_wait(
             executable=executable,
             url=url,
             gateway_profile=gateway_profile,
@@ -3081,8 +3084,13 @@ def _run_agate_once_unchecked(
             elapsed=time.monotonic() - wait_started,
             initial=submitted,
         )
-    finally:
-        _forget_agate_job(job_id)
+        final_job = _job_response(completed.stdout or "")
+        if final_job and final_job.get("status") in {"succeeded", "failed", "cancelled"}:
+            _forget_agate_job(job_id)
+        return completed
+    except BaseException:
+        # The signal/final cleanup handler still owns this accepted job.
+        raise
 
 
 def _run_agate_with_cancel_retry(
@@ -3105,30 +3113,8 @@ def _run_agate_with_cancel_retry(
         wait_budget=wait_budget,
     )
     first_job = _job_response(first.stdout or "")
-    fallback = (
-        _l20n_failover_command(agate)
-        if _ray_submit_version_mismatch(first_job)
-        else None
-    )
-    if fallback is not None:
-        agate = fallback
-        print(
-            "[sandbox] L20N submit cluster unavailable; retrying on l20n-ray",
-            file=sys.stderr,
-            flush=True,
-        )
-        first = _run_agate_once(
-            agate=agate,
-            executable=executable,
-            url=url,
-            gateway_profile=gateway_profile,
-            command_timeout=command_timeout,
-            wait_budget=max(1, int(deadline - time.monotonic())),
-        )
-        first_job = _job_response(first.stdout or "")
-    while _ray_submit_version_mismatch(first_job) or _queue_timeout_before_start(
-        first_job
-    ):
+    while (first_job and first_job.get("status") in {"failed", "cancelled"}
+           and (_ray_submit_version_mismatch(first_job) or _queue_timeout_before_start(first_job))):
         remaining = int(deadline - time.monotonic())
         if remaining <= 1:
             return first
@@ -3278,31 +3264,6 @@ def _typed_fallback_allowed(detail: object) -> bool:
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 
 
-def _mask_generalized_result(
-    workspace: Path, result: dict[str, Any]
-) -> dict[str, Any]:
-    """Hide exact inputs and failures but retain real latency keyed by opaque shape id."""
-    result = _with_workspace_performance_score(workspace, result)
-    if not _is_generalized_workspace(workspace):
-        return result
-    masked = dict(result)
-    if result.get("failures"):
-        evaluation_failure = result.get("evaluation_failure")
-        if isinstance(evaluation_failure, dict):
-            masked["failures"] = [
-                str(evaluation_failure.get("message") or "evaluation unavailable")
-            ]
-        elif result.get("actionable_diagnostics"):
-            masked["failures"] = [
-                "candidate compile/import/runtime failure; see actionable_diagnostics"
-            ]
-        else:
-            masked["failures"] = [
-                "one or more hidden evaluator cases failed; reproduce within the public shape_domain"
-            ]
-    masked["hidden_case_details"] = "shape inputs and failure details withheld"
-    return masked
-
 
 def _record_profile_job(
     job: dict[str, Any], workspace: Path, sync_paths: list[str]
@@ -3366,6 +3327,7 @@ def _run_typed_gateway(
             "shape_id": exc.shape_id,
             "hardware": exc.hardware,
         }
+        emit_diagnostic(diagnostic)
         print(f"[sandbox] {exc}; GPU submission skipped", file=sys.stderr)
         print(
             "[sandbox] gateway_protocol_failure="
@@ -3381,15 +3343,10 @@ def _run_typed_gateway(
         )
         return None
 
-    expected_shape_ids = _request_shape_ids(request)
-    shape_batches = (
-        _shape_batches(
-            expected_shape_ids,
-            getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
-        )
-        if kind == "run"
-        else [expected_shape_ids]
-    )
+    measurement = GatewayMeasurement(request, workspace=workspace, hardware=args.hardware,
+        private=generalized, batch_size=getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
+        profiling=kind != "run")
+    shape_batches = measurement.batches
     batched = len(shape_batches) > 1
 
     if args.dry_run:
@@ -3428,9 +3385,7 @@ def _run_typed_gateway(
                 item: tuple[int, list[str]],
             ) -> subprocess.CompletedProcess[str]:
                 batch_index, shape_ids = item
-                batch_request = (
-                    _shape_batch_request(request, shape_ids) if batched else request
-                )
+                batch_request = measurement.request_for(batch_index)
                 if args.url and agate_executable is None:
                     return _run_direct_job(
                         url=args.url,
@@ -3447,7 +3402,7 @@ def _run_typed_gateway(
                     # directory. Otherwise the agate CLI would reload the original
                     # full shapes.json and defeat --shape-id smoke selection.
                     reference_dir = batch_root / f"batch-{batch_index:04d}"
-                    _shape_batch_reference(batch_request["reference"], reference_dir)
+                    measurement.write_reference(batch_index, reference_dir)
                 agate = _typed_agate_command(
                     agate_executable,
                     args,
@@ -3476,7 +3431,7 @@ def _run_typed_gateway(
                     file=sys.stderr,
                     flush=True,
                 )
-            from aka.legacy.experiment.batches import run_batches
+            from aka.legacy.execution.dispatch import run_batches
             processes = run_batches(
                 batch_items, run_batch, max_workers=DEFAULT_EVAL_BATCH_WORKERS,
             )
@@ -3488,6 +3443,7 @@ def _run_typed_gateway(
             )
             return None
         if exc.status in {429, 502, 503, 504}:
+            emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})
             print(INFRASTRUCTURE_MARKER, file=sys.stderr)
             return ENVIRONMENT_TEMPFAIL
         if generalized:
@@ -3552,36 +3508,9 @@ def _run_typed_gateway(
         file=sys.stderr,
     )
     if kind == "run":
-        metadata = request["reference"].get("metadata")
-        require_performance = request.get("mode") != "correctness_only"
-        batch_results = [
-            _optimizer_result_from_eval(
-                job["result"],
-                shape_ids,
-                metadata,
-                require_performance=require_performance,
-                hardware=args.hardware,
-            )
-            for job, shape_ids in zip(jobs, shape_batches)
-        ]
-        result = _mask_generalized_result(
-            workspace,
-            _merge_optimizer_results(
-                batch_results,
-                expected_shape_ids,
-                metadata,
-                require_performance=require_performance,
-                hardware=args.hardware,
-            )
-            if batched
-            else batch_results[0],
-        )
-        _record_episode_evaluation(
-            workspace,
-            result,
-            gateway_kind=kind,
-            job_id=",".join(str(job.get("job_id")) for job in jobs),
-        )
+        result = measurement.interpret(jobs)
+        emit_fact({"event": "result_available"})
+
         print(
             TEST_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False)
         )
@@ -4174,6 +4103,7 @@ def _main(argv: list[str] | None = None) -> int:
                 )
             except GatewayHTTPError as exc:
                 if exc.status in {429, 502, 503, 504}:
+                    emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})
                     print(INFRASTRUCTURE_MARKER, file=sys.stderr)
                     return ENVIRONMENT_TEMPFAIL
                 raise SystemExit(f"sandbox: direct gateway request failed: {exc}") from exc
@@ -4244,16 +4174,9 @@ def _main(argv: list[str] | None = None) -> int:
             print(remote_stderr.rstrip(), file=sys.stderr)
         print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
         return int(result.get("exit_code") or proc.returncode or 2)
-    if evaluator_command:
-        command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
-        command_stdout = _hydrate_result_lines(workspace, command_stdout)
-        _record_result_lines(workspace, command_stdout, gateway_kind="dev")
-    if hide_evaluator_details:
-        command_stdout = "\n".join(
-            _public_numerical_result_line(line) if line.startswith(NUMERICAL_RESULT_PREFIX) else line
-            for line in command_stdout.splitlines()
-            if line.startswith((TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX))
-        )
+    command_stdout = prepare_dev_output(workspace, command_stdout,
+        evaluator=evaluator_command, private=hide_evaluator_details)
+
     if command_stdout:
         print(command_stdout)
     if remote_stderr and not hide_evaluator_details:
@@ -4338,11 +4261,17 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_agate_once(*args, **kwargs):
     from .protocol import protocol_failure
-    process = _run_agate_once_unchecked(*args, **kwargs)
-    diagnostic = protocol_failure(process, _submitted_job_id)
-    if diagnostic is not None:
-        print("[sandbox] gateway_protocol_failure=" + json.dumps(diagnostic, sort_keys=True), file=sys.stderr, flush=True)
-    return process
+    from aka.legacy.execution.outcomes import observe_attempt
+    agate = kwargs.get("agate", ())
+    operation = agate[1] if len(agate) > 1 else "unknown"
+    with backend_attempt(operation):
+        process = _run_agate_once_unchecked(*args, **kwargs)
+        observe_attempt(process, operation=operation)
+        diagnostic = protocol_failure(process, _submitted_job_id)
+        if diagnostic is not None:
+            emit_diagnostic(diagnostic)
+            print("[sandbox] gateway_protocol_failure=" + json.dumps(diagnostic, sort_keys=True), file=sys.stderr, flush=True)
+        return process
 
 
 if __name__ == "__main__":

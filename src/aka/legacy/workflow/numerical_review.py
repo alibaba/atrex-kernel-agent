@@ -21,9 +21,8 @@ from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.legacy.task.durable import durable_write_json
 from aka.legacy.agent.availability import check_review_service
-from aka.legacy.execution.transport import check_transport
-from aka.legacy.execution.gateway.protocol import classify_gateway_outcome
 from aka.legacy.experiment.retry import retry_infrastructure
+from aka.contracts.execution import ExecutionPending
 from aka.legacy.workflow.review_trace import ReviewTrace
 
 import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
@@ -51,6 +50,7 @@ _PROBE_EXCEPTIONS = (
     TypeError,
     KeyError,
     subprocess.SubprocessError,
+    ExecutionPending,
 )
 
 
@@ -297,7 +297,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, e
                 process,
                 receipt_status=interpreted.receipt_status,
             ))
-            check_transport(process)
+            _at_probe_stage("check_transport", process.require_transport)
             return interpreted
 
         interpreted = retry_infrastructure(
@@ -338,7 +338,9 @@ def _probe_transport_fact(process, *, receipt_status):
         "return_code": int(process.returncode),
         "receipt_status": receipt_status,
     }
-    diagnostic = classify_gateway_outcome(process).failure_record() or {}
+    primary = process.primary_diagnostic
+    diagnostic = ({**primary.details, "failure_class": primary.category, "reason": primary.code}
+                  if primary else {})
     mapping = {
         "failure_class": "failure_class",
         "reason": "failure_reason",

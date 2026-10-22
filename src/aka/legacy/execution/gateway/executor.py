@@ -1,13 +1,9 @@
 """Own the shared gateway launcher and its synchronous cancellation lifetime."""
 import os
 from pathlib import Path
-import signal
-import subprocess
 import sys
-import time
 from aka.contracts.execution import BackendCapabilities, JobResult, ResourceIdentity
 from aka.legacy.execution.configuration import queue_wait_grace
-from aka.legacy.execution.transport import check_transport
 
 
 class GatewayExecutor:
@@ -56,41 +52,7 @@ class GatewayExecutor:
                 environment[env] = json.dumps(value) if isinstance(value, list) else str(value)
 
         grace = queue_wait_grace(environment)
-        # Transport owns endpoint configuration in the selected profile/environment.
-        process = subprocess.Popen(argv, cwd=command.workspace, env=environment,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, start_new_session=True)
-        deadline = time.monotonic() + command.timeout + grace + 240
-
-        def stop():
-            if process.poll() is None:
-                try:
-                    os.killpg(process.pid, signal.SIGTERM)
-                except ProcessLookupError:
-                    pass
-            try:
-                return process.communicate(timeout=20)
-            except subprocess.TimeoutExpired:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                return process.communicate()
-
-        try:
-            while True:
-                if command.cancel_event is not None and command.cancel_event.is_set():
-                    raise subprocess.SubprocessError("gateway command cancelled")
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    stdout, stderr = stop()
-                    raise subprocess.TimeoutExpired(argv, command.timeout, output=stdout, stderr=stderr)
-                try:
-                    stdout, stderr = process.communicate(timeout=min(remaining, .25))
-                    break
-                except subprocess.TimeoutExpired:
-                    continue
-        except BaseException:
-            stop()
-            raise
-        check_transport(subprocess.CompletedProcess(argv, process.returncode, stdout, stderr))
-        return JobResult(process.returncode, stdout, stderr, resource=self.resource_identity)
+        from aka.legacy.execution.outcomes import run_owned
+        return run_owned(argv, environment=environment, workspace=command.workspace,
+            timeout=command.timeout + grace + 240, resource=self.resource_identity,
+            hardware=command.hardware, cancel_event=command.cancel_event)

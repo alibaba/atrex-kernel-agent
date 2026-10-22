@@ -7,8 +7,6 @@ from pathlib import Path
 import subprocess
 
 from aka.legacy.execution.assembly import compose_execution
-from aka.legacy.execution.legacy.executor import LegacyExecutor
-from aka.legacy.execution.legacy.runtime import sandbox_invocation
 from aka.contracts.execution import (
     CommandSpec, JobResult, Executor, UnsupportedExecution,
 )
@@ -102,21 +100,7 @@ def selected_workspace_resources():
 def _completed_process(command, result):
     if not isinstance(result, JobResult):
         raise TypeError("Executor.run must return JobResult")
-    if type(result.transport_returncode) is not int or (
-        result.exit_code is not None and type(result.exit_code) is not int
-    ):
-        raise TypeError("execution return codes must be integers or an unknown command exit")
-    if result.output_scope not in ("transport", "command"):
-        raise ValueError("unknown execution output scope")
-    if result.transport_returncode != 0:
-        returncode = result.transport_returncode
-    elif result.exit_code is not None:
-        returncode = result.exit_code
-    elif result.output_scope == "command":
-        raise ValueError("command-scoped output requires a known command exit code")
-    else:
-        returncode = result.transport_returncode
-    return subprocess.CompletedProcess(list(command.command), returncode, result.stdout, result.stderr)
+    return subprocess.CompletedProcess(list(command.command), result.returncode, result.stdout, result.stderr)
 
 
 def run_sandbox(executor: Executor, request, *, hooks) -> subprocess.CompletedProcess[str]:
@@ -124,23 +108,13 @@ def run_sandbox(executor: Executor, request, *, hooks) -> subprocess.CompletedPr
         timeout=request.timeout, environment=request.environment, hardware=request.hardware,
         artifacts=request.sync, operation="preflight" if request.preflight else request.gateway_kind,
         cancel_event=request.cancel_event)
-    if not isinstance(executor, LegacyExecutor):
-        if any((request.profile, request.url, request.ssh, request.ssh_init,
-                request.health_command, request.wall_timeout is not None)):
-            raise UnsupportedExecution(
-                "selected executor owns endpoint and recovery configuration; "
-                "omit legacy sandbox options"
-            )
-        executor.capabilities.require(command)
-        return _completed_process(command, executor.run(command))
-    with sandbox_invocation(request, hooks) as invocation:
-        result = executor.run(command)
-        if not isinstance(result, JobResult):
-            raise TypeError("Executor.run must return JobResult")
-        if invocation.result is not None:
-            original = invocation.result
-            if (original.returncode, original.stdout, original.stderr) == (
-                result.transport_returncode, result.stdout, result.stderr
-            ):
-                return original
-        return _completed_process(command, result)
+    # CLI-only endpoint adaptation is owned by the backend, not by its consumers.
+    binder = getattr(executor, "bind_sandbox", None)
+    if binder is not None:
+        executor = binder(request, hooks)
+    elif any((request.profile, request.url, request.ssh, request.ssh_init,
+              request.health_command, request.wall_timeout is not None)):
+        raise UnsupportedExecution("selected executor owns endpoint configuration; omit legacy sandbox options")
+    result = executor.run(command)
+    result.require_transport()
+    return _completed_process(command, result)

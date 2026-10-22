@@ -50,6 +50,7 @@ class LegacyExperiment:
 
             def attempt():
                 result = self.executor.run(command)
+                result.require_transport()
                 if self.check_result is not None:
                     self.check_result(result)
                 self.evaluator.record_step(prepared, index, result)
@@ -57,7 +58,7 @@ class LegacyExperiment:
 
             if self.retry is None:
                 return attempt()
-            stage = self.stage(request, index, command)
+            stage = prepared.retry_keys[index] if prepared.retry_keys else self.stage(request, index, command)
             return self.retry(request.workspace, stage, attempt, cancel=cancel)
 
         pool = ThreadPoolExecutor(max_workers=min(prepared.max_parallelism, len(steps)))

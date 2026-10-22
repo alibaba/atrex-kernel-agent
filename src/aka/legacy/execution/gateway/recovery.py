@@ -6,6 +6,18 @@ from pathlib import Path
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
+
+from aka.contracts.execution import JobResult
+
+
+@dataclass
+class TransportCapture:
+    args: object
+    returncode: int
+    stdout: str
+    stderr: str
+    outcome: JobResult
 
 
 def _workspace_arg(argv):
@@ -119,6 +131,12 @@ def _failed_transiently(process: subprocess.CompletedProcess[str]) -> bool:
         return False
     diagnostic = outcome.failure_record()
     if diagnostic and diagnostic.get("failure_class") in {"request", "authentication", "cancelled"}:
+        return False
+    # A result-less transport error alone does not prove that submission failed.
+    # Retry only a backend-confirmed terminal job or explicit admission rejection.
+    if not isinstance(process, TransportCapture):
+        return False
+    if process.outcome.facts.disposition == "unknown":
         return False
     return any(marker in output for marker in TRANSIENT_MARKERS)
 

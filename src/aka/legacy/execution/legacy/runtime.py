@@ -38,14 +38,6 @@ class ExecutionHooks:
     queue_wait_grace: Callable[[Mapping[str, str]], int]
 
 
-@dataclass
-class SandboxInvocation:
-    request: SandboxRequest
-    hooks: ExecutionHooks
-    result: subprocess.CompletedProcess[str] | None = None
-
-
-_invocation = ContextVar("aka_legacy_sandbox_invocation", default=None)
 _transport_arguments = ContextVar("aka_execution_transport_arguments", default=())
 
 
@@ -63,18 +55,18 @@ def transport_arguments(arguments: tuple[str, ...]):
         _transport_arguments.reset(token)
 
 
-def current_invocation() -> SandboxInvocation:
-    invocation = _invocation.get()
-    if invocation is None:
-        raise RuntimeError("legacy execution requires a host sandbox runtime binding")
-    return invocation
-
-
-@contextmanager
-def sandbox_invocation(request: SandboxRequest, hooks: ExecutionHooks):
-    invocation = SandboxInvocation(request, hooks)
-    token = _invocation.set(invocation)
-    try:
-        yield invocation
-    finally:
-        _invocation.reset(token)
+def default_binding(context):
+    """Resolve Legacy-owned configuration once; returned instances need no invocation scope."""
+    import sys
+    from aka.legacy.execution.configuration import legacy_settings, queue_wait_grace
+    from aka.legacy.execution.processes import spawn_owned_session
+    from aka.legacy.execution.recovery import raise_if_environment_blocked
+    settings = legacy_settings()
+    request = SandboxRequest(
+        workspace=Path("."), launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
+        hardware=context.hardware, timeout=context.timeout, command=(),
+        environment=context.environment, profile=settings.profile, url=settings.url,
+        ssh=settings.ssh, ssh_init=settings.ssh_init, health_command=settings.health_command,
+        wall_timeout=context.timeout + 14_400 + 120 if context.formal else None,
+    )
+    return request, ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace)

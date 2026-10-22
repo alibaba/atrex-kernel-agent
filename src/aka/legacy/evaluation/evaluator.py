@@ -6,7 +6,7 @@ Preparation and interpretation never submit commands or run a model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import json
 import math
 from pathlib import Path
@@ -86,6 +86,16 @@ class LegacyEvaluator:
         self.abba_driver = abba_driver or Path(remote_abba.__file__)
 
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
+        prepared = self._prepare(request)
+        if request.mode == "abba":
+            config = self.configuration
+            return replace(prepared, retry_keys=tuple(
+                f"abba:{request.base_commit}:{request.candidate_commit}:"
+                f"{max(1, config.repeats)}:{config.shape_batch_size}:{Path(command.command[-2]).name}"
+                for command in prepared.steps))
+        return prepared
+
+    def _prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         config = self.configuration
         if self.evaluation_input is not None:
             from aka.legacy.task.problem.resources import validate_resources
@@ -99,7 +109,6 @@ class LegacyEvaluator:
         if request.mode == "fast":
             return PreparedEvaluation((), 1, _Plan(request))
         if request.mode in {"v0", "framework"}:
-            (request.workspace / ".atrex_long_horizon/ci_gateway_failure.json").unlink(missing_ok=True)
             command = ["python", "test_kernel.py", "--version", f"v{request.version}"]
             if request.mode == "framework":
                 command += ["--multi-seed", "5"]
@@ -205,7 +214,13 @@ class LegacyEvaluator:
     ) -> None:
         """Persist a completed ABBA batch before other workers finish or fail."""
         plan = prepared.context
-        if plan.request.mode == "abba" and result.transport_returncode == 0:
+        if plan.request.mode in {"v0", "framework"}:
+            from .baseline import BaselinePreparation
+            BaselinePreparation.print_v0_evaluator_output(result)
+        if plan.request.mode == "abba" and result.returncode != 0:
+            raise RuntimeError(f"gateway ABBA command exited {result.returncode}: "
+                               + (result.stdout + "\n" + result.stderr)[-3000:])
+        if plan.request.mode == "abba" and result.returncode == 0:
             atomic_write_json(
                 plan.result_paths[index], _payload_from_stdout(result.stdout)
             )
@@ -225,9 +240,9 @@ class LegacyEvaluator:
             return self._baseline_result(request, results[0])
         payloads = []
         for index, result in enumerate(results):
-            if result.transport_returncode != 0:
+            if result.returncode != 0:
                 raise RuntimeError(
-                    f"gateway ABBA command exited {result.transport_returncode}: "
+                    f"gateway ABBA command exited {result.returncode}: "
                     + (result.stdout + "\n" + result.stderr)[-3000:]
                 )
             payloads.append(_payload_from_stdout(result.stdout))
@@ -309,9 +324,10 @@ class LegacyEvaluator:
         )
 
     def _baseline_result(self, request, observation):
-        failure_path = request.workspace / ".atrex_long_horizon/ci_gateway_failure.json"
-        if observation.transport_returncode != 0 and failure_path.is_file():
-            details = json.loads(failure_path.read_text())
+        if observation.returncode != 0 and observation.primary_diagnostic is not None:
+            primary, *secondary = observation.diagnostics
+            details = {**primary.details, "failure_class": primary.category,
+                       "secondary_diagnostics": [{"failure_class": item.category} for item in secondary]}
             category = details.get("failure_class", "protocol")
             explicit_repairable = details.get("candidate_repairable")
             repairable = (
@@ -365,7 +381,7 @@ class LegacyEvaluator:
             return VerificationResult("FAIL" if repairable else "ERROR", None, None, None,
                                       error=message, failure=failure)
         framework_transport_failed = (
-            request.mode == "framework" and observation.transport_returncode != 0
+            request.mode == "framework" and observation.returncode != 0
         )
         try:
             result = result_from_stdout(observation.stdout)
@@ -377,9 +393,9 @@ class LegacyEvaluator:
                 None,
                 None,
                 None,
-                error=f"combined validation command failed (exit={observation.transport_returncode})",
+                error=f"combined validation command failed (exit={observation.returncode})",
             )
-        run = VerificationRun("candidate", 0, observation.transport_returncode, result)
+        run = VerificationRun("candidate", 0, observation.returncode, result)
         evaluation_failure = result.get("evaluation_failure")
         if isinstance(evaluation_failure, dict):
             category = str(evaluation_failure.get("category") or "infrastructure")
@@ -404,12 +420,12 @@ class LegacyEvaluator:
                 None,
                 None,
                 runs=[run],
-                error=f"combined validation command failed (exit={observation.transport_returncode})",
+                error=f"combined validation command failed (exit={observation.returncode})",
             )
         if request.mode == "v0":
             error = (
                 ""
-                if observation.transport_returncode == 0 and result.get("all_pass")
+                if observation.returncode == 0 and result.get("all_pass")
                 else "sandbox V0 baseline failed correctness/performance validation"
             )
         else:

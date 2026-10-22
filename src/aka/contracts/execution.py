@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
+from types import MappingProxyType
 
 
 class Cancellation(Protocol):
@@ -30,6 +31,10 @@ class BackendCapabilities:
     cancellation: bool = False
 
     def require(self, command: CommandSpec) -> None:
+        if type(command.timeout) is not int or command.timeout <= 0:
+            raise UnsupportedExecution("execution timeout must be a positive integer")
+        if not command.command and command.operation != "preflight":
+            raise UnsupportedExecution("execution command must contain argv")
         if command.operation not in self.operations:
             raise UnsupportedExecution(f"unsupported execution operation: {command.operation}")
         if command.cancel_event is not None and not self.cancellation:
@@ -38,7 +43,16 @@ class BackendCapabilities:
 
 class ExecutionUnavailable(RuntimeError):
     """Explicit service outage; retry the same command without a candidate verdict."""
-    pass
+    def __init__(self, message, outcome=None):
+        self.outcome = outcome
+        super().__init__(message)
+
+
+class ExecutionPending(RuntimeError):
+    """Execution may still be running; this result cannot authorize resubmission."""
+    def __init__(self, message, outcome=None):
+        self.outcome = outcome
+        super().__init__(message)
 
 
 class UnsupportedExecution(ValueError):
@@ -52,6 +66,68 @@ class ResourceIdentity:
 
 
 @dataclass(frozen=True)
+class ExecutionDiagnostic:
+    """Safe transport facts. Evaluation, not Execution, decides repairability."""
+    category: str
+    code: str
+    details: Mapping[str, str | int | bool] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if any(type(value) not in (str, int, bool) for value in self.details.values()):
+            raise TypeError("diagnostic details must be scalar transport facts")
+        object.__setattr__(self, "details", MappingProxyType(dict(self.details)))
+
+
+@dataclass(frozen=True)
+class ExecutionAttempt:
+    """One actual backend submission/attempt, in observation order."""
+    operation: str
+    disposition: str = "unknown"  # not_submitted, terminal, unknown
+    resource: ResourceIdentity | None = None
+    termination: str | None = None
+    exit_code: int | None = None
+    diagnostics: tuple[ExecutionDiagnostic, ...] = ()
+    attempt_id: str | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
+
+
+@dataclass(frozen=True)
+class ExecutionFacts:
+    disposition: str = "unknown"
+    termination: str | None = None
+    cancellation_requested: bool = False
+    local_stopped: bool | None = None
+    remote_terminated: bool | None = None
+    cleanup: str = "unknown"  # not_required, completed, failed, unknown
+    cleanup_diagnostics: tuple[ExecutionDiagnostic, ...] = ()
+    basis: tuple[str, ...] = ()
+    remote_cleanup: str = "unknown"
+
+    def __post_init__(self):
+        object.__setattr__(self, "cleanup_diagnostics", tuple(self.cleanup_diagnostics))
+        object.__setattr__(self, "basis", tuple(self.basis))
+
+
+@dataclass(frozen=True)
+class ExecutionContext:
+    """Host inputs copied once when borrowing an execution session."""
+    environment: Mapping[str, str] = field(default_factory=dict)
+    hardware: str = ""
+    timeout: int = 600
+    formal: bool = False
+
+    def __post_init__(self):
+        object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
+
+
+@runtime_checkable
+class ExecutionBinder(Protocol):
+    def bind(self, context: ExecutionContext) -> Executor: ...
+
+
+@dataclass(frozen=True)
 class JobResult:
     """Captured transport output; a command exit code may remain unknown."""
 
@@ -61,6 +137,57 @@ class JobResult:
     exit_code: int | None = None
     resource: ResourceIdentity | None = None
     output_scope: str = "transport"
+    transport_status: str = "unknown"
+    facts: ExecutionFacts = field(default_factory=ExecutionFacts)
+    attempts: tuple[ExecutionAttempt, ...] = ()
+    diagnostics: tuple[ExecutionDiagnostic, ...] = ()
+    hardware: str = ""
+    environment_identity: str | None = None
+
+    def __post_init__(self):
+        object.__setattr__(self, "attempts", tuple(self.attempts))
+        object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
+
+    def as_dict(self) -> dict:
+        """Return independent JSON-compatible facts for explicit archival."""
+        def encode(value):
+            if is_dataclass(value):
+                return {item.name: encode(getattr(value, item.name)) for item in fields(value)}
+            if isinstance(value, Mapping):
+                return {key: encode(item) for key, item in value.items()}
+            if isinstance(value, tuple):
+                return [encode(item) for item in value]
+            return value
+        return encode(self)
+
+    @property
+    def primary_diagnostic(self) -> ExecutionDiagnostic | None:
+        if self.transport_status in {"succeeded", "failed", "unknown"}:
+            return None
+        return self.diagnostics[0] if self.diagnostics else None
+
+    @property
+    def returncode(self) -> int:
+        """Legacy effective code: transport failure takes precedence over command exit."""
+        if type(self.transport_returncode) is not int or (
+            self.exit_code is not None and type(self.exit_code) is not int
+        ):
+            raise TypeError("execution return codes must be integers or an unknown command exit")
+        if self.output_scope not in ("transport", "command"):
+            raise ValueError("unknown execution output scope")
+        if self.output_scope == "command" and self.exit_code is None:
+            raise ValueError("command-scoped output requires a known command exit code")
+        return self.transport_returncode or self.exit_code or 0
+
+    def require_transport(self) -> None:
+        """Raise on execution failures; never turn an unknown job into a retry."""
+        if self.transport_status == "infrastructure":
+            if self.facts.disposition == "unknown":
+                raise ExecutionPending("GPU transport unavailable; remote execution state unknown", self)
+            raise ExecutionUnavailable("GPU validation transport unavailable", self)
+        if self.transport_status in {"timed_out", "cancelled", "interrupted"}:
+            raise ExecutionPending("execution " + self.transport_status, self)
+
 
 
 @runtime_checkable

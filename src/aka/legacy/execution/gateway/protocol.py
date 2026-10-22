@@ -34,11 +34,6 @@ class GatewayOutcome:
         if self.has_result or self.primary_diagnostic is None:
             return None
         record = dict(self.primary_diagnostic)
-        record["candidate_repairable"] = bool(
-            record.get("failure_class") == "request"
-            and not record.get("reference_rejected")
-            and (record.get("candidate_rejected") or record.get("io_contract_rejected"))
-        )
         if self.secondary_diagnostics:
             record["secondary_diagnostics"] = [
                 dict(item) for item in self.secondary_diagnostics
