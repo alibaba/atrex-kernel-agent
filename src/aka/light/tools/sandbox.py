@@ -5,8 +5,10 @@ Existing GPU command syntax is preserved, for example:
   python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --no-memory
   python3 tools/sandbox.py --kind profile --no-sync -- python3 profile_driver.py
   python3 tools/sandbox.py --kind dev --input scratch/probe.py -- python3 scratch/probe.py
-Additional typed operations: check, disassemble, env; Wiki: wiki-query, wiki-search,
-wiki-hardware. Use --kind OPERATION --help for the operation's request options.
+Additional typed operations: check, disassemble, env. Use --kind OPERATION --help
+for the operation's request options. Wiki access uses selected Core tools through
+`python3 tools/plugin.py list` and `call`. The old `--kind wiki-query` form is a
+compatibility alias for Core's `gpu-wiki.query`; other retired Wiki commands return a migration error.
 Read saved results with --kind record-read --record-id gateway-...;
 copy source with --kind kernel-read --kernel-id kernel-... --output-path scratch/kernel.py;
 list a Kernel's measurements with --kind kernel-records --kernel-id kernel-....
@@ -34,10 +36,10 @@ RUNTIME_TOKEN_ENV = "ATREX_AKA_RUNTIME_TOKEN"
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
-WIKI_KINDS = {"wiki-query": "query_nl", "wiki-search": "query_wiki", "wiki-hardware": "query_hardware"}
 REQUEST_KINDS = {"update-direction": "direction_update", "record-experiment": "experiment_record", "episode-report": "episode_report"}
 LIST_KINDS = {"list-directions": "directions_list", "list-experiments": "experiments_list"}
 LOAD_KINDS = {"load-direction": ("direction_load", "direction_id"), "load-experiment": ("experiment_load", "experiment_id")}
+RETIRED_WIKI_KINDS = {"wiki-search", "wiki-hardware"}
 
 
 def client_error(code: str, message: str, instruction: str, *, repairable=False, path="$", **details) -> None:
@@ -204,10 +206,6 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
         return 75
 
 
-def proxy_wiki(tool: str, argv: list[str]) -> int:
-    return proxy_command("/v1/wiki/query", {"tool": tool, "argv": argv})
-
-
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args in (["--help"], ["-h"]):
@@ -224,11 +222,21 @@ def main(argv: list[str] | None = None) -> int:
         )
         if kind is not None:
             record_read = kind == "record-read"
+        if kind == "wiki-query":
+            end = index + 2 if value == "--kind" else index + 1
+            return proxy_command(
+                "/v1/wiki/query",
+                {"tool": "query_nl", "argv": args[:index] + args[end:]},
+            )
+        if kind in RETIRED_WIKI_KINDS:
+            client_error(
+                "plugin_retired",
+                f"The Light {kind} command has been retired.",
+                "Select a Wiki provider in the Core profile, then use python3 tools/plugin.py list and call.",
+            )
+            return 2
         if kind in {*REQUEST_KINDS, *LIST_KINDS, *LOAD_KINDS}:
             return proxy_command("/v1/journal/execute", journal_request(kind, args))
-        if kind in WIKI_KINDS:
-            count = 2 if value == "--kind" else 1
-            return proxy_wiki(WIKI_KINDS[kind], args[:index] + args[index + count:])
     return proxy_command("/v1/gateway/execute", {"argv": args}, record_read=record_read)
 
 

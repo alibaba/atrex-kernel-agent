@@ -47,11 +47,11 @@ def owned(distribution: str) -> tuple[Path, ...]:
 
 
 def build_wiki_resources(output: Path) -> None:
-    """Export the explicitly selected public Wiki plugin and its data closure."""
+    """Export public Wiki data; the Core plugin lives in its Python wheel."""
     output.mkdir(parents=True, exist_ok=True)
     inventory = {}
     with tarfile.open(output / 'atrex-aka-public-resources-0.1.0.tar.gz', 'w:gz') as archive:
-        for relative in ('plugins/gpu-wiki', 'gpu-wiki'):
+        for relative in ('gpu-wiki',):
             directory = ROOT / relative
             if not directory.is_dir():
                 raise FileNotFoundError(f'missing selected public resource: {directory}')
@@ -90,7 +90,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--with-wiki-resources', action='store_true',
-                        help='also export the selected public Wiki plugin and data as a separate artifact')
+                        help='also export selected public Wiki data as a separate artifact')
     parser.add_argument('distributions', nargs='*')
     args = parser.parse_args()
     distributions = args.distributions or list(OWNERS)

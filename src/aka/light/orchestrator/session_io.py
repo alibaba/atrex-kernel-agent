@@ -87,8 +87,8 @@ def ensure_submodules(platform: str = "", arch: str = "") -> None:
     """Initialize submodules required by the optimization pipeline.
 
     The historical ncu-report-skill submodule is optional: profiling helpers
-    used by Campaigns are vendored under tools/ncu_helpers/. KernelWiki's
-    Agent-facing skill and the GPU Wiki JSON stores are repository-native.
+    used by Campaigns are vendored under tools/ncu_helpers/. GPU Wiki access
+    is supplied by the selected Core resource profile.
     PPU campaigns also require their vendor reference projects: without those
     working trees the framework-baseline catalog silently contains no usable
     PPU implementation sources.

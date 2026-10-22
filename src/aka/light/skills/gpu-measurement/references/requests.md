@@ -235,15 +235,13 @@ files under `scratch/`; only that diagnostics tree is published to the controlle
 Paths must be workspace-relative and must not traverse symlinks or `..`.
 Do not request control files or changes to Kernel source via remote outputs.
 
-## Optional Wiki
+## Selected Core Wiki tools
 
-Wiki is disabled by default. Only use these commands when the session explicitly enables Wiki
-and mounts `skills/KernelWiki/SKILL.md`; read that Skill for query scope and hardware identity.
-Do not depend on a `gpu-wiki/` source directory in the Agent workspace. When Wiki is disabled,
-use supplied public knowledge and measured evidence instead.
+Wiki access is determined by the selected Core profile. Discover only the tools available in this
+session, then call an enabled Wiki tool using its declared input schema. Use the returned source
+references and receipt when recording research; do not assume a public or internal provider is enabled.
 
 ```bash
-python3 tools/sandbox.py --kind wiki-query "Triton reduction on sm_120: measured bandwidth bottleneck"
-python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverage
-python3 tools/sandbox.py --kind wiki-hardware --product sm120
+python3 tools/plugin.py list
+python3 tools/plugin.py call <enabled-wiki-tool> --input scratch/wiki_request.json
 ```

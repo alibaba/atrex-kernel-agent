@@ -1,7 +1,6 @@
 """Campaign-scoped factory; business state never lives in the Core container."""
 from dataclasses import dataclass, replace
 from typing import Protocol
-from aka.light.wiki.config import WikiConfig
 
 
 class ToolRuntimeFactory(Protocol):
@@ -17,6 +16,12 @@ class ManagedRuntimeFactory:
     wiki_options: dict | None = None
     services: object | None = None
 
+    def __post_init__(self):
+        if self.wiki or self.wiki_options:
+            raise ValueError(
+                "Light's legacy Wiki runtime has been retired; select public/internal Wiki resources in a Core profile"
+            )
+
     @property
     def research_records(self) -> bool:
         return self.services.journal.research_records if self.services is not None else False
@@ -25,8 +30,6 @@ class ManagedRuntimeFactory:
         from aka.light.orchestrator.supervisor_runtime import SupervisorRuntime
         return SupervisorRuntime(replace(configuration,
             measurement_repetitions=self.measurement_repetitions,
-            wiki_enabled=self.wiki,
-            wiki_options=WikiConfig(**(self.wiki_options or {})),
             request_timeout=self.request_timeout if self.request_timeout is not None else configuration.request_timeout,
             queue_timeout=self.queue_timeout), workspace_provider=workspace_provider,
             services=self.services, agent_resources=agent_resources)

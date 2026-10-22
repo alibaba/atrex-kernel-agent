@@ -137,6 +137,12 @@ class PluginRegistry:
             raise PluginError(
                 "invalid_manifest", f"invalid plugin identity/API: {manifest_path}"
             )
+        if manifest["id"] in {"gpu-wiki", "internal-gpu-wiki"}:
+            raise PluginError(
+                "plugin_retired",
+                "Legacy Wiki manifest plugins are retired; select a Core Wiki profile. "
+                "Historical campaigns require their original matching engine and artifacts.",
+            )
         for key in optional:
             if key in manifest and not isinstance(manifest[key], dict):
                 raise PluginError("invalid_manifest", f"{key} must be an object")

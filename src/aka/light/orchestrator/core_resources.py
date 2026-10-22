@@ -159,9 +159,7 @@ class CoreResourceProjection:
             source_value = row.get("path")
             if not isinstance(name, str) or not name or Path(name).name != name:
                 raise ValueError("Core Agent Skill has an unsafe install name")
-            # The Core Wiki Skill intentionally replaces the old packaged
-            # Light KernelWiki Skill at the same Agent path during migration.
-            if name in SKILL_MANIFEST and name != "KernelWiki":
+            if name in SKILL_MANIFEST:
                 raise ValueError(
                     f"Core Agent Skill conflicts with Light Runtime Skill: {name}"
                 )

@@ -6,9 +6,10 @@ peak-performance sheet and does not make timeline collection mandatory.
 
 ## Hardware sources
 
-Read the target's hardware specifications from `gpu-wiki` and record the source references used by
-the experiment. Resolve warp size, thread limits, shared-memory/register capacity and CU topology
-there; combine those facts with actual launch resources and ACU occupancy evidence. A single
+When a Core Wiki provider is selected, read the target's hardware specifications through its
+declared tool and record the returned source references. Resolve warp size, thread limits,
+shared-memory/register capacity and CU topology there; combine those facts with actual launch
+resources and ACU occupancy evidence. A single
 resource limit does not establish achieved residency.
 
 Use the [recorder timer contract](recorder.md#timer-contract-and-correctness-evidence) for timestamp semantics and keep decoded

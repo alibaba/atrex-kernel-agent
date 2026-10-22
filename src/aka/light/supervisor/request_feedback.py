@@ -266,7 +266,6 @@ def augment_error(response, *, route, request, research_records=False, superviso
                                     "instruction": "Use the enabled tool's declared input schema; do not bypass the Runtime."})
     elif route == "/v1/wiki/query":
         result["recovery"].append({"instruction":
-            "Use python3 tools/sandbox.py --kind wiki-query --help (or wiki-search/wiki-hardware). "
-            "Pass only workspace-relative input files and bounded max-bytes/max-records; "
-            "do not specify private Wiki stores."})
+            "The legacy Light Wiki route is retired. Ask the operator to select the required Wiki in a Core profile, "
+            "then use `python3 tools/plugin.py list` and call only an enabled Core Wiki tool."})
     return result

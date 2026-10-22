@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 import argparse
-import hashlib
 import logging
 import math
 import os
@@ -22,7 +21,6 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from aka.light.runtime.paths import legacy_resource_root
 
 from aka.light.supervisor.gateway import (
     EPISODE_EVALUATIONS_PATH, build_parser, configured_queue_wait_grace, find_agate, validate_evaluation_options,
@@ -36,7 +34,7 @@ from aka.light.supervisor.journal import SupervisorJournalService, load_journal,
 from aka.light.supervisor.errors import AgentRequestError, RuntimeStateError, error_response
 from aka.light.supervisor.request_feedback import augment_error
 from aka.light.supervisor.plugin_output import (
-    MAX_OUTPUT_BYTES, check_executor_output_failure, project_plugin_output, raise_output_error,
+    MAX_OUTPUT_BYTES, check_executor_output_failure, project_plugin_output,
 )
 from .constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER, SOL_HARNESS
 from .episode_workspace import EpisodeWorkspace
@@ -45,8 +43,6 @@ from aka.light.runtime.errors import (
     RequestValidationError, RequestDispatchTimeout, GatewayExecutionUnavailable, SessionRevokedError,
 )
 from aka.light.runtime.paths import supervisor_campaign_root
-from aka.light.wiki.config import WikiConfig
-from aka.light.wiki.service import WikiService
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
@@ -64,9 +60,6 @@ AUTHORITY = frozenset({
     "--timeout", "--max-input-file-mb", "--max-output-file-mb",
 })
 FORBIDDEN = frozenset({"--preflight", "--check-health"})
-WIKI_STORES = {"query_nl": "--store-root", "query_wiki": "--json-store", "query_hardware": "--store"}
-
-
 def sol_evaluation_config(workspace: Path) -> bytes | None:
     """Read optional SOL policy from V0, never from mutable files or the index."""
     from .workspace_state import v0_baseline_commit
@@ -191,7 +184,6 @@ class RuntimeConfig:
     health_command: str = ""
     private_reference_dir: Path | None = None
     atrex_bench_root: Path | None = None
-    wiki_profile_root: Path | None = None
     task_id: str = ""
     optimization_mode: str = "leaderboard"
     workspace: Path | None = None
@@ -199,8 +191,6 @@ class RuntimeConfig:
     request_timeout: float | None = None
     queue_timeout: float = 60
     measurement_repetitions: int = 1
-    wiki_enabled: bool = False
-    wiki_options: WikiConfig = field(default_factory=WikiConfig)
 
     def __post_init__(self):
         for name in ("request_timeout", "queue_timeout"):
@@ -337,15 +327,11 @@ class _Handler(BaseHTTPRequestHandler):
             # the stopped CLI cannot drain a large response. Disconnection does
             # not release this scope early or cancel an already submitted job.
             wait = capability.session_control.request() if capability.session_control else nullcontext()
-            with wait:
-                if owner.is_wiki_request(self.path, request):
-                    result = owner.execute(capability, self.path, request)
-                else:
-                    with owner.request_lock(capability, deadline, self.request_id):
-                        with owner.lock:
-                            if owner.closed or owner.capabilities.get(token) is not capability:
-                                raise SessionRevokedError("Session capability revoked")
-                        result = owner.execute(capability, self.path, request)
+            with wait, owner.request_lock(capability, deadline, self.request_id):
+                with owner.lock:
+                    if owner.closed or owner.capabilities.get(token) is not capability:
+                        raise SessionRevokedError("Session capability revoked")
+                result = owner.execute(capability, self.path, request)
             execution_exit_code = None
             if self.path == "/v1/gateway/execute" and isinstance(result.get("agent_result"), dict):
                 # Never expose the private compatibility streams alongside the
@@ -399,7 +385,7 @@ class SupervisorRuntime:
             self.plugins = CoreResourceProjection(agent_resources)
         else:
             from .plugins import PluginRegistry
-            self.plugins = PluginRegistry(enabled=config.wiki_enabled)
+            self.plugins = PluginRegistry(enabled=True)
         self.workspace_provider = workspace_provider
         self.environment = {k: v for k, v in os.environ.items() if k not in {OWNER_ENV, URL_ENV, TOKEN_ENV}}
         self.gateway_queue_wait_grace = configured_queue_wait_grace(self.environment)
@@ -434,8 +420,6 @@ class SupervisorRuntime:
             self.plugins.check_lock(plugin_lock)
         plugin_snapshot = self.plugins.snapshot()
         publish(plugin_lock, ".atrex_plugins/lock.json", json.dumps(plugin_snapshot).encode())
-        self.wiki = WikiService((self.audit_root or self.root) / "wiki", config.wiki_options,
-                                plugin_snapshot)
         self.server = _Server(("127.0.0.1", 0), _Handler)
         self.server.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -656,16 +640,6 @@ class SupervisorRuntime:
             lambda: self._acquire(self.slots, capability, deadline), self.slots.release,
         ))
 
-    def is_wiki_request(self, route, request):
-        if self.agent_resources is not None:
-            return False
-        if route == "/v1/wiki/query":
-            return True
-        if route == "/v1/plugins/execute" and request.get("action") == "call":
-            return any(request.get("tool") == f"{plugin.id}.{name}" and tool.get("runtime_tool") == "wiki-query"
-                       for plugin in self.plugins.plugins for name, tool in plugin.tools.items())
-        return False
-
     def execute_trusted(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
                         parent=None, reference_snapshot: Path | None = None) -> dict:
         """Controller-only execution/reuse; no Session, draft publication or HTTP switch."""
@@ -690,6 +664,12 @@ class SupervisorRuntime:
                 execution_timeout: int | None = None, reference_snapshot: Path | None = None) -> dict:
         if self.agent_resources is not None and route == "/v1/wiki/query":
             return self._execute_core_wiki_compat(capability, request)
+        if route == "/v1/wiki/query":
+            raise AgentRequestError(
+                "The legacy Light Wiki runtime has been retired; select Wiki tools through a Core profile.",
+                code="plugin_retired", repairable=False,
+                next_action="Ask the operator to select a Core profile with the required Wiki tool, then use python3 tools/plugin.py list.",
+            )
         if route == "/v1/plugins/execute":
             return self.execute_plugin(capability, request)
         if route == "/v1/journal/execute":
@@ -707,8 +687,11 @@ class SupervisorRuntime:
             staged = Path(temporary)
             with _validating_request():
                 if route.endswith("query"):
-                    command = self._wiki_command(capability, request["tool"], argv, staged, environment)
-                    kind = "wiki"
+                    raise AgentRequestError(
+                        "The legacy Light Wiki runtime has been retired; select Wiki tools through a Core profile.",
+                        code="plugin_retired", repairable=False,
+                        next_action="Use the selected Core Wiki tool through python3 tools/plugin.py.",
+                    )
                 else:
                     argv = filter_options(argv, AUTHORITY, FORBIDDEN)
                     parsed = parse_gateway(argv)
@@ -824,8 +807,6 @@ class SupervisorRuntime:
                                                reuse_completed=reuse_completed, reuse_correctness=reuse_correctness)
             # From this point execution may have submitted a job. Failures must
             # never be classified as repairable argument errors by the handler.
-            if kind == "wiki":
-                return self.wiki.execute(self, capability, command, staged, environment, argv)
             process = self.run_executor(command, staged, environment, capability)
             self.audit_process(capability, kind, argv, process)
             if kind == "gateway":
@@ -836,7 +817,7 @@ class SupervisorRuntime:
             response = project_response(process, generalized=self.config.private_reference_dir is not None,
                                     operation=parsed.kind if kind == "gateway" and parsed is not None else None,
                                     private_values=credential_values(environment),
-                                    wiki=kind == "wiki", private_paths=(str(staged), str(self.root),
+                                    private_paths=(str(staged), str(self.root),
                                     str(self.config.private_reference_dir or ""), str(ROOT),
                                     self.config.url, str(self.config.atrex_bench_root or "")))
             if kind == "gateway" and parsed is not None and parsed.kind == "env":
@@ -951,24 +932,6 @@ class SupervisorRuntime:
             exit_code = 0 if status == "ok" else (75 if status in {"tool_cancelled", "tool_timeout"} else 1)
             return {"exit_code": exit_code,
                     "stdout": json.dumps(result, ensure_ascii=False) + "\n", "stderr": ""}
-        if tool.get("runtime_tool") == "wiki-query":
-            # Reuse the existing scoped, bounded Wiki executor and private audit.
-            value = request["input"]
-            argv = [value["request"]]
-            for name in ("max_records", "max_bytes", "exclude"):
-                if name in value:
-                    argv += ["--" + name.replace("_", "-"), str(value[name])]
-            response = self.execute(capability, "/v1/wiki/query", {"tool": "query_nl", "argv": argv})
-            # The schema describes successful tool output, not executor failures.
-            # Validate after dispatch (outside _validating_request): drift is a
-            # Supervisor failure, not an Agent-repairable input error.
-            if response["exit_code"] == 0:
-                # The Wiki projection may already have truncated an oversized
-                # stdout. Classify the size before trying to decode that prefix.
-                if len(response["stdout"].encode()) > MAX_OUTPUT_BYTES:
-                    raise_output_error(request["tool"], "result_too_large")
-                project_plugin_output(request["tool"], tool["output_schema"], response["stdout"])
-            return response
         with tempfile.TemporaryDirectory(dir=self.root, prefix="plugin-") as temporary:
             staged = Path(temporary)
             with _validating_request():
@@ -983,9 +946,6 @@ class SupervisorRuntime:
             # Preserve catalog-wide environment semantics without rehashing every
             # plugin/resource in the child. These are cached operator declarations.
             environment.update(self.plugins.environment(staged))
-            if self.config.wiki_profile_root:
-                environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
-            environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
             process = self.run_executor(
                 [sys.executable, str(ROOT / "supervisor/plugin_executor.py"), str(request_path)],
                 staged, environment, capability,
@@ -1145,57 +1105,6 @@ class SupervisorRuntime:
         if len(output.encode("utf-8")) > MAX_OUTPUT_BYTES:
             return {"exit_code": 1, "stdout": "", "stderr": "Core Wiki result exceeds the Light output limit"}
         return {"exit_code": 0, "stdout": output, "stderr": ""}
-
-    def _wiki_command(self, capability, tool, argv, staged, environment):
-        if not self.config.wiki_enabled:
-            raise AgentRequestError("GPU Wiki is disabled in the selected Workflow configuration",
-                                    code="wiki_disabled", repairable=False,
-                                    next_action="Continue with the enabled tools. Only the operator can enable Wiki; do not retry or access its private store directly.")
-        if not isinstance(tool, str) or tool not in WIKI_STORES:
-            raise ValueError("Unsupported Wiki tool")
-        if "--" in argv:
-            raise ValueError("Wiki requests do not accept a '--' option terminator")
-        # No prefix spelling or '--' escape may reinterpret private host files.
-        forbidden = frozenset({"--store", "--store-root", "--json-store", "--keep-workspace"})
-        argv = filter_options(argv, frozenset(), forbidden)
-        for index, item in enumerate(argv):
-            option = item.split("=", 1)[0]
-            if option.startswith("--") and option != "--file" and "--file".startswith(option):
-                raise ValueError("Use the full --file option")
-            if option == "--file":
-                raw = item.split("=", 1)[1] if "=" in item else (
-                    argv[index + 1] if index + 1 < len(argv) else "")
-                data = read_input(capability.workspace, raw, limit=128 * 1024)
-                target = staged / "query.txt"
-                target.write_bytes(data)
-                if "=" in item:
-                    argv[index] = "--file=" + str(target)
-                else:
-                    argv[index + 1] = str(target)
-        if tool in {"query_nl", "query_wiki"}:
-            # Honor narrower context requests without permitting an unbounded result.
-            requested_limits = []
-            for index, item in enumerate(argv):
-                if item == "--max-bytes":
-                    if index + 1 >= len(argv):
-                        raise ValueError("--max-bytes requires a positive byte limit")
-                    requested_limits.append(int(argv[index + 1]))
-                elif item.startswith("--max-bytes="):
-                    requested_limits.append(int(item.split("=", 1)[1]))
-            if any(value <= 0 for value in requested_limits):
-                raise ValueError("--max-bytes must be positive")
-            argv = filter_options(argv, frozenset({"--max-bytes"}), frozenset())
-            argv += ["--brief", "--max-bytes", str(min([128 * 1024, *requested_limits]))]
-        if tool == "query_nl":
-            # No Agent-controlled deadline or bridge model/provider override.
-            argv = filter_options(argv, frozenset({"--timeout", "--agent-cli"}), frozenset())
-            argv += ["--timeout", str(self.config.wiki_options.bridge_timeout)]
-            if self.config.wiki_options.model or self.config.wiki_options.settings_file:
-                environment["ATREX_WIKI_BRIDGE_CLI"] = "claude"
-        if self.config.wiki_profile_root:
-            environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
-        environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
-        return [sys.executable, str(legacy_resource_root() / "gpu-wiki/tools" / f"{tool}.py"), *argv]
 
     def publish_legacy_outputs(self, workspace, staged, args):
         # Profile artifacts remain part of the old Agent workflow. Only these

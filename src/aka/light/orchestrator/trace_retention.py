@@ -107,19 +107,29 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
             add(episode / "journal.json", "episode-journal")
             add(episode / "evaluations.jsonl", "episode-evaluation")
 
-    profile = workspace / ".gpu_wiki_profile"
-    add(profile / "run.json", "wiki-run-identity")
-    query_root = profile / "raw" / "query_events"
-    if query_root.is_dir():
-        for path in query_root.glob("*/*.json"):
-            add(path, "wiki-query-event")
-
     profiles = workspace / "profiles"
     if profiles.is_dir():
         for directory in profiles.iterdir():
             if directory.is_dir() and PROFILE_RE.fullmatch(directory.name):
                 for relative in PROFILE_FILES:
                     add(directory / relative, "compact-profiler-evidence")
+
+    # Core-bound resources publish a durable descriptor whose declared
+    # artifacts include Wiki receipts and source references. Validate paths
+    # again through add() before retaining them.
+    try:
+        from aka.legacy.workflow.resource_evidence import collect_artifacts
+
+        artifacts = collect_artifacts(workspace)
+    except Exception:  # noqa: BLE001 - retention evidence is auxiliary
+        artifacts = []
+    if artifacts:
+        for artifact in artifacts:
+            if isinstance(artifact, dict) and isinstance(artifact.get("path"), str):
+                add(
+                    workspace / artifact["path"],
+                    str(artifact.get("role") or "resource-artifact"),
+                )
 
     return [
         {"path": path, "role": files[path]}

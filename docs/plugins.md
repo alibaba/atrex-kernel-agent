@@ -7,10 +7,13 @@ ownership, profile commands, the new tools interface and legacy compatibility.
 
 ## Standalone legacy manifest catalogs
 
-The following material applies to explicitly selected standalone legacy catalogs
-and matching historical campaigns. The default legacy Workflow selects
-`plugins/gpu-wiki` from the checkout supplied with `--repo-root`. Custom
-configurations can select explicit `plugins` paths or a `plugin_dir` catalog;
+The Wiki manifest plugins have retired. Public and internal Wiki are selected
+only through Core profiles; copied manifests with the old Wiki IDs fail with
+`plugin_retired`. Restore historical campaigns with their original matching
+engine and artifacts rather than changing their frozen selection in place.
+
+The following material applies to other explicitly selected standalone manifest
+catalogs. Custom configurations can select explicit `plugins` paths or a `plugin_dir` catalog;
 catalog mode discovers immediate subdirectories containing `plugin.json`. A
 plugin may contribute tools, Skills, instructions, and workspace resources. These
 manifests do not participate in new Core Wiki composition.
@@ -25,7 +28,9 @@ For an unfamiliar operator or device, establish the operator's dataflow and exac
 MicroAnalysis can be selected independently of GPUWiki. Use the workflow's enabled knowledge
 sources and available target documentation, following each source's lookup and attribution
 requirements and checking applicability. GPUWiki is one such source when enabled; selecting it
-alongside MicroAnalysis in a custom configuration does not create a plugin dependency. Use focused
+does not create a dependency on the standalone MicroAnalysis manifest. Core campaigns need a Core
+Skill contribution to combine that guide with their selected Wiki; independent manifest catalogs
+cannot be mixed with Core AgentResources. Use focused
 probes or A/B experiments to check existing knowledge or investigate unresolved observations.
 Keep unresolved facts explicit and distinguish contextual measurements from specifications.
 Backend documentation owns collection commands and metric meanings.
@@ -117,10 +122,10 @@ This scans the specified catalog rather than resolving a Workflow's configured p
 The separate workspace avoids conflicts with source directories such as `gpu-wiki` and with existing
 campaign locks.
 Both forms return separate `tools` and `skills` catalogs. Each tool uses a namespaced name such as
-`gpu-wiki.query`; each Skill has a namespaced catalog ID while retaining its native installation
+`local-docs.query`; each Skill has a namespaced catalog ID while retaining its native installation
 name.
 
-To query GPU Wiki when that plugin is enabled, create `wiki_request.json`:
+To query GPU Wiki in a Core-bound campaign, create `wiki_request.json`:
 
 ```json
 {
@@ -129,29 +134,31 @@ To query GPU Wiki when that plugin is enabled, create `wiki_request.json`:
 }
 ```
 
-In the campaign's Agent environment, call:
+In a native Core campaign's Agent environment, call:
 
 ```bash
-python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json
+aka tools call gpu-wiki.query --input wiki_request.json
 ```
 
-For a standalone call from the checkout root, retain the same catalog and workspace selection:
+Light sessions use their scoped Supervisor client:
 
 ```bash
-python -m aka.legacy.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" \
-  call gpu-wiki.query --input wiki_request.json
+python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json
 ```
 
-`--input -` reads JSON from stdin. The response preserves the Wiki envelope: `query_id`, `records`,
-and `notes`. Canonical `wiki_id` values, payloads, and public/internal store isolation are unchanged.
+`--input -` reads JSON from stdin. The result is an `aka.tool-result.v1` envelope;
+its `data` contains `query_id`, `records`, and `notes`. The old Resources CLI still
+forwards to the frozen Core owner and returns raw business data when that owner
+is present. It does not discover or enable Wiki from a standalone manifest catalog.
+Canonical `wiki_id` values, payloads, and public/internal store isolation are unchanged.
 `max_bytes` and `exclude` are also supported input fields.
 
 The standard episode request uses the deterministic Wiki parser. Other prose can invoke the Wiki's
 existing bridge agent. Mining and admission through `wiki-gate` remain separate from this query
 tool, and direct Wiki scripts remain available for maintenance and standalone use.
 
-The plugin declares the public store and optional `internal_gpu_wiki` sibling as dependencies. A
-conflicting `ATREX_WIKI_STORE_ROOT` is rejected instead of silently selecting an undeclared store.
+Public and internal stores are independent Core contributions. The selected
+profile pins each store explicitly; there is no optional sibling-store discovery.
 
 ## Add a tool plugin
 

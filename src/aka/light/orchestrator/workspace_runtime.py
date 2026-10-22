@@ -15,13 +15,14 @@ from .constants import REPO_ROOT, STALL_STATE_FILE
 RETIRED_SKILL_NAMES = frozenset({
     "humanize", "humanize-gen-plan", "humanize-refine-plan", "humanize-rlcr",
     "gen-plan", "gpu-kernel-baseline", "gpu-kernel-episode-loop", "ncu-report-skill",
+    "KernelWiki", "InternalKernelWiki",
 })
 
 
 def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = False) -> str:
     root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
     extra = ", PPU profiling" if is_ppu else ""
-    knowledge = ", `KernelWiki`" if wiki else ""
+    knowledge = ", selected Core Wiki tools" if wiki else ""
     return (
         f"- `skills/` (also discoverable under `{root}/skills/`): `gpu-measurement`, "
         f"`runtime-records`{knowledge}, and optional timeline diagnostics{extra}. "
@@ -142,8 +143,6 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
         from aka.light.workspace.sources import register_managed_paths
         register_managed_paths(workspace, managed_paths)
     names = ["gpu-measurement", "runtime-records", "autonomous-gpu-kernel-timeline"]
-    if any(plugin.id == "gpu-wiki" for plugin in plugin_registry.plugins):
-        names.append("KernelWiki")
     if is_ppu:
         names.append("ppu-acu-joint-profile")
     inactive = RETIRED_SKILL_NAMES | (set(SKILL_MANIFEST) - set(names))
@@ -159,8 +158,8 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     installed_plugin_skills = plugin_registry.install_agent_skills(workspace)
     names.extend(installed_plugin_skills)
     # Core Wiki Skills are host-neutral; Light Agents use the capability bridge
-    # instead of Legacy's resources CLI. Rewrite only these selected Skill files
-    # in the Light projection, leaving the packaged Core source unchanged.
+    # instead of a host-side resources CLI. Rewrite only these selected
+    # Skill files in the Light projection, leaving the packaged Core source unchanged.
     for name in (installed_plugin_skills if is_core_projection else ()):
         skill_file = workspace / "skills" / name / "SKILL.md"
         if name not in {"KernelWiki", "InternalKernelWiki"} or not skill_file.is_file():

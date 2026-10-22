@@ -116,9 +116,6 @@ from .workspace_state import (
 )
 
 
-_WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
-_WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
-
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 4
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
@@ -390,7 +387,7 @@ class Campaign:
             ssh_init=self.sandbox_ssh_init, ssh_gpu=self.sandbox_ssh_gpu,
             health_command=self.sandbox_health_command, private_reference_dir=self.private_reference_dir,
             atrex_bench_root=Path(self.atrex_bench_root).resolve() if self.atrex_bench_root else None,
-            wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
+            task_id=self.campaign_name,
             optimization_mode=self.optimization_mode,
             workspace=self.workspace,
             request_timeout=request_timeout,
@@ -421,7 +418,7 @@ class Campaign:
                 str(row.get("name", "")).endswith("gpu-wiki.query")
                 for row in registry.catalog()
             )
-        return self.tool_runtime.wiki
+        return False
 
     def _uses_core_resources(self) -> bool:
         return getattr(self.plugin_registry, "bound", None) is not None
@@ -545,17 +542,6 @@ class Campaign:
         state_file = environment_state_file()
         if state_file is not None:
             environment["ATREX_ENVIRONMENT_STATE_FILE"] = str(state_file)
-        # Query events from disposable episode worktrees must land in the
-        # incumbent workspace, where the completion hook can retain them.
-        wiki_profile_root = self.workspace / ".gpu_wiki_profile"
-        # Preserve lexical paths for bwrap's mount validation; native sessions
-        # retain the existing symlink and '..' canonicalization.
-        environment[_WIKI_PROFILE_ROOT_ENV] = str(
-            wiki_profile_root.absolute()
-            if self.agent_sandbox == "bwrap"
-            else wiki_profile_root.resolve()
-        )
-        environment[_WIKI_TASK_ID_ENV] = self.campaign_name
         return environment
 
 
@@ -1035,9 +1021,6 @@ class Campaign:
             )
         else:
             hardware_evidence = (
-                "Before an optimization plan uses a hardware limit, source it through "
-                "`--kind wiki-query` and cite the returned record. "
-                if self._wiki_enabled_for_agent() else
                 "Wiki queries are disabled. Use supplied, attributable hardware evidence; "
                 "do not guess missing peak specifications. "
             )
@@ -2287,18 +2270,14 @@ class Campaign:
             AGENT_RUNTIME=_agent_runtime_directive(
                 self.agent_cli,
                 is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-                wiki=self._wiki_enabled_for_agent() and not self._uses_core_resources(),
+                wiki=self._uses_core_resources() and self._wiki_enabled_for_agent(),
             ),
             KNOWLEDGE_RESEARCH=(
                 "Use only selected Core Wiki tools described in PLUGINS; call each enabled store "
                 "separately via tools/plugin.py and preserve returned source attribution."
                 if self._uses_core_resources() and self._wiki_enabled_for_agent() else
-                ((PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8")
-                 .replace("{{PLATFORM}}", self.platform).replace("{{ARCH}}", self.arch)
-                 .replace("{{FRAMEWORK}}", self.framework)
-                 if self._wiki_enabled_for_agent() else
-                 "Wiki is disabled. Use the supplied public contract and compiler/measurement evidence. "
-                 "If an essential fact is unavailable, report the blocker instead of inventing it.")
+                "Wiki is disabled. Use the supplied public contract and compiler/measurement evidence. "
+                "If an essential fact is unavailable, report the blocker instead of inventing it."
             ),
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._framework_baseline_sandbox_directive(),

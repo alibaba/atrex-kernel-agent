@@ -1,5 +1,10 @@
 # Plugin fingerprint cost
 
+This is a historical measurement of the retired Wiki manifest implementation.
+Its results and script require the matching 2026-09-22 checkout and do not
+describe current Core Wiki execution. See [Core resources](core-agent-resources.md)
+for the supported Wiki path.
+
 Measured on 2026-09-22, Apple M5 / 16 GiB RAM, macOS 26.5.2 arm64, Python 3.14.6,
 local checkout. Each case has one warmup followed by nine samples in the same process; Python
 imports, temporary-workspace creation, service shutdown and cleanup are outside the timed region.
@@ -66,7 +71,7 @@ Each array follows execution order after its warmup.
 }
 ```
 
-## Reproduction
+## Historical reproduction
 
 Run from the repository root using the desired Python environment. The Supervisor case requires
 permission to bind a loopback listener. This uses only temporary workspaces and does not modify

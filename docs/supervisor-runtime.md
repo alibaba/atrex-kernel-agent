@@ -104,9 +104,19 @@ Profile and unsupported pre-Typed source contracts retain their documented Dev c
 
 ## Wiki
 
-The mounted `KernelWiki` Skill comes exclusively from `skills/KernelWiki` and describes the same stores and query semantics as the existing Wiki. The legacy external KernelWiki submodule and its startup initialization are removed; queries use the repository's `gpu-wiki/kernel_wiki` and `gpu-wiki/hardware_wiki` JSON stores. Agent calls to `gpu-wiki/tools/query_nl.py`, `query_wiki.py` and `query_hardware.py` are forwarded automatically; `wiki-query`, `wiki-search` and `wiki-hardware` aliases are also available through `tools/sandbox.py`.
+Core profiles select no Wiki, public Wiki, internal Wiki, or both. The selected Core
+plugins supply their Skills, tools and attribution providers; Light exposes them through
+`python3 tools/plugin.py list` and `call`. The former Light Wiki service, worker,
+manifest and bundled Skill have been retired. `tools/sandbox.py --kind wiki-query`
+and `/v1/wiki/query` remain compatibility aliases for the selected public Core query
+tool. Without that tool they fail explicitly; `wiki-search` and `wiki-hardware`
+return migration instructions.
 
-Retrieval, bridge execution and query telemetry run on the Supervisor. Agents can provide a query or a workspace-local query file, not a host store root or retained bridge workspace. `query_id`/`wiki_id` attribution still uses the existing Journal; no new feedback or Journal protocol is introduced.
+Retrieval and query telemetry execute in Supervisor-owned bounded subprocesses with
+the existing deadline and cancellation mechanism. Agents provide schema-validated
+query input, without choosing host store roots or trusted implementation paths. Core
+receipts and canonical references feed Journal attribution and trace retention;
+compatible `query_id`/`wiki_id` fields remain available. See [Core resources](core-agent-resources.md).
 
 ## Files, diagnostics and limits
 

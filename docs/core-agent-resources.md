@@ -111,6 +111,8 @@ campaign receipts and retain the old Wiki fields as a compatibility projection.
 
 Frozen launch recovery uses the original code/data and selection. Light's own
 Episode Journal and sealed candidate recovery remain authoritative; this bridge
-does not add Legacy Agent session checkpoint export to Light. Existing manifest
-integrations can select `light-legacy-resources.json`; Core mode does not mix an
-independently discovered manifest registry into the selected tool catalog.
+does not add Legacy Agent session checkpoint export to Light. The old Wiki
+manifest profiles have been retired. Generic standalone `PluginRegistry`
+support remains available for non-Wiki plugins, while Light Wiki selection now
+uses only the Core profiles listed above; a separate legacy Wiki registry is no
+longer a supported Light profile mode.
