@@ -10,7 +10,7 @@ from dataclasses import dataclass, replace
 import json
 import math
 from pathlib import Path
-import shutil
+import stat
 from typing import Sequence
 import uuid
 
@@ -19,6 +19,7 @@ from aka.contracts.evaluation import (
     EvaluationConfiguration,
     EvaluationRequest,
     PreparedEvaluation,
+    PreparationFile,
     VerificationResult,
     VerificationRun,
     MeasurementArtifact,
@@ -43,15 +44,6 @@ from .results import (
 )
 
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
-
-
-def atomic_write_json(path, value):
-    temporary = path.with_name(path.name + ".tmp")
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary.write_text(
-        json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-    )
-    temporary.replace(path)
 
 
 def result_from_stdout(stdout: str) -> dict:
@@ -142,25 +134,22 @@ class LegacyEvaluator:
             request.workspace, config.private_reference_dir, config.shape_batch_size
         )
         relative_dir = f"{VERIFY_DIR}/{uuid.uuid4().hex}"
-        directory = request.workspace / relative_dir
-        directory.mkdir(parents=True, exist_ok=False)
-        shutil.copy2(self.abba_driver, directory / "test_kernel.py")
-        manifests = {
-            "incumbent": self.candidate_workspace.write_revision(
-                request.workspace,
-                request.base_commit,
-                list(request.changed_paths),
-                directory,
-                "incumbent",
-            ),
-            "candidate": self.candidate_workspace.write_revision(
-                request.workspace,
-                request.candidate_commit,
-                list(request.changed_paths),
-                directory,
-                "candidate",
-            ),
-        }
+        inputs = [PreparationFile(
+            f"{relative_dir}/test_kernel.py", self.abba_driver.read_bytes(),
+            stat.S_IMODE(self.abba_driver.stat().st_mode) & 0o777, "text/x-python",
+        )]
+        manifests = {}
+        for label, revision in (("incumbent", request.base_commit), ("candidate", request.candidate_commit)):
+            content = self.candidate_workspace.read_revision(
+                request.workspace, revision, list(request.changed_paths))
+            manifest = {}
+            for index, relative in enumerate(request.changed_paths):
+                data = content.files[relative]
+                snapshot = f"snapshots/{label}/{index:04d}.bin" if data is not None else None
+                manifest[relative] = snapshot
+                if data is not None:
+                    inputs.append(PreparationFile(f"{relative_dir}/{snapshot}", data))
+            manifests[label] = manifest
         steps = []
         for index, ids in enumerate(batches):
             request_relative = f"{relative_dir}/request-{index:04d}.json"
@@ -168,16 +157,16 @@ class LegacyEvaluator:
             command = ["python3", "test_kernel.py", "--version", "vlong", "--no-memory"]
             for shape_id in ids or []:
                 command += ["--shape-id", shape_id]
-            atomic_write_json(
-                request.workspace / request_relative,
-                {
-                    "schema_version": 1,
-                    "schedule": schedule,
-                    "manifests": manifests,
-                    "command": command,
-                    "run_timeout_seconds": config.per_run_timeout,
-                },
-            )
+            value = {
+                "schema_version": 1,
+                "schedule": schedule,
+                "manifests": manifests,
+                "command": command,
+                "run_timeout_seconds": config.per_run_timeout,
+            }
+            inputs.append(PreparationFile(request_relative,
+                (json.dumps(value, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+                content_type="application/json"))
             steps.append(
                 CommandSpec(
                     request.workspace,
@@ -205,6 +194,7 @@ class LegacyEvaluator:
                 ),
             ),
             output_directory=Path(relative_dir),
+            inputs=tuple(inputs),
         )
 
     def observe_step(

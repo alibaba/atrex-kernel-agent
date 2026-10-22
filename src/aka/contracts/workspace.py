@@ -3,10 +3,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol, Any
+from typing import Protocol, Any, Mapping
+from types import MappingProxyType
 
 from .content import SourceContent, WorkspaceFile
 from .problem import InitialSource
+
+
+@dataclass(frozen=True)
+class RevisionContent:
+    """Committed path bytes; None represents a path absent at that revision."""
+    files: Mapping[str, bytes | None]
+
+    def __post_init__(self):
+        files = dict(self.files)
+        if any(value is not None and not isinstance(value, bytes) for value in files.values()):
+            raise TypeError("revision content must contain immutable bytes or None")
+        object.__setattr__(self, "files", MappingProxyType(files))
 
 
 @dataclass(frozen=True)
@@ -96,6 +109,8 @@ class CandidateWorkspace(Protocol):
     def remove(self, handle: CandidateHandle, workspace: Path) -> None: ...
     def promote(self, workspace: Path, *, base_commit: str, candidate_commit: str, episode: int,
                 evidence: dict[str, Any], memory_version: int, memory_record: dict[str, Any]) -> str: ...
-    def write_revision(self, workspace: Path, revision: str, changed_paths: list[str],
-                       destination: Path, label: str) -> dict[str, str | None]: ...
+    def read_revision(self, workspace: Path, revision: str,
+                      changed_paths: list[str]) -> RevisionContent:
+        """Read committed bytes without creating snapshot files or modifying Git."""
+        ...
 

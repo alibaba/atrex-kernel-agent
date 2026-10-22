@@ -90,7 +90,7 @@ def _record(value):
     return ExperimentRecord(**data)
 
 
-def _atomic(path, data):
+def _atomic(path, data, *, mode=None):
     """Publish complete bytes and sync both file and containing directory."""
     path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     if path.parent.is_symlink() or path.parent.resolve() != path.parent:
@@ -100,6 +100,8 @@ def _atomic(path, data):
         with os.fdopen(fd, "wb") as output:
             output.write(data)
             output.flush()
+            if mode is not None:
+                os.fchmod(output.fileno(), mode)
             os.fsync(output.fileno())
         os.replace(temporary, path)
         directory = os.open(path.parent, os.O_RDONLY)
@@ -247,14 +249,18 @@ class FileExperimentRecords:
             updated = transform(old)
             return self._save(replace(updated, record_version=old.record_version + 1, updated_at=_now()))
 
-    def prepared(self, ref, commands):
+    def prepared(self, ref, commands, inputs=()):
         steps = tuple(ExperimentStep(f"step-{index}", index, tuple(command.command), command.operation,
                                      command.timeout, command.hardware, tuple(sorted(command.environment)))
                       for index, command in enumerate(commands))
         # Environment values affect identity but are not persisted as credentials.
         plan = [{**step.as_dict(), "environment_digest": _digest(dict(command.environment)),
                  "artifacts": list(command.artifacts)} for step, command in zip(steps, commands)]
-        return self._update(ref, lambda old: replace(old, steps=steps, plan_digest=_digest(plan),
+        identity = {"steps": plan, "inputs": [
+            {"path": item.path, "sha256": hashlib.sha256(item.content).hexdigest(),
+             "mode": item.mode, "content_type": item.content_type} for item in inputs
+        ]} if inputs else plan
+        return self._update(ref, lambda old: replace(old, steps=steps, plan_digest=_digest(identity),
                                                     lifecycle="prepared", phase="execute"))
 
     def intent(self, ref, index):
@@ -338,8 +344,11 @@ class FileExperimentRecords:
 
     def failed(self, ref, error):
         if isinstance(error, ExperimentRecordError):
-            return  # A persistence failure never masks a previous committed snapshot.
+            old = self.get(ref)
+            if old.phase != "prepare" or old.attempts:
+                return  # Preserve previously committed execution snapshots.
         def transform(old):
-            return replace(old, failure=ExperimentFailure(old.phase, "experiment_error", type(error).__name__),
+            code = error.code if isinstance(error, ExperimentRecordError) else "experiment_error"
+            return replace(old, failure=ExperimentFailure(old.phase, code, type(error).__name__),
                            lifecycle="terminal" if _settled(old) else "failed", outcome="inconclusive")
         return self._update(ref, transform)

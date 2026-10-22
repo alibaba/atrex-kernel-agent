@@ -6,6 +6,7 @@ from contextvars import copy_context
 from pathlib import Path
 from dataclasses import asdict, replace
 import subprocess
+import json
 from threading import Event
 from typing import TYPE_CHECKING, Callable
 
@@ -170,14 +171,15 @@ class LegacyExperiment:
             raise ValueError("evaluation requires an injected Evaluator")
         prepared = self.evaluator.prepare(request)
         steps = prepared.steps
+        if steps and prepared.max_parallelism < 1:
+            raise ValueError("evaluation parallelism must be positive")
+        self._write_inputs(request, prepared, records, ref)
         if records is not None:
-            records.prepared(ref, steps)
+            records.prepared(ref, steps, prepared.inputs)
         if not steps:
             if records is not None:
                 records.phase(ref, "interpret")
             return self._interpret(request, prepared, (), ref)
-        if prepared.max_parallelism < 1:
-            raise ValueError("evaluation parallelism must be positive")
         cancel = Event()
 
         def run_step(index: int) -> JobResult:
@@ -241,6 +243,41 @@ class LegacyExperiment:
             raise
         except (subprocess.SubprocessError, RuntimeError, ValueError, KeyError, TypeError) as error:
             raise ExperimentExecutionError(str(error)) from error
+
+    def _write_inputs(self, request, prepared, records, ref):
+        """Preflight all inputs, then publish bytes before any backend submission."""
+        workspace = request.workspace.resolve()
+        targets = {}
+        for item in prepared.inputs:
+            relative = Path(item.path)
+            if relative.is_absolute() or ".." in relative.parts or relative == Path("."):
+                raise ValueError("preparation inputs must be workspace-relative files")
+            path = workspace / relative
+            if (not path.resolve().is_relative_to(workspace) or path.is_symlink()
+                    or (path.exists() and not path.is_file())):
+                raise ValueError("preparation input escapes workspace or is not a regular file")
+            if path in targets:
+                raise ValueError("duplicate preparation input path")
+            if any(parent.is_symlink() or (parent.exists() and not parent.is_dir())
+                   for parent in path.parents if parent.is_relative_to(workspace)):
+                raise ValueError("preparation input traverses a symlink or file")
+            targets[path] = item
+        if any(parent in targets for path in targets for parent in path.parents):
+            raise ValueError("preparation input paths conflict as file and directory")
+        manifest = []
+        for path, item in targets.items():
+            try:
+                _atomic(path, item.content, mode=item.mode)
+            except (OSError, ValueError) as error:
+                raise ExperimentRecordError("storage_unavailable", ref) from error
+            if records is not None:
+                artifact = records.publish_content(ref, item.content, "evaluation_input")
+                manifest.append({"path": item.path, "artifact_id": artifact.artifact_id,
+                                 "sha256": artifact.sha256, "mode": item.mode,
+                                 "content_type": item.content_type})
+        if records is not None and manifest:
+            records.publish_content(ref, json.dumps({"schema_version": 1, "files": manifest},
+                sort_keys=True).encode("utf-8"), "evaluation_inputs")
 
     def _write_outputs(self, request, prepared, outputs, ref):
         """Retain optional workspace mirrors; all result writes belong here."""

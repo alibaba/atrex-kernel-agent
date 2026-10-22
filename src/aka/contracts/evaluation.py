@@ -159,17 +159,43 @@ class EvaluationRequest:
 
 
 @dataclass(frozen=True)
-class PreparedEvaluation:
-    """Prepared commands and optional workspace-relative output mirror directory.
+class PreparationFile:
+    """Immutable execution input, materialized and archived only by Experiment."""
+    path: str
+    content: bytes = field(repr=False)
+    mode: int = 0o644
+    content_type: str = "application/octet-stream"
 
-    Output mirroring is owned by Experiment; interpretation context stays opaque.
-    Preparation may still materialize execution inputs through Task adapters.
+    def __post_init__(self):
+        path = Path(self.path)
+        if not self.path or path.is_absolute() or ".." in path.parts or path == Path("."):
+            raise ValueError("preparation file requires a workspace-relative path")
+        if not isinstance(self.content, bytes):
+            raise TypeError("preparation content must be immutable bytes")
+        if type(self.mode) is not int or not 0 <= self.mode <= 0o777:
+            raise ValueError("preparation file requires ordinary permission bits")
+
+
+@dataclass(frozen=True)
+class PreparedEvaluation:
+    """Commands, immutable input content and an optional output mirror directory.
+
+    Experiment owns all input/output materialization; interpretation context stays
+    opaque. Evaluator.prepare describes inputs without writing workspace files.
     """
     steps: tuple[CommandSpec, ...]
     max_parallelism: int
     context: object
     retry_keys: tuple[str, ...] = ()
     output_directory: Path | None = None
+    inputs: tuple[PreparationFile, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "steps", tuple(self.steps))
+        inputs = tuple(self.inputs)
+        if any(not isinstance(item, PreparationFile) for item in inputs):
+            raise TypeError("prepared inputs must be PreparationFile values")
+        object.__setattr__(self, "inputs", inputs)
 
 
 class Evaluator(Protocol):
