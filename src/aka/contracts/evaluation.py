@@ -10,6 +10,7 @@ from typing import Any, Mapping, Protocol, Sequence
 from .execution import CommandSpec, JobResult
 from .workspace import CandidateWorkspace
 from .problem import EvaluationInput
+from .experiment_identity import ExperimentRef
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,7 @@ class VerificationResult:
     candidate_performance_score: float | None = None
     incumbent_performance_score: float | None = None
     failure: EvaluationFailure | None = None
+    experiment_ref: ExperimentRef | None = None
 
     @property
     def passed(self) -> bool:
@@ -89,6 +91,8 @@ class VerificationResult:
         }
         if self.failure is not None:
             value["failure"] = asdict(self.failure)
+        if self.experiment_ref is not None:
+            value["experiment_ref"] = self.experiment_ref.as_dict()
         return value
 
 
@@ -118,6 +122,7 @@ class EvaluationRequest:
     memory_version: int = 0
     canonical_workspace: Path | None = None
     expected_shape_ids: frozenset[str] | None = None
+    experiment_ref: ExperimentRef | None = None
 
 
 @dataclass(frozen=True)
@@ -136,6 +141,20 @@ class Evaluator(Protocol):
     def interpret(
         self, prepared: PreparedEvaluation, results: Sequence[JobResult]
     ) -> VerificationResult: ...
+
+
+@dataclass(frozen=True)
+class MeasurementArtifact:
+    """A completed method-owned file offered to Experiment for archival."""
+    path: Path
+    role: str = "measurement"
+
+
+class MeasurementArtifacts(Protocol):
+    """Optional artifact discovery; never runs commands or returns private directories."""
+    def artifacts(
+        self, prepared: PreparedEvaluation, index: int
+    ) -> tuple[MeasurementArtifact, ...]: ...
 
 
 @dataclass(frozen=True)

@@ -21,6 +21,7 @@ from aka.contracts.evaluation import (
     PreparedEvaluation,
     VerificationResult,
     VerificationRun,
+    MeasurementArtifact,
 )
 from aka.contracts.execution import CommandSpec, JobResult
 from aka.contracts.workspace import CandidateWorkspace
@@ -266,6 +267,15 @@ class LegacyEvaluator:
             repeats=max(1, self.configuration.repeats),
             artifact=str(result_path),
         )
+
+    def artifacts(self, prepared: PreparedEvaluation, index: int):
+        """Offer completed batch files without exposing interpretation context."""
+        plan = prepared.context
+        if plan.request.mode == "abba" and index < len(plan.result_paths):
+            path = plan.result_paths[index]
+            if path.is_file():
+                return (MeasurementArtifact(path, "measurement_batch"),)
+        return ()
 
     def _fast_result(self, request):
         artifact = str(request.workspace / EPISODE_EVALUATIONS_PATH)

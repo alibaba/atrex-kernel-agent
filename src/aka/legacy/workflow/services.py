@@ -9,7 +9,7 @@ from aka.legacy.evaluation.baseline import (
     BaselinePreparation,
 )
 from aka.legacy.evaluation import records
-from aka.legacy.experiment import LegacyExperiment
+from aka.legacy.experiment import LegacyExperiment, FileExperimentRecords
 from aka.legacy.acceptance import LegacyAcceptancePolicy
 from aka.legacy.execution.selection import execution_scope
 from aka.legacy.execution.binding import sandbox_executor
@@ -29,6 +29,22 @@ class BorrowedExperiment:
     def run_command(self, command):
         with self.services.experiment() as experiment:
             return experiment.run_command(command)
+
+    def run_recorded(self, request, *, request_id):
+        with self.services.experiment(formal=self.formal) as experiment:
+            return experiment.run_recorded(request, request_id=request_id)
+
+    def get(self, ref):
+        return self.services.experiment_records.get(ref)
+
+    def find(self, request_id):
+        return self.services.experiment_records.find(request_id)
+
+    def unresolved(self):
+        return self.services.experiment_records.unresolved()
+
+    def read_artifact(self, artifact):
+        return self.services.experiment_records.read_artifact(artifact)
 
 
 class WorkflowServices:
@@ -57,6 +73,11 @@ class WorkflowServices:
             self.campaign.problem, self.campaign.workspace
         ).evaluation
         self.evaluator = self.create_evaluator()
+        # A sibling root survives candidate workspace reset/clean operations.
+        from pathlib import Path
+        workspace = Path(campaign.workspace).resolve()
+        self.experiment_records = FileExperimentRecords(
+            workspace.parent / ".aka-experiments", str(workspace))
         self.records = records
         self.baseline_experiment = BorrowedExperiment(self)
         self.formal_experiment = BorrowedExperiment(self, formal=True)
@@ -126,7 +147,8 @@ class WorkflowServices:
             evaluator = self.create_evaluator()
             from aka.legacy.experiment.runner import evaluation_stage
             yield LegacyExperiment(bound, evaluator,
-                retry=retry_infrastructure if formal else None, stage=evaluation_stage)
+                retry=retry_infrastructure if formal else None, stage=evaluation_stage,
+                records=self.experiment_records, purpose="formal" if formal else "development")
 
     def sandbox_command(self, command):
         import shlex
