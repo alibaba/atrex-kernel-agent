@@ -14,6 +14,35 @@ from .experiment_identity import ExperimentRef
 
 
 @dataclass(frozen=True)
+class MeasurementArtifact:
+    """Method-owned output content, offered to Experiment without writing a file.
+
+    name is a logical filename within the prepared output directory, not a host
+    path. Experiment owns serialization publication, integrity and archival.
+    Content is host-private evidence, not an Agent feedback projection.
+    """
+    name: str
+    content: bytes = field(repr=False)
+    role: str = "measurement"
+    content_type: str = "application/json"
+
+    def __post_init__(self):
+        if not self.name or Path(self.name).name != self.name or self.name in {".", ".."}:
+            raise ValueError("measurement artifact requires a logical filename")
+        if not isinstance(self.content, bytes):
+            raise TypeError("measurement artifact content must be immutable bytes")
+
+
+@dataclass(frozen=True)
+class StepEvaluation:
+    """Completed step outputs; returned before the final interpretation."""
+    artifacts: tuple[MeasurementArtifact, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "artifacts", tuple(self.artifacts))
+
+
+@dataclass(frozen=True)
 class NumericalProbeResult:
     """Interpreted probe facts; no raw receipt, private inputs or exception text."""
 
@@ -72,6 +101,10 @@ class VerificationResult:
     incumbent_performance_score: float | None = None
     failure: EvaluationFailure | None = None
     experiment_ref: ExperimentRef | None = None
+    artifacts: tuple[MeasurementArtifact, ...] = field(default=(), repr=False)
+
+    def __post_init__(self):
+        self.artifacts = tuple(self.artifacts)
 
     @property
     def passed(self) -> bool:
@@ -127,35 +160,26 @@ class EvaluationRequest:
 
 @dataclass(frozen=True)
 class PreparedEvaluation:
+    """Prepared commands and optional workspace-relative output mirror directory.
+
+    Output mirroring is owned by Experiment; interpretation context stays opaque.
+    Preparation may still materialize execution inputs through Task adapters.
+    """
     steps: tuple[CommandSpec, ...]
     max_parallelism: int
     context: object
     retry_keys: tuple[str, ...] = ()
+    output_directory: Path | None = None
 
 
 class Evaluator(Protocol):
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation: ...
-    def record_step(
+    def observe_step(
         self, prepared: PreparedEvaluation, index: int, result: JobResult
-    ) -> None: ...
+    ) -> StepEvaluation: ...
     def interpret(
         self, prepared: PreparedEvaluation, results: Sequence[JobResult]
     ) -> VerificationResult: ...
-
-
-@dataclass(frozen=True)
-class MeasurementArtifact:
-    """A completed method-owned file offered to Experiment for archival."""
-    path: Path
-    role: str = "measurement"
-
-
-class MeasurementArtifacts(Protocol):
-    """Optional artifact discovery; never runs commands or returns private directories."""
-    def artifacts(
-        self, prepared: PreparedEvaluation, index: int
-    ) -> tuple[MeasurementArtifact, ...]: ...
-
 
 @dataclass(frozen=True)
 class EvaluationConfiguration:

@@ -287,21 +287,32 @@ class FileExperimentRecords:
         return self._update(ref, lambda old: replace(old, phase=phase))
 
     def publish(self, ref, path, role):
-        """Copy a method-declared artifact; never expose its source location."""
+        """Collect an existing command/compatibility artifact."""
         try:
             if path.is_symlink() or not path.is_file():
                 raise ValueError("artifact must be a regular file")
             data = path.read_bytes()
-            artifact = ExperimentArtifact(ref, uuid.uuid4().hex, role,
-                                          hashlib.sha256(data).hexdigest(), len(data))
+            return self.publish_content(ref, data, role)
+        except ExperimentRecordError:
+            raise
+        except (OSError, ValueError) as error:
+            raise ExperimentRecordError("artifact_unavailable", ref) from error
+
+    def publish_content(self, ref, content: bytes, role):
+        """Publish returned content before committing its opaque record reference."""
+        if not isinstance(content, bytes):
+            raise TypeError("experiment artifact content must be bytes")
+        artifact = ExperimentArtifact(ref, uuid.uuid4().hex, role,
+                                      hashlib.sha256(content).hexdigest(), len(content))
+        try:
             destination = self._directory(ref) / "artifacts" / artifact.artifact_id
-            _atomic(destination, data)
+            _atomic(destination, content)
             self._update(ref, lambda old: replace(old, artifacts=(*old.artifacts, artifact)))
             return artifact
         except ExperimentRecordError:
             raise
         except (OSError, ValueError) as error:
-            raise ExperimentRecordError("artifact_unavailable", ref) from error
+            raise ExperimentRecordError("storage_unavailable", ref) from error
 
     def completed(self, ref, evaluation=None):
         if evaluation is not None:

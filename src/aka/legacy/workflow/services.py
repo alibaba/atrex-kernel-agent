@@ -106,7 +106,7 @@ class WorkflowServices:
             evaluation_input=self.evaluation_input(),
         )
         if any(not callable(getattr(evaluator, method, None))
-               for method in ("prepare", "record_step", "interpret")):
+               for method in ("prepare", "observe_step", "interpret")):
             raise TypeError("factory did not return an Evaluator")
         return evaluator
 

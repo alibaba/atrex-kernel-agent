@@ -22,6 +22,7 @@ from aka.contracts.evaluation import (
     VerificationResult,
     VerificationRun,
     MeasurementArtifact,
+    StepEvaluation,
 )
 from aka.contracts.execution import CommandSpec, JobResult
 from aka.contracts.workspace import CandidateWorkspace
@@ -67,8 +68,6 @@ class _Plan:
     request: EvaluationRequest
     schedule: tuple[dict, ...] = ()
     shape_ids: tuple[str, ...] = ()
-    result_paths: tuple[Path, ...] = ()
-    directory: Path | None = None
     error: str = ""
 
 
@@ -162,7 +161,7 @@ class LegacyEvaluator:
                 "candidate",
             ),
         }
-        steps, result_paths = [], []
+        steps = []
         for index, ids in enumerate(batches):
             request_relative = f"{relative_dir}/request-{index:04d}.json"
             result_relative = f"{relative_dir}/result-{index:04d}.json"
@@ -192,7 +191,6 @@ class LegacyEvaluator:
                     operation="dev",
                 )
             )
-            result_paths.append(request.workspace / result_relative)
         return PreparedEvaluation(
             tuple(steps),
             max(1, min(config.max_parallelism, len(steps))),
@@ -200,20 +198,19 @@ class LegacyEvaluator:
                 request,
                 tuple(schedule),
                 tuple(shape_ids),
-                tuple(result_paths),
-                directory,
                 error=(
                     "gateway ABBA verification failed: max_workers must be greater than 0"
                     if not steps and config.max_parallelism != 1
                     else ""
                 ),
             ),
+            output_directory=Path(relative_dir),
         )
 
-    def record_step(
+    def observe_step(
         self, prepared: PreparedEvaluation, index: int, result: JobResult
-    ) -> None:
-        """Persist a completed ABBA batch before other workers finish or fail."""
+    ) -> StepEvaluation:
+        """Return completed ABBA content for immediate Experiment persistence."""
         plan = prepared.context
         if plan.request.mode in {"v0", "framework"}:
             from .baseline import BaselinePreparation
@@ -222,9 +219,9 @@ class LegacyEvaluator:
             raise RuntimeError(f"gateway ABBA command exited {result.returncode}: "
                                + (result.stdout + "\n" + result.stderr)[-3000:])
         if plan.request.mode == "abba" and result.returncode == 0:
-            atomic_write_json(
-                plan.result_paths[index], _payload_from_stdout(result.stdout)
-            )
+            return StepEvaluation((self._artifact(f"result-{index:04d}.json",
+                _payload_from_stdout(result.stdout), "measurement_batch"),))
+        return StepEvaluation()
 
     def interpret(
         self, prepared: PreparedEvaluation, results: Sequence[JobResult]
@@ -250,32 +247,18 @@ class LegacyEvaluator:
         payload = _merge_batch_payloads(
             payloads, list(plan.schedule), list(plan.shape_ids)
         )
-        result_path = plan.directory / "result.json"
-        try:
-            atomic_write_json(result_path, payload)
-        except (OSError, TypeError, ValueError) as exc:
-            return VerificationResult(
-                "ERROR",
-                None,
-                None,
-                None,
-                error=f"cannot persist gateway ABBA result: {type(exc).__name__}: {exc}",
-            )
-        return interpret_verification_payload(
+        result = interpret_verification_payload(
             payload,
             schedule=list(plan.schedule),
             repeats=max(1, self.configuration.repeats),
-            artifact=str(result_path),
+            artifact="result.json",
         )
+        return replace(result, artifacts=(self._artifact("result.json", payload, "evaluation"),))
 
-    def artifacts(self, prepared: PreparedEvaluation, index: int):
-        """Offer completed batch files without exposing interpretation context."""
-        plan = prepared.context
-        if plan.request.mode == "abba" and index < len(plan.result_paths):
-            path = plan.result_paths[index]
-            if path.is_file():
-                return (MeasurementArtifact(path, "measurement_batch"),)
-        return ()
+    @staticmethod
+    def _artifact(name, payload, role):
+        content = (json.dumps(payload, indent=2, ensure_ascii=False) + "\n").encode("utf-8")
+        return MeasurementArtifact(name, content, role)
 
     def _fast_result(self, request):
         artifact = str(request.workspace / EPISODE_EVALUATIONS_PATH)

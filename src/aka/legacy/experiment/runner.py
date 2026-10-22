@@ -11,7 +11,10 @@ from typing import TYPE_CHECKING, Callable
 
 from aka.contracts.execution import CommandSpec, Executor, JobResult
 from aka.contracts.experiment import ExperimentExecutionError, ExperimentRecordError
-from aka.contracts.evaluation import EvaluationRequest, EvaluationUnavailable
+from aka.contracts.evaluation import (
+    EvaluationRequest, EvaluationUnavailable, StepEvaluation, VerificationResult,
+)
+from .file_records import _atomic
 
 if TYPE_CHECKING:
     from aka.contracts.evaluation import EvaluationRequest, Evaluator, VerificationResult
@@ -131,7 +134,14 @@ class LegacyExperiment:
                     raise ValueError("evaluation returned another experiment reference")
                 result = replace(result, experiment_ref=ref)
                 value = result.as_dict()
-                if value["artifact"]:
+                if result.artifacts:
+                    primary = None
+                    for output in result.artifacts:
+                        artifact = records.publish_content(ref, output.content, output.role)
+                        if output.name == Path(result.artifact).name:
+                            primary = artifact.artifact_id
+                    value["artifact"] = primary
+                elif value["artifact"]:
                     artifact_path = Path(value["artifact"])
                     if not artifact_path.is_absolute():
                         artifact_path = request.workspace / artifact_path
@@ -165,7 +175,7 @@ class LegacyExperiment:
         if not steps:
             if records is not None:
                 records.phase(ref, "interpret")
-            return self.evaluator.interpret(prepared, ())
+            return self._interpret(request, prepared, (), ref)
         if prepared.max_parallelism < 1:
             raise ValueError("evaluation parallelism must be positive")
         cancel = Event()
@@ -186,12 +196,13 @@ class LegacyExperiment:
                 result.require_transport()
                 if self.check_result is not None:
                     self.check_result(result)
-                self.evaluator.record_step(prepared, index, result)
+                observed = self.evaluator.observe_step(prepared, index, result)
+                if not isinstance(observed, StepEvaluation):
+                    raise TypeError("Evaluator.observe_step must return StepEvaluation")
+                self._write_outputs(request, prepared, observed.artifacts, ref)
                 if records is not None:
-                    artifacts = getattr(self.evaluator, "artifacts", None)
-                    if callable(artifacts):
-                        for artifact in artifacts(prepared, index):
-                            records.publish(ref, artifact.path, artifact.role)
+                    for output in observed.artifacts:
+                        records.publish_content(ref, output.content, output.role)
                 return result
 
             if self.retry is None:
@@ -223,11 +234,52 @@ class LegacyExperiment:
         try:
             if records is not None:
                 records.phase(ref, "interpret")
-            return self.evaluator.interpret(prepared, results)
+            return self._interpret(request, prepared, results, ref)
+        except ExperimentRecordError:
+            raise
         except EvaluationUnavailable:
             raise
         except (subprocess.SubprocessError, RuntimeError, ValueError, KeyError, TypeError) as error:
             raise ExperimentExecutionError(str(error)) from error
+
+    def _write_outputs(self, request, prepared, outputs, ref):
+        """Retain optional workspace mirrors; all result writes belong here."""
+        if prepared.output_directory is None:
+            return {}
+        relative = Path(prepared.output_directory)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise ValueError("evaluation output directory must be workspace-relative")
+        workspace = request.workspace.resolve()
+        directory = workspace / relative
+        if not directory.resolve().is_relative_to(workspace):
+            raise ValueError("evaluation outputs escape the workspace")
+        paths = {}
+        for output in outputs:
+            if output.name in paths:
+                raise ValueError("duplicate measurement output name")
+            path = directory / output.name
+            if path.is_symlink():
+                raise ValueError("evaluation output cannot replace a symlink")
+            try:
+                _atomic(path, output.content)
+            except (OSError, ValueError) as error:
+                raise ExperimentRecordError("storage_unavailable", ref) from error
+            paths[output.name] = str(path)
+        return paths
+
+    def _interpret(self, request, prepared, results, ref):
+        result = self.evaluator.interpret(prepared, results)
+        if not isinstance(result, VerificationResult):
+            raise TypeError("Evaluator.interpret must return VerificationResult")
+        names = [output.name for output in result.artifacts]
+        if len(names) != len(set(names)) or (
+            names and result.artifact and result.artifact not in names
+        ):
+            raise ValueError("evaluation primary artifact must name a unique returned output")
+        paths = self._write_outputs(request, prepared, result.artifacts, ref)
+        if result.artifact in paths:
+            result = replace(result, artifact=paths[result.artifact])
+        return result
 
 
 def abba_stage(repeats: int, shape_batch_size: int):
