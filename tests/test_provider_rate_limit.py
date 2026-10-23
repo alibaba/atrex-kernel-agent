@@ -140,5 +140,44 @@ class RecoveryTests(TestCase):
             self.run_case([THROTTLED], cancelled=True)
 
 
+class HistoricalCreditTests(TestCase):
+    def test_credit_preserves_history_and_token_accounting(self):
+        from aka.light.workflow.models import SupervisorState
+        state = SupervisorState.from_dict({"episodes": 29, "protocol_failures": 29,
+            "tokens": 1234, "rate_limit_credits": [2, 3]})
+        restored = SupervisorState.from_dict(state.as_dict())
+        self.assertEqual(restored.tokens, 1234)
+        self.assertEqual(restored.protocol_failures, 29)
+        self.assertEqual(restored.rate_limit_credits, [2, 3])
+        self.assertEqual(SupervisorState.from_dict({}).rate_limit_credits, [])
+
+    def test_completed_version_limit_resumes_only_with_audited_credit(self):
+        from aka.light.workflow.episode import LongHorizonCampaign
+        from aka.light.workflow.models import SupervisorState
+        from unittest.mock import Mock
+        with TemporaryDirectory() as directory:
+            base = Mock()
+            base.candidate_workspace.plan.side_effect = RuntimeError("new episode planned")
+            engine = LongHorizonCampaign(base_campaign=base, max_version=30,
+                                         verifier=Mock(), session_runner=Mock())
+            # workspace is derived from the campaign by the real engine.
+            base.workspace = Path(directory)
+            for credits in ([], [2]):
+                state = SupervisorState(episodes=29, rate_limit_credits=credits)
+                with patch('aka.light.workflow.episode.main_adapter.prepare_campaign'), \
+                     patch('aka.light.workflow.episode.CampaignStore.ensure_excluded'), \
+                     patch('aka.light.workflow.episode.git_head', return_value='base'), \
+                     patch('aka.light.workflow.episode.main_adapter.conversion_required', return_value=False), \
+                     patch('aka.light.workflow.episode.main_adapter.latest_version', return_value=30), \
+                     patch('aka.light.workflow.episode.CampaignStore.load_state', return_value=state), \
+                     patch.object(LongHorizonCampaign, '_recover_interrupted', return_value=None), \
+                     patch.object(LongHorizonCampaign, '_episode_mode', return_value='episode'):
+                    if credits:
+                        with self.assertRaisesRegex(RuntimeError, "new episode planned"):
+                            engine.run()
+                    else:
+                        self.assertEqual(engine.run(), 'budget: max-iters')
+
+
 if __name__ == '__main__':
     main()

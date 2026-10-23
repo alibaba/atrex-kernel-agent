@@ -75,6 +75,9 @@ class SupervisorState:
     usage_receipts: dict[str, int] = field(default_factory=dict)
     consecutive_without_promotion: int = 0
     attempts: list[dict[str, Any]] = field(default_factory=list)
+    # Operator-audited historical throttles from before in-Episode recovery.
+    # Retain original episode/version IDs and usage while refunding only rounds.
+    rate_limit_credits: list[int] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, value: object) -> "SupervisorState":
