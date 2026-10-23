@@ -34,7 +34,9 @@ class WikiCall:
     is_live: Callable[[], bool]
     #: Private, request-scoped directory removed after the call.
     scratch: Path
-    #: Trusted Supervisor environment. Never echo it in results.
+    #: Bounded Supervisor environment: ordinary process/model/TLS values plus scoped
+    #: Wiki task/profile identity. GPU, store and private-reference authority is removed.
+    #: Never echo any value in results or errors.
     environment: Mapping[str, str]
     #: Bounded, cancellable subprocess execution under the request deadline.
     run: Callable[[Sequence[str], Path, Mapping[str, str]], subprocess.CompletedProcess]

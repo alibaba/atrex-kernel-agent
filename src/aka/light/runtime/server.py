@@ -948,23 +948,53 @@ class SupervisorRuntime:
                 project_plugin_output(request["tool"], tool["output_schema"], response["stdout"])
             return response
         if tool.get("runtime_tool") == "wiki":
-            environment = dict(self.environment)
+            # Providers receive the same bounded Supervisor environment as subprocess
+            # plugins, plus the explicitly selected Wiki model route. GPU, store and
+            # private-reference authority never crosses this seam.
+            environment = scrub_environment(self.environment)
             environment.update(capability.context)
-            for key in (OWNER_ENV, URL_ENV, TOKEN_ENV):
-                environment.pop(key, None)
+            if self.config.wiki_profile_root:
+                environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
+            environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
             from aka.light.evaluation.projection import credential_values, redact_diagnostics
-
-            def project(result):
-                # Redact and validate before the result can become reusable evidence.
-                # Output drift is a provider failure, never an Agent-repairable input error.
-                result = redact_diagnostics(result, private_paths=(str(self.root), str(self.audit_root or "")),
-                                            private_values=credential_values(environment))
-                return json.loads(project_plugin_output(request["tool"], tool["output_schema"],
-                                                        json.dumps(result, ensure_ascii=False, allow_nan=False)))
+            from aka.light.wiki.worker import provider_environment
+            try:
+                bridge_values = provider_environment(self.config.wiki_options, environment)
+            except ValueError as error:
+                raise RuntimeStateError(
+                    "Wiki provider settings are invalid or the credential endpoint does not match.",
+                    code="wiki_configuration_invalid",
+                ) from error
+            environment.update(bridge_values)
 
             with tempfile.TemporaryDirectory(dir=self.root, prefix="wiki-") as temporary:
-                result = self.wiki.invoke(self, capability, request["tool"].partition(".")[2],
-                                          request["input"], Path(temporary), environment, project=project)
+                private_paths = (
+                    str(temporary), str(self.root), str(self.audit_root or ""),
+                    str(self.config.private_reference_dir or ""),
+                    str(self.config.wiki_profile_root or ""),
+                    self.config.wiki_options.settings_file, self.config.wiki_options.base_url,
+                )
+                private_values = credential_values(environment)
+
+                def redact(value):
+                    return redact_diagnostics(
+                        value, private_paths=private_paths, private_values=private_values,
+                    )
+
+                def project(result):
+                    # Redact and validate before the result can become reusable evidence.
+                    # Output drift is a provider failure, never an Agent-repairable input error.
+                    result = redact(result)
+                    return json.loads(project_plugin_output(
+                        request["tool"], tool["output_schema"],
+                        json.dumps(result, ensure_ascii=False, allow_nan=False),
+                    ))
+
+                result = self.wiki.invoke(
+                    self, capability, request["tool"].partition(".")[2],
+                    request["input"], Path(temporary), environment, project=project,
+                    redact_error=redact,
+                )
             return {"exit_code": 0, "stdout": json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n",
                     "stderr": ""}
         with tempfile.TemporaryDirectory(dir=self.root, prefix="plugin-") as temporary:
