@@ -109,7 +109,7 @@ Response:
 {"status":"recorded","experiment_id":"experiment_22222222222222222222222222222222"}
 ```
 
-All shown fields are required; textual fields must be non-empty. Existing optional `wiki_usage`, `wiki_query_ids`, and `wiki_usage_status` attribution fields remain supported with the legacy schema; malformed attribution is diagnostic, not an acceptance gate. The Direction must be in progress or closed;
+All shown fields are required; textual fields must be non-empty. Optional `wiki_usage`, `wiki_query_ids`, and `wiki_usage_status` record knowledge attribution; malformed attribution is diagnostic, not an acceptance gate. Copy the provider's returned `query_id` verbatim. Each usage row needs `query_id`, `disposition`, `use`, `evidence`, and either an emitted `wiki_id` (`store::record`) or `cite` (`wiki@version relative-path:start-end`); both may be retained. Query IDs are bounded opaque tokens, not restricted to one backend's prefix. `declared` requires non-empty valid usage; `wiki_query_ids` must include every used query ID. For `no_material_use`, include the queries considered without usage rows; for `not_queried`, omit both. The Direction must be in progress or closed;
 not merely proposed. Late records can attach already obtained evidence after closure, even while
 another Direction is active. This does not restart exploration or change previous closure support.
 `gateway_record_ids` is a non-empty, duplicate-free list of visible Kernel-bound Gateway IDs: Evaluate, ABBA, Profile, Dev,
