@@ -211,9 +211,40 @@ timing receipts, redaction and revision pinning:
 | `revision()` | Identity of the served knowledge. The first value is pinned in the Campaign's private `wiki/revision.json`; a different value after restart fails closed with `wiki_revision_changed`. It is part of every cache key. |
 | `invoke(call)` | Executes one operation against `call.revision` within `call.deadline`. `call.run` launches bounded, cancellable subprocesses. Raise `WikiProviderError`: `retryable` failures return 503 with retry guidance, `repairable` ones return 400 for the Agent to correct, others are operator blockers. |
 
-Provider code runs in the Supervisor, never in the Agent workspace, so credentials
-stay outside Agent sessions. Results are redacted against the Supervisor environment
-before validation and caching. Only validated results are reused.
+Provider code runs in the Supervisor, never in the Agent workspace. `server.py`
+starts from `scrub_environment()`, then adds only the scoped telemetry, Wiki profile/task
+identity and explicitly selected Wiki model route. GPU/Agate, store and private-reference
+authority do not cross the seam. Settings paths, endpoints, private references and
+credential values are redacted before output-schema validation, private audit and cache
+publication. Only validated results are reused.
+
+```mermaid
+flowchart TD
+    A["Agent: tools/plugin.py call"] -->|"Session capability + schema-checked input"| R["Tool Runtime<br/>server.py::execute_plugin"]
+    R --> E["scrub_environment<br/>+ scoped Wiki identity/model"]
+    E --> W["WikiService.invoke"]
+    W --> P{"revision.json pinned?"}
+    P -->|"first use under revision.lock"| PR["provider.revision() → atomic pin"]
+    P -->|"different revision"| RC["wiki_revision_changed<br/>fail closed"]
+    PR --> Q["single-flight reservation"]
+    P -->|"same revision"| Q
+    Q -->|"cached + digest valid"| RE["reused"]
+    Q -->|"cache miss + slot"| RU["running"]
+    RU --> I["WikiProvider.invoke(WikiCall)"]
+    I -->|"optional subprocess"| CR["WikiCall.run<br/>bounded + cancellable"]
+    I -->|"result"| V["redact → output schema validate"]
+    V -->|"valid"| CO["private audit + cache<br/>completed"]
+    V -->|"invalid"| IO["invalid_output<br/>not cached"]
+    I -->|"repairable"| F4["HTTP 400 + field guidance"]
+    I -->|"retryable"| F5["HTTP 503 + retry delay"]
+    I -->|"operator blocker"| FB["HTTP 503 + escalation"]
+    W --> T["private receipt<br/>waiting/running/reused/completed/error"]
+```
+
+The diagram maps the public contract (`aka.contracts.wiki`), authenticated routing
+(`aka.light.runtime.server`), lifecycle/cache/revision state (`aka.light.wiki.service`)
+and the provider-owned implementation. Provider error codes are diagnostic fields in
+an `provider_error` receipt state; they cannot impersonate `completed` or `reused`.
 
 Journal attribution supports the existing `wiki_usage` rows with `wiki_id`
 (`store::record`) as well as versioned `cite` (`wiki@version relative-path:start-end`).
