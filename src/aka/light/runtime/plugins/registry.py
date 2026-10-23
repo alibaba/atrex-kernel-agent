@@ -19,6 +19,8 @@ from aka.light.runtime.plugins.schema import PluginError, check_schema, read_jso
 NAME = re.compile(r"[a-z][a-z0-9-]*")
 STATE_DIR = ".atrex_plugins"
 RUNTIME_TOOLS = {"gpu-wiki.query": "wiki-query"}
+# Any other routed tool is a provider-declared operation executed by the selected Wiki provider.
+WIKI_OPERATION = "wiki"
 ENV_PLACEHOLDER = re.compile(r"\{([A-Za-z_][A-Za-z0-9_.-]*)\}")
 SKILL_ROOTS = (".claude/skills", ".qoder/skills", ".agents/skills")
 RESERVED_MOUNTS = frozenset(
@@ -191,8 +193,8 @@ class PluginRegistry:
                 )
             loaded = dict(tool)
             if "runtime_tool" in tool:
-                expected = RUNTIME_TOOLS.get(f"{manifest['id']}.{name}")
-                if expected is None or tool["runtime_tool"] != expected:
+                expected = RUNTIME_TOOLS.get(f"{manifest['id']}.{name}", WIKI_OPERATION)
+                if tool["runtime_tool"] != expected:
                     raise PluginError("invalid_manifest", f"unsupported Runtime tool: {name}")
             else:
                 loaded["resolved_command"] = resolve_command(root, tool)

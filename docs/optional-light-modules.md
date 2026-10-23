@@ -30,7 +30,7 @@ Configuration has two framework-defined layers: `profiles/<name>.json` is the
 launch manifest (services, resources and environment), and
 `profiles/compositions/<name>.json` selects implementations and their options.
 Both managed Light compositions reuse the upstream Workflow bundle and a single
-`compositions/bundles/light-services.json` containing the six additional Light
+`compositions/bundles/light-services.json` containing the seven additional Light
 services. Only the necessary Agent/Workspace/Workflow replacements remain in
 each composition; the two variants differ in `agent.config.sandbox`. Bundles are
 additive, so those replacements cannot be moved into a bundle without copying
@@ -178,6 +178,51 @@ Wiki queue, in-flight and execution timeout errors have distinct `wiki_*` codes
 and safe retry guidance. These are not GPU environment failures. An unavailable
 provider configuration requires operator repair, not Agent credential changes.
 
+### Wiki providers
+
+The knowledge source behind the Tool Runtime is a separate `wiki` service
+(`aka.contracts.wiki.WikiProvider`). Both Light compositions select the built-in
+`aka.light.wiki.plugin`, which serves the GPU Wiki from the selected checkout exactly
+as before. Point it at another store with the same command-line contract:
+
+```json
+{"api_version":1,"patches":[{"id":"wiki","config":{"root":"/path/to/gpu-wiki"}}]}
+```
+
+To use a different source (for example a remote knowledge service), replace the
+`wiki` row with a module that provides the same service:
+
+```json
+{"api_version":1,"patches":[
+  {"id":"wiki","remove":true},
+  {"id":"wiki","insert":{"name":"my_package.wiki.plugin","required":true,"config":{}}},
+  {"id":"tool_runtime","config":{"wiki":true}}
+]}
+```
+
+A provider supplies a plugin catalog (`catalog_root/plugin.json`) and executes its
+operations; the Tool Runtime keeps authorization, queueing, single-flight caching,
+timing receipts, redaction and revision pinning:
+
+| Provider member | Contract |
+| --- | --- |
+| `catalog_root` | Plugin directory. Tools declared with `"runtime_tool": "wiki"` are the Agent-visible operations (`python3 tools/plugin.py list/call`); input is validated before dispatch, output after. It may contribute Skills and `wiki_episode`, `wiki_conversion`, `wiki_framework_baseline` and `wiki_hardware_evidence` instruction files, which replace the built-in Wiki prompt fragments. |
+| `cli_root` | Directory implementing `query_nl.py`/`query_wiki.py`/`query_hardware.py`, or `None`. Only then are `tools/sandbox.py --kind wiki-*` requests served; otherwise they return `wiki_operation_unsupported`. |
+| `revision()` | Identity of the served knowledge. The first value is pinned in the Campaign's private `wiki/revision.json`; a different value after restart fails closed with `wiki_revision_changed`. It is part of every cache key. |
+| `invoke(call)` | Executes one operation against `call.revision` within `call.deadline`. `call.run` launches bounded, cancellable subprocesses. Raise `WikiProviderError`: `retryable` failures return 503 with retry guidance, `repairable` ones return 400 for the Agent to correct, others are operator blockers. |
+
+Provider code runs in the Supervisor, never in the Agent workspace, so credentials
+stay outside Agent sessions. Results are redacted against the Supervisor environment
+before validation and caching. Only validated results are reused.
+
+Journal attribution supports the existing `wiki_usage` rows with `wiki_id`
+(`store::record`) as well as versioned `cite` (`wiki@version relative-path:start-end`).
+Copy the provider's emitted query ID verbatim; IDs are bounded opaque tokens, not
+restricted to the local query prefix. Each row retains `disposition`, `use` and
+`evidence`, and may carry both a record ID and a citation. `wiki_query_ids` and
+`wiki_usage_status` keep the same use/no-use semantics; invalid attribution remains
+diagnostic and does not waive candidate correctness or promotion gates.
+
 ### Other module options
 
 Provider configuration uses the existing Core composition patch format. For example, pass `--patch /path/to/options.json` before the `--` separator:
@@ -199,6 +244,7 @@ Patches replace a module's whole configuration; omitted fields receive that prov
 | --- | --- |
 | `aka.light.agent.plugin` | `sandbox: none`, `capture: false`, `bwrap_executable: bwrap`, `read_only_paths: []`, `proc_mode: private`, `timeout_seconds: 28800` |
 | `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `wiki: false`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
+| `aka.light.wiki.plugin` | `root: ""` (the selected checkout's `gpu-wiki`); see [Wiki providers](#wiki-providers) |
 | `aka.light.workflow.plugin` | `numerical_validation: true`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 2`, `episode_timeout_seconds: 28800`; optional `search` and `source_tree` |
 | `aka.light.workspace.plugin` | `inherit_state: true`; carry custom Skills/tools across Episodes independently of Kernel promotion |
 | `aka.light.execution.plugin` | No options; endpoint/timeouts remain prepared Execution request values |
@@ -708,6 +754,7 @@ The providers reuse the current public `Agent`, `Workflow`, `Problem`, `SourcePr
 | `light_acceptance` | `aka.light.acceptance.plugin` | Candidate correctness evidence, supplemental validation and ABBA verifier construction |
 | `light_journal` | `aka.light.workflow.journal_plugin` | Episode identity, Direction/Experiment claims and report validation |
 | `tool_runtime` | `aka.light.runtime.plugin` | HTTP authorization, staging, routing, deadlines and scoped publication |
+| `wiki` | `aka.light.wiki.plugin` | The knowledge source and its Agent-visible operations; see [Wiki providers](#wiki-providers) |
 | `workflow` | `aka.light.workflow.plugin` | Bootstrap, optimization sessions, reports, acceptance and promotion orchestration |
 
 Replacing a provider means replacing its entry's `name` in a composition (for example `aka.light.evaluation.plugin`) while preserving the declared service contract. Records still use the existing private MeasurementStore schema, and the runtime executor must implement the version-local `run_gateway` extension. Replacing either service does not imply arbitrary storage or transport schemas will interoperate.

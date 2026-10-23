@@ -16,6 +16,7 @@ class ManagedRuntimeFactory:
     queue_timeout: float = 60
     wiki_options: dict | None = None
     services: object | None = None
+    wiki_provider: object | None = None
 
     @property
     def research_records(self) -> bool:
@@ -27,6 +28,7 @@ class ManagedRuntimeFactory:
             measurement_repetitions=self.measurement_repetitions,
             wiki_enabled=self.wiki,
             wiki_options=WikiConfig(**(self.wiki_options or {})),
+            wiki_provider=self.wiki_provider,
             request_timeout=self.request_timeout if self.request_timeout is not None else configuration.request_timeout,
             queue_timeout=self.queue_timeout), workspace_provider=workspace_provider,
             services=self.services)

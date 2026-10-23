@@ -35,8 +35,24 @@ PPU_DIAGNOSTIC_TEXT_FIELDS = (
     "finding",
     "decision_impact",
 )
-QUERY_ID_RE = re.compile(r"wiki-query-[0-9a-f]{32}")
-WIKI_ID_RE = re.compile(r"(?:gpu_wiki|internal_gpu_wiki)::[A-Za-z0-9][A-Za-z0-9._:-]*")
+QUERY_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
+WIKI_ID_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{0,63}::[A-Za-z0-9][A-Za-z0-9._:-]{0,1023}")
+WIKI_CITE_RE = re.compile(
+    r"[a-z][a-z0-9-]{0,62}@[^\s\x00-\x1f\x7f]{1,256} "
+    r"(?P<path>[^\x00-\x1f\x7f]+):(?P<start>[1-9][0-9]{0,11})-(?P<end>[1-9][0-9]{0,11})"
+)
+
+
+def valid_wiki_citation(value: object) -> bool:
+    if not isinstance(value, str) or len(value) > 4096:
+        return False
+    match = WIKI_CITE_RE.fullmatch(value.strip())
+    if match is None or int(match["end"]) < int(match["start"]):
+        return False
+    path = match["path"]
+    return (not path.startswith("/") and "\\" not in path
+            and not re.match(r"[A-Za-z]:", path)
+            and all(part not in {"", ".", ".."} for part in path.split("/")))
 
 
 def normalize_wiki_usage(raw: object) -> tuple[list[dict[str, str]], list[str]]:
@@ -52,14 +68,21 @@ def normalize_wiki_usage(raw: object) -> tuple[list[dict[str, str]], list[str]]:
             continue
         query_id = row.get("query_id")
         wiki_id = row.get("wiki_id")
+        cite = row.get("cite")
         disposition = row.get("disposition")
         use = row.get("use", "")
         evidence = row.get("evidence", "")
         if not isinstance(query_id, str) or not QUERY_ID_RE.fullmatch(query_id.strip()):
             errors.append(f"{label}.query_id must be an emitted Wiki query_id")
             continue
-        if not isinstance(wiki_id, str) or not WIKI_ID_RE.fullmatch(wiki_id.strip()):
+        if "wiki_id" not in row and "cite" not in row:
+            errors.append(f"{label} requires an emitted wiki_id or cite")
+            continue
+        if "wiki_id" in row and (not isinstance(wiki_id, str) or not WIKI_ID_RE.fullmatch(wiki_id.strip())):
             errors.append(f"{label}.wiki_id must be an emitted canonical store::record id")
+            continue
+        if "cite" in row and not valid_wiki_citation(cite):
+            errors.append(f"{label}.cite must be an emitted wiki@version relative-path:start-end citation")
             continue
         if disposition not in WIKI_USAGE_DISPOSITIONS:
             errors.append(
@@ -69,15 +92,17 @@ def normalize_wiki_usage(raw: object) -> tuple[list[dict[str, str]], list[str]]:
         if not isinstance(use, str) or not isinstance(evidence, str):
             errors.append(f"{label}.use and {label}.evidence must be strings")
             continue
-        normalized.append(
-            {
-                "query_id": query_id.strip(),
-                "wiki_id": wiki_id.strip(),
-                "disposition": disposition,
-                "use": use.strip(),
-                "evidence": evidence.strip(),
-            }
-        )
+        entry = {
+            "query_id": query_id.strip(),
+            "disposition": disposition,
+            "use": use.strip(),
+            "evidence": evidence.strip(),
+        }
+        if "wiki_id" in row:
+            entry["wiki_id"] = wiki_id.strip()
+        if "cite" in row:
+            entry["cite"] = cite.strip()
+        normalized.append(entry)
     return normalized, errors
 
 
