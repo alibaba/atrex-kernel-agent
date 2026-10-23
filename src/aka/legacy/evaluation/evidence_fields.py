@@ -84,7 +84,7 @@ def normalize_wiki_usage(raw: object) -> tuple[list[dict[str, str]], list[str]]:
         if "cite" in row and not valid_wiki_citation(cite):
             errors.append(f"{label}.cite must be an emitted wiki@version relative-path:start-end citation")
             continue
-        if disposition not in WIKI_USAGE_DISPOSITIONS:
+        if not isinstance(disposition, str) or disposition not in WIKI_USAGE_DISPOSITIONS:
             errors.append(
                 f"{label}.disposition must be one of " + ", ".join(sorted(WIKI_USAGE_DISPOSITIONS))
             )
@@ -240,7 +240,7 @@ def normalize_wiki_attribution(entry: dict[str, Any]) -> None:
         status = "declared"
         entry["wiki_usage_status"] = status
         entry["wiki_usage_status_inferred"] = True
-    elif status is not None and status not in WIKI_USAGE_STATUSES:
+    elif status is not None and (not isinstance(status, str) or status not in WIKI_USAGE_STATUSES):
         errors.append("wiki_usage_status must be one of " + ", ".join(sorted(WIKI_USAGE_STATUSES)))
     if status == "declared" and not entry.get("wiki_usage"):
         errors.append("wiki_usage_status=declared requires at least one valid wiki_usage row")
@@ -252,7 +252,7 @@ def normalize_wiki_attribution(entry: dict[str, Any]) -> None:
             errors.append("wiki_query_ids must include every wiki_usage query_id")
     if status == "no_material_use" and not query_ids:
         errors.append("wiki_usage_status=no_material_use requires non-empty wiki_query_ids")
-    if status in {"no_material_use", "not_queried"} and entry.get("wiki_usage"):
+    if status in ("no_material_use", "not_queried") and entry.get("wiki_usage"):
         errors.append(f"wiki_usage_status={status} requires an empty or omitted wiki_usage")
     if status == "not_queried" and query_ids:
         errors.append("wiki_usage_status=not_queried requires empty or omitted wiki_query_ids")

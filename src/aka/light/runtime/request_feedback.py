@@ -69,11 +69,29 @@ def journal_schema(operation, body, *, research_records=False, supervisor_git=Tr
                 required.add("blocker")
         return _object(properties, required)
     if operation == "experiment_record":
+        from aka.legacy.evaluation.evidence_fields import (
+            QUERY_ID_RE, WIKI_ID_RE, WIKI_CITE_RE, WIKI_USAGE_DISPOSITIONS, WIKI_USAGE_STATUSES,
+        )
+        query_id = {"type": "string", "minLength": 1, "maxLength": 256,
+                    "pattern": "^" + QUERY_ID_RE.pattern + "$"}
+        usage = _object({
+            "query_id": query_id,
+            "wiki_id": {"type": "string", "minLength": 1, "maxLength": 1090,
+                        "pattern": "^" + WIKI_ID_RE.pattern + "$"},
+            "cite": {"type": "string", "minLength": 1, "maxLength": 4096,
+                     "pattern": "^" + WIKI_CITE_RE.pattern.replace("(?P<path>", "(")
+                     .replace("(?P<start>", "(").replace("(?P<end>", "(") + "$",
+                     "description": "Copy wiki@version relative-path:start-end verbatim; no parent paths; end >= start."},
+            "disposition": {"type": "string", "enum": sorted(WIKI_USAGE_DISPOSITIONS)},
+            "use": _text(), "evidence": _text(),
+        }, {"query_id", "disposition", "use", "evidence"})
+        usage["anyOf"] = [{"required": ["wiki_id"]}, {"required": ["cite"]}]
         properties = {key: _text() for key in EXPERIMENT_FIELDS}
         properties.update(direction_id={"type": "string", "pattern": "^direction_[0-9a-f]{32}$"},
                           gateway_record_ids=_ids("gateway-", minimum=1), action={"enum": sorted(EXPERIMENT_ACTIONS)},
-                          wiki_usage={"type": "array"}, wiki_query_ids={"type": "array"},
-                          wiki_usage_status={"type": "string"})
+                          wiki_usage={"type": "array", "maxItems": 64, "items": usage},
+                          wiki_query_ids={"type": "array", "maxItems": 64, "items": query_id},
+                          wiki_usage_status={"type": "string", "enum": sorted(WIKI_USAGE_STATUSES)})
         return _object(properties, EXPERIMENT_FIELDS)
     if operation == "direction_update":
         action = body.get("action")
