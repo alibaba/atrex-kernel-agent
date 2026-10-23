@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import signal
 import uuid
+from threading import Event
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Callable
@@ -13,7 +14,8 @@ from aka.contracts.agent import Agent, NativeInvocation
 from aka.light.workflow.models import EpisodeHandoff, InvocationObservation, SessionResult
 from aka.light.workflow.protocol import handoff_diagnosis, read_handoff
 from aka.light.workflow.output_limit import recovery_prompt
-from aka.light.agent.runtime.adapter import ClaudeAdapter
+from aka.light.agent.runtime.adapter import ClaudeAdapter, PiAdapter
+from aka.light.execution.retry import InfrastructureUnavailable
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
@@ -120,10 +122,14 @@ class LongSessionRunner:
             next_prompt = prompt
             purpose = "optimization"
             attempt = 0
+            rate_limit_retries = 0
+            retry_resume = False
 
             while True:
                 from aka.light.agent.execution_clock import current_budget
                 if current_budget().remaining <= 0:
+                    if purpose == "rate_limit_recovery":
+                        raise InfrastructureUnavailable("Rate-limited Episode exhausted its active-time budget; draft preserved")
                     timed_out = True
                     exit_status = exit_status or -signal.SIGKILL
                     completion_diagnosis = "Episode active-time budget exhausted; no continuation started"
@@ -133,12 +139,15 @@ class LongSessionRunner:
                     from concurrent.futures import CancelledError
                     raise CancelledError("Search coordinator stopped this Episode")
                 if remaining_token_budget is not None and total_tokens >= remaining_token_budget:
+                    if purpose == "rate_limit_recovery":
+                        raise InfrastructureUnavailable("Rate-limited Episode exhausted its token budget; draft preserved")
                     completion_diagnosis = "Episode token budget exhausted; no continuation started"
                     exit_status = exit_status or 1
                     break
                 if next_prompt is not None:
                     turn_prompt = next_prompt
-                    resume = False
+                    resume = retry_resume
+                    retry_resume = False
                 else:
                     if resume_count >= max(0, handoff_resumes):
                         break
@@ -188,7 +197,9 @@ class LongSessionRunner:
                 active_session_id = turn.session_id or active_session_id
                 failure_kind, provider_error_code = (
                     ClaudeAdapter().classify_terminal_failure(stdout, active_session_id)
-                    if self.agent_cli == "claude" else (None, None)
+                    if self.agent_cli == "claude" else
+                    PiAdapter().classify_terminal_failure(stdout, active_session_id)
+                    if self.agent_cli == "pi" else (None, None)
                 )
                 if failure_kind:
                     exit_status = exit_status or 1
@@ -224,6 +235,39 @@ class LongSessionRunner:
                         break
                 else:
                     completion_diagnosis = handoff_diagnosis(handoff_path)
+                if failure_kind == "rate_limit" and not timed_out:
+                    rate_limit_retries += 1
+                    purpose = "rate_limit_recovery"
+                    delay = min(60, 5 * 2 ** min(rate_limit_retries - 1, 4))
+                    print(f"[long-horizon] provider rate limit ({provider_error_code}); "
+                          f"retry {rate_limit_retries} in {delay}s; same Episode and draft; "
+                          "no optimization round consumed", flush=True)
+                    if (current_budget().remaining <= 0 or
+                            (remaining_token_budget is not None and total_tokens >= remaining_token_budget)):
+                        raise InfrastructureUnavailable("Rate-limited Episode reached its budget; draft preserved")
+                    if (cancel if cancel is not None else Event()).wait(delay):
+                        from concurrent.futures import CancelledError
+                        raise CancelledError("Search coordinator stopped rate-limit recovery")
+                    continuation = (
+                        "Continue the SAME optimization Episode after provider throttling. "
+                        "Preserve the existing kernel/source tree and scratch. Inspect saved progress "
+                        "and reconcile existing Runtime/Gateway results before repeating work. "
+                        "Finish the existing episode-report contract; do not reset the candidate."
+                    )
+                    if native.supports_resume and active_session_id:
+                        next_prompt = continuation
+                        retry_resume = True
+                    else:
+                        native.close()
+                        active_session_id = str(uuid.uuid4())
+                        native = self.agent.open_session(
+                            self.agent_cli, workspace, session_id=active_session_id,
+                            environment=telemetry_environment,
+                        )
+                        next_prompt = prompt.rstrip() + "\n\n" + continuation
+                    continue
+                if failure_kind == "provider_error":
+                    completion_diagnosis = f"Provider session failed: {provider_error_code}"
                 if timed_out:
                     if current_budget().remaining <= 0:
                         completion_diagnosis = "Episode active-time budget exhausted; no continuation started"
