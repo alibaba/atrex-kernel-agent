@@ -153,8 +153,7 @@ class ClaudeAdapter(_ClaudeAdapter, ClaudeLikeAdapter):
             if event.get("type") == "assistant":
                 last_assistant = event
                 failure = (None, None)
-                if (event.get("is_api_error_message") is True
-                        or event.get("isApiErrorMessage") is True):
+                if event.get("isApiErrorMessage") is True:
                     message = event.get("message")
                     content = message.get("content", []) if isinstance(message, Mapping) else []
                     for block in content:

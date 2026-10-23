@@ -1729,7 +1729,7 @@ class LongHorizonCampaign:
             agent_cli=getattr(self.base_campaign, "agent_cli", "claude"),
             usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0,
         )
-        starting_episodes = state.episodes - len(state.rate_limit_credits)
+        starting_episodes = state.episodes
         reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
 
         while True:
@@ -1737,7 +1737,7 @@ class LongHorizonCampaign:
                 self.base_campaign, state.consecutive_without_promotion, self.workspace
             )
             if self.max_version is not None:
-                if main_adapter.latest_version(self.workspace) - len(state.rate_limit_credits) >= self.max_version:
+                if main_adapter.latest_version(self.workspace) >= self.max_version:
                     if conversion_pending:
                         raise RuntimeError(
                             "mandatory Triton->Gluon conversion did not succeed before max-iters"
@@ -1746,13 +1746,13 @@ class LongHorizonCampaign:
                     break
             elif (
                 self.max_version is None
-                and state.episodes - len(state.rate_limit_credits) >= self.max_episodes
+                and state.episodes >= self.max_episodes
             ):
                 reason = "max-episodes"
                 break
             if (
                 self.episode_limit
-                and state.episodes - len(state.rate_limit_credits) - starting_episodes >= self.episode_limit
+                and state.episodes - starting_episodes >= self.episode_limit
             ):
                 reason = "episode-limit"
                 break

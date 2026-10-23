@@ -217,6 +217,10 @@ class LongSessionRunner:
                         provider_error_code=provider_error_code,
                     )
                 )
+                # Keep the invocation's recovery label, but let subsequent
+                # budget exhaustion record normal work once throttling ends.
+                if purpose == "rate_limit_recovery" and failure_kind != "rate_limit":
+                    purpose = "optimization"
                 if record_usage is not None:
                     record_usage(total_tokens)
                 # Even an interrupted candidate has consumed real model tokens.
