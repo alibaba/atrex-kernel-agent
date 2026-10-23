@@ -44,6 +44,12 @@ class ClassificationTests(TestCase):
     def test_pi_other_terminal_errors_are_not_invalid_handoffs(self):
         self.assertEqual(PiAdapter().classify_terminal_failure(pi_message('401 unauthorized'), "id")[0], "provider_error")
 
+    def test_pi_aborted_response_is_never_retried(self):
+        event = json.loads(pi_message(THROTTLED))
+        event['message']['stopReason'] = 'aborted'
+        self.assertEqual(PiAdapter().classify_terminal_failure(json.dumps(event), "id"),
+                         ("provider_error", "pi_assistant_aborted"))
+
     def test_claude_terminal_error_and_recovery(self):
         error = {"type": "assistant", "session_id": "id", "isApiErrorMessage": True,
                  "message": {"content": [{"type": "text", "text": THROTTLED}]}}

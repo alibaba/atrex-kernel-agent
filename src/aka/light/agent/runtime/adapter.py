@@ -130,7 +130,8 @@ class PiAdapter(_PiAdapter):
                 continue
             failure = (None, None)
             if message.get("stopReason") in {"error", "aborted"}:
-                code = rate_limit_code(str(message.get("errorMessage", "")))
+                code = (rate_limit_code(str(message.get("errorMessage", "")))
+                        if message.get("stopReason") == "error" else None)
                 failure = (("rate_limit", code) if code else
                            ("provider_error", "pi_assistant_" + message["stopReason"]))
         return failure
