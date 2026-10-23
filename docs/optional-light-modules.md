@@ -220,8 +220,11 @@ Journal attribution supports the existing `wiki_usage` rows with `wiki_id`
 Copy the provider's emitted query ID verbatim; IDs are bounded opaque tokens, not
 restricted to the local query prefix. Each row retains `disposition`, `use` and
 `evidence`, and may carry both a record ID and a citation. `wiki_query_ids` and
-`wiki_usage_status` keep the same use/no-use semantics; invalid attribution remains
-diagnostic and does not waive candidate correctness or promotion gates.
+`wiki_usage_status` keep the same use/no-use semantics. New Light Experiment requests
+with invalid attribution fail before writing and return repairable field issues and
+the complete request schema; resubmit corrected fields with the same Gateway Record
+IDs without rerunning GPU work. Previously stored malformed attribution remains
+diagnostic on read. This does not waive candidate correctness or promotion gates.
 
 ### Other module options
 
