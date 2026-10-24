@@ -953,6 +953,9 @@ class SupervisorRuntime:
             # private-reference authority never crosses this seam.
             environment = scrub_environment(self.environment)
             environment.update(capability.context)
+            for name in ("ATREX_ENVIRONMENT_RESTART_HANDOFF_ID", "ATREX_ENVIRONMENT_RESTART_LOCK_FD",
+                         "ATREX_ENVIRONMENT_STATE_FILE"):
+                environment.pop(name, None)
             if self.config.wiki_profile_root:
                 environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
             environment["ATREX_WIKI_TASK_ID"] = self.config.task_id

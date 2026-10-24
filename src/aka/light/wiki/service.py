@@ -211,7 +211,6 @@ class WikiService:
                 if not live():
                     raise SessionRevokedError("Session revoked")
                 # Use a request-local identity; never mutate capability.deadline/request_id.
-                from dataclasses import replace
                 owner.audit_process(replace(capability, request_id=request_id), "wiki", argv, process)
                 from aka.light.evaluation.projection import credential_values, project_response
                 response = project_response(process, generalized=owner.config.private_reference_dir is not None,
@@ -325,14 +324,12 @@ class WikiService:
                 query_id = response.get("query_id") if isinstance(response, dict) else None
                 if isinstance(query_id, str) and query_id:
                     record["query_id"] = query_id
-                audit = getattr(owner, "audit_process", None)
-                if callable(audit):
-                    audit(
-                        replace(capability, request_id=request_id), "wiki", [operation],
-                        subprocess.CompletedProcess(
-                            [operation], 0, json.dumps(response, ensure_ascii=False), "",
-                        ),
-                    )
+                owner.audit_process(
+                    replace(capability, request_id=request_id), "wiki", [operation],
+                    subprocess.CompletedProcess(
+                        [operation], 0, json.dumps(response, ensure_ascii=False), "",
+                    ),
+                )
                 publish(self.root, "results/" + key + ".json", json.dumps({
                     "key": key, "response_digest": digest(response), "response": response,
                     "query_id": record.get("query_id"),

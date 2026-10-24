@@ -214,9 +214,10 @@ timing receipts, redaction and revision pinning:
 
 Provider code runs in the Supervisor, never in the Agent workspace. `server.py`
 starts from `scrub_environment()`, then adds only the scoped telemetry, Wiki profile/task
-identity and explicitly selected Wiki model route. GPU/Agate, store and private-reference
-authority do not cross the seam. Settings paths, endpoints, private references and
-credential values are redacted before output-schema validation, private audit and cache
+identity and explicitly selected Wiki model route. GPU/Agate, store, private-reference
+and Campaign restart authority do not cross the seam. Wiki subprocesses are standalone
+requests, not Campaign restart-managed children. Settings paths, endpoints, private references
+and credential values are redacted before output-schema validation, private audit and cache
 publication. Only validated results are reused.
 
 ```mermaid
