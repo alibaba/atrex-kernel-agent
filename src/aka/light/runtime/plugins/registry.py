@@ -199,16 +199,11 @@ class PluginRegistry:
             else:
                 loaded["resolved_command"] = resolve_command(root, tool)
             for field in ("input_schema", "output_schema"):
-                # Built-in routed Wiki tools use the same schema files as the
-                # public Wiki plugin, not a second mutable schema copy. Arbitrary
-                # subprocess plugins remain confined to their own directory.
-                schema_root = root
                 if tool.get("runtime_tool") == "wiki-query":
                     expected = f"schemas/query.{field.removesuffix('_schema')}.json"
-                    if self.resource_root is None or tool[field] != expected:
-                        raise PluginError("invalid_manifest", "Wiki requires its canonical shared schemas")
-                    schema_root = self.resource_root / "plugins/gpu-wiki"
-                path = local_file(schema_root, tool[field])
+                    if tool[field] != expected:
+                        raise PluginError("invalid_manifest", "Wiki requires its packaged canonical schemas")
+                path = local_file(root, tool[field])
                 loaded[field] = read_json(path, budget=self.file_budget)
                 check_schema(loaded[field])
             tools[name] = loaded

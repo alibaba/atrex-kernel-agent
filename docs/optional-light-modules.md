@@ -141,6 +141,12 @@ configures the enabled Wiki but does not override an explicit `wiki: false`.
 Recorded continuations retain their frozen selection; this does not change the
 Legacy Workflow default or running Campaigns.
 
+The built-in catalog and request/response schemas are package-owned control-plane assets.
+The checkout corpus is provider-owned data: Light resolves and revision-pins it only on the
+first Wiki request. A checkout without `gpu-wiki/` therefore still starts Light normally;
+Wiki requests return `wiki_configuration_invalid` with operator guidance until the corpus
+is restored. Remote providers do not require a checkout corpus.
+
 When enabled, set `tool_runtime.config.wiki_options` independently of Optimizer configuration:
 
 ```json
