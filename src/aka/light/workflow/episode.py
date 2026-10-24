@@ -1866,6 +1866,7 @@ class LongHorizonCampaign:
             result = runner.run(
                 agent_workspace,
                 prompt,
+                output_directory=store.episode_dir(episode),
                 episode_timeout_seconds=self.base_campaign.module_options.episode_timeout_seconds,
                 handoff_path=handoff_path,
                 handoff_resumes=(
