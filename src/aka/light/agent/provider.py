@@ -90,7 +90,8 @@ class LightAgent:
                 self._runtimes[runtime_id] = _Runtime(self, runtime)
             return self._runtimes[runtime_id]
 
-    def open_session(self, runtime_id, workspace, *, session_id="", environment=None):
+    def open_session(self, runtime_id, workspace, *, session_id="", environment=None,
+                     output_directory=None):
         from .native import NativeSession
         with self._lock:
             self.check_open()
@@ -101,6 +102,7 @@ class LightAgent:
             session = NativeSession(
                 runtime_id, workspace, session_id or str(uuid.uuid4()), self._execute,
                 values, self.check_open, runtime=self.runtime(runtime_id).runtime,
+                output_directory=output_directory,
             )
             self._sessions.add(session)
             return session
