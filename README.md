@@ -170,7 +170,7 @@ aka optimize --repo-root /path/to/aka -- \
 
 `--repo-root` selects the matching AKA checkout; `--op-dir` selects the native
 Atrex-Bench or SOL problem. Omitting `--profile` selects native Light, not Bubblewrap.
-Wiki, Direction/Experiment recording and generated memory remain disabled by default.
+Wiki is enabled by default; Direction/Experiment recording and generated memory remain disabled.
 For a new Legacy campaign, add `--profile workflow` before `--`; existing recorded
 continuations retain their original selection. Do not reuse a Legacy workspace as
 a Light workspace. See the [installation and application selection

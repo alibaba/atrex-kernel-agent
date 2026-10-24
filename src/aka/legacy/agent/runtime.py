@@ -83,6 +83,9 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
 def build_session_environment(runtime_id: str) -> dict[str, str]:
     """Build the current guarded environment for one coding-agent session."""
     environment = os.environ.copy()
+    # Wiki service credentials belong to the Supervisor, never the coding Agent.
+    for name in ("ATREX_API_TOKEN", "ATREX_SERVER_URL", "ATREX_WIKI_CONFIG"):
+        environment.pop(name, None)
     # Private Atrex-Bench evaluator inputs are campaign-scoped and must be reintroduced only by
     # the owning campaign, never inherited accidentally by an unrelated or legacy session.
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
