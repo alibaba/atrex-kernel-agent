@@ -14,7 +14,8 @@
     "light_evaluation": "aka.light.evaluation.plugin:EVALUATION",
     "light_experiments": "aka.light.experiment.plugin:EXPERIMENTS",
     "light_acceptance": "aka.light.acceptance.plugin:ACCEPTANCE",
-    "light_journal": "aka.light.workflow.journal_plugin:JOURNAL"
+    "light_journal": "aka.light.workflow.journal_plugin:JOURNAL",
+    "wiki": "aka.light.wiki.plugin:WIKI"
   },
   "composition": "light",
   "environment_values": {
@@ -33,7 +34,8 @@
     "light_evaluation",
     "light_experiments",
     "light_acceptance",
-    "light_journal"
+    "light_journal",
+    "wiki"
   ],
   "tokens": [
     "problem",
@@ -48,7 +50,8 @@
     "light_evaluation",
     "light_experiments",
     "light_acceptance",
-    "light_journal"
+    "light_journal",
+    "wiki"
   ],
   "doc": "Default optimizer launch: managed AKA-light services with native Agent execution; Bubblewrap is not enabled."
 }

@@ -2,7 +2,7 @@
 
 AKA loads the plugins selected by the Resources configuration. The explicit Legacy `workflow`
 profile selects `plugins/gpu-wiki` from the checkout supplied with `--repo-root`. The default
-Light launch keeps Wiki disabled unless enabled through `tool_runtime.config.wiki`; see
+Light launch enables Wiki; set `tool_runtime.config.wiki` to `false` to disable it. See
 [Light configuration](optional-light-modules.md#independent-wiki-execution).
 A custom configuration can select explicit `plugins` paths or a `plugin_dir` catalog; catalog mode
 discovers immediate subdirectories containing `plugin.json`. A plugin may contribute tools, Skills,

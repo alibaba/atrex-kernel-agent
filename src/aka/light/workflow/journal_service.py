@@ -849,7 +849,41 @@ def record_experiment(
                 if key in value
             }
         )
+        issues = []
+        for field in ("wiki_usage", "wiki_query_ids"):
+            rows = value.get(field)
+            if field in value and not isinstance(rows, list):
+                issues.append({"path": field, "code": "list_type", "message": "Expected an array."})
+            if isinstance(rows, list) and len(rows) > 64:
+                raise field_error(field, "Wiki attribution arrays may contain at most 64 entries.",
+                                  code="wiki_attribution_invalid")
+        if "wiki_usage_status" in value and not isinstance(value["wiki_usage_status"], str):
+            issues.append({"path": "wiki_usage_status", "code": "string_type", "message": "Expected an attribution status."})
+        usage = value.get("wiki_usage")
+        for index, row in enumerate(usage if isinstance(usage, list) else []):
+            if not isinstance(row, dict):
+                continue
+            label = f"wiki_usage[{index}]"
+            for field in sorted(set(row) - {"query_id", "wiki_id", "cite", "disposition", "use", "evidence"})[:32]:
+                issues.append({"path": f"{label}.{field[:128]}", "code": "extra_forbidden", "message": "Unexpected attribution field."})
+            for field in ("use", "evidence"):
+                text = row.get(field)
+                if not isinstance(text, str) or not text.strip() or len(text) > 16000:
+                    issues.append({"path": f"{label}.{field}", "code": "invalid_string",
+                                   "message": "Expected non-empty text of at most 16000 characters."})
         normalize_wiki_attribution(experiment)
+        for message in experiment.get("wiki_usage_errors", []):
+            field = re.match(r"wiki_usage_status|wiki_query_ids|wiki_usage(?:\[[0-9]+\](?:\.[a-z_]+)?)?", message)
+            issues.append({"path": field[0] if field else "wiki_usage", "code": "wiki_attribution_invalid",
+                           "message": message})
+        if issues:
+            raise AgentRequestError(
+                "Wiki attribution is invalid; no Experiment was recorded.", code="wiki_attribution_invalid",
+                issues=issues[:32],
+                next_action="Correct the indicated Wiki fields using request_schema and resubmit record-experiment. "
+                            "Use applied, partially_applied, reference_only or rejected for disposition. "
+                            "Reuse the existing Gateway Record IDs; do not rerun GPU measurements.",
+            )
     current["experiments"].append(experiment)
     _save_journal(path, campaign_root, current)
     return {"status": "recorded", "experiment_id": experiment["experiment_id"]}
