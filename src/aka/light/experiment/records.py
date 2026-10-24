@@ -26,6 +26,19 @@ from aka.light.experiment.identifiers import GATEWAY_RECORD_ID_RE, KERNEL_RECORD
 QUERY_KINDS = {"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier"}
 
 
+def _completed_abba_timeout(sample: object, states: list[dict], *, truncated: bool) -> bool:
+    """A twice-timed-out native ABBA is final only after both Jobs are terminal."""
+    from aka.light.evaluation.native_abba import is_terminal_abba_timeout
+    return bool(
+        isinstance(sample, dict)
+        and sample.get("correct") is False
+        and is_terminal_abba_timeout(sample)
+        and states
+        and all(state.get("phase") == "terminal" for state in states)
+        and not truncated
+    )
+
+
 def _read_record(reader, identifier, *, field, pattern):
     if not isinstance(identifier, str) or pattern.fullmatch(identifier) is None:
         raise field_error(field, f"{field} must be a complete ID returned by this Campaign")
@@ -241,7 +254,23 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     for state in states)
                 cacheable = cacheable and not response.get("truncated")
                 if operation == "same_allocation_abba":
-                    cacheable = cacheable and sample is not None and isinstance(sample.get("correct"), bool)
+                    terminal_abba_timeout = _completed_abba_timeout(
+                        sample,
+                        states,
+                        truncated=response.get("truncated") is True,
+                    )
+                    if terminal_abba_timeout:
+                        # The native ABBA executor has already submitted one
+                        # fresh retry.  Two terminal wall-clock failures are a
+                        # complete negative promotion result, not uncertain
+                        # infrastructure that the Supervisor should retry forever.
+                        cacheable = True
+                    else:
+                        cacheable = (
+                            cacheable
+                            and sample is not None
+                            and isinstance(sample.get("correct"), bool)
+                        )
                 if sample is not None:
                     samples.append(sample)
                 if process.returncode != 0 or sample is None or not cacheable:

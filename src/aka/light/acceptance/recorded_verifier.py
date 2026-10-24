@@ -106,6 +106,23 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
                 raise ValueError("No authoritative ABBA record: " + response.get("stderr", "")[-1000:])
             if result.get("comparison") != {"method": "abba", "repeats": self.repeats}:
                 raise ValueError("ABBA record does not match the acceptance schedule")
+            from aka.light.evaluation.native_abba import is_terminal_abba_timeout
+            if is_terminal_abba_timeout(result):
+                error = result["error"]
+                verdict = VerificationResult(
+                    "FAIL",
+                    None,
+                    None,
+                    None,
+                    artifact=result["gateway_record_id"],
+                    error=(
+                        "ABBA run exceeded its wall-clock limit on the initial request and one retry: "
+                        + str(error.get("message") or error.get("reason"))
+                    ),
+                )
+                verdict.gateway_record_id = result["gateway_record_id"]
+                verdict.reused = response.get("reused") is True
+                return verdict
             # Gateway validates every schedule row and Shape. Promotion uses
             # latency reduction, never the reference-relative performance score.
             schedule = verification_schedule(1)

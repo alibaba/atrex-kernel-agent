@@ -2963,6 +2963,7 @@ def run_direct_job(
     queue_wait_grace: int,
     max_device_retries: int = 2,
     device_retry_delay: float | None = None,
+    identity_extra: dict[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     eval_request = kind == "eval"
@@ -3055,8 +3056,11 @@ def run_direct_job(
         finally:
             _forget_agate_job(job_id)
 
-    return execute_job({"url_fingerprint": private_value_fingerprint(url),
-                        "kind": kind, "payload": payload_identity(payload)}, submit, poll,
+    identity = {"url_fingerprint": private_value_fingerprint(url),
+                "kind": kind, "payload": payload_identity(payload)}
+    if identity_extra:
+        identity["execution_context"] = identity_extra
+    return execute_job(identity, submit, poll,
                        wait_budget=timeout + queue_wait_grace,
                        retry_classifier=eval_retry_kind if eval_request else None,
                        idempotent_submission=True,

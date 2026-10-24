@@ -189,13 +189,14 @@ def diagnostic_request(request, workspace, kind, *, timeout=600):
     return dict(request, **{DIAGNOSTIC: payload})
 
 
-def run(gateway, args, request, kind, queue_wait_grace):
+def run(gateway, args, request, kind, queue_wait_grace, *, identity_extra=None):
     url = gateway._resolved_gateway_url(gateway.find_agate(), url=args.url, profile=args.gateway_profile)
     if not url:
         raise ValueError("Whole-tree transport requires a resolvable Agate URL and Supervisor HTTP credentials")
     diagnostic = request.get(DIAGNOSTIC)
     process = gateway.run_direct_job(url=url, kind="dev" if diagnostic else "eval", payload=diagnostic or request,
-        timeout=args.timeout, queue_wait_grace=queue_wait_grace, max_device_retries=10, device_retry_delay=60)
+        timeout=args.timeout, queue_wait_grace=queue_wait_grace, max_device_retries=10,
+        device_retry_delay=60, identity_extra=identity_extra)
     if diagnostic and process.returncode == 0:
         from .source_diagnostics import DIAGNOSTIC_PREFIX
         from aka.light.experiment.store import EvidenceUnavailable

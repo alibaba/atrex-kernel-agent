@@ -134,6 +134,11 @@ def merge_abba_batch_payloads(
         ]
         if actual != schedule:
             raise ValueError("shape batch returned an invalid ABBA schedule")
+    terminal_failures = [
+        payload["terminal_failure"]
+        for payload in payloads
+        if isinstance(payload.get("terminal_failure"), dict)
+    ]
     runs = []
     for index, step in enumerate(schedule):
         rows = [payload["runs"][index] for payload in payloads]
@@ -159,7 +164,7 @@ def merge_abba_batch_payloads(
                 )[-3000:],
             }
         )
-    return {
+    merged = {
         "schema_version": 1,
         "runs": runs,
         "error": "; ".join(
@@ -168,6 +173,26 @@ def merge_abba_batch_payloads(
         or None,
         "shape_batch_count": len(payloads),
     }
+    if terminal_failures:
+        failure = dict(terminal_failures[0])
+        all_failures = [
+            row
+            for terminal in terminal_failures
+            for row in (terminal.get("details") or {}).get("failures", [])
+            if isinstance(row, dict)
+        ]
+        details = {
+            "attempts": 2,
+            "failures": all_failures[:64],
+            **(
+                {"omitted_failures": len(all_failures) - 64}
+                if len(all_failures) > 64
+                else {}
+            ),
+        }
+        failure["details"] = details
+        merged["terminal_failure"] = failure
+    return merged
 
 
 class GatewayABBAValidator:
