@@ -990,9 +990,9 @@ def runtime_requirements(path: str) -> list[str]:
             if line.strip() and not line.lstrip().startswith("#")]
 
 
-def _runtime_pins(request):
+def _runtime_pins(request, *, include_bench_version: bool = True):
     version = os.environ.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip()
-    if version:
+    if include_bench_version and version:
         request["atrex_bench_version"] = version
     path = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if path:
@@ -1400,7 +1400,12 @@ def build_typed_request(
         else:
             request["fmt"] = disassembly_format
         from aka.light.evaluation.source_transport import diagnostic_request
-        return diagnostic_request(_runtime_pins(request), workspace, kind, timeout=timeout)
+        return diagnostic_request(
+            _runtime_pins(request, include_bench_version=False),
+            workspace,
+            kind,
+            timeout=timeout,
+        )
 
     requested_shape_ids = _option_values(command, "--shape-id")
     if requested_shape_ids:
@@ -1521,7 +1526,7 @@ def build_typed_request(
         if deps_mode is not None:
             request["deps_mode"] = deps_mode
     from aka.light.evaluation.source_transport import attach, diagnostic_request
-    request = _runtime_pins(request)
+    request = _runtime_pins(request, include_bench_version=kind == "run")
     return attach(request, workspace) if kind == "run" else diagnostic_request(request, workspace, kind, timeout=timeout)
 
 
@@ -2958,6 +2963,7 @@ def run_direct_job(
     queue_wait_grace: int,
     max_device_retries: int = 2,
     device_retry_delay: float | None = None,
+    identity_extra: dict[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     eval_request = kind == "eval"
@@ -3050,8 +3056,11 @@ def run_direct_job(
         finally:
             _forget_agate_job(job_id)
 
-    return execute_job({"url_fingerprint": private_value_fingerprint(url),
-                        "kind": kind, "payload": payload_identity(payload)}, submit, poll,
+    identity = {"url_fingerprint": private_value_fingerprint(url),
+                "kind": kind, "payload": payload_identity(payload)}
+    if identity_extra:
+        identity["execution_context"] = identity_extra
+    return execute_job(identity, submit, poll,
                        wait_budget=timeout + queue_wait_grace,
                        retry_classifier=eval_retry_kind if eval_request else None,
                        idempotent_submission=True,
@@ -3416,7 +3425,10 @@ def build_typed_agate_command(
         if kind != "run":
             raise ValueError("Agate Profile CLI does not support multi-GPU requests")
         command += ["--num-gpus", str(num_gpus)]
-    if request.get("atrex_bench_version"):
+    # The version selector belongs to Eval. Agate Profile rejects this option,
+    # while still using the pinned evaluator files supplied through
+    # --reference-dir and --requirements.
+    if kind == "run" and request.get("atrex_bench_version"):
         command += ["--atrex-bench-version", request["atrex_bench_version"]]
     if request.get("requirements"):
         requirements_path = candidate_path.parent / "runtime-requirements.txt"
