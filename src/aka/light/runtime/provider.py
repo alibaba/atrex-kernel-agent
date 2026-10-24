@@ -11,7 +11,7 @@ class ToolRuntimeFactory(Protocol):
 @dataclass(frozen=True)
 class ManagedRuntimeFactory:
     measurement_repetitions: int = 1
-    wiki: bool = False
+    wiki: bool = True
     request_timeout: float | None = None
     queue_timeout: float = 60
     wiki_options: dict | None = None

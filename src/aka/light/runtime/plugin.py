@@ -21,7 +21,7 @@ Config = {"type": "object", "properties": {
     "request_timeout": {"type": "number", "minimum": 0.001},
     "queue_timeout": {"type": "number", "minimum": 0.001},
 }, "additionalProperties": False}
-Defaults = {"measurement_repetitions": 1, "wiki": False, "queue_timeout": 60}
+Defaults = {"measurement_repetitions": 1, "wiki": True, "queue_timeout": 60}
 
 
 def apply(ctx, config):

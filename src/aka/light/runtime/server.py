@@ -210,7 +210,7 @@ class RuntimeConfig:
     request_timeout: float | None = None
     queue_timeout: float = 60
     measurement_repetitions: int = 1
-    wiki_enabled: bool = False
+    wiki_enabled: bool = True
     wiki_options: WikiConfig = field(default_factory=WikiConfig)
     # Selected aka.contracts.wiki.WikiProvider; None selects the built-in local store.
     wiki_provider: object | None = field(default=None, compare=False, repr=False)
