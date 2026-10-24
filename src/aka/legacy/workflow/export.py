@@ -560,6 +560,9 @@ class RetainedWorkflowExport:
                 artifacts.append(_artifact('wiki_'+hashlib.sha256(relative.encode()).hexdigest(),
                     'wiki/'+path.parent.name+'/'+path.name,'wiki-query-event',path.read_bytes()))
         sessions = list(read_sessions(workspace))
+        for directory in sorted(runtime.glob('episodes/e*')):
+            number = int(directory.name[1:])
+            sessions.extend(replace(s, episode=number) for s in read_sessions(directory))
         for directory in sorted(runtime.glob('episodes/e*/agent_observations')):
             sessions.extend(read_sessions(directory, direct=True))
         sessions = tuple(replace(s, episode=next((e.episode for e in episodes if e.session_id==s.session_id),s.episode)) for s in sessions)
