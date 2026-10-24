@@ -4,7 +4,7 @@ New `aka optimize` and `aka workflow` launches default to `light`: native Agent 
 session capture, managed drafts, private HTTP tools and unified Light Episodes. This is a
 launch-selection change, not a change to the Legacy providers. Use `--profile workflow`
 to retain the Legacy Agent, Task and Workflow, or `--profile light-sandbox` for Bubblewrap.
-Wiki, Direction/Experiment recording and generated memory remain default-off.
+Wiki is default-on; Direction/Experiment recording and generated memory remain default-off.
 
 Install the matching `atrex-aka-light` package together with its framework/legacy dependencies.
 If Light is unavailable, default startup fails with installation guidance; it never silently
@@ -127,18 +127,19 @@ transport backoff and 60-second validation-infrastructure retry loop are unchang
 
 ### Independent Wiki execution
 
-GPU Wiki is **disabled by default** in both `light` and `light-sandbox`.
-Enable it explicitly through the Tool Runtime module:
+GPU Wiki is **enabled by default** in both `light` and `light-sandbox`.
+Disable it explicitly through the Tool Runtime module:
 
 ```json
-{"api_version":1,"patches":[{"id":"tool_runtime","config":{"wiki":true}}]}
+{"api_version":1,"patches":[{"id":"tool_runtime","config":{"wiki":false}}]}
 ```
 
-With `wiki: false` (or omitted), the Agent receives no KernelWiki Skill, Wiki
-catalog entry, or Wiki-query prompt requirement. Direct Wiki requests return
-`wiki_disabled` without starting a query. Supplying `wiki_options` alone does not
-enable Wiki. Existing explicitly enabled configurations remain enabled; this does
-not change the upstream Workflow default or running Campaigns.
+With `wiki: false`, the Agent receives no KernelWiki Skill, Wiki catalog entry,
+or Wiki-query prompt requirement. Direct Wiki requests return `wiki_disabled`
+without starting a query. Omitting `wiki` keeps it enabled; `wiki_options` alone
+configures the enabled Wiki but does not override an explicit `wiki: false`.
+Recorded continuations retain their frozen selection; this does not change the
+Legacy Workflow default or running Campaigns.
 
 When enabled, set `tool_runtime.config.wiki_options` independently of Optimizer configuration:
 
@@ -277,7 +278,7 @@ Patches replace a module's whole configuration; omitted fields receive that prov
 | Provider | Options and defaults |
 | --- | --- |
 | `aka.light.agent.plugin` | `sandbox: none`, `capture: false`, `bwrap_executable: bwrap`, `read_only_paths: []`, `proc_mode: private`, `timeout_seconds: 28800` |
-| `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `wiki: false`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
+| `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `wiki: true`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
 | `aka.light.wiki.plugin` | `root: ""` (the selected checkout's `gpu-wiki`); see [Wiki providers](#wiki-providers) |
 | `aka.light.workflow.plugin` | `numerical_validation: true`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 2`, `episode_timeout_seconds: 28800`; optional `search` and `source_tree` |
 | `aka.light.workspace.plugin` | `inherit_state: true`; carry custom Skills/tools across Episodes independently of Kernel promotion |
