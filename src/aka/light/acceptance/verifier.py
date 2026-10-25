@@ -10,6 +10,7 @@ from aka.legacy.evaluation.abba import (
     _result_latency, _result_performance_score,
 )
 from aka.light.evaluation.policy import SHAPE_BATCH_SIZE, BATCH_WORKERS, validate_abba_repeats
+from aka.light.execution.config import DEFAULT_QUEUE_WAIT_GRACE
 
 from aka.light.workflow.models import VerificationResult, VerificationRun
 
@@ -209,7 +210,7 @@ class GatewayABBAValidator:
         repeats: int = 2,
         per_run_timeout: int = 120,
         min_improvement_pct: float = 0.0,
-        queue_wait_grace: int = 14_400,
+        queue_wait_grace: int = DEFAULT_QUEUE_WAIT_GRACE,
         private_reference_dir: Path | None = None,
         shape_batch_size: int = DEFAULT_SHAPE_BATCH_SIZE,
     ):
@@ -224,6 +225,12 @@ class GatewayABBAValidator:
         self.repeats = repeats
         self.per_run_timeout = per_run_timeout
         self.min_improvement_pct = min_improvement_pct
-        self.queue_wait_grace = queue_wait_grace
+        if (
+            isinstance(queue_wait_grace, bool)
+            or not isinstance(queue_wait_grace, int)
+            or queue_wait_grace < 0
+        ):
+            raise ValueError("Queue wait grace must be a non-negative integer")
+        self.queue_wait_grace = min(queue_wait_grace, DEFAULT_QUEUE_WAIT_GRACE)
         self.private_reference_dir = private_reference_dir
         self.shape_batch_size = shape_batch_size
