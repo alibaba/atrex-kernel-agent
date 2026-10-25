@@ -82,6 +82,7 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
+from aka.contracts.evaluation import derived_evaluation_timeout
 from aka.legacy.execution.gateway.request_values import (
     safe_relative as _safe_relative,
     is_fp4_dtype as _is_fp4_dtype,
@@ -176,7 +177,7 @@ INPUT_SKIP_SUFFIXES = {
 }
 OUTPUT_BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
-DEFAULT_COMMAND_TIMEOUT = 600
+DEFAULT_COMMAND_TIMEOUT = derived_evaluation_timeout()
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
 FP4_MAX_REL_L2 = 0.2
@@ -1824,7 +1825,7 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         help=(
             "Positive remote command execution timeout in seconds "
-            "(default: 600; queue wait is budgeted separately)."
+            f"(default: {DEFAULT_COMMAND_TIMEOUT}; queue wait is budgeted separately)."
         ),
     )
     parser.add_argument(

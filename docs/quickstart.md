@@ -438,7 +438,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
 --handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
 --verify-repeats N               Full-mode ABBA repeat pairs (default: 2)
---verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 120)
+--verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 300)
 --min-improvement-pct PCT        Strict gain required in fast or full verification
 --arch ARCH                      Override runtime architecture detection
 ```

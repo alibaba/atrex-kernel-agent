@@ -10,7 +10,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from aka.light.evaluation.policy import validate_abba_repeats
+from aka.light.evaluation.policy import PERFORMANCE_TIMEOUT, validate_abba_repeats
 
 from aka.light.evaluation.projection import (
     GATEWAY_ERROR_PREFIX,
@@ -83,7 +83,7 @@ def validate_comparison(args) -> None:
 def comparison_run_timeout(args) -> int:
     available = (args.timeout - 30) // (2 * args.comparison_repeats)
     requested = getattr(args, "comparison_run_timeout", None)
-    seconds = min(120, available) if requested is None else requested
+    seconds = PERFORMANCE_TIMEOUT if requested is None else requested
     if seconds <= 0 or seconds > available:
         raise ValueError("--comparison-run-timeout must be positive and fit the full ABBA allocation schedule")
     return seconds

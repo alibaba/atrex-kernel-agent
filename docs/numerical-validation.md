@@ -34,7 +34,7 @@ Each planner uses `--production-review-timeout` (default 600 seconds). A bounded
 GPU probes use the same private MeasurementStore and exact-task reuse as other Supervisor requests. A case has a 540-second evaluator deadline inside a 600-second Dev allocation. Confirmed service outages use fixed 60-second outer Supervisor retry waits; the inner Gateway backoff is unchanged. On resume, older longer waits are shortened to 60 seconds after the recorded failure without resetting retry counts or extending earlier deadlines. Uncertain submissions are not blindly replayed. Nested requests share the parent report's deadline and revocation. Total outage waiting is otherwise unbounded while the controller remains active.
 
 The probe request explicitly carries Light's ordinary Evaluate candidate timeout
-(`CANDIDATE_TIMEOUT`, currently 120 seconds), including model construction/JIT
+(`CANDIDATE_TIMEOUT`, currently 300 seconds), including model construction/JIT
 compilation. It must not accidentally inherit the shared Legacy harness's
 20-second default: the evaluator constructs the candidate before generating the
 first input receipt, so a short initialization timeout otherwise appears as zero

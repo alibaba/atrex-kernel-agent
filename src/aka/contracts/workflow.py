@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Protocol
 from collections.abc import Callable
 
+from .evaluation import (
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+)
+
 
 @dataclass(frozen=True)
 class WorkflowSettings:
@@ -58,14 +64,12 @@ class CampaignRuntimeSettings:
     # None derives the enclosing allocation from the inner Eval/ABBA limits.
     # An explicit value remains an advanced operator override.
     timeout: int | None = None
-    verify_repeats: int = 2
-    verify_run_timeout: int = 120
+    verify_repeats: int = DEFAULT_ABBA_REPEATS
+    verify_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
     shape_batch_size: int = 4
 
     def __post_init__(self):
-        from .evaluation import derived_evaluation_timeout
-
         if self.timeout is None:
             object.__setattr__(self, "timeout", derived_evaluation_timeout(
                 repeats=self.verify_repeats,

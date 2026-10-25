@@ -75,12 +75,13 @@ python3 tools/sandbox.py --kind env
 ```
 
 For ABBA, optional `--comparison-run-timeout SECONDS` controls each run and must fit the
-configured allocation's complete schedule. The default is up to 120 seconds. Acceptance can
+configured allocation's complete schedule. By default it matches the 300-second Performance
+timeout. Acceptance can
 reuse only an exact matching request, including baseline bytes, path, repeats and run timeout.
 The injected acceptance block supplies the exact command for the current
 configuration, including Shape batch size, and a `kernel-read` command for the committed
 incumbent. Use that block instead of this generic example when seeking acceptance reuse.
-It also reports Runtime-owned measurement repetitions and allocation timeout; do not emulate
+Runtime owns the measurement repetitions and derives the allocation timeout; do not emulate
 them with repeated Agent requests or environment overrides. Other request/input changes can
 prevent reuse. A matching comparison is optional and does not replace the report's full Evaluate.
 

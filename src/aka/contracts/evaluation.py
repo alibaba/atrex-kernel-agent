@@ -16,7 +16,9 @@ from .problem import EvaluationInput
 # it contains; it is not an independent timeout users must keep in sync.
 DEFAULT_CANDIDATE_TIMEOUT = 300
 DEFAULT_PERFORMANCE_TIMEOUT = 300
-DEFAULT_ABBA_RUN_TIMEOUT = 120
+# One A or B run uses the same default execution budget as an ordinary
+# performance measurement. Operators may still override either limit.
+DEFAULT_ABBA_RUN_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
 DEFAULT_ABBA_REPEATS = 2
 ABBA_SCHEDULING_OVERHEAD = 30
 
@@ -137,9 +139,9 @@ class Evaluator(Protocol):
 
 @dataclass(frozen=True)
 class EvaluationConfiguration:
-    timeout: int = 600
-    repeats: int = 2
-    per_run_timeout: int = 120
+    timeout: int = derived_evaluation_timeout()
+    repeats: int = DEFAULT_ABBA_REPEATS
+    per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT
     shape_batch_size: int = 4
     max_parallelism: int = 4
     private_reference_dir: Path | None = None

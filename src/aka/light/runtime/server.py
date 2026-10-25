@@ -22,6 +22,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from aka.contracts.evaluation import derived_evaluation_timeout
 from aka.light.runtime.paths import legacy_resource_root
 
 from aka.light.evaluation.gateway import (
@@ -193,7 +194,7 @@ def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
 @dataclass(frozen=True)
 class RuntimeConfig:
     hardware: str
-    timeout: int = 600
+    timeout: int = derived_evaluation_timeout()
     url: str = ""
     profile: str = ""
     ssh: str = ""

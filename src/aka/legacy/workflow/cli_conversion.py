@@ -235,9 +235,9 @@ def parse_arguments(argv):
         "--verify-run-timeout",
         type=int,
         default=DEFAULT_VERIFY_RUN_TIMEOUT,
-        help="Evaluator budget for each ABBA run (default: 120s; the remote driver "
-        "allows up to 60s cold-start/finalization grace within the unchanged "
-        "whole-allocation timeout).",
+        help=f"Evaluator budget for each ABBA run (default: {DEFAULT_VERIFY_RUN_TIMEOUT}s, "
+        "matching the Performance timeout; the enclosing allocation is derived from "
+        "the complete schedule).",
     )
     ap.add_argument(
         "--min-improvement-pct",

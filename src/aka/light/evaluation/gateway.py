@@ -92,6 +92,11 @@ from typing import Any, Iterable, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+from aka.contracts.evaluation import (  # noqa: E402
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+)
 from aka.legacy.execution.gateway.request_values import (
     safe_relative as _safe_relative,
     is_fp4_dtype as _is_fp4_dtype,
@@ -226,7 +231,7 @@ INPUT_SKIP_SUFFIXES = {
 }
 OUTPUT_BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
-DEFAULT_COMMAND_TIMEOUT = 600
+DEFAULT_COMMAND_TIMEOUT = derived_evaluation_timeout()
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = SHAPE_BATCH_SIZE
 DEFAULT_EVAL_BATCH_WORKERS = BATCH_WORKERS
 FP4_MAX_REL_L2 = 0.2
@@ -1979,7 +1984,7 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
         ),
         help=(
             "Positive remote command execution timeout in seconds "
-            "(default: 600; queue wait is budgeted separately)."
+            f"(default: {DEFAULT_COMMAND_TIMEOUT}; queue wait is budgeted separately)."
         ),
     )
     parser.add_argument(
@@ -2120,13 +2125,16 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument(
             "--comparison-repeats",
             type=int,
-            default=2,
+            default=DEFAULT_ABBA_REPEATS,
             metavar="N",
             help="Measurements per side, even 2..16 (default: 2 = one native A/B/B/A block).",
         )
     parser.add_argument(
             "--comparison-run-timeout", type=int, default=None,
-            help="Seconds per ABBA run; must fit the allocation timeout. Default: up to 120.",
+            help=(
+                "Seconds per ABBA run; must fit the allocation timeout. "
+                f"Default: {DEFAULT_ABBA_RUN_TIMEOUT}, matching Performance timeout."
+            ),
         )
     parser.add_argument(
             "--input-path",

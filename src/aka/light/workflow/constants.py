@@ -9,7 +9,11 @@ from pathlib import Path
 from aka.legacy.evaluation.resources import profile_driver_script
 from aka.legacy.task.problem.resources import native_harness_script
 from aka.legacy.acceptance.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
-from aka.contracts.evaluation import derived_evaluation_timeout
+from aka.contracts.evaluation import (
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+)
 from aka.light.workspace.resource_catalog import resource
 
 import aka.light.agent.runtime as _agent_runtime
@@ -33,8 +37,8 @@ DEFAULT_CONVERT_AFTER = (
 SUPPLEMENTAL_REPAIR_PREFIX = "Supplemental numerical probes"
 SUPPLEMENTAL_PENDING_PREFIX = "Supplemental validation is incomplete"
 DEFAULT_HANDOFF_RESUMES = 2
-DEFAULT_VERIFY_REPEATS = 2
-DEFAULT_VERIFY_RUN_TIMEOUT = 120
+DEFAULT_VERIFY_REPEATS = DEFAULT_ABBA_REPEATS
+DEFAULT_VERIFY_RUN_TIMEOUT = DEFAULT_ABBA_RUN_TIMEOUT
 FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
 FRAMEWORK_BASELINE_VERSION = (
     1  # the framework baseline always occupies v1, retries overwrite it

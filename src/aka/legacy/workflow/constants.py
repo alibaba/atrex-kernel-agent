@@ -1,6 +1,7 @@
 """Workflow constants implementation and callable interface."""
 from __future__ import annotations
 
+from aka.contracts.evaluation import DEFAULT_ABBA_REPEATS, DEFAULT_ABBA_RUN_TIMEOUT
 from aka.legacy.agent.adapter import DEFAULT_BACKEND_REGISTRY
 
 
@@ -27,10 +28,10 @@ DEFAULT_FAST_EPISODES = 2
 DEFAULT_FAST_TRIALS = 5
 
 
-DEFAULT_VERIFY_REPEATS = 2
+DEFAULT_VERIFY_REPEATS = DEFAULT_ABBA_REPEATS
 
 
-DEFAULT_VERIFY_RUN_TIMEOUT = 120
+DEFAULT_VERIFY_RUN_TIMEOUT = DEFAULT_ABBA_RUN_TIMEOUT
 
 
 FRAMEWORK_BASELINE_VERSION = (

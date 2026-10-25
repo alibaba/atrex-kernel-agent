@@ -5,6 +5,11 @@ import math
 from pathlib import Path
 from typing import Any
 
+from aka.contracts.evaluation import (
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+)
 from aka.legacy.evaluation.abba import (
     verification_schedule, _geomean, _merge_batch_results,
     _result_latency, _result_performance_score,
@@ -206,9 +211,9 @@ class GatewayABBAValidator:
         ssh: str = "",
         ssh_init: str = "",
         health_command: str = "",
-        timeout: int = 600,
-        repeats: int = 2,
-        per_run_timeout: int = 120,
+        timeout: int = derived_evaluation_timeout(),
+        repeats: int = DEFAULT_ABBA_REPEATS,
+        per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT,
         min_improvement_pct: float = 0.0,
         queue_wait_grace: int = DEFAULT_QUEUE_WAIT_GRACE,
         private_reference_dir: Path | None = None,
