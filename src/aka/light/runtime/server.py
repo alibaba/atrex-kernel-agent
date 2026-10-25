@@ -141,12 +141,12 @@ def parse_gateway(argv):
 
 
 def failure(message: str, *, repairable: bool = True, next_action: str | None = None,
-            code: str | None = None) -> dict:
+            code: str | None = None, **details) -> dict:
     from aka.light.runtime.request_errors import UNKNOWN_OUTCOME
     return error_response(message, code=code or ("invalid_request" if repairable else "outcome_unknown"),
                           repairable=repairable, next_action=next_action or (
                               "Correct the arguments, using full option names, then retry."
-                              if repairable else UNKNOWN_OUTCOME))
+                              if repairable else UNKNOWN_OUTCOME), **details)
 
 
 def validated_argv(value: object) -> list[str]:
@@ -382,6 +382,31 @@ class _Handler(BaseHTTPRequestHandler):
                 "Supervisor Runtime request %s timed out before dispatch; safe to retry after backoff",
                 self.request_id)
             self.reply(429, result, retry_after=DISPATCH_RETRY_SECONDS)
+        except GatewayExecutionUnavailable as error:
+            next_action = (
+                "The Gateway process started, so this request may already have created or completed "
+                "an Agate job. Keep the candidate and request unchanged. Inspect available Kernel/Record "
+                "history first; if no terminal Record is visible, report this request_id to the operator "
+                "for Job reconciliation. Do not loop or submit a modified replacement blindly."
+            )
+            logging.getLogger(__name__).warning(
+                "Supervisor Runtime request %s ended with unknown Gateway outcome: %s",
+                self.request_id, error.code,
+            )
+            self.reply(503, failure(
+                str(error),
+                repairable=False,
+                code=error.code,
+                next_action=next_action,
+                reason=error.reason,
+                outcome="unknown",
+                phase="gateway_execution",
+                gateway_started=True,
+                cancellation_requested=error.cancellation_requested,
+                cancellation_confirmed=False,
+                request_id=self.request_id,
+                **error.details,
+            ))
         except SessionRevokedError:
             self.reply(401, failure("Session capability revoked", repairable=False, code="session_revoked"))
         except (BrokenPipeError, ConnectionResetError):
