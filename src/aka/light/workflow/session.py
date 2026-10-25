@@ -269,6 +269,7 @@ class LongSessionRunner:
                         native = self.agent.open_session(
                             self.agent_cli, workspace, session_id=active_session_id,
                             environment=telemetry_environment,
+                            output_directory=output_directory,
                         )
                         next_prompt = prompt.rstrip() + "\n\n" + continuation
                     continue
