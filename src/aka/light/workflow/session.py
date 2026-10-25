@@ -86,6 +86,7 @@ class LongSessionRunner:
         completion_check: CompletionCheck,
         reasoning_effort: str = "max",
         session_id: str = "",
+        output_directory: Path | None = None,
         telemetry_environment: Mapping[str, str] | None = None,
         record_usage: Callable[[int], None] | None = None,
         output_limit_recovery_retries: int = 2,
@@ -104,6 +105,7 @@ class LongSessionRunner:
             workspace,
             session_id=session_id,
             environment=telemetry_environment,
+            output_directory=output_directory,
         )
         try:
             telemetry_attempt_prefix = native.environment.get(
@@ -267,6 +269,7 @@ class LongSessionRunner:
                         native = self.agent.open_session(
                             self.agent_cli, workspace, session_id=active_session_id,
                             environment=telemetry_environment,
+                            output_directory=output_directory,
                         )
                         next_prompt = prompt.rstrip() + "\n\n" + continuation
                     continue
@@ -319,6 +322,7 @@ class LongSessionRunner:
                         native = self.agent.open_session(
                             self.agent_cli, workspace, session_id=active_session_id,
                             environment=telemetry_environment,
+                            output_directory=output_directory,
                         )
                         purpose = "output_limit_recovery"
                         print(f"[long-horizon] max_output_tokens; preserving Episode draft; "

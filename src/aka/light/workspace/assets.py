@@ -19,10 +19,11 @@ RETIRED_SKILL_NAMES = frozenset({
 })
 
 
-def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = False) -> str:
+def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = False,
+                             knowledge_skills=("KernelWiki",)) -> str:
     root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
     extra = ", PPU profiling" if is_ppu else ""
-    knowledge = ", `KernelWiki`" if wiki else ""
+    knowledge = "".join(f", `{name}`" for name in knowledge_skills) if wiki else ""
     return (
         f"- `skills/` (also discoverable under `{root}/skills/`): `gpu-measurement`, "
         f"`runtime-records`{knowledge}, and optional timeline diagnostics{extra}. "

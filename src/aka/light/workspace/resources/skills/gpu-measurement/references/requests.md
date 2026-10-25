@@ -238,9 +238,9 @@ Do not request control files or changes to Kernel source via remote outputs.
 
 ## Optional Wiki
 
-Wiki is disabled by default. Only use these commands when the session explicitly enables Wiki
-and mounts `skills/KernelWiki/SKILL.md`; read that Skill for query scope and hardware identity.
-Do not depend on a `gpu-wiki/` source directory in the Agent workspace. When Wiki is disabled,
+Wiki is enabled by default. Only use these commands when the session mounts
+`skills/KernelWiki/SKILL.md`; read that Skill for query scope and hardware identity.
+Do not depend on a `gpu-wiki/` source directory in the Agent workspace. When Wiki is explicitly disabled,
 use supplied public knowledge and measured evidence instead.
 
 ```bash
