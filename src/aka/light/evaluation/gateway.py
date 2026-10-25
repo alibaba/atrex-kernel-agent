@@ -3540,6 +3540,14 @@ def build_typed_agate_command(
             command += ["--deps-mode", request["deps_mode"]]
         for name, value in request.get("runner_overrides", runner_overrides()).items():
             command += ["--set", f"{name}={value}"]
+        # Kernel attribution adds a torch.profiler pass after the ordinary
+        # latency measurement.  A reference composed from many small PyTorch
+        # operations can emit hundreds of thousands of GPU events per forward,
+        # turning a seconds-long measurement into a minutes-long Eval.  Agate's
+        # typed Eval CLI exposes run_eval.py's --skip-kernel-attribution through
+        # the runner-config channel, so keep this final to prevent a request
+        # override from enabling the profiler again.
+        command += ["--set", "skip_kernel_attribution=true"]
         for name in ("atol", "rtol"):
             command += ["--set", f"{name}={options[name]}"]
         if request.get("abba"):
