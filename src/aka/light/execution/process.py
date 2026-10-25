@@ -59,8 +59,13 @@ def run_gateway(command, cwd, environment, control):
                             pass
                         process.wait()
                         if not live:
-                            raise SessionRevokedError(
-                                "Session revoked while Gateway was running"
+                            raise GatewayExecutionUnavailable(
+                                "Session authorization was revoked after Gateway execution began; "
+                                "cancellation was requested, but the Agate job outcome is not confirmed",
+                                code="gateway_session_revoked",
+                                reason="session_revoked_after_dispatch",
+                                cancellation_requested=True,
+                                session_revoked=True,
                             )
                         if deadline_exceeded:
                             raise GatewayExecutionUnavailable(

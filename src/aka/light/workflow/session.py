@@ -71,7 +71,7 @@ class LongSessionRunner:
         self.agent = agent
         self.usage_policy = usage_policy
 
-    def run(self, *args, episode_timeout_seconds=28800, **kwargs) -> SessionResult:
+    def run(self, *args, episode_timeout_seconds=14400, **kwargs) -> SessionResult:
         from aka.light.agent.execution_clock import episode_budget
         with episode_budget(episode_timeout_seconds):
             return self._run(*args, **kwargs)

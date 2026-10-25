@@ -6,9 +6,11 @@ import fcntl
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import secrets
+import threading
 import time
 import uuid
 from contextlib import contextmanager
@@ -24,6 +26,7 @@ RECORD_ID = re.compile(r"gateway-[0-9a-f]{32}")
 KERNEL_ID = re.compile(r"kernel-[0-9a-f]{32}")
 JOB_ROOT_ENV = "ATREX_AKA_MEASUREMENT_JOB_ROOT"
 ABBA_BATCH_ROOT_ENV = "ATREX_AKA_ABBA_BATCH_ROOT"
+BATCH_ROOT_ENV = "ATREX_AKA_SHAPE_BATCH_ROOT"
 MAX_RECORD_BYTES = 32 * 1024 * 1024
 MAX_RECORD_HEADER_BYTES = 16 * 1024
 RECORD_HEADER_FIELDS = frozenset({"gateway_record_id", "operation", "created_at", "kernels"})
@@ -145,9 +148,56 @@ class DuplicateTask(RuntimeError):
                     "Wait for the original request; do not launch a second identical job.")}
 
 
+class TaskRunning(DuplicateTask):
+    """An identical local call still owns its reservation, not a cached result."""
+
+    def __init__(self, deadline: float | None = None, request_id: str = ""):
+        super().__init__(None)
+        self.deadline = deadline
+        self.request_id = request_id
+
+    def response(self) -> dict:
+        remaining = (max(0, math.ceil(self.deadline - time.monotonic()))
+                     if self.deadline is not None else None)
+        message = "The same Agate call is still running. No new Agate task was submitted."
+        if remaining:
+            message += (f" The original request has about {remaining} seconds left before its deadline. "
+                        "Expect a result or timeout response within that budget, plus cleanup time; "
+                        "this is not a guarantee of successful Agate completion.")
+        elif remaining == 0:
+            message += " Its request deadline has elapsed; cleanup is still in progress. Completion time is unknown."
+        else:
+            message += " Its remaining request time is unavailable; completion time is unknown."
+        return {
+            "code": "gateway_task_running", "message": message,
+            "status": "running", "gateway_record_id": None,
+            "original_request_id": self.request_id or None,
+            "remaining_seconds": remaining, "estimate_basis": "runtime_request_deadline",
+            "completion_guaranteed": False,
+            "next_action": "Wait for the original call's response; do not submit this same task again while it is running.",
+        }
+
+
+def _running_task(descriptor: int) -> TaskRunning:
+    # Lock metadata is advisory and bounded. Missing/old metadata must never
+    # turn a live reservation into a cache hit or invent a fresh deadline.
+    try:
+        value = json.loads(os.pread(descriptor, 4096, 0))
+        deadline, request_id = value.get("deadline"), value.get("request_id", "")
+        if type(deadline) not in (int, float) or not math.isfinite(deadline):
+            deadline = None
+        if not isinstance(request_id, str):
+            request_id = ""
+        return TaskRunning(deadline, request_id)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return TaskRunning()
+
+
 class MeasurementStore:
     def __init__(self, root: Path):
         self.root = root
+        self._active_tasks: dict[str, TaskRunning] = {}
+        self._active_lock = threading.Lock()
         with open_private_directory(root) as directory:
             lock = os.open("identity.lock", os.O_WRONLY | os.O_CREAT | os.O_NOFOLLOW,
                            0o600, dir_fd=directory)
@@ -270,16 +320,31 @@ class MeasurementStore:
             "no replacement job was submitted. Restore storage access, then retry."
         ) from last_error
 
+    def check_running(self, request: dict) -> None:
+        """Probe this Supervisor's active calls without taking their file lock."""
+        key = digest(request)
+        with self._active_lock:
+            active = self._active_tasks.get(key)
+        if active is not None:
+            raise TaskRunning(active.deadline, active.request_id)
+
     @contextmanager
-    def reserve(self, request: dict, kernels: dict):
+    def reserve(self, request: dict, kernels: dict, *, deadline: float | None = None, request_id: str = ""):
         key = digest(request)
         with open_private_directory(self.root / "tasks") as directory:
             descriptor = os.open(key + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+        acquired = False
         try:
             try:
                 fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise DuplicateTask(None) from None
+                raise _running_task(descriptor) from None
+            acquired = True
+            # Publish only the current owner's supervisory deadline, outside
+            # task identity. Waiting callers must not reset it with their own.
+            os.ftruncate(descriptor, 0)
+            os.write(descriptor, json.dumps({"deadline": deadline, "request_id": request_id},
+                                            allow_nan=False).encode())
             marker = self.root / "tasks" / (key + ".json")
             try:
                 state = read_json(marker, limit=4096)
@@ -304,9 +369,17 @@ class MeasurementStore:
                 directory = self.root / "records" / record_id
                 private_write(directory / "request.json", request)
             private_write(marker, {"status": "running", "gateway_record_id": record_id})
+            with self._active_lock:
+                self._active_tasks[key] = TaskRunning(deadline, request_id)
             yield MeasurementTask(self, key, record_id, directory, request, kernels, marker)
         finally:
-            os.close(descriptor)
+            try:
+                if acquired:
+                    with self._active_lock:
+                        self._active_tasks.pop(key, None)
+                    os.ftruncate(descriptor, 0)
+            finally:
+                os.close(descriptor)
 
     def kernel_records(self, kernel_id: str) -> list[dict]:
         self.read_kernel(kernel_id)  # Validate identity and visibility first.

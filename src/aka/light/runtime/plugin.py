@@ -8,6 +8,7 @@ inject = ("executor", "light_experiments", "light_acceptance", "light_journal")
 identity_packages = ("aka.light.runtime", "aka.light.evaluation", "aka.light.workspace", "aka.light.wiki")
 Config = {"type": "object", "properties": {
     "measurement_repetitions": {"type": "integer", "enum": [1, 3]},
+    "pause_agent_during_requests": {"type": "boolean"},
     "wiki": {"type": "boolean"},
     "wiki_options": {"type": "object", "properties": {
         "model": {"type": "string"}, "effort": {"type": "string", "enum": ["low", "medium", "high", "max"]},
@@ -20,7 +21,12 @@ Config = {"type": "object", "properties": {
     "request_timeout": {"type": "number", "minimum": 0.001},
     "queue_timeout": {"type": "number", "minimum": 0.001},
 }, "additionalProperties": False}
-Defaults = {"measurement_repetitions": 1, "wiki": False, "queue_timeout": 60}
+Defaults = {
+    "measurement_repetitions": 1,
+    "pause_agent_during_requests": True,
+    "wiki": False,
+    "queue_timeout": 60,
+}
 
 
 def apply(ctx, config):

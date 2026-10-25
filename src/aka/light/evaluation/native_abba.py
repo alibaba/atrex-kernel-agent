@@ -21,6 +21,7 @@ from aka.light.evaluation.public_result import correctness_summary
 from aka.light.experiment.abba_checkpoints import AbbaBatchStore, validate_batch
 from aka.light.experiment.store import (
     ABBA_BATCH_ROOT_ENV,
+    BATCH_ROOT_ENV,
     JOB_ROOT_ENV,
     EvidenceUnavailable,
 )
@@ -28,7 +29,7 @@ from aka.light.experiment.store import (
 
 ABBA_WALL_CLOCK_TIMEOUT_REASON = "abba_run_wall_clock_timeout"
 _ABBA_WALL_CLOCK_TIMEOUT = re.compile(
-    r"^candidate exceeded (?P<seconds>[0-9]+(?:\.[0-9]+)?)s wall-clock timeout$",
+    r"^candidate exceeded [0-9]+(?:\.[0-9]+)?s wall-clock timeout$",
     re.IGNORECASE,
 )
 
@@ -375,20 +376,28 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     # stored there cannot suppress already-completed Shape submissions.  The
     # Runtime supplies a Campaign-stable private root for recorded ABBA; retain
     # JOB_ROOT_ENV as the standalone/cooperative CLI fallback.
-    checkpoint_root = os.environ.get(ABBA_BATCH_ROOT_ENV) or os.environ.get(JOB_ROOT_ENV)
+    checkpoint_root = (
+        os.environ.get(BATCH_ROOT_ENV)
+        or os.environ.get(ABBA_BATCH_ROOT_ENV)
+        or os.environ.get(JOB_ROOT_ENV)
+    )
     store = AbbaBatchStore(Path(checkpoint_root)) if checkpoint_root else None
     job_root = os.environ.get(JOB_ROOT_ENV)
     record_store = AbbaBatchStore(Path(job_root)) if job_root else None
 
     def retain_in_record(identity, saved):
         """Keep a replacement Record self-contained without another GPU run."""
+        retained = saved
         if record_store is not None and (store is None or record_store.root != store.root):
-            record_store.save(
+            retained = record_store.save(
                 identity,
                 saved["payload"],
                 stdout=saved["stdout"],
                 stderr=saved["stderr"],
+                returncode=saved["returncode"],
             )
+        if record_store is not None:
+            record_store.retain_terminal_job(identity, retained)
 
     def run_batch(ids):
         batch = shape_batch_request(request, ids)
@@ -485,9 +494,16 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
                     )
                     continue
                 error = _terminal_abba_timeout_error(timeout_attempts)
-                return _timed_out_abba_payload(
-                    job, args.comparison_repeats, ids, error
-                ), None
+                try:
+                    payload = _timed_out_abba_payload(
+                        job, args.comparison_repeats, ids, error
+                    )
+                except (ValueError, TypeError, KeyError, AttributeError) as exc:
+                    raise EvidenceUnavailable(
+                        "Native ABBA timed out twice but returned malformed terminal evidence; "
+                        "inspect the saved Agate Job"
+                    ) from exc
+                return payload, None
             try:
                 payload = parse_native_abba(job, args.comparison_repeats, ids)
             except (ValueError, TypeError, KeyError, AttributeError) as exc:
@@ -502,10 +518,10 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
                     payload,
                     stdout=process.stdout,
                     stderr=process.stderr or "",
+                    returncode=process.returncode,
                 )
                 retain_in_record(identity, saved)
             return payload, None
-        raise AssertionError("ABBA wall-clock retry loop did not terminate")
 
     batches = batch_shape_ids(shapes, args.shape_batch_size)
     with ThreadPoolExecutor(max_workers=min(BATCH_WORKERS, len(batches))) as pool:

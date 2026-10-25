@@ -43,7 +43,7 @@ FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
 FRAMEWORK_BASELINE_VERSION = (
     1  # the framework baseline always occupies v1, retries overwrite it
 )
-FRAMEWORK_BASELINE_TIMEOUT_S = 10800
+FRAMEWORK_BASELINE_TIMEOUT_S = 28800
 FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
 FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
 DEPENDENCY_REVIEW_TIMEOUT_S = 600

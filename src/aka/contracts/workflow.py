@@ -31,7 +31,7 @@ class WorkflowSettings:
     optimization_mode: str = "leaderboard"
     framework_baseline: str = "auto"
     gateway_candidate_recovery: str = "disabled"
-    framework_baseline_timeout: int = 10800
+    framework_baseline_timeout: int = 28800
     handoff_resumes: int = 2
     production_review_timeout: int = 600
     review_trace_mode: str = "errors"
@@ -43,6 +43,14 @@ class WorkflowSettings:
     resume_framework_candidate: bool = False
 
     def __post_init__(self):
+        for name in (
+            "setup_timeout",
+            "framework_baseline_timeout",
+            "production_review_timeout",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         if self.review_trace_mode not in {"off", "errors", "all"}:
             raise ValueError(
                 "review_trace_mode must be one of: off, errors, all"

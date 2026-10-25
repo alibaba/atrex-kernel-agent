@@ -1,4 +1,4 @@
-"""Supervisor-owned active-time budgets and Runtime request suspension.
+"""Supervisor-owned active-time budgets and optional Runtime request suspension.
 
 The HTTP handler lives outside the Provider's process tree. It stops that tree
 only after receiving a complete authenticated request, and releases it before

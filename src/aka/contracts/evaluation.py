@@ -14,13 +14,17 @@ from .problem import EvaluationInput
 # These are execution-policy defaults shared by the workflow configuration and
 # Light's native evaluator. The enclosing allocation is derived from the work
 # it contains; it is not an independent timeout users must keep in sync.
-DEFAULT_CANDIDATE_TIMEOUT = 300
+# Some production Shapes spend more than five minutes in input materialization
+# plus the first JIT touch. Keep candidate construction/correctness distinct
+# from the shorter steady-state performance budget.
+DEFAULT_CANDIDATE_TIMEOUT = 600
 DEFAULT_PERFORMANCE_TIMEOUT = 300
 # One A or B run uses the same default execution budget as an ordinary
 # performance measurement. Operators may still override either limit.
 DEFAULT_ABBA_RUN_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
 DEFAULT_ABBA_REPEATS = 2
 ABBA_SCHEDULING_OVERHEAD = 30
+MAX_TYPED_GATEWAY_JOB_TIMEOUT = 10_800
 
 
 def derived_evaluation_timeout(
@@ -43,6 +47,28 @@ def derived_evaluation_timeout(
         candidate_timeout + performance_timeout,
         2 * repeats * per_run_timeout + ABBA_SCHEDULING_OVERHEAD,
     )
+
+
+def typed_gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
+    """Validate the deadline sent to Agate's typed-job API.
+
+    Agate rejects typed job deadlines above three hours.  Silently clamping a
+    larger local allocation can terminate a valid Eval/ABBA schedule before its
+    configured inner limits expire, so reject the impossible configuration
+    before submission instead.
+    """
+    if type(command_timeout) is not int or command_timeout <= 0:
+        raise ValueError("Gateway command timeout must be a positive integer")
+    if type(queue_wait_grace) is not int or queue_wait_grace < 0:
+        raise ValueError("Gateway queue wait grace must be a non-negative integer")
+    requested = command_timeout + queue_wait_grace
+    if requested > MAX_TYPED_GATEWAY_JOB_TIMEOUT:
+        raise ValueError(
+            "Configured Gateway allocation exceeds Agate's 10800-second typed-job limit: "
+            f"command timeout {command_timeout}s + queue grace {queue_wait_grace}s = "
+            f"{requested}s. Reduce the allocation, ABBA repeats/run timeout, or queue grace."
+        )
+    return requested
 
 
 @dataclass(frozen=True)

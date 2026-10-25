@@ -82,7 +82,7 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
-from aka.contracts.evaluation import derived_evaluation_timeout
+from aka.contracts.evaluation import derived_evaluation_timeout, typed_gateway_job_timeout
 from aka.legacy.execution.gateway.request_values import (
     safe_relative as _safe_relative,
     is_fp4_dtype as _is_fp4_dtype,
@@ -181,7 +181,6 @@ DEFAULT_COMMAND_TIMEOUT = derived_evaluation_timeout()
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
 FP4_MAX_REL_L2 = 0.2
-MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
@@ -2868,7 +2867,7 @@ def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
     timeout.  Give that job deadline as much of the configured queue grace as the
     service permits.
     """
-    return min(MAX_GATEWAY_JOB_TIMEOUT, command_timeout + queue_wait_grace)
+    return typed_gateway_job_timeout(command_timeout, queue_wait_grace)
 
 
 def _dev_gateway_job_timeout(command_timeout: int) -> int:

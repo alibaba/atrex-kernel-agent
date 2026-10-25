@@ -422,7 +422,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never
---framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
+--framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 28800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
 --setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
 --sandbox-hardware GPU           Sandbox hardware selector or alias

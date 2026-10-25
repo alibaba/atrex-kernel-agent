@@ -70,10 +70,11 @@ modify its private records. Editing the HTTP client does not change Runtime auth
 
 Run Runtime commands in the foreground and wait for the same invocation to finish.
 Do not add a shell `timeout`, background the command, or start unrelated work while it is
-pending. In managed Sessions the Supervisor pauses the Agent and its subagents during
-authenticated Runtime requests, including GPU, enabled Wiki, Journal and report calls;
-that wait does not consume the Agent's active-time budget. The request still has its
-own Supervisor-controlled deadline. Do not interpret a quiet wait as a dead Agent.
+pending. The session Prompt states whether Runtime request suspension is enabled. When enabled,
+the Supervisor pauses the Agent and its subagents during authenticated Runtime requests and
+excludes that wait from the Agent active-time budget. When disabled, the Supervisor does not
+pause them and request time remains active time. The request always has its own
+Supervisor-controlled deadline. Do not interpret a quiet wait as a dead Agent.
 If the CLI backend backgrounds a tool call automatically, use its wait/output facility
 until that invocation finishes. Killing the local client does not cancel a submitted job
 or establish that no job ran. After a lost connection, reconcile saved evidence rather

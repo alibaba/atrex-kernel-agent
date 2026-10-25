@@ -15,8 +15,9 @@ from aka.contracts.evaluation import (
 CORRECTNESS_CASES = 6
 BENCH_ITERS = 20
 WARMUP_ITERS = 5
-# Budget each Shape independently for candidate initialization/correctness and
-# timed measurement.  Operators may still override the enclosing allocation.
+# Budget each Shape independently. Candidate initialization/correctness retains
+# the production-safe 600-second allowance; steady-state measurement is 300
+# seconds. Operators may still override the enclosing allocation.
 CANDIDATE_TIMEOUT = DEFAULT_CANDIDATE_TIMEOUT
 PERFORMANCE_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
 SHAPE_BATCH_SIZE = 1

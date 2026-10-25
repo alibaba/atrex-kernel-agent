@@ -11,6 +11,7 @@ class ToolRuntimeFactory(Protocol):
 @dataclass(frozen=True)
 class ManagedRuntimeFactory:
     measurement_repetitions: int = 1
+    pause_agent_during_requests: bool = True
     wiki: bool = False
     request_timeout: float | None = None
     queue_timeout: float = 60
@@ -25,6 +26,7 @@ class ManagedRuntimeFactory:
         from aka.light.runtime.server import SupervisorRuntime
         return SupervisorRuntime(replace(configuration,
             measurement_repetitions=self.measurement_repetitions,
+            pause_agent_during_requests=self.pause_agent_during_requests,
             wiki_enabled=self.wiki,
             wiki_options=WikiConfig(**(self.wiki_options or {})),
             request_timeout=self.request_timeout if self.request_timeout is not None else configuration.request_timeout,

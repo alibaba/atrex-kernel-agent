@@ -18,7 +18,7 @@ class WorkflowOptions:
     goal_episodes: bool = False
     generate_memory: bool = False
     output_limit_recovery_retries: int = 2
-    episode_timeout_seconds: float = 28800
+    episode_timeout_seconds: float = 14400
     search: SearchOptions | dict | None = None
     source_tree: dict | None = None
 

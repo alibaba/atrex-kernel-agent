@@ -18,6 +18,8 @@ class MeasurementEffects:
     audit: Callable[[list[str], subprocess.CompletedProcess, str], None]
     publish_log: Callable[[Path], None]
     publish_outputs: Callable[[Path, object], None]
+    deadline: float | None = None
+    request_id: str = ""
 
 
 class RecordedExperiments:
@@ -28,6 +30,16 @@ class RecordedExperiments:
     def query(self, args, workspace):
         from .records import query
         return query(self.store, args, workspace)
+
+    def task_identity(self, staged, args, environment, *, mode, repetitions):
+        from aka.light.runtime.request_errors import AgentRequestError
+        try:
+            return self.evaluation.prepare(
+                args, staged, environment, identity_key=self.store.identity_key,
+                mode=mode, repetitions=repetitions,
+            ).request
+        except ValueError as error:
+            raise AgentRequestError(str(error)) from error
 
     def execute(self, staged, args, argv, environment, command, *, effects,
                 reuse_completed=False, reuse_correctness=False):

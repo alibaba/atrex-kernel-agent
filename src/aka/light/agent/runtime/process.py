@@ -492,7 +492,7 @@ def _run_bounded(
     *, auxiliary_input_files: dict[str, Path] | None = None,
     session_control=None,
 ) -> tuple[str, str, int, bool]:
-    """Run with an active-time deadline excluding authenticated Runtime waits."""
+    """Run with an active-time deadline excluding only configured suspended waits."""
     from aka.light.agent.execution_clock import (
         ActiveCommunication, DEFAULT_TIMEOUT_SECONDS, SessionControl, current_budget, validate_timeout,
     )
@@ -636,7 +636,7 @@ def _run_bounded(
     if timed_out:
         stderr = (stderr or "") + (
             f"\n[orchestrator] Agent active-time limit exceeded ({limit:g}s); "
-            f"{control.wait_seconds:.3f}s of Runtime tool waiting excluded.\n"
+            f"{control.wait_seconds:.3f}s of suspended Runtime waiting excluded.\n"
         )
     if environment_failures:
         environment_message = (

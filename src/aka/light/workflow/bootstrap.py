@@ -2259,6 +2259,7 @@ class Campaign:
                 self.agent_cli,
                 is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
                 wiki=self.tool_runtime.wiki,
+                pause_agent_during_requests=self.tool_runtime.pause_agent_during_requests,
             ),
             KNOWLEDGE_RESEARCH=(
                 (PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8")

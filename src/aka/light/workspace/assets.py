@@ -19,15 +19,29 @@ RETIRED_SKILL_NAMES = frozenset({
 })
 
 
-def _agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = False) -> str:
+def _agent_runtime_directive(
+    agent_cli: str,
+    *,
+    is_ppu: bool = False,
+    wiki: bool = False,
+    pause_agent_during_requests: bool = True,
+) -> str:
     root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
     extra = ", PPU profiling" if is_ppu else ""
     knowledge = ", `KernelWiki`" if wiki else ""
+    suspension = (
+        "Authenticated Runtime requests pause this Agent and its subagents; that wait is excluded "
+        "from the Agent active-time budget."
+        if pause_agent_during_requests
+        else "Runtime request suspension is disabled; request time remains part of the Agent "
+        "active-time budget. Keep each request in the foreground and wait for it to finish."
+    )
     return (
         f"- `skills/` (also discoverable under `{root}/skills/`): `gpu-measurement`, "
         f"`runtime-records`{knowledge}, and optional timeline diagnostics{extra}. "
         "Read the relevant Skill for request schemas/examples. "
-        "Use `python3 tools/plugin.py list` for additional operator-enabled tools and Skills."
+        "Use `python3 tools/plugin.py list` for additional operator-enabled tools and Skills. "
+        + suspension
     )
 
 

@@ -312,6 +312,8 @@ def parse_arguments(argv):
         )
     if args.sandbox_timeout is not None and args.sandbox_timeout < 1:
         ap.error("--sandbox-timeout must be positive")
+    if args.setup_timeout <= 0:
+        ap.error("--setup-timeout must be positive")
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
     if args.fast_episodes < 0:
