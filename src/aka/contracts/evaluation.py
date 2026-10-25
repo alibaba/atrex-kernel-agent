@@ -11,6 +11,38 @@ from .workspace import CandidateWorkspace
 from .problem import EvaluationInput
 
 
+# These are execution-policy defaults shared by the workflow configuration and
+# Light's native evaluator. The enclosing allocation is derived from the work
+# it contains; it is not an independent timeout users must keep in sync.
+DEFAULT_CANDIDATE_TIMEOUT = 300
+DEFAULT_PERFORMANCE_TIMEOUT = 300
+DEFAULT_ABBA_RUN_TIMEOUT = 120
+DEFAULT_ABBA_REPEATS = 2
+ABBA_SCHEDULING_OVERHEAD = 30
+
+
+def derived_evaluation_timeout(
+    *,
+    repeats: int = DEFAULT_ABBA_REPEATS,
+    per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT,
+    candidate_timeout: int = DEFAULT_CANDIDATE_TIMEOUT,
+    performance_timeout: int = DEFAULT_PERFORMANCE_TIMEOUT,
+) -> int:
+    """Return one allocation large enough for either Eval or A/B/B/A."""
+    values = {
+        "repeats": repeats,
+        "per_run_timeout": per_run_timeout,
+        "candidate_timeout": candidate_timeout,
+        "performance_timeout": performance_timeout,
+    }
+    if any(type(value) is not int or value <= 0 for value in values.values()):
+        raise ValueError("evaluation timing inputs must be positive integers")
+    return max(
+        candidate_timeout + performance_timeout,
+        2 * repeats * per_run_timeout + ABBA_SCHEDULING_OVERHEAD,
+    )
+
+
 @dataclass(frozen=True)
 class VerificationRun:
     revision: str

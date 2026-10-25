@@ -39,8 +39,7 @@ class RecordedABBAValidator(GatewayABBAValidator):
             "--multi-seed", "0",
         ]
 
-    def agent_instructions(self, *, baseline_kernel_id: str, measurement_repetitions: int,
-                           allocation_timeout_seconds: int) -> str:
+    def agent_instructions(self, *, baseline_kernel_id: str, measurement_repetitions: int) -> str:
         read = shlex.join([
             "python3", "tools/sandbox.py", "--kind", "kernel-read", "--kernel-id",
             baseline_kernel_id, "--output-path", self.BASELINE_PATH,
@@ -66,7 +65,7 @@ command/input/Shape/seed/benchmark/dependency overrides.
 The Runtime supplies the evaluator, full workload and target; private inputs stay private.
 
 Supervisor measurement repetitions: **{measurement_repetitions}** per request (one result if 1;
-per-Shape median if 3). Allocation timeout: **{allocation_timeout_seconds} seconds**.
+per-Shape median if 3). The enclosing allocation is derived from the per-run limits above.
 These are Runtime-owned settings, already applied to this request; do not loop the command
 or set environment variables to reproduce them.
 

@@ -432,7 +432,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --sandbox-ssh-runtime-bind PATH  Read-only runtime path inside the SSH namespace (repeatable)
 --sandbox-health-command COMMAND GPU health probe used for failure classification
 --environment-poll-interval S    Recovery probe interval (default: 60)
---sandbox-timeout S              Remote command timeout, at most 600 seconds
+--sandbox-timeout S              Advanced override for the derived evaluation allocation
 --workspace DIR                  Campaign parent directory (default: current directory)
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
 --convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)

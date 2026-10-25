@@ -231,6 +231,6 @@ class GatewayABBAValidator:
             or queue_wait_grace < 0
         ):
             raise ValueError("Queue wait grace must be a non-negative integer")
-        self.queue_wait_grace = min(queue_wait_grace, DEFAULT_QUEUE_WAIT_GRACE)
+        self.queue_wait_grace = queue_wait_grace
         self.private_reference_dir = private_reference_dir
         self.shape_batch_size = shape_batch_size

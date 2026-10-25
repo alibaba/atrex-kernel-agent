@@ -25,7 +25,7 @@ class ManagedCampaign(Campaign):
             verify_repeats=evaluation.verify_repeats,
             verify_run_timeout=evaluation.verify_run_timeout,
             min_improvement_pct=evaluation.min_improvement_pct,
-            problem_generation_timeout=min(settings.setup_timeout, 1800),
+            problem_generation_timeout=settings.setup_timeout,
             v1_ask_codex="codex" in settings.framework_baseline_reviewers,
             v1_ask_qoder="qoder" in settings.framework_baseline_reviewers,
             agent_sandbox=workflow.agent.options.sandbox,

@@ -55,13 +55,22 @@ class ProblemSource:
 class CampaignRuntimeSettings:
     """Selected execution and measurement settings for one Campaign."""
     hardware: str = ""
-    timeout: int = 600
+    # None derives the enclosing allocation from the inner Eval/ABBA limits.
+    # An explicit value remains an advanced operator override.
+    timeout: int | None = None
     verify_repeats: int = 2
     verify_run_timeout: int = 120
     min_improvement_pct: float = 0.0
     shape_batch_size: int = 4
 
     def __post_init__(self):
+        from .evaluation import derived_evaluation_timeout
+
+        if self.timeout is None:
+            object.__setattr__(self, "timeout", derived_evaluation_timeout(
+                repeats=self.verify_repeats,
+                per_run_timeout=self.verify_run_timeout,
+            ))
         if type(self.shape_batch_size) is not int or self.shape_batch_size <= 0:
             raise ValueError("shape_batch_size must be a positive integer")
 

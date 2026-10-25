@@ -5,16 +5,20 @@ its evaluator or acceptance policy. Explicit request/operator overrides still
 participate in the measurement identity.
 """
 
+from aka.contracts.evaluation import (
+    DEFAULT_CANDIDATE_TIMEOUT,
+    DEFAULT_PERFORMANCE_TIMEOUT,
+)
+
+
 # Preserve the legacy candidate gate: one base seed plus five additional seeds.
 CORRECTNESS_CASES = 6
 BENCH_ITERS = 20
 WARMUP_ITERS = 5
-# Some production shapes spend more than two minutes in the first candidate
-# touch (input materialization plus JIT compilation).  Keep this aligned with
-# the outer sandbox budget so a valid slow-to-initialize kernel is not rejected
-# before Agate can finish the evaluation.
-CANDIDATE_TIMEOUT = 600
-PERFORMANCE_TIMEOUT = 120
+# Budget each Shape independently for candidate initialization/correctness and
+# timed measurement.  Operators may still override the enclosing allocation.
+CANDIDATE_TIMEOUT = DEFAULT_CANDIDATE_TIMEOUT
+PERFORMANCE_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
 SHAPE_BATCH_SIZE = 1
 BATCH_WORKERS = 16
 MEASUREMENT_CONTRACT = "runtime-native-eval-v1"

@@ -215,7 +215,7 @@ class Campaign:
                 result = self._run_session(
                     staging,
                     prompt,
-                    timeout=min(self.setup_timeout, 1_800),
+                    timeout=self.setup_timeout,
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
                 )

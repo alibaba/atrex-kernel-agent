@@ -230,7 +230,6 @@ DEFAULT_COMMAND_TIMEOUT = 600
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = SHAPE_BATCH_SIZE
 DEFAULT_EVAL_BATCH_WORKERS = BATCH_WORKERS
 FP4_MAX_REL_L2 = 0.2
-MAX_COMMAND_TIMEOUT = 600
 MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
@@ -1979,7 +1978,7 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
             os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))
         ),
         help=(
-            "Remote command execution timeout in seconds, 1..600 "
+            "Positive remote command execution timeout in seconds "
             "(default: 600; queue wait is budgeted separately)."
         ),
     )
@@ -4132,11 +4131,8 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit("sandbox: --ssh-runtime-bind requires --ssh")
     elif args.ssh_gpu is not None:
         raise SystemExit("sandbox: --ssh-gpu requires --ssh")
-    if not 1 <= args.timeout <= MAX_COMMAND_TIMEOUT:
-        raise SystemExit(
-            "sandbox: --timeout must be in the gateway-supported range "
-            f"1..{MAX_COMMAND_TIMEOUT}"
-        )
+    if args.timeout < 1:
+        raise SystemExit("sandbox: --timeout must be positive")
     if args.shape_batch_size <= 0:
         raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:
