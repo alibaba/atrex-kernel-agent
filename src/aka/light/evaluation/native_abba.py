@@ -19,7 +19,11 @@ from aka.light.evaluation.evaluation_feedback import evaluation_feedback
 from aka.light.evaluation.policy import BATCH_WORKERS, validate_abba_repeats
 from aka.light.evaluation.public_result import correctness_summary
 from aka.light.experiment.abba_checkpoints import AbbaBatchStore, validate_batch
-from aka.light.experiment.store import JOB_ROOT_ENV, EvidenceUnavailable
+from aka.light.experiment.store import (
+    ABBA_BATCH_ROOT_ENV,
+    JOB_ROOT_ENV,
+    EvidenceUnavailable,
+)
 
 
 ABBA_WALL_CLOCK_TIMEOUT_REASON = "abba_run_wall_clock_timeout"
@@ -366,13 +370,32 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     if not executable and not url:
         raise ValueError("Native ABBA requires a resolvable Agate Gateway URL; no Dev fallback was submitted")
     schedule = verification_schedule(args.comparison_repeats)
-    store = AbbaBatchStore(Path(os.environ[JOB_ROOT_ENV])) if os.environ.get(JOB_ROOT_ENV) else None
+    # Recorded acceptance retries create a fresh Gateway Record after an
+    # incomplete result.  Its per-record JOB_ROOT_ENV changes, so checkpoints
+    # stored there cannot suppress already-completed Shape submissions.  The
+    # Runtime supplies a Campaign-stable private root for recorded ABBA; retain
+    # JOB_ROOT_ENV as the standalone/cooperative CLI fallback.
+    checkpoint_root = os.environ.get(ABBA_BATCH_ROOT_ENV) or os.environ.get(JOB_ROOT_ENV)
+    store = AbbaBatchStore(Path(checkpoint_root)) if checkpoint_root else None
+    job_root = os.environ.get(JOB_ROOT_ENV)
+    record_store = AbbaBatchStore(Path(job_root)) if job_root else None
+
+    def retain_in_record(identity, saved):
+        """Keep a replacement Record self-contained without another GPU run."""
+        if record_store is not None and (store is None or record_store.root != store.root):
+            record_store.save(
+                identity,
+                saved["payload"],
+                stdout=saved["stdout"],
+                stderr=saved["stderr"],
+            )
 
     def run_batch(ids):
         batch = shape_batch_request(request, ids)
         identity = {"transport": "agate_native_eval_abba", "request": payload_identity(batch),
                     "schedule": schedule, "shape_ids": ids}
         if store and (saved := store.load(identity)) is not None:
+            retain_in_record(identity, saved)
             return saved["payload"], None
 
         def dispatch(attempt: int):
@@ -474,12 +497,13 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
                     "Native ABBA returned incomplete evidence; inspect the saved Job, not the Kernel"
                 ) from exc
             if store:
-                store.save(
+                saved = store.save(
                     identity,
                     payload,
                     stdout=process.stdout,
                     stderr=process.stderr or "",
                 )
+                retain_in_record(identity, saved)
             return payload, None
         raise AssertionError("ABBA wall-clock retry loop did not terminate")
 
@@ -494,7 +518,10 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             job = gateway.parse_job_response(process.stdout or "")
             infrastructure |= job is None or eval_retry_kind(job) is not None or job.get("status") in {"cancelled", "canceled"}
         if infrastructure:
-            raise EvidenceUnavailable("Native ABBA did not produce a measurement; saved batches are retained for recovery")
+            raise EvidenceUnavailable(
+                "Native ABBA did not produce a measurement; completed Shape batches "
+                "are retained and only incomplete Shapes will be retried"
+            )
         return 1
     payload = merge_abba_batch_payloads([value for value, _ in results], schedule, shapes)
     value = abba(payload, schedule, shapes, args.comparison_repeats)

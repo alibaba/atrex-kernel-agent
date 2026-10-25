@@ -9,6 +9,7 @@ from pathlib import Path
 
 from aka.light.execution.gateway_jobs import cacheable_job, job_from_process
 from aka.light.experiment.store import (
+    ABBA_BATCH_ROOT_ENV,
     JOB_ROOT_ENV,
     DuplicateTask,
     RecordNotFound,
@@ -220,6 +221,16 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     JOB_ROOT_ENV: str(directory),
                     "ATREX_AKA_IDENTITY_KEY": store.identity_key.hex(),
                 }
+                if operation == "same_allocation_abba":
+                    # ABBA may finish only a subset of Shape batches before an
+                    # infrastructure outage.  Keep completed batches at the
+                    # Campaign measurement-store scope so a fresh Gateway
+                    # Record can reuse them and dispatch only missing Shapes.
+                    # AbbaBatchStore's full request identity prevents reuse
+                    # across different sources, Shapes or measurement policy.
+                    env[ABBA_BATCH_ROOT_ENV] = str(
+                        store.root / "abba-recovery" / f"repetition-{repetition + 1}"
+                    )
                 if "version" in plan.runtime_pins:
                     env["ATREX_SANDBOX_ATREX_BENCH_VERSION"] = plan.runtime_pins["version"]
                 if "requirements" in plan.runtime_pins:

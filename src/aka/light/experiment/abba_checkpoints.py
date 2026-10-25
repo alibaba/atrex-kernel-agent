@@ -65,6 +65,15 @@ def validate_batch(
 
 
 class AbbaBatchStore:
+    """Store completed Shape batches under a caller-selected recovery scope.
+
+    Recorded ABBA uses a repetition-scoped directory in the Campaign
+    Measurement Store as ``evidence_root``.  Checkpoints therefore survive a
+    replacement Gateway Record without collapsing independent measurement
+    repetitions.  Standalone CLI execution may still use its physical-job
+    root.  In either case the content-derived identity below is the authority
+    for reuse.
+    """
     def __init__(self, evidence_root: Path) -> None:
         self.root = evidence_root / "abba-batches"
 

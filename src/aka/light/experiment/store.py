@@ -23,6 +23,7 @@ from aka.light.workspace.sources import MAX_SNAPSHOT, unpack
 RECORD_ID = re.compile(r"gateway-[0-9a-f]{32}")
 KERNEL_ID = re.compile(r"kernel-[0-9a-f]{32}")
 JOB_ROOT_ENV = "ATREX_AKA_MEASUREMENT_JOB_ROOT"
+ABBA_BATCH_ROOT_ENV = "ATREX_AKA_ABBA_BATCH_ROOT"
 MAX_RECORD_BYTES = 32 * 1024 * 1024
 MAX_RECORD_HEADER_BYTES = 16 * 1024
 RECORD_HEADER_FIELDS = frozenset({"gateway_record_id", "operation", "created_at", "kernels"})
