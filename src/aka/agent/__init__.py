@@ -27,6 +27,8 @@ _EXPORTS = {
     "descendant_process_commands": (".process", "descendant_process_commands"),
     "Agent": (".provider", "Agent"),
     "AgentOptions": (".provider", "AgentOptions"),
+    "AgentCapabilities": (".model", "AgentCapabilities"),
+    "AgentObservation": (".model", "AgentObservation"),
     "AgentAccess": ("aka.contracts.agent", "AgentAccess"),
     "AgentMount": ("aka.contracts.agent", "AgentMount"),
     "run_bounded": ("aka.agent.process", "run_bounded"),

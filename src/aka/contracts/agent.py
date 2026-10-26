@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
+from .filesystem import FilesystemAccess as AgentAccess, FilesystemMount as AgentMount
 
 UsageMeasurement = Literal["exact", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
@@ -140,34 +141,20 @@ class AgentRuntimeCapabilities:
 
 
 @dataclass(frozen=True)
-class AgentMount:
-    """One host-authorized path visible at an explicit absolute sandbox path."""
-    source: Path
-    target: Path
-    writable: bool = False
-
-    def __post_init__(self):
-        if not isinstance(self.source, Path) or not isinstance(self.target, Path):
-            raise TypeError("Agent mounts require Path source and target")
-        if type(self.writable) is not bool:
-            raise TypeError("Agent mount writable flag must be boolean")
+class AgentCapabilities:
+    filesystem_isolation: bool = False
+    tool_runtime: bool = False
 
 
 @dataclass(frozen=True)
-class AgentAccess:
-    """Workspace view additions; CLI environment values never grant filesystem access."""
-    mounts: tuple[AgentMount, ...] = ()
-    hidden_paths: tuple[Path, ...] = ()
-    read_only_paths: tuple[Path, ...] = ()
-
-    def __post_init__(self):
-        object.__setattr__(self, "mounts", tuple(self.mounts))
-        object.__setattr__(self, "hidden_paths", tuple(self.hidden_paths))
-        object.__setattr__(self, "read_only_paths", tuple(self.read_only_paths))
-        if any(not isinstance(item, AgentMount) for item in self.mounts):
-            raise TypeError("Agent access mounts must be AgentMount values")
-        if any(not isinstance(path, Path) for path in (*self.hidden_paths, *self.read_only_paths)):
-            raise TypeError("Agent access restrictions require Path values")
+class AgentObservation:
+    session_id: str
+    runtime: str
+    status: str
+    updated_at: str | None
+    usage: dict[str, int | str | None]
+    events: tuple[dict, ...] = ()
+    resume_supported: bool = False
 
 
 @dataclass(frozen=True)
@@ -210,6 +197,16 @@ class AgentCheckpointSnapshot:
 
 
 class Agent(Protocol):
+    @property
+    def capabilities(self) -> "AgentCapabilities": ...
+    @property
+    def configuration_identity(self) -> str:
+        """Opaque identity of the frozen selection; contains no configuration values."""
+        ...
+    def close(self) -> None: ...
+    def export_observations(self, workspace: Path, destination: Path) -> Path:
+        """Export normalized invocation records to a new caller-owned directory."""
+        ...
     def export_checkpoint(self, workspace: Path, destination: Path) -> AgentCheckpointSnapshot: ...
     def validate_checkpoint(self, snapshot: AgentCheckpointSnapshot, *, check_destinations: bool = False) -> None: ...
     def restore_checkpoint(self, snapshot: AgentCheckpointSnapshot) -> None: ...

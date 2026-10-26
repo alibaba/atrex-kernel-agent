@@ -2,13 +2,14 @@
 
 from aka.core.keys import ServiceKey
 
-AGENT = ServiceKey("agent", "Agent", module="aka.contracts.agent")
+AGENT = ServiceKey("agent", "Agent", module="aka.contracts.agent", protocol_version=2)
 name = "agent"
 provide = ("agent",)
 identity_packages = (
     "aka.agent",
     "aka.contracts.agent",
     "aka.contracts.agent_resources",
+    "aka.contracts.filesystem",
 )
 Config = {
     "type": "object",

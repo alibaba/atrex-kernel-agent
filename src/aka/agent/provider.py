@@ -9,7 +9,7 @@ import signal
 from threading import Condition, RLock
 import uuid
 
-from aka.contracts.agent import AgentAccess, AgentMount
+from aka.contracts.agent import AgentAccess, AgentMount, AgentCapabilities
 from .backends import DEFAULT_BACKEND_REGISTRY
 from .execution.home import PREPARED_ENV, prepare_home
 from .execution.native import NativeExecution
@@ -73,6 +73,7 @@ class Agent:
         host_environment=None,
         shell_guard=None,
         session_name="",
+        environment=None,
     ):
         self.options = options
         self._registry = registry if registry is not None else DEFAULT_BACKEND_REGISTRY
@@ -83,6 +84,8 @@ class Agent:
         self._host_environment = host_environment
         self._shell_guard = shell_guard
         self._session_name = session_name
+        import os
+        self._environment = dict(os.environ if environment is None else environment)
         self._runtimes = {}
         self._sessions = set()
         self._invocations = {}
@@ -98,6 +101,20 @@ class Agent:
             from .execution.bubblewrap import BubblewrapExecution
 
             self._execution = BubblewrapExecution(options.bwrap_executable, proc_mode=options.proc_mode)
+
+    @property
+    def capabilities(self):
+        return AgentCapabilities(filesystem_isolation=self.options.sandbox == "bwrap")
+
+    @property
+    def configuration_identity(self):
+        import hashlib
+        import json
+        from dataclasses import asdict
+        settings = {key: value for key, value in self._environment.items()
+                    if key.endswith("_SESSION_SETTINGS") or key == "ATREX_CLAUDE_SESSION_NAME"}
+        return hashlib.sha256(json.dumps({"options": asdict(self.options), "session_name": self._session_name,
+                                         "settings": settings}, sort_keys=True, default=str).encode()).hexdigest()
 
     def _check_open(self):
         if self._closed:
@@ -369,6 +386,7 @@ class Agent:
                     session_name=self._session_name,
                     prepare_environment=self._prepare,
                     release_environment=self._release,
+                    environment=self._environment,
                 )
             return self._runtimes[runtime_id]
 
@@ -409,6 +427,10 @@ class Agent:
         from .checkpoint import export_checkpoint
 
         return export_checkpoint(workspace, destination)
+
+    def export_observations(self, workspace, destination):
+        from .public_output import export_observations
+        return export_observations(workspace, destination)
 
     def validate_checkpoint(self, snapshot, *, check_destinations=False):
         from .checkpoint import validate_checkpoint

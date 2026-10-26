@@ -78,9 +78,9 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
     )
 
 
-def build_session_environment(runtime_id: str, *, shell_guard=None) -> dict[str, str]:
+def build_session_environment(runtime_id: str, *, shell_guard=None, environment=None) -> dict[str, str]:
     """Build CLI execution defaults; the host supplies resources and protection policy."""
-    environment = os.environ.copy()
+    environment = dict(os.environ if environment is None else environment)
     environment["ATREX_AGENT_CLI"] = runtime_id
     python_bin = str(Path(sys.executable).absolute().parent)
     path_parts = [
@@ -109,7 +109,9 @@ class CliAgentRuntime:
         session_name="",
         prepare_environment=None,
         release_environment=None,
+        environment=None,
     ) -> None:
+        self._environment = dict(os.environ if environment is None else environment)
         self._release_environment = release_environment
         self._prepare_environment = prepare_environment
         self._session_name = session_name
@@ -122,18 +124,22 @@ class CliAgentRuntime:
         return self._adapter.id
 
     def build_command(
-        self, prompt: str, session_id: str, reasoning_effort: str
+        self, prompt: str, session_id: str, reasoning_effort: str, *, environment=None
     ) -> list[str]:
         command = self._adapter.build_command(
-            prompt, session_id, reasoning_effort, self._session_settings()
+            prompt, session_id, reasoning_effort, self._session_settings(environment)
         )
-        command = self._adapter.name_session(command, self._session_name, session_id)
+        values = self._environment if environment is None else environment
+        name = self._session_name or (values.get("ATREX_CLAUDE_SESSION_NAME", "") if self.id == "claude" else "")
+        command = self._adapter.name_session(command, name, session_id)
         return self._adapter.prepare_command(command)
 
-    def _session_settings(self) -> str:
-        return os.environ.get(self._adapter.settings_variable) or os.environ.get(
-            "ATREX_SESSION_SETTINGS", ""
-        )
+    def session_environment(self):
+        return build_session_environment(self.id, environment=self._environment)
+
+    def _session_settings(self, environment=None) -> str:
+        values = self._environment if environment is None else environment
+        return values.get(self._adapter.settings_variable) or values.get("ATREX_SESSION_SETTINGS", "")
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         if self._check_open is not None:
@@ -146,10 +152,7 @@ class CliAgentRuntime:
 
         validate_timeout(request.timeout_s)
         session_id = request.session_id or str(uuid.uuid4())
-        command = self.build_command(
-            request.prompt, session_id, request.reasoning_effort
-        )
-        environment = build_session_environment(self.id)
+        environment = self.session_environment()
         environment["IS_SANDBOX"] = "1"
         if request.environment:
             for key, value in request.environment.items():
@@ -161,6 +164,7 @@ class CliAgentRuntime:
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id
         environment = self._adapter.configure_environment(environment)
+        command = self.build_command(request.prompt, session_id, request.reasoning_effort, environment=environment)
         if self._prepare_environment is not None:
             environment = self._prepare_environment(
                 request.workspace,
@@ -341,6 +345,7 @@ def build_agent_runtime(
     session_name="",
     prepare_environment=None,
     release_environment=None,
+    environment=None,
 ) -> AgentRuntime:
     adapter = registry.create(runtime_id, runtime_assets_dir)
     return CliAgentRuntime(
@@ -350,6 +355,7 @@ def build_agent_runtime(
         session_name=session_name,
         prepare_environment=prepare_environment,
         release_environment=release_environment,
+        environment=environment,
     )
 
 

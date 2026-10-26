@@ -51,6 +51,12 @@ def system_visible(path):
     return any(Path(path).is_relative_to(Path(root)) for root in SYSTEM_PATHS)
 
 
+def runtime_visible(path):
+    import sys
+    return system_visible(path) or any(Path(path).is_relative_to(root) for root in
+        (Path(sys.prefix) / "lib", Path(sys.base_prefix) / "lib"))
+
+
 def local_path(path, *, must_exist=True):
     path = Path(path).expanduser()
     if not path.is_absolute():
@@ -144,6 +150,8 @@ def validate_access(workspace, home, host_home, access, *, home_exists=True):
         if not source.is_dir() and not source.is_file():
             raise ValueError("Agent grants require regular files or directories")
         target = local_path(mount.target, must_exist=False)
+        if not mount.writable and source == target and runtime_visible(source):
+            continue
         if system_visible(source) or system_visible(target):
             raise ValueError("Agent mount cannot alias system runtime paths")
         if (

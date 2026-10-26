@@ -27,23 +27,23 @@ from aka.contracts.agent import (
 
 
 def fresh_session_command(
-    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None
+    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None
 ):
     if reasoning_effort not in REASONING_EFFORTS:
         raise ValueError(f"unsupported reasoning effort: {reasoning_effort!r}")
     runtime = runtime or build_agent_runtime(agent_cli)
     return runtime._adapter.fresh_command(
-        runtime.build_command(prompt, session_id, reasoning_effort)
+        runtime.build_command(prompt, session_id, reasoning_effort, environment=environment)
     )
 
 
 def resume_session_command(
-    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None
+    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None
 ):
     runtime = runtime or build_agent_runtime(agent_cli)
     return runtime._adapter.resume_command(
         fresh_session_command(
-            prompt, session_id, reasoning_effort, agent_cli, runtime=runtime
+            prompt, session_id, reasoning_effort, agent_cli, runtime=runtime, environment=environment
         ),
         session_id,
     )
@@ -138,44 +138,6 @@ def _replace_terminal_usage(
 
 
 class NativeSession:
-    _build_runtime = staticmethod(build_agent_runtime)
-
-    def _prepare_environment(self, environment, overrides, session_id):
-        for key, value in (overrides or {}).items():
-            if value is None:
-                environment.pop(str(key), None)
-            else:
-                environment[str(key)] = str(value)
-        return environment
-
-    def _invocation_environment(self, overrides):
-        values = dict(self.environment)
-        for key, value in (overrides or {}).items():
-            if value is None:
-                values.pop(str(key), None)
-            else:
-                values[str(key)] = str(value)
-        return values
-
-    @staticmethod
-    def _new_codex_observer(environment):
-        return CodexSessionLedgerObserver(codex_home(environment))
-
-    def _stream_usage(self, stdout):
-        return terminal_usage_from_stream(stdout)
-
-    def _observe(self, stdout):
-        return normalize_stream(
-            self.runtime_id,
-            stdout,
-            session_id=self._session_id,
-            codex_observer=self._observer if self._ledger_usable else None,
-            adapter=self._runtime._adapter,
-        )
-
-    def _check_invocation(self, resume):
-        pass
-
     def __init__(
         self,
         runtime_id,
@@ -191,24 +153,23 @@ class NativeSession:
         access=None,
         release_environment=None,
         cancel_environment=None,
+        session_hooks=None,
     ):
+        from .session_hooks import SessionHooks
+        self._hooks = session_hooks or SessionHooks()
         self._release_environment = release_environment
         self._cancel_environment = cancel_environment
         self._session_lock = RLock()
         self._runtime = (
-            runtime if runtime is not None else self._build_runtime(runtime_id)
+            runtime if runtime is not None else build_agent_runtime(runtime_id)
         )
         is_codex = runtime_id == "codex"
         self.workspace = workspace
         self.output_directory = output_directory or workspace
-        environment = (
-            session_environment()
-            if runtime_id == "claude"
-            else session_environment(runtime_id)
-        )
+        environment = self._runtime.session_environment()
         environment["IS_SANDBOX"] = "1"
-        environment = self._prepare_environment(
-            environment, environment_overrides, session_id
+        environment = self._hooks.prepare_environment(
+            workspace, environment, environment_overrides, session_id
         )
         environment = self._runtime._adapter.configure_environment(environment)
         if prepare_environment is not None:
@@ -224,7 +185,7 @@ class NativeSession:
         codex_setup_errors: tuple[str, ...] = ()
         if is_codex:
             try:
-                codex_observer = self._new_codex_observer(environment)
+                codex_observer = self._hooks.observer(environment)
             except Exception as exc:
                 codex_setup_errors = (
                     f"codex_ledger_setup_failed:{type(exc).__name__}",
@@ -306,7 +267,8 @@ class NativeSession:
             self._check_open()
         if self._closed:
             raise RuntimeError("native session has been closed")
-        self._check_invocation(resume)
+        self._hooks.check_invocation(self._invoked, resume)
+        invocation_environment = self._hooks.invocation_environment(self.environment, environment)
         if resume:
             if not self.supports_resume or not self._session_id:
                 raise RuntimeError(
@@ -318,6 +280,7 @@ class NativeSession:
                 reasoning_effort,
                 self.runtime_id,
                 runtime=self._runtime,
+                environment=invocation_environment,
             )
         else:
             command = fresh_session_command(
@@ -326,8 +289,8 @@ class NativeSession:
                 reasoning_effort,
                 self.runtime_id,
                 runtime=self._runtime,
+                environment=invocation_environment,
             )
-        invocation_environment = self._invocation_environment(environment)
         stdout, stderr, exit_status, timed_out = self._executor(
             command, self.workspace, None, invocation_environment
         )
@@ -338,8 +301,9 @@ class NativeSession:
         )
         if observed_session_id:
             self._session_id = observed_session_id
-        stream_session_usage = self._stream_usage(stdout) if is_codex else None
-        events, terminal_usage, capabilities, observation_errors = self._observe(stdout)
+        stream_session_usage = self._hooks.stream_usage(self.runtime_id, stdout) if is_codex else None
+        events, terminal_usage, capabilities, observation_errors = self._hooks.observe(self.runtime_id, stdout, self._session_id,
+            self._observer if self._ledger_usable else None, self._runtime._adapter)
         if not self._invoked and self._setup_errors:
             observation_errors = self._setup_errors + observation_errors
         ledger_failed = any(

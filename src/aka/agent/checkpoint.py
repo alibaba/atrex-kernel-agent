@@ -40,7 +40,7 @@ def capture_native_session(output, workspace, runtime, session_id, environment):
         files.append(path)
     else:
         home = (
-            Path(environment.get("CLAUDE_CONFIG_DIR") or Path.home() / ".claude")
+            Path(environment.get("CLAUDE_CONFIG_DIR") or Path(environment.get("HOME") or Path.home()) / ".claude")
             .expanduser()
             .resolve()
         )

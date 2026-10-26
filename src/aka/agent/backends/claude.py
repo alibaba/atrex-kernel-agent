@@ -1,5 +1,4 @@
 from __future__ import annotations
-import os
 from pathlib import Path
 from .base import BackendFiles, ClaudeLikeAdapter
 
@@ -43,16 +42,6 @@ class ClaudeAdapter(ClaudeLikeAdapter):
             "--dangerously-skip-permissions",
             "--output-format",
             "stream-json",
-            *(
-                [
-                    "--name",
-                    os.environ["ATREX_CLAUDE_SESSION_NAME"].format(
-                        session_id=session_id
-                    ),
-                ]
-                if os.environ.get("ATREX_CLAUDE_SESSION_NAME")
-                else []
-            ),
             "--session-id",
             session_id,
             "--effort",
