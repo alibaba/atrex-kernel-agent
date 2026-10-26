@@ -14,6 +14,7 @@ import math
 from .execution import CommandSpec, JobResult
 from .evaluation import EvaluationFailure, EvaluationRequest, VerificationResult
 from .experiment_identity import ExperimentRef
+from .measurement import MeasurementAssessment, MeasurementIdentity
 
 class Experiment(Protocol):
     def run(self, request: EvaluationRequest) -> VerificationResult: ...
@@ -86,11 +87,15 @@ class ExperimentStep:
     timeout: int
     hardware: str
     environment_keys: tuple[str, ...] = ()
+    measurement_identity: MeasurementIdentity | None = None
 
     def as_dict(self) -> dict:
-        return {"task_id": self.task_id, "index": self.index, "argv": list(self.argv),
+        value = {"task_id": self.task_id, "index": self.index, "argv": list(self.argv),
                 "operation": self.operation, "timeout": self.timeout, "hardware": self.hardware,
                 "environment_keys": list(self.environment_keys)}
+        if self.measurement_identity is not None:
+            value["measurement_identity"] = self.measurement_identity.as_dict()
+        return value
 
 
 @dataclass(frozen=True)
@@ -100,12 +105,16 @@ class ExperimentAttempt:
     disposition: Literal["intent", "not_submitted", "terminal", "unknown"]
     result: JobResult | None = None
     failure: ExperimentFailure | None = None
+    assessment: MeasurementAssessment | None = None
 
     def as_dict(self) -> dict:
-        return {"attempt_id": self.attempt_id, "task_id": self.task_id,
+        value = {"attempt_id": self.attempt_id, "task_id": self.task_id,
                 "disposition": self.disposition,
                 "result": self.result.as_dict() if self.result else None,
                 "failure": self.failure.as_dict() if self.failure else None}
+        if self.assessment is not None:
+            value["assessment"] = self.assessment.as_dict()
+        return value
 
 
 @dataclass(frozen=True)
@@ -126,9 +135,11 @@ class ExperimentEvaluation:
     artifact: str | None = None
     failure: EvaluationFailure | None = None
     experiment_ref: ExperimentRef | None = None
+    measurements: tuple[MeasurementAssessment, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "runs", tuple(_freeze(item) for item in self.runs))
+        object.__setattr__(self, "measurements", tuple(self.measurements))
 
     def as_dict(self) -> dict:
         value = {"gate": self.gate, "candidate_latency_us": self.candidate_latency_us,
@@ -139,6 +150,8 @@ class ExperimentEvaluation:
         if self.failure is not None:
             from dataclasses import asdict
             value["failure"] = asdict(self.failure)
+        if self.measurements:
+            value["measurements"] = [item.as_dict() for item in self.measurements]
         if self.experiment_ref is not None:
             value["experiment_ref"] = self.experiment_ref.as_dict()
         return value
@@ -226,6 +239,11 @@ class RecordedExperiment(ExperimentRecords, Protocol):
         Completed calls may return result_recorded when execution termination is
         unknown. Replaying a stored result does not call the Executor again.
         """
+        ...
+
+    def resume_recorded(self, request: EvaluationRequest | CommandSpec, *, request_id: str,
+                        recovery_timeout: float | None = None, max_remeasurements: int = 0) -> ExperimentRecord:
+        """Query original work and schedule only missing, identity-matched batches."""
         ...
 
 

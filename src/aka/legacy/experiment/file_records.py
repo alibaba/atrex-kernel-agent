@@ -23,6 +23,30 @@ from aka.contracts.experiment import (
     ExperimentRecordError, ExperimentRef, ExperimentStep, ExperimentEvaluation,
 )
 from aka.contracts.evaluation import EvaluationFailure
+from aka.contracts.execution import ExecutionBudget
+from aka.contracts.execution_environment import EnvironmentSnapshot, EnvironmentSupport
+from aka.contracts.execution_recovery import ExecutionCause, JobReference
+from aka.contracts.measurement import MeasurementIdentity, MeasurementPoint, MeasurementAssessment, MeasurementDiagnostic
+
+
+def _measurement_identity(value):
+    data = dict(value)
+    data["points"] = tuple(MeasurementPoint(**item) for item in data["points"])
+    return MeasurementIdentity(**data)
+
+
+def _assessment(value):
+    data = dict(value)
+    digest = data.pop("identity_digest", None)
+    data["identity"] = _measurement_identity(data["identity"])
+    if digest is not None and digest != data["identity"].digest:
+        raise ValueError("measurement identity digest mismatch")
+    for name in ("observed", "missing"):
+        data[name] = tuple(MeasurementPoint(**item) for item in data[name])
+    data["diagnostics"] = tuple(MeasurementDiagnostic(item["category"], item["code"],
+        MeasurementPoint(**item["point"]) if item.get("point") else None, tuple(item.get("basis", ())))
+        for item in data.get("diagnostics", ()))
+    return MeasurementAssessment(**data)
 
 
 def _encoded(value):
@@ -42,10 +66,25 @@ def _diagnostic(value):
     return ExecutionDiagnostic(**value)
 
 
+def _cause(value):
+    data = dict(value)
+    data["causes"] = tuple(_cause(item) for item in data.get("causes", ()))
+    return ExecutionCause(**data)
+
+
 def _job(value):
     if value is None:
         return None
     data = dict(value)
+    data["budgets"] = tuple(ExecutionBudget(**item) for item in data.get("budgets", ()))
+    data["causes"] = tuple(_cause(item) for item in data.get("causes", ()))
+    data["job_references"] = tuple(JobReference(**item) for item in data.get("job_references", ()))
+    if data.get("environment_snapshot") is not None:
+        data["environment_snapshot"] = EnvironmentSnapshot(**data["environment_snapshot"])
+    if data.get("environment_support") is not None:
+        support = dict(data["environment_support"])
+        support["environment"] = EnvironmentSnapshot(**support["environment"])
+        data["environment_support"] = EnvironmentSupport(**support)
     data["file_receipts"] = tuple(ExecutionFileReceipt(**item) for item in data.get("file_receipts", ()))
     data["resource"] = ResourceIdentity(**data["resource"]) if data["resource"] else None
     facts = dict(data["facts"])
@@ -57,6 +96,7 @@ def _job(value):
         item = dict(item)
         item["resource"] = ResourceIdentity(**item["resource"]) if item["resource"] else None
         item["diagnostics"] = tuple(map(_diagnostic, item["diagnostics"]))
+        item["causes"] = tuple(_cause(cause) for cause in item.get("causes", ()))
         attempts.append(ExecutionAttempt(**item))
     data["attempts"] = tuple(attempts)
     return JobResult(**data)
@@ -70,11 +110,14 @@ def _record(value):
         item = dict(item)
         item["argv"] = tuple(item["argv"])
         item["environment_keys"] = tuple(item["environment_keys"])
+        if item.get("measurement_identity") is not None:
+            item["measurement_identity"] = _measurement_identity(item["measurement_identity"])
         steps.append(ExperimentStep(**item))
     data["steps"] = tuple(steps)
     data["attempts"] = tuple(ExperimentAttempt(
         item["attempt_id"], item["task_id"], item["disposition"], _job(item["result"]),
         ExperimentFailure(**item["failure"]) if item["failure"] else None,
+        _assessment(item["assessment"]) if item.get("assessment") else None,
     ) for item in data["attempts"])
     data["artifacts"] = tuple(ExperimentArtifact(
         ExperimentRef(**item["experiment"]), item["artifact_id"], item["role"],
@@ -87,6 +130,7 @@ def _record(value):
             evaluation["experiment_ref"] = ExperimentRef(**evaluation["experiment_ref"])
         if evaluation.get("failure"):
             evaluation["failure"] = EvaluationFailure(**evaluation["failure"])
+        evaluation["measurements"] = tuple(_assessment(item) for item in evaluation.get("measurements", ()))
         data["evaluation"] = ExperimentEvaluation(**evaluation)
     return ExperimentRecord(**data)
 
@@ -250,19 +294,41 @@ class FileExperimentRecords:
             updated = transform(old)
             return self._save(replace(updated, record_version=old.record_version + 1, updated_at=_now()))
 
-    def prepared(self, ref, commands, inputs=()):
+    def prepared(self, ref, commands, inputs=(), identities=(), *, resume=False):
+        if identities and len(identities) > len(commands):
+            raise ValueError("measurement identities do not match steps")
         steps = tuple(ExperimentStep(f"step-{index}", index, tuple(command.command), command.operation,
-                                     command.timeout, command.hardware, tuple(sorted(command.environment)))
+                                     command.timeout, command.hardware, tuple(sorted(command.environment)),
+                                     identities[index] if index < len(identities) else None)
                       for index, command in enumerate(commands))
         # Environment values affect identity but are not persisted as credentials.
         plan = [{**step.as_dict(), "environment_digest": _digest(dict(command.environment)),
-                 "artifacts": list(command.artifacts), "num_gpus": command.num_gpus, "submission_sha256":
+                 "artifacts": list(command.artifacts), "num_gpus": command.num_gpus,
+                 "languages": list(command.languages), "requirements": list(command.requirements), "submission_sha256":
                  hashlib.sha256(command.submission).hexdigest() if command.submission is not None else None} for step, command in zip(steps, commands)]
         identity = {"steps": plan, "inputs": [
             {"path": item.path, "sha256": hashlib.sha256(item.content).hexdigest(),
              "mode": item.mode, "content_type": item.content_type} for item in inputs
         ]} if inputs else plan
-        return self._update(ref, lambda old: replace(old, steps=steps, plan_digest=_digest(identity),
+        if identities:
+            # Measurement identity owns semantic inputs; generated local output paths
+            # and launcher filenames cannot change a resumed batch's identity.
+            identity = [{"measurement": step.measurement_identity.digest if step.measurement_identity else None,
+                         "operation": command.operation, "timeout": command.timeout,
+                         "hardware": command.hardware, "num_gpus": command.num_gpus,
+                         "languages": list(command.languages), "requirements": list(command.requirements),
+                         "environment_digest": _digest(dict(command.environment))}
+                        if step.measurement_identity else plan[index]
+                        for index, (step, command) in enumerate(zip(steps, commands))]
+        digest = _digest(identity)
+        if resume:
+            with self._write_lock:
+                old = self.get(ref)
+                if not old.plan_digest or old.plan_digest != digest:
+                    raise ExperimentRecordError("plan_identity_mismatch", ref)
+                return self._save(replace(old, lifecycle="prepared", phase="execute", outcome=None,
+                                         record_version=old.record_version + 1, updated_at=_now()))
+        return self._update(ref, lambda old: replace(old, steps=steps, plan_digest=digest,
                                                     lifecycle="prepared", phase="execute"))
 
     def intent(self, ref, index):
@@ -277,9 +343,11 @@ class FileExperimentRecords:
         if not isinstance(result, JobResult):
             result = None
         disposition = result.facts.disposition if result else "unknown"
-        if disposition not in {"terminal", "not_submitted"} or (
-            result and any(item.disposition == "unknown" for item in result.attempts)
-        ):
+        settled = {(item.resource.backend, item.resource.identifier) for item in result.attempts
+                   if item.disposition == "terminal" and item.resource and item.resource.identifier} if result else set()
+        if disposition not in {"terminal", "not_submitted"} or (result and any(
+            item.disposition == "unknown" and (not item.resource or not item.resource.identifier or (item.resource.backend, item.resource.identifier) not in settled)
+            for item in result.attempts)):
             disposition = "unknown"
         failure = ExperimentFailure("execute", "execution_error", type(error).__name__) if error else None
 
@@ -290,6 +358,30 @@ class FileExperimentRecords:
                                                if item.attempt_id == attempt_id else item for item in old.attempts),
                            phase="record_step")
         return self._update(ref, transform)
+
+    def assessed(self, ref, attempt_id, assessment):
+        if not isinstance(assessment, MeasurementAssessment):
+            raise TypeError("measurement assessment must use the public contract")
+        def transform(old):
+            if not any(item.attempt_id == attempt_id for item in old.attempts):
+                raise ExperimentRecordError("attempt_mismatch", ref)
+            return replace(old, attempts=tuple(replace(item, assessment=assessment)
+                if item.attempt_id == attempt_id else item for item in old.attempts))
+        return self._update(ref, transform)
+
+    def result_for(self, ref, attempt_id):
+        from aka.contracts.execution import ExecutionFile
+        record = self.get(ref)
+        attempt = next((item for item in record.attempts if item.attempt_id == attempt_id), None)
+        if attempt is None or attempt.result is None:
+            raise ExperimentRecordError("attempt_result_unavailable", ref)
+        files = []
+        for receipt in attempt.result.file_receipts:
+            artifact = next((item for item in record.artifacts if item.sha256 == receipt.sha256 and item.size_bytes == receipt.size_bytes), None)
+            if artifact is None:
+                raise ExperimentRecordError("artifact_unavailable", ref)
+            files.append(ExecutionFile(receipt.path, self.read_artifact(artifact), receipt.mode))
+        return replace(attempt.result, files=tuple(files))
 
     def phase(self, ref, phase):
         return self._update(ref, lambda old: replace(old, phase=phase))
@@ -329,6 +421,7 @@ class FileExperimentRecords:
                 value["failure"] = EvaluationFailure(**value["failure"])
             if value.get("experiment_ref"):
                 value["experiment_ref"] = ExperimentRef(**value["experiment_ref"])
+            value["measurements"] = tuple(_assessment(item) for item in value.get("measurements", ()))
             evaluation = ExperimentEvaluation(**value)
         def transform(old):
             outcome = "completed"

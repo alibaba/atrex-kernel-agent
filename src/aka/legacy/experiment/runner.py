@@ -79,12 +79,31 @@ class LegacyExperiment:
     def run_recorded(self, request, *, request_id):
         return self._recorded(request, request_id)[0]
 
+    def resume_recorded(self, request, *, request_id, recovery_timeout=None, max_remeasurements=0):
+        if type(max_remeasurements) is not int or max_remeasurements < 0:
+            raise ValueError("measurement retry limit must be nonnegative")
+        if recovery_timeout is not None and (type(recovery_timeout) not in (int, float) or recovery_timeout <= 0):
+            raise ValueError("recovery timeout must be positive")
+        return self._recorded(request, request_id, resume={"timeout": recovery_timeout,
+                              "remeasurements": max_remeasurements})[0]
+
+    def reusable(self, ref, identities):
+        """Experiment qualifies stored evidence without an Evaluation approval call."""
+        record = self.get(ref)
+        measurements = record.evaluation.measurements if record.evaluation else ()
+        if record.phase != "complete" or record.lifecycle != "terminal" or not measurements:
+            return False
+        return tuple(item.identity.digest for item in measurements) == tuple(item.digest for item in identities) and all(
+            item.completeness == "complete" and item.validity == "valid" and item.comparability == "comparable"
+            for item in measurements) and len({item.environment_identity for item in measurements}) == 1
+
     def _request_data(self, request):
         if isinstance(request, CommandSpec):
             import hashlib
             import json
             return {"workspace": str(request.workspace.resolve()), "argv": list(request.command),
                     "operation": request.operation, "timeout": request.timeout, "hardware": request.hardware, "num_gpus": request.num_gpus,
+                    "languages": list(request.languages), "requirements": list(request.requirements),
                     "artifacts": list(request.artifacts), "environment_keys": sorted(request.environment),
                     "environment_digest": hashlib.sha256(json.dumps(dict(request.environment),
                         sort_keys=True).encode()).hexdigest(), "cancellation": request.cancel_event is not None, "submission_sha256":
@@ -97,7 +116,7 @@ class LegacyExperiment:
         data["expected_shape_ids"] = sorted(data["expected_shape_ids"]) if data["expected_shape_ids"] is not None else None
         return data
 
-    def _recorded(self, request, request_id):
+    def _recorded(self, request, request_id, *, resume=None):
         records = self._records()
         if not isinstance(request, (EvaluationRequest, CommandSpec)):
             raise TypeError("recorded experiment requires EvaluationRequest or CommandSpec")
@@ -107,12 +126,15 @@ class LegacyExperiment:
             record, created = records.register(ref, request_id, self._request_data(request),
                 kind="command" if isinstance(request, CommandSpec) else "evaluation", purpose=self.purpose)
             if not created:
-                if record.phase == "complete" and record.outcome is not None:
+                if record.phase == "complete" and record.outcome is not None and (resume is None or record.lifecycle == "terminal"):
                     return record, None
-                raise ExperimentRecordError("experiment_incomplete", ref)
+                if resume is None:
+                    raise ExperimentRecordError("experiment_incomplete", ref)
+                if not record.plan_digest:
+                    raise ExperimentRecordError("experiment_not_prepared", ref)
             try:
                 if isinstance(request, CommandSpec):
-                    result = self._run_command(request, records=records, ref=ref)
+                    result = self._run_command(request, records=records, ref=ref, resume=resume if not created else None)
                     for relative in request.artifacts:
                         artifact_path = Path(relative)
                         if artifact_path.is_absolute() or ".." in artifact_path.parts:
@@ -141,7 +163,7 @@ class LegacyExperiment:
                 if request.experiment_ref is not None and request.experiment_ref != ref:
                     raise ValueError("evaluation experiment reference mismatch")
                 request = replace(request, experiment_ref=ref)
-                result = self._run(request, records=records, ref=ref)
+                result = self._run(request, records=records, ref=ref, resume=resume if not created else None)
                 if result.experiment_ref is not None and result.experiment_ref != ref:
                     raise ValueError("evaluation returned another experiment reference")
                 result = replace(result, experiment_ref=ref)
@@ -177,18 +199,80 @@ class LegacyExperiment:
                     pass
                 raise
 
-    def _run_command(self, command, *, records=None, ref=None):
+    def _resume_results(self, records, ref, commands, evaluator, prepared, options):
+        latest = {}
+        history = {}
+        for attempt in records.get(ref).attempts:
+            latest[attempt.task_id] = attempt
+            history.setdefault(attempt.task_id, []).append(attempt)
+        cached = {}
+        for index, command in enumerate(commands):
+            attempt = latest.get(f"step-{index}")
+            if attempt is None:
+                continue
+            result = attempt.result
+            if attempt.disposition in {"intent", "unknown"}:
+                query = getattr(self.executor, "query_job", None)
+                references = result.job_references if result else ()
+                if not callable(query) or len(references) != 1:
+                    raise ExperimentRecordError("experiment_pending", ref)
+                observed = query(references[0], timeout=options["timeout"] or command.timeout)
+                if observed.job_references != references:
+                    raise ExperimentRecordError("job_identity_mismatch", ref)
+                if result is not None:
+                    observed = replace(observed, attempts=(*result.attempts, *observed.attempts),
+                                       causes=(*result.causes, *observed.causes),
+                                       budgets=observed.budgets or result.budgets,
+                                       environment_identity=observed.environment_identity or result.environment_identity,
+                                       environment_snapshot=observed.environment_snapshot or result.environment_snapshot,
+                                       environment_support=observed.environment_support or result.environment_support)
+                records.observed(ref, attempt.attempt_id, result=observed)
+                for item in observed.files:
+                    records.publish_content(ref, item.content, "execution_output")
+                result = observed
+                if result.facts.disposition == "unknown":
+                    raise ExperimentRecordError("experiment_pending", ref)
+            assessment = getattr(evaluator, "diagnose_step", lambda *args: None)(prepared, index, result) if result is not None else None
+            if assessment is not None:
+                records.assessed(ref, attempt.attempt_id, assessment)
+            retryable = result is not None and result.transport_status in {"infrastructure", "timed_out"}
+            if retryable and options["remeasurements"] and len(history[attempt.task_id]) <= options["remeasurements"]:
+                if result.facts.disposition == "not_submitted" or result.facts.remote_terminated is True:
+                    continue  # Experiment explicitly schedules one missing measurement.
+            if result is None or result.facts.disposition == "unknown":
+                raise ExperimentRecordError("experiment_pending", ref)
+            if result.transport_status in {"timed_out", "cancelled", "interrupted", "infrastructure"}:
+                result.require_transport()
+            cached[index] = records.result_for(ref, attempt.attempt_id)
+        return cached
+
+    @staticmethod
+    def _observed_command(command, records, ref, attempt_id):
+        if records is None:
+            return command
+        def observe(value):
+            records.observed(ref, attempt_id, result=value)
+            if command.on_observation is not None:
+                command.on_observation(value)
+        return replace(command, on_observation=observe)
+
+    def _run_command(self, command, *, records=None, ref=None, resume=None):
         from .measurement_files import record_result_lines
         evaluator = self.command_evaluator
         prepared = evaluator.prepare(command)
+        commands = (*prepared.steps, *prepared.fallback_steps)
+        cached = {}
         if records is not None:
-            records.prepared(ref, (*prepared.steps, *prepared.fallback_steps))
+            records.prepared(ref, commands, identities=prepared.measurement_identities, resume=resume is not None)
+            if resume is not None:
+                cached = self._resume_results(records, ref, commands, evaluator, prepared, resume)
             for step in prepared.steps:
                 if step.submission is not None:
                     records.publish_content(ref, step.submission, "evaluation_input")
-        commands = (*prepared.steps, *prepared.fallback_steps)
         cancel = Event()
         def attempt(index):
+            if index in cached:
+                return cached[index]
             if cancel.is_set():
                 from concurrent.futures import CancelledError
                 raise CancelledError("experiment batch cancelled before submission")
@@ -197,13 +281,18 @@ class LegacyExperiment:
                 capabilities = getattr(self.executor, "capabilities", None)
                 if capabilities is not None:
                     capabilities.require(commands[index])
-                result = self.executor.run(commands[index])
+                command = commands[index]
+                command = self._observed_command(command, records, ref, attempt_id)
+                result = self.executor.run(command)
             except BaseException as error:
                 if records is not None:
                     records.observed(ref, attempt_id, error=error)
                 raise
             if records is not None:
                 records.observed(ref, attempt_id, result=result)
+                assessment = getattr(evaluator, "diagnose_step", lambda *args: None)(prepared, index, result)
+                if assessment is not None:
+                    records.assessed(ref, attempt_id, assessment)
                 for output in evaluator.observe_step(prepared, index, result).artifacts:
                     records.publish_content(ref, output.content, output.role)
             if not isinstance(prepared.context, dict) or prepared.context.get("kind") != "profile" or prepared.context.get("measurement") is None:
@@ -242,20 +331,25 @@ class LegacyExperiment:
             for item in files:
                 records.publish_content(ref, item.content, "execution_output")
 
-    def _run(self, request: EvaluationRequest, *, records=None, ref=None) -> VerificationResult:
+    def _run(self, request: EvaluationRequest, *, records=None, ref=None, resume=None) -> VerificationResult:
         if self.evaluator is None:
             raise ValueError("evaluation requires an injected Evaluator")
         prepared = self.evaluator.prepare(request)
         steps = prepared.steps
         if steps and prepared.max_parallelism < 1:
             raise ValueError("evaluation parallelism must be positive")
+        cached = {}
+        if records is not None and resume is not None:
+            records.prepared(ref, (*steps, *prepared.fallback_steps), prepared.inputs,
+                             prepared.measurement_identities, resume=True)
+            cached = self._resume_results(records, ref, (*steps, *prepared.fallback_steps), self.evaluator, prepared, resume)
         self._write_inputs(request, prepared, records, ref)
         if records is not None:
             for command in steps:
                 if command.submission is not None:
                     records.publish_content(ref, command.submission, "evaluation_input")
-        if records is not None:
-            records.prepared(ref, (*steps, *prepared.fallback_steps), prepared.inputs)
+        if records is not None and resume is None:
+            records.prepared(ref, (*steps, *prepared.fallback_steps), prepared.inputs, prepared.measurement_identities)
         if not steps:
             if records is not None:
                 records.phase(ref, "interpret")
@@ -264,17 +358,26 @@ class LegacyExperiment:
 
         def run_step(index: int) -> JobResult:
             command = steps[index]
+            if index in cached:
+                result = cached[index]
+                observed = self.evaluator.observe_step(prepared, index, result)
+                self._write_outputs(request, prepared, observed.artifacts, ref)
+                return result
 
             def attempt():
                 attempt_id = records.intent(ref, index) if records is not None else None
                 try:
-                    result = self.executor.run(command)
+                    observed_command = self._observed_command(command, records, ref, attempt_id)
+                    result = self.executor.run(observed_command)
                 except BaseException as error:
                     if records is not None:
                         records.observed(ref, attempt_id, error=error)
                     raise
                 if records is not None:
                     records.observed(ref, attempt_id, result=result)
+                    assessment = getattr(self.evaluator, "diagnose_step", lambda *args: None)(prepared, index, result)
+                    if assessment is not None:
+                        records.assessed(ref, attempt_id, assessment)
                 self._publish_files(request, result.files, records, ref)
                 if records is not None and command.submission is not None:
                     records.publish_content(ref, result.stdout.encode("utf-8"), "measurement_receipt")
