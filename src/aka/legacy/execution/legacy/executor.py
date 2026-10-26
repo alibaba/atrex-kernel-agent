@@ -86,7 +86,14 @@ class LegacyExecutor(GatewayRecoveryMixin):
             environment["AKA_GATEWAY_RECOVERY_RETRY_DELAYS"] = json.dumps(self.configuration.get("recovery_retry_delays", []))
             environment["AKA_GATEWAY_RECOVERY_RETRY_BUDGET_S"] = str(self.configuration.get("recovery_retry_budget_s", 0))
             request = replace(request, environment=environment)
-        result = self._run_sandbox(request, hooks=self.hooks)
+        try:
+            result = self._run_sandbox(request, hooks=self.hooks)
+        except BaseException as error:
+            if isinstance(getattr(error, "execution_outcome", None), JobResult):
+                error.execution_outcome = replace(error.execution_outcome,
+                    environment_snapshot=support.environment,
+                    environment_identity=support.environment.identity, environment_support=support)
+            raise
         return replace(result, environment_snapshot=support.environment,
                        environment_identity=support.environment.identity, environment_support=support)
 
@@ -151,10 +158,17 @@ class LegacyExecutor(GatewayRecoveryMixin):
             grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
             effective_timeout = timeout + grace + 240
         from aka.legacy.execution.outcomes import run_owned
-        result = run_owned(cmd, environment=environment, workspace=workspace,
-            timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
-            cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment,
-            input_payload=request.submission, on_observation=request.on_observation)
         from aka.legacy.execution.gateway.requests import effective_budget
+        try:
+            result = run_owned(cmd, environment=environment, workspace=workspace,
+                timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
+                cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment,
+                input_payload=request.submission, on_observation=request.on_observation)
+        except BaseException as error:
+            if isinstance(getattr(error, "execution_outcome", None), JobResult):
+                error.execution_outcome = replace(error.execution_outcome,
+                    budgets=(*error.execution_outcome.budgets,
+                        effective_budget(effective_timeout, scope="local-wait", emit=False)))
+            raise
         return replace(result, budgets=(*result.budgets,
             effective_budget(effective_timeout, scope="local-wait", emit=False)))

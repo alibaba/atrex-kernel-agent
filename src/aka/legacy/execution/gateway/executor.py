@@ -104,15 +104,21 @@ class GatewayExecutor(GatewayRecoveryMixin):
 
         grace = queue_wait_grace(environment)
         from aka.legacy.execution.outcomes import run_owned
+        def decorate(result):
+            return replace(result, environment_snapshot=support.environment,
+                environment_identity=support.environment.identity, environment_support=support,
+                budgets=(*result.budgets, effective_budget(command.timeout + grace + 240,
+                    scope="local-wait", emit=False)))
         def observed(result):
             if command.on_observation is not None:
-                command.on_observation(replace(result, environment_snapshot=support.environment,
-                    environment_identity=support.environment.identity, environment_support=support))
-        result = run_owned(argv, environment=environment, workspace=command.workspace,
-            timeout=command.timeout + grace + 240, resource=self.resource_identity,
-            hardware=command.hardware, cancel_event=command.cancel_event, input_payload=command.submission,
-            on_observation=observed if command.on_observation is not None else None)
-        return replace(result, environment_snapshot=support.environment,
-                       environment_identity=support.environment.identity, environment_support=support,
-                       budgets=(*result.budgets, effective_budget(command.timeout + grace + 240,
-                           scope="local-wait", emit=False)))
+                command.on_observation(decorate(result))
+        try:
+            result = run_owned(argv, environment=environment, workspace=command.workspace,
+                timeout=command.timeout + grace + 240, resource=self.resource_identity,
+                hardware=command.hardware, cancel_event=command.cancel_event, input_payload=command.submission,
+                on_observation=observed if command.on_observation is not None else None)
+        except BaseException as error:
+            if isinstance(getattr(error, "execution_outcome", None), JobResult):
+                error.execution_outcome = decorate(error.execution_outcome)
+            raise
+        return decorate(result)
