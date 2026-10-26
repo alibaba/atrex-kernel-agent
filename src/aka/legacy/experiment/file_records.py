@@ -354,7 +354,11 @@ class FileExperimentRecords:
         def transform(old):
             if not any(item.attempt_id == attempt_id for item in old.attempts):
                 raise ExperimentRecordError("attempt_mismatch", ref)
-            return replace(old, attempts=tuple(replace(item, disposition=disposition, result=result, failure=failure)
+            # A host callback/launcher error cannot erase admission facts that
+            # were already durably observed over the owned channel.
+            return replace(old, attempts=tuple(replace(item, disposition=disposition,
+                                                      result=result if result is not None else item.result,
+                                                      failure=failure)
                                                if item.attempt_id == attempt_id else item for item in old.attempts),
                            phase="record_step")
         return self._update(ref, transform)

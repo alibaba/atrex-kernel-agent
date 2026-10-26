@@ -236,6 +236,8 @@ class LegacyExperiment:
             if assessment is not None:
                 records.assessed(ref, attempt.attempt_id, assessment)
             retryable = result is not None and result.transport_status in {"infrastructure", "timed_out"}
+            if assessment is not None and (assessment.validity == "invalid" or assessment.completeness == "complete"):
+                retryable = False
             if retryable and options["remeasurements"] and len(history[attempt.task_id]) <= options["remeasurements"]:
                 if result.facts.disposition == "not_submitted" or result.facts.remote_terminated is True:
                     continue  # Experiment explicitly schedules one missing measurement.
@@ -272,7 +274,10 @@ class LegacyExperiment:
         cancel = Event()
         def attempt(index):
             if index in cached:
-                return cached[index]
+                result = cached[index]
+                if not isinstance(prepared.context, dict) or prepared.context.get("kind") != "profile" or prepared.context.get("measurement") is None:
+                    self._publish_files(commands[index], result.files, records, ref)
+                return result
             if cancel.is_set():
                 from concurrent.futures import CancelledError
                 raise CancelledError("experiment batch cancelled before submission")
@@ -360,6 +365,9 @@ class LegacyExperiment:
             command = steps[index]
             if index in cached:
                 result = cached[index]
+                self._publish_files(request, result.files, records, ref)
+                if self.check_result is not None:
+                    self.check_result(result)
                 observed = self.evaluator.observe_step(prepared, index, result)
                 self._write_outputs(request, prepared, observed.artifacts, ref)
                 return result
