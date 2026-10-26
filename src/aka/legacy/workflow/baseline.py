@@ -43,7 +43,13 @@ class WorkflowBaseline:
         return self.preparation().native_v0_readme(generalized=generalized)
 
     def write_v0_baseline_report(self, result, source_commit):
-        return self.preparation().write_v0_baseline_report(result, source_commit)
+        from .baseline_report import render_baseline_report
+        campaign = self.campaign
+        report = render_baseline_report(result, source_commit,
+            private_shapes=(campaign.workspace / "agent_problem.json").is_file())
+        campaign.candidate_workspace.install_files(campaign.workspace,
+            (WorkspaceFile(path="baseline_report.md", text=report),))
+        return campaign.workspace / "baseline_report.md"
 
     def framework_baseline_smoke_shape_ids(self, *, limit=3):
         return self.preparation().framework_baseline_smoke_shape_ids(limit=limit)
@@ -237,23 +243,22 @@ class WorkflowBaseline:
             "correctness and latency reference for later versions"
         )
         optimization["risks_and_rollback"] = "none; immutable V0 reference baseline"
-        memory_path.write_text(
-            json.dumps(memory, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
         coverage_problem = self.campaign._generalized_memory_coverage_problem(memory)
         if coverage_problem:
             raise RuntimeError(f"invalid native V0 measurement: {coverage_problem}")
-        self.write_v0_baseline_report(result, source_commit)
-
-        staged = ["memory/v0.json", "baseline_report.md"]
-        staged.extend(
-            path for path in extra_paths if (self.campaign.workspace / path).is_file()
-        )
+        from .baseline_report import render_baseline_report
+        report = render_baseline_report(result, source_commit,
+            private_shapes=(self.campaign.workspace / "agent_problem.json").is_file())
+        files = [WorkspaceFile(path="memory/v0.json",
+                               text=json.dumps(memory, indent=2, ensure_ascii=False) + "\n"),
+                 WorkspaceFile(path="baseline_report.md", text=report)]
+        files.extend(WorkspaceFile(path=name, source=self.campaign.workspace / name)
+                     for name in dict.fromkeys(extra_paths)
+                     if name not in {"memory/v0.json", "baseline_report.md"}
+                     and (self.campaign.workspace / name).is_file())
         revision = self.campaign.candidate_workspace.record(
             self.campaign.workspace, expected_revision=expected,
-            files=tuple(WorkspaceFile(path=name, source=self.campaign.workspace / name)
-                        for name in staged),
-            message="V0: record baseline measurement",
+            files=tuple(files), message="V0: record baseline measurement",
         )
         if revision == expected:
             raise RuntimeError("V0 evaluator produced no measurement metadata to commit")
@@ -274,9 +279,7 @@ class WorkflowBaseline:
             raise RuntimeError(
                 "native V0 requires workspace kernel.py and reference.py"
             )
-        (self.campaign.workspace / "README.md").write_text(
-            self.native_v0_readme(generalized=generalized), encoding="utf-8"
-        )
+        readme = self.native_v0_readme(generalized=generalized)
         source_paths = [
             ".gitignore",
             "CLAUDE.md",
@@ -290,13 +293,14 @@ class WorkflowBaseline:
             dict.fromkeys(
                 path
                 for path in source_paths
-                if (self.campaign.workspace / path).is_file()
+                if path == "README.md" or (self.campaign.workspace / path).is_file()
             )
         )
         self.campaign.candidate_workspace.record(
             self.campaign.workspace,
             expected_revision=expected,
-            files=tuple(WorkspaceFile(path=name, source=self.campaign.workspace / name)
+            files=tuple(WorkspaceFile(path=name, text=readme) if name == "README.md"
+                        else WorkspaceFile(path=name, source=self.campaign.workspace / name)
                         for name in source_paths),
             message="V0: baseline kernel",
         )
