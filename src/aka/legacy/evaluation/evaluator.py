@@ -90,11 +90,13 @@ class LegacyEvaluator:
                                context=replace(prepared.context, gateway=gateway), fallback_steps=gateway.fallback_steps)
         if request.mode == "abba":
             config = self.configuration
-            return replace(prepared, retry_keys=tuple(
+            prepared = replace(prepared, retry_keys=tuple(
                 f"abba:{request.base_commit}:{request.candidate_commit}:"
                 f"{max(1, config.repeats)}:{config.shape_batch_size}:{Path(command.command[-2]).name}"
                 for command in prepared.steps))
-        return prepared
+        from .measurement import legacy_identities
+        return replace(prepared, measurement_identities=legacy_identities(
+            prepared, self.configuration, self.evaluation_input))
 
     def _prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         config = self.configuration
@@ -132,15 +134,6 @@ class LegacyEvaluator:
         metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else None
         num_gpus = distributed_evaluation_world_size(metadata)
         schedule = verification_schedule(config.repeats)
-        if config.per_run_timeout * len(schedule) + 30 > config.timeout:
-            return PreparedEvaluation(
-                (),
-                config.max_parallelism,
-                _Plan(
-                    request,
-                    error="ABBA schedule cannot fit in one gateway allocation timeout",
-                ),
-            )
         if self.candidate_workspace is None:
             raise ValueError("ABBA preparation requires an injected CandidateWorkspace")
         batches, shape_ids = _verification_shape_batches(

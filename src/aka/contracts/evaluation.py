@@ -11,6 +11,7 @@ from .execution import CommandSpec, JobResult
 from .workspace import CandidateWorkspace
 from .problem import EvaluationInput
 from .experiment_identity import ExperimentRef
+from .measurement import MeasurementIdentity, MeasurementPoint, MeasurementAssessment, MeasurementDiagnostic
 
 
 @dataclass(frozen=True)
@@ -37,9 +38,12 @@ class MeasurementArtifact:
 class StepEvaluation:
     """Completed step outputs; returned before the final interpretation."""
     artifacts: tuple[MeasurementArtifact, ...] = ()
+    assessment: MeasurementAssessment | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "artifacts", tuple(self.artifacts))
+        if self.assessment is not None and not isinstance(self.assessment, MeasurementAssessment):
+            raise TypeError("step assessment must use the public measurement contract")
 
 
 @dataclass(frozen=True)
@@ -102,9 +106,13 @@ class VerificationResult:
     failure: EvaluationFailure | None = None
     experiment_ref: ExperimentRef | None = None
     artifacts: tuple[MeasurementArtifact, ...] = field(default=(), repr=False)
+    measurements: tuple[MeasurementAssessment, ...] = ()
 
     def __post_init__(self):
         self.artifacts = tuple(self.artifacts)
+        self.measurements = tuple(self.measurements)
+        if any(not isinstance(item, MeasurementAssessment) for item in self.measurements):
+            raise TypeError("verification measurements must use the public contract")
 
     @property
     def passed(self) -> bool:
@@ -126,6 +134,8 @@ class VerificationResult:
             value["failure"] = asdict(self.failure)
         if self.experiment_ref is not None:
             value["experiment_ref"] = self.experiment_ref.as_dict()
+        if self.measurements:
+            value["measurements"] = [item.as_dict() for item in self.measurements]
         return value
 
 
@@ -190,6 +200,7 @@ class PreparedEvaluation:
     output_directory: Path | None = None
     inputs: tuple[PreparationFile, ...] = ()
     fallback_steps: tuple[CommandSpec, ...] = ()
+    measurement_identities: tuple[MeasurementIdentity, ...] = ()
 
     def __post_init__(self):
         object.__setattr__(self, "steps", tuple(self.steps))
@@ -198,6 +209,12 @@ class PreparedEvaluation:
         if any(not isinstance(item, PreparationFile) for item in inputs):
             raise TypeError("prepared inputs must be PreparationFile values")
         object.__setattr__(self, "inputs", inputs)
+        identities = tuple(self.measurement_identities)
+        if identities and len(identities) != len(self.steps):
+            raise ValueError("prepared measurement identities must match execution steps")
+        if any(not isinstance(item, MeasurementIdentity) for item in identities):
+            raise TypeError("prepared measurement identities must use the public contract")
+        object.__setattr__(self, "measurement_identities", identities)
 
 
 class Evaluator(Protocol):

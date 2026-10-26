@@ -15,8 +15,15 @@ from .metadata import distributed_evaluation_world_size
 class GatewayCommandEvaluator:
     def prepare(self, command):
         if command.operation == "preflight" or command.submission is not None:
+            identities = ()
+            if command.submission is not None:
+                prepared = json.loads(command.submission)
+                if prepared.get("kind") in {"run", "profile"}:
+                    from .measurement import gateway_identity
+                    identities = (gateway_identity(prepared["request"], prepared.get("reference_files", {}), prepared["kind"]),)
             return PreparedEvaluation((command,), 1, {"command": command, "measurement": None,
-                "kind": command.operation, "private": False, "evaluator": False})
+                "kind": command.operation, "private": False, "evaluator": False},
+                measurement_identities=identities)
         environment = command.environment
         argv = ["--hardware", command.hardware, "--workspace", str(command.workspace),
                 "--timeout", str(command.timeout), "--kind", command.operation,
@@ -84,14 +91,18 @@ class GatewayCommandEvaluator:
             raise ValueError("measurement requires at least one shape")
         context["measurement"] = measurement
         steps = []
+        identities = []
         for index in range(len(measurement.batches)):
             reference_files = {name: value.decode("utf-8") for name, value in measurement.reference_content(index).items()}
+            from .measurement import gateway_identity
+            identities.append(gateway_identity(measurement.request_for(index), reference_files, kind))
             submission = json.dumps({"schema_version": 1, "kind": kind,
                 "request": measurement.request_for(index), "reference_files": reference_files},
                 ensure_ascii=False, allow_nan=False).encode("utf-8")
             steps.append(replace(command, operation=kind, submission=submission, artifacts=()))
         return PreparedEvaluation(tuple(steps), min(4, len(steps)), context,
-            fallback_steps=(replace(command, operation="dev", submission=None),))
+            fallback_steps=(replace(command, operation="dev", submission=None),),
+            measurement_identities=tuple(identities))
 
     def fallback(self, prepared, results):
         """Only a settled unsupported route can authorize the prepared dev alternative."""
