@@ -14,6 +14,11 @@ Follow the current session's measurement scope and finish procedure. Framework
 Baseline permits only its prescribed smoke; optimization Episodes may use the
 operations below. Measurements and comparisons do not grant promotion authority.
 
+For NVIDIA CUDA implementation plumbing, use the tested
+[starting point](references/cuda-starting-point.md) and `templates/cuda_nvrtc.py`.
+Adapt its operator interface and CUDA math; keep the compiler/loader and launch ABI
+unless measured diagnostics require a change. It does not replace candidate evaluation.
+
 Follow the injected evaluator contract. SOL-ExecBench uses `--kind run --no-sync`
 for the official full workload; do not add typed `--mode` or top-level seed controls.
 

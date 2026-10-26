@@ -2275,6 +2275,16 @@ class Campaign:
             SANDBOX=self._framework_baseline_sandbox_directive(),
             EVALUATOR=self._evaluator_directive(),
             CORRECTNESS_GUIDANCE=self._framework_baseline_correctness_guidance_text(),
+            CUDA_STARTER=(
+                "Read `skills/gpu-measurement/references/cuda-starting-point.md` and "
+                "`skills/gpu-measurement/templates/cuda_nvrtc.py` once. Reuse the tested "
+                "in-process compiler/loader and CPU argument packing in your self-contained "
+                "`kernel.py`; replace the example computation and Model interface with this "
+                "operator's contract. Do not import the template at runtime. Keep the loader "
+                "unless a concrete compiler/runtime diagnostic requires a change."
+                if self.framework.lower() == "cuda" and hardware_vendor(self.platform, self.arch) == "nvidia"
+                else "Use the selected framework's supported in-process build/launch path."
+            ),
             SMOKE_COMMAND=smoke_command,
             SMOKE_SCOPE=smoke_scope,
             MODE_POLICY=self._mode_directive(),

@@ -13,6 +13,8 @@ SKILL_MANIFEST = {
     "gpu-measurement": SkillManifest("skills/gpu-measurement", (
         "SKILL.md",
         "references/requests.md",
+        "references/cuda-starting-point.md",
+        "templates/cuda_nvrtc.py",
     )),
     "runtime-records": SkillManifest("skills/runtime-records", (
         "SKILL.md",
