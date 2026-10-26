@@ -60,7 +60,7 @@ class CandidateCheckpointState:
 
 class CandidateWorkspace(Protocol):
     def filesystem_access(self, workspace: Path, *, include_git: bool = False) -> FilesystemAccess:
-        """Describe immutable inputs and the selected candidate's writable Git scope."""
+        """Describe immutable inputs; reject Git grants unsupported by this implementation."""
         ...
     def export_checkpoint(self, workspace: Path, destination: Path, *,
                           candidates: tuple[CandidateHandle, ...] = ()) -> CandidateWorkspaceSnapshot: ...

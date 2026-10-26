@@ -11,6 +11,17 @@ from aka.light.supervisor.workspace import publish
 class ManagedCandidateWorkspace(GitCandidateWorkspace):
     managed_drafts = True
 
+    def filesystem_access(self, workspace, *, include_git=False):
+        from aka.contracts.filesystem import FilesystemAccess
+        from aka.light.orchestrator.episode_workspace import PUBLIC_FILES
+        from .sources import POLICY
+        if include_git:
+            raise ValueError("Managed candidates retain Git under the Supervisor")
+        workspace = Path(workspace).resolve(strict=True)
+        protected = tuple(workspace / name for name in (*PUBLIC_FILES, "memory", "input", POLICY)
+                          if (workspace / name).exists())
+        return FilesystemAccess(hidden_paths=(workspace / ".git",), read_only_paths=protected)
+
     def __init__(self, *, inherit_state: bool = True):
         if type(inherit_state) is not bool:
             raise ValueError("inherit_state must be boolean")
