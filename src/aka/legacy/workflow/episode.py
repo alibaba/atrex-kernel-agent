@@ -612,9 +612,10 @@ class LongHorizonCampaign:
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
-        observations = worktree.path / '.aka-agent-observations'
-        if observations.is_dir():
-            shutil.copytree(observations, episode_dir / 'agent_observations', dirs_exist_ok=True)
+        destination = episode_dir / 'agent_observations'
+        if destination.exists():
+            shutil.rmtree(destination)
+        self.base_campaign.agent.export_observations(worktree.path, destination)
         verification = worktree.path / VERIFY_DIR
         if verification.is_dir():
             destination = episode_dir / "verification_runtime"
@@ -1835,6 +1836,11 @@ class LongHorizonCampaign:
                 )
             usage_receipt = uuid.uuid4().hex
             try:
+                access_options = {}
+                runner_agent = getattr(runner, "agent", None)
+                if runner_agent.capabilities.filesystem_isolation:
+                    from .agent_access import for_workspace
+                    access_options["access"] = for_workspace(self.base_campaign, worktree.path)
                 result = runner.run(
                     worktree.path,
                     prompt,
@@ -1859,6 +1865,7 @@ class LongHorizonCampaign:
                     record_usage=lambda tokens: store.record_usage(
                         state, usage_receipt, tokens
                     ),
+                    **access_options,
                 )
                 # Also persist before verification: a GPU outage there must not
                 # discard the coding session's usage. Receipt replay is harmless.

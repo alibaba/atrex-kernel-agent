@@ -5,7 +5,7 @@ Light only overrides Claude accounting and Qoder transcript persistence.
 """
 from collections.abc import Mapping
 from dataclasses import replace
-from aka.legacy.agent.adapter import (
+from aka.agent.adapter import (
     AgentBackendAdapter, AdapterFactory, BackendAdapterRegistry,
     ClaudeLikeAdapter as _ClaudeLikeAdapter, ClaudeAdapter as _ClaudeAdapter,
     QoderAdapter as _QoderAdapter, PiAdapter, CodexAdapter,

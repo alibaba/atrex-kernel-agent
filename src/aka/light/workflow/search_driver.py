@@ -34,7 +34,7 @@ class EpisodeSearchDriver:
         # Store only a digest of settings (endpoint addresses remain private).
         values = {"request": asdict(self.campaign.request),
                   "workflow": asdict(self.campaign.module_options),
-                  "agent": asdict(self.campaign.agent.options),
+                  "agent": self.campaign.agent.configuration_identity,
                   "inherit_state": self.campaign.candidate_workspace.inherit_state,
                   "research_records": self.campaign.research_records,
                   "wiki": self.campaign.tool_runtime.wiki,

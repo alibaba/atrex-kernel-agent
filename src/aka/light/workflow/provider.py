@@ -40,7 +40,7 @@ class WorkflowOptions:
 class LightWorkflow:
     def __init__(self, agent, problem, source, candidate, tool_runtime,
                  *, workflow_observer=None, options=WorkflowOptions()):
-        if not getattr(agent, "supports_tool_runtime", False):
+        if not agent.capabilities.tool_runtime:
             raise ValueError("light Workflow requires aka.light.agent.plugin (sandbox may remain none)")
         if not getattr(candidate, "managed_drafts", False):
             raise ValueError("light Workflow requires aka.light.workspace.plugin for sealed candidates")

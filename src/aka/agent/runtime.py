@@ -1,0 +1,379 @@
+from __future__ import annotations
+
+import json
+import os
+import sys
+import uuid
+from collections.abc import Mapping
+from dataclasses import replace
+from pathlib import Path
+
+from .backends import (
+    DEFAULT_BACKEND_REGISTRY,
+    BackendAdapterRegistry,
+    ClaudeAdapter,
+    CodexAdapter,
+    PiAdapter,
+    QoderAdapter,
+    token_usage_from_mapping,
+    token_usage_from_model_usage,
+)
+from .codex_ledger import (
+    CodexSessionLedgerObserver,
+    CodexTemporaryHome,
+    codex_home,
+    codex_thread_id_from_stream,
+    observe_codex_usage,
+)
+from .model import (
+    AgentRunRequest,
+    AgentRunResult,
+    AgentRuntime,
+    TokenUsage,
+    sum_token_usages,
+)
+from aka.agent.process import ProcessRunner, run_bounded
+
+SESSION_SHELL_GUARD = None  # Resource selection belongs to the constructing host.
+PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"
+SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
+REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
+
+
+def terminal_usage_from_stream(stdout: str) -> TokenUsage:
+    """Parse the existing cross-backend terminal contract without event attribution."""
+    terminal = TokenUsage.unavailable()
+    deltas: list[TokenUsage] = []
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(event, Mapping):
+            continue
+        if event.get("type") in {"result", "turn.completed"}:
+            parsed = token_usage_from_mapping(event.get("usage"))
+            if parsed.total_tokens is None:
+                parsed = token_usage_from_model_usage(event.get("modelUsage"))
+            if parsed.total_tokens is not None:
+                terminal = parsed
+            continue
+        usage = event.get("usage")
+        message = event.get("message")
+        if usage is None and isinstance(message, Mapping):
+            usage = message.get("usage")
+        parsed = token_usage_from_mapping(usage)
+        if parsed.total_tokens is not None:
+            deltas.append(parsed)
+    if terminal.total_tokens is not None:
+        return terminal
+    fallback = sum_token_usages(deltas)
+    return (
+        replace(fallback, measurement="partial")
+        if fallback.total_tokens is not None
+        else fallback
+    )
+
+
+def build_session_environment(runtime_id: str, *, shell_guard=None, environment=None) -> dict[str, str]:
+    """Build CLI execution defaults; the host supplies resources and protection policy."""
+    environment = dict(os.environ if environment is None else environment)
+    environment["ATREX_AGENT_CLI"] = runtime_id
+    python_bin = str(Path(sys.executable).absolute().parent)
+    path_parts = [
+        part
+        for part in environment.get("PATH", "").split(os.pathsep)
+        if part and part != python_bin
+    ]
+    environment["PATH"] = os.pathsep.join([python_bin, *path_parts])
+    environment["PIP_ONLY_BINARY"] = ":all:"
+    environment["PIP_INDEX_URL"] = PYPI_MIRROR
+    environment["PIP_DISABLE_PIP_VERSION_CHECK"] = "1"
+    if shell_guard is not None:
+        if not Path(shell_guard).is_file():
+            raise ValueError("selected Agent shell guard resource is unavailable")
+        environment["BASH_ENV"] = str(shell_guard)
+    return environment
+
+
+class CliAgentRuntime:
+    def __init__(
+        self,
+        adapter,
+        *,
+        process_runner: ProcessRunner = run_bounded,
+        check_open=None,
+        session_name="",
+        prepare_environment=None,
+        release_environment=None,
+        environment=None,
+    ) -> None:
+        self._environment = dict(os.environ if environment is None else environment)
+        self._release_environment = release_environment
+        self._prepare_environment = prepare_environment
+        self._session_name = session_name
+        self._adapter = adapter
+        self._process_runner = process_runner
+        self._check_open = check_open
+
+    @property
+    def id(self) -> str:
+        return self._adapter.id
+
+    def build_command(
+        self, prompt: str, session_id: str, reasoning_effort: str, *, environment=None
+    ) -> list[str]:
+        command = self._adapter.build_command(
+            prompt, session_id, reasoning_effort, self._session_settings(environment)
+        )
+        values = self._environment if environment is None else environment
+        name = self._session_name or (values.get("ATREX_CLAUDE_SESSION_NAME", "") if self.id == "claude" else "")
+        command = self._adapter.name_session(command, name, session_id)
+        return self._adapter.prepare_command(command)
+
+    def session_environment(self):
+        return build_session_environment(self.id, environment=self._environment)
+
+    def _session_settings(self, environment=None) -> str:
+        values = self._environment if environment is None else environment
+        return values.get(self._adapter.settings_variable) or values.get("ATREX_SESSION_SETTINGS", "")
+
+    def run(self, request: AgentRunRequest) -> AgentRunResult:
+        if self._check_open is not None:
+            self._check_open()
+        if request.reasoning_effort not in REASONING_EFFORTS:
+            raise ValueError(
+                f"unsupported reasoning effort: {request.reasoning_effort!r}"
+            )
+        from .provider import validate_timeout
+
+        validate_timeout(request.timeout_s)
+        session_id = request.session_id or str(uuid.uuid4())
+        environment = self.session_environment()
+        environment["IS_SANDBOX"] = "1"
+        if request.environment:
+            for key, value in request.environment.items():
+                if value is None:
+                    environment.pop(key, None)
+                else:
+                    environment[key] = value
+        # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
+        # launching Codex or Qoder from an episode already owned by the matching backend.
+        environment["ATREX_AGENT_CLI"] = self.id
+        environment = self._adapter.configure_environment(environment)
+        command = self.build_command(request.prompt, session_id, request.reasoning_effort, environment=environment)
+        if self._prepare_environment is not None:
+            environment = self._prepare_environment(
+                request.workspace,
+                session_id,
+                self._adapter,
+                environment,
+                request.access,
+                explicit_environment=request.environment or {},
+            )
+        codex_observer = None
+        codex_temporary_home = None
+        pre_observation_errors: tuple[str, ...] = ()
+        original_codex_home = environment.get("CODEX_HOME")
+        isolated_home_ready = False
+        if self.id == "codex" and not environment.get("ATREX_AGENT_PREPARED_HOME"):
+            try:
+                codex_temporary_home = CodexTemporaryHome(codex_home(environment))
+                isolated_home = codex_temporary_home.open()
+                isolated_home_ready = True
+                environment["CODEX_HOME"] = str(isolated_home)
+                codex_observer = CodexSessionLedgerObserver(isolated_home)
+            except Exception as exc:
+                pre_observation_errors = (
+                    f"codex_ledger_setup_failed:{type(exc).__name__}",
+                )
+                if not isolated_home_ready:
+                    if codex_temporary_home is not None:
+                        cleanup_error = codex_temporary_home.close()
+                        if cleanup_error:
+                            pre_observation_errors += (cleanup_error,)
+                    codex_temporary_home = None
+                    if original_codex_home is None:
+                        environment.pop("CODEX_HOME", None)
+                    else:
+                        environment["CODEX_HOME"] = original_codex_home
+                try:
+                    command.insert(command.index("--json") + 1, "--ephemeral")
+                except ValueError:
+                    pass
+        if self.id == "codex" and environment.get("ATREX_AGENT_PREPARED_HOME"):
+            try:
+                codex_observer = CodexSessionLedgerObserver(codex_home(environment))
+            except Exception as exc:
+                pre_observation_errors = (
+                    f"codex_ledger_setup_failed:{type(exc).__name__}",
+                )
+        try:
+            stdout, stderr, exit_status, timed_out = self._process_runner(
+                command,
+                cwd=request.workspace,
+                timeout=request.timeout_s,
+                env=environment,
+            )
+        except BaseException:
+            if codex_temporary_home is not None:
+                codex_temporary_home.close()
+            raise
+        finally:
+            if self._release_environment is not None:
+                self._release_environment(environment)
+        observation_errors: tuple[str, ...] = pre_observation_errors
+        try:
+            events, terminal_usage = self._adapter.normalize_stream(stdout)
+        except Exception as exc:
+            # Observation parsing must not turn a completed Agent run into a failure,
+            # and the existing terminal token budget must remain available.
+            events = ()
+            terminal_usage = terminal_usage_from_stream(stdout)
+            observation_errors = (f"stream_normalization_failed:{type(exc).__name__}",)
+        capabilities = replace(
+            self._adapter.capabilities,
+            usage_delta_observed=any(event.kind == "usage_delta" for event in events),
+        )
+        if codex_observer is not None:
+            observed_session_id = codex_thread_id_from_stream(stdout)
+            try:
+                if not observed_session_id:
+                    observed_session_id = codex_observer.identify_new_thread(
+                        request.workspace
+                    )
+                session_id = observed_session_id
+                (
+                    events,
+                    terminal_usage,
+                    capabilities,
+                    ledger_errors,
+                ) = observe_codex_usage(
+                    codex_observer, observed_session_id, terminal_usage
+                )
+                observation_errors += ledger_errors
+            except Exception as exc:
+                observation_errors += (
+                    f"codex_ledger_unavailable:{type(exc).__name__}",
+                )
+        if codex_temporary_home is not None:
+            cleanup_error = codex_temporary_home.close()
+            if cleanup_error:
+                observation_errors += (cleanup_error,)
+        from .public_output import record_invocation
+
+        observation_directory = request.observation_directory or request.workspace
+        record_invocation(
+            observation_directory,
+            self.id,
+            session_id,
+            terminal_usage,
+            events,
+            observation_errors,
+            stdout=stdout,
+        )
+        return AgentRunResult(
+            runtime_id=self.id,
+            exit_status=exit_status,
+            timed_out=timed_out,
+            terminal_usage=terminal_usage,
+            events=events,
+            capabilities=capabilities,
+            observation_errors=observation_errors,
+            stdout_tail=stdout[-2000:],
+            stderr_tail=stderr[-2000:],
+            session_id=session_id,
+        )
+
+
+class ClaudeRuntime(CliAgentRuntime):
+    def __init__(
+        self,
+        *,
+        process_runner: ProcessRunner = run_bounded,
+        runtime_assets_dir: Path | None = None,
+    ) -> None:
+        super().__init__(
+            ClaudeAdapter(runtime_assets_dir), process_runner=process_runner
+        )
+
+
+class QoderRuntime(CliAgentRuntime):
+    def __init__(
+        self,
+        *,
+        process_runner: ProcessRunner = run_bounded,
+        runtime_assets_dir: Path | None = None,
+    ) -> None:
+        super().__init__(
+            QoderAdapter(runtime_assets_dir), process_runner=process_runner
+        )
+
+
+class PiRuntime(CliAgentRuntime):
+    def __init__(
+        self,
+        *,
+        process_runner: ProcessRunner = run_bounded,
+        runtime_assets_dir: Path | None = None,
+    ) -> None:
+        super().__init__(PiAdapter(runtime_assets_dir), process_runner=process_runner)
+
+
+class CodexRuntime(CliAgentRuntime):
+    def __init__(
+        self,
+        *,
+        process_runner: ProcessRunner = run_bounded,
+        runtime_assets_dir: Path | None = None,
+    ) -> None:
+        super().__init__(
+            CodexAdapter(runtime_assets_dir), process_runner=process_runner
+        )
+
+
+def build_agent_runtime(
+    runtime_id: str,
+    *,
+    process_runner: ProcessRunner = run_bounded,
+    runtime_assets_dir: Path | None = None,
+    registry: BackendAdapterRegistry = DEFAULT_BACKEND_REGISTRY,
+    check_open=None,
+    session_name="",
+    prepare_environment=None,
+    release_environment=None,
+    environment=None,
+) -> AgentRuntime:
+    adapter = registry.create(runtime_id, runtime_assets_dir)
+    return CliAgentRuntime(
+        adapter,
+        process_runner=process_runner,
+        check_open=check_open,
+        session_name=session_name,
+        prepare_environment=prepare_environment,
+        release_environment=release_environment,
+        environment=environment,
+    )
+
+
+def build_session_command(
+    runtime_id: str,
+    prompt: str,
+    session_id: str,
+    reasoning_effort: str = "max",
+    *,
+    runtime_assets_dir: Path | None = None,
+) -> list[str]:
+    if reasoning_effort not in REASONING_EFFORTS:
+        raise ValueError(f"unsupported reasoning effort: {reasoning_effort!r}")
+    runtime = build_agent_runtime(runtime_id, runtime_assets_dir=runtime_assets_dir)
+    assert isinstance(runtime, CliAgentRuntime)
+    return runtime.build_command(prompt, session_id, reasoning_effort)
+
+
+def auth_hint(runtime_id: str) -> str:
+    adapter = DEFAULT_BACKEND_REGISTRY.create(runtime_id)
+    return adapter.auth_hint()

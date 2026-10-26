@@ -4,7 +4,7 @@
     "problem": "aka.legacy.task.problem.plugin:PROBLEM",
     "source": "aka.legacy.task.source.plugin:SOURCE",
     "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
-    "agent": "aka.legacy.agent.plugin:AGENT",
+    "agent": "aka.agent.plugin:AGENT",
     "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
     "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
     "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER"

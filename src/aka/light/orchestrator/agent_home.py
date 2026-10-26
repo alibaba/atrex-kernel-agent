@@ -5,8 +5,6 @@ from __future__ import annotations
 import hashlib
 import os
 import subprocess
-from collections.abc import Iterator
-from contextlib import contextmanager, suppress
 from pathlib import Path
 
 from .session_tail import read_regular_bytes
@@ -48,24 +46,7 @@ def projected_backends(environment: dict[str, str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(value for value in values if value in STATE_FILES))
 
 
-@contextmanager
-def open_private_directory(path: Path) -> Iterator[int]:
-    """Yield a pinned directory FD; create missing components with mode 0700.
-
-    No component may be a symlink. This context owns and closes the returned FD.
-    """
-    path = Path(os.path.abspath(path))
-    descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for name in path.parts[1:]:
-            with suppress(FileExistsError):
-                os.mkdir(name, mode=0o700, dir_fd=descriptor)
-            child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
-            os.close(descriptor)
-            descriptor = child
-        yield descriptor
-    finally:
-        os.close(descriptor)
+from aka.agent.execution.home import open_private_directory
 
 
 def _seed(source: Path, destination: Path) -> None:

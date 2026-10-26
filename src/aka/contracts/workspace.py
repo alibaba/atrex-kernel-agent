@@ -8,6 +8,7 @@ from types import MappingProxyType
 
 from .content import SourceContent, WorkspaceFile
 from .problem import InitialSource
+from .filesystem import FilesystemAccess
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,9 @@ class CandidateCheckpointState:
 
 
 class CandidateWorkspace(Protocol):
+    def filesystem_access(self, workspace: Path, *, include_git: bool = False) -> FilesystemAccess:
+        """Describe immutable inputs; reject Git grants unsupported by this implementation."""
+        ...
     def export_checkpoint(self, workspace: Path, destination: Path, *,
                           candidates: tuple[CandidateHandle, ...] = ()) -> CandidateWorkspaceSnapshot: ...
     def validate_checkpoint(self, snapshot: CandidateWorkspaceSnapshot, *,

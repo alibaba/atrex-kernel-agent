@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
+from .filesystem import FilesystemAccess as AgentAccess, FilesystemMount as AgentMount
 
 UsageMeasurement = Literal["exact", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
@@ -140,6 +141,23 @@ class AgentRuntimeCapabilities:
 
 
 @dataclass(frozen=True)
+class AgentCapabilities:
+    filesystem_isolation: bool = False
+    tool_runtime: bool = False
+
+
+@dataclass(frozen=True)
+class AgentObservation:
+    session_id: str
+    runtime: str
+    status: str
+    updated_at: str | None
+    usage: dict[str, int | str | None]
+    events: tuple[dict, ...] = ()
+    resume_supported: bool = False
+
+
+@dataclass(frozen=True)
 class AgentRunRequest:
     workspace: Path
     prompt: str
@@ -148,6 +166,7 @@ class AgentRunRequest:
     session_id: str | None = None
     environment: Mapping[str, str | None] | None = None
     observation_directory: Path | None = None
+    access: AgentAccess | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +197,16 @@ class AgentCheckpointSnapshot:
 
 
 class Agent(Protocol):
+    @property
+    def capabilities(self) -> "AgentCapabilities": ...
+    @property
+    def configuration_identity(self) -> str:
+        """Opaque identity of the frozen selection; contains no configuration values."""
+        ...
+    def close(self) -> None: ...
+    def export_observations(self, workspace: Path, destination: Path) -> Path:
+        """Export normalized invocation records to a new caller-owned directory."""
+        ...
     def export_checkpoint(self, workspace: Path, destination: Path) -> AgentCheckpointSnapshot: ...
     def validate_checkpoint(self, snapshot: AgentCheckpointSnapshot, *, check_destinations: bool = False) -> None: ...
     def restore_checkpoint(self, snapshot: AgentCheckpointSnapshot) -> None: ...
@@ -193,6 +222,7 @@ class Agent(Protocol):
         session_id: str = "",
         environment: Mapping[str, str] | None = None,
         output_directory: Path | None = None,
+        access: AgentAccess | None = None,
     ) -> "AgentSession": ...
 
 

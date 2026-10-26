@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         registry = PluginRegistry(args.plugin_dir, plugins=args.plugin)
         registry.check_lock(workspace)
         if args.command == "list":
-            from aka.legacy.agent.resources import discover_resources
+            from aka.agent.resources import discover_resources
             result = discover_resources(registry.resource_result(workspace))
         else:
             request = (

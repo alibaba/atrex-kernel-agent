@@ -1,6 +1,4 @@
-"""Project installer results into the existing Agent tool discovery response."""
-from aka.contracts.agent_resources import AgentResourceInstallation
-
-
-def discover_resources(installation: AgentResourceInstallation) -> dict:
-    return {"tools": installation.catalog(), "skills": installation.skill_catalog()}
+"""Compatibility alias; implementation belongs to aka.agent."""
+import sys
+from importlib import import_module
+sys.modules[__name__] = import_module("aka.agent.resources")

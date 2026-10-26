@@ -1,6 +1,6 @@
 """Light session policy over the shared Agent lifecycle and resume mechanics."""
 from dataclasses import replace
-from aka.legacy.agent.native import (
+from aka.agent.native import (
     NativeSession as LegacyNativeSession,
     fresh_session_command as _fresh_session_command,
     resume_session_command as _resume_session_command,
@@ -16,14 +16,14 @@ from aka.light.orchestrator.agent_runtime.codex_ledger import (
 )
 
 
-def fresh_session_command(prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None):
+def fresh_session_command(prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None):
     return _fresh_session_command(prompt, session_id, reasoning_effort, agent_cli,
-                                  runtime=runtime or build_agent_runtime(agent_cli))
+                                  runtime=runtime or build_agent_runtime(agent_cli), environment=environment)
 
 
-def resume_session_command(prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None):
+def resume_session_command(prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None):
     return _resume_session_command(prompt, session_id, reasoning_effort, agent_cli,
-                                   runtime=runtime or build_agent_runtime(agent_cli))
+                                   runtime=runtime or build_agent_runtime(agent_cli), environment=environment)
 
 
 def session_environment(agent_cli="claude"):
@@ -80,45 +80,35 @@ def normalize_stream(
 
 
 
-class NativeSession(LegacyNativeSession):
-    _build_runtime = staticmethod(build_agent_runtime)
+from aka.agent.session_hooks import SessionHooks
 
-    def _prepare_environment(self, environment, overrides, session_id):
+
+class LightSessionHooks(SessionHooks):
+    def prepare_environment(self, workspace, environment, overrides, session_id):
         from aka.light.orchestrator.agent_home import prepare_agent_environment
-        for key, value in (overrides or {}).items():
-            if value is None:
-                environment.pop(key, None)
-            else:
-                environment[str(key)] = str(value)
-        return prepare_agent_environment(self.workspace, environment, session_id)
+        return prepare_agent_environment(workspace, super().invocation_environment(environment, overrides), session_id)
 
-    def _invocation_environment(self, overrides):
-        environment = dict(self.environment)
+    def invocation_environment(self, environment, overrides):
         for key, value in (overrides or {}).items():
-            # Capture and the ledger remain bound to the Home chosen at creation.
-            if key in {"HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR"}:
-                if value != self.environment.get(key):
-                    raise ValueError(f"Cannot change {key} inside an open Agent session")
-            if value is None:
-                environment.pop(key, None)
-            else:
-                environment[str(key)] = str(value)
-        return environment
+            if key in {"HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR"} and value != environment.get(key):
+                raise ValueError(f"Cannot change {key} inside an open Agent session")
+        return super().invocation_environment(environment, overrides)
 
-    @staticmethod
-    def _new_codex_observer(environment):
+    def observer(self, environment):
         return CodexSessionLedgerObserver(codex_home(environment))
 
-    def _stream_usage(self, stdout):
-        return terminal_usage_from_stream(stdout, backend=self.runtime_id)
+    def stream_usage(self, runtime_id, stdout):
+        return terminal_usage_from_stream(stdout, backend=runtime_id)
 
-    def _observe(self, stdout):
-        return normalize_stream(
-            self.runtime_id, stdout, session_id=self._session_id,
-            codex_observer=self._observer if self._ledger_usable else None,
-            adapter=self._runtime._adapter,
-        )
+    def observe(self, runtime_id, stdout, session_id, observer, backend):
+        return normalize_stream(runtime_id, stdout, session_id=session_id,
+                                codex_observer=observer, adapter=backend)
 
-    def _check_invocation(self, resume):
-        if not resume and self._invoked:
+    def check_invocation(self, invoked, resume):
+        if invoked and not resume:
             raise RuntimeError("Session already invoked; use resume=True or open a new Session")
+
+
+def NativeSession(*args, **kwargs):
+    kwargs["session_hooks"] = LightSessionHooks()
+    return LegacyNativeSession(*args, **kwargs)

@@ -20,7 +20,7 @@ from typing import Optional
 
 from aka.contracts.problem import LoadedProblem
 from aka.contracts.evaluation import EvaluationUnavailable
-from aka.legacy.agent.runtime import auth_hint
+from aka.agent.runtime import auth_hint
 
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, DEPENDENCY_REVIEW_SCHEMA_VERSION, DEPENDENCY_REVIEW_TIMEOUT_S, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
 from .resources import DEPENDENCY_REVIEW_PROMPT, PROMPTS_DIR
@@ -62,7 +62,7 @@ from .plan_reviewers import (
 from .review_trace import ReviewTrace
 from aka.legacy.evaluation.metadata import distributed_evaluation_world_size, evaluator_num_gpus
 from aka.legacy.resources.plugins import PluginRegistry
-from aka.legacy.agent.session import SessionResult
+from aka.legacy.workflow.agent_session import SessionResult
 from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
 from aka.legacy.evaluation.local_results import _record_local_test_result
 from aka.legacy.resources.prompts import render_prompt
@@ -218,6 +218,7 @@ class Campaign:
                     timeout=min(self.setup_timeout, 1_800),
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
+                    agent_plugins=False,
                 )
                 self._account(result, f"agent problem generation attempt {attempt + 1}")
                 generated = staging / AGENT_PROBLEM_FILENAME
@@ -426,7 +427,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
-        from aka.legacy.agent.availability import check_review_service
+        from aka.agent.availability import check_review_service
 
         candidate_digest = _production_review_digest(
             workspace, framework, require_gluon
@@ -1902,10 +1903,21 @@ class Campaign:
                 "combined authoritative gate.\n\n" + prompt
             )
         if framework_baseline_progress_path(self.workspace).is_file():
+            resume_path = ".atrex_long_horizon/framework_baseline/resume.json"
+            if self.agent.capabilities.filesystem_isolation:
+                resume_record = self.workspace / resume_path
+                resume_path = "framework_baseline_resume.json"
+                destination = self.workspace / resume_path
+                if destination.is_symlink() or (destination.exists() and destination.stat().st_nlink != 1):
+                    raise ValueError("Workflow resume projection must not have filesystem aliases")
+                if resume_record.is_file():
+                    shutil.copy2(resume_record, destination)
+                else:
+                    destination.unlink(missing_ok=True)
             prompt = (
                 "# Resume V1 from an unexpected-exit handoff\n\n"
                 "Do not start over. Read "
-                "`.atrex_long_horizon/framework_baseline/resume.json` when present, then inspect "
+                f"`{resume_path}` when present, then inspect "
                 "the existing candidate and debug files. Continue at the recorded `next_step` and "
                 "avoid repeating completed research.\n\n" + prompt
             )
@@ -2237,6 +2249,11 @@ class Campaign:
         return self.services.numerical_feedback(workspace, standard_correctness_passed=standard_correctness_passed)
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude", **options):
+        from .agent_access import for_workspace
+
+        if self.agent.capabilities.filesystem_isolation:
+            if "access" not in options:
+                options["access"] = for_workspace(self, workspace, resources=options.get("agent_plugins", True))
         runtime = (
             self.agent_runtime
             if agent_cli == self.agent_cli

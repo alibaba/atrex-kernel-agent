@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-legacy"
-version = "0.1.0"
+version = "0.2.0"
 description = "AKA Task, Agent, Workflow and Execution implementations"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-framework==0.1.0"]
+dependencies = ["atrex-aka-framework==0.2.0"]
 
 [project.entry-points."aka.commands"]
 optimize = "aka.legacy.compat.command:main"
@@ -15,7 +15,7 @@ workflow = "aka.bootstrap.workflow_cli:main"
 execution = "aka.legacy.execution.cli:main"
 
 [project.entry-points."aka.tokens"]
-agent = "aka.legacy.agent.plugin:AGENT"
+agent = "aka.agent.plugin:AGENT"
 workflow = "aka.legacy.workflow.plugin:WORKFLOW"
 problem = "aka.legacy.task.problem.plugin:PROBLEM"
 source = "aka.legacy.task.source.plugin:SOURCE"
@@ -28,7 +28,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka.legacy", "aka.legacy.*"]
+include = ["aka.legacy", "aka.legacy.*", "aka.agent", "aka.agent.*"]
 
 [tool.setuptools.package-data]
 "*" = ["*", "**/*"]

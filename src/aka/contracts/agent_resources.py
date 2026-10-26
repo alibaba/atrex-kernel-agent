@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from pathlib import Path
 import re
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
+from .filesystem import FilesystemAccess
 
 
 @dataclass(frozen=True)
@@ -121,3 +122,9 @@ class AgentResourceInstallation:
 
     def skill_catalog(self) -> list[dict[str, Any]]:
         return deepcopy(list(self._skills))
+
+
+class AgentResourceRegistry(Protocol):
+    def filesystem_access(self, workspace: Path) -> FilesystemAccess:
+        """Return locked, installed resource links and read-only content grants."""
+        ...

@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from dataclasses import replace
 from pathlib import Path
 
-from aka.legacy.agent.runtime import (
+from aka.agent.runtime import (
     CliAgentRuntime as SharedCliAgentRuntime,
     build_session_environment as shared_session_environment,
 )
@@ -47,14 +47,19 @@ SUPPORTED_RUNTIME_IDS = DEFAULT_BACKEND_REGISTRY.ids
 REASONING_EFFORTS = frozenset({"low", "medium", "high", "xhigh", "max"})
 
 
-def build_session_environment(runtime_id: str) -> dict[str, str]:
-    environment = shared_session_environment(runtime_id)
+def build_session_environment(runtime_id: str, *, environment=None) -> dict[str, str]:
+    environment = shared_session_environment(runtime_id, environment=environment)
+    for name in ("ATREX_PRIVATE_REFERENCE_DIR", "ATREX_SANDBOX_REQUIREMENTS_FILE", "AKA_GATEWAY_DEV_DEPENDENCIES"):
+        environment.pop(name, None)
     # HTTP sandboxes mount the Light guard, not the Legacy package resources.
     # Keep the shared environment policy while selecting the visible tool route.
     if not SESSION_SHELL_GUARD.is_file():
         raise ValueError("selected Agent shell guard resource is unavailable")
     environment["BASH_ENV"] = str(SESSION_SHELL_GUARD)
-    return environment
+    screen, state = protected_gateway_identity(environment)
+    environment["ATREX_PROTECTED_GATEWAY_SCREEN"] = screen
+    environment["ATREX_PROTECTED_GATEWAY_STATE_DIR"] = state
+    return DEFAULT_BACKEND_REGISTRY.create(runtime_id).configure_environment(environment)
 
 
 def terminal_usage_from_stream(stdout: str, *, backend: str = "") -> TokenUsage:
@@ -117,9 +122,13 @@ class CliAgentRuntime(SharedCliAgentRuntime):
         adapter,
         *,
         process_runner: ProcessRunner = run_bounded,
+        environment=None,
     ) -> None:
-        super().__init__(adapter, process_runner=process_runner)
+        super().__init__(adapter, process_runner=process_runner, environment=environment)
 
+
+    def session_environment(self):
+        return build_session_environment(self.id, environment=self._environment)
 
     def run(self, request: AgentRunRequest) -> AgentRunResult:
         if request.reasoning_effort not in REASONING_EFFORTS:
@@ -127,10 +136,7 @@ class CliAgentRuntime(SharedCliAgentRuntime):
                 f"unsupported reasoning effort: {request.reasoning_effort!r}"
             )
         session_id = request.session_id or str(uuid.uuid4())
-        command = self.build_command(
-            request.prompt, session_id, request.reasoning_effort
-        )
-        environment = build_session_environment(self.id)
+        environment = self.session_environment()
         environment["IS_SANDBOX"] = "1"
         if request.extra_environment:
             for key, value in request.extra_environment.items():
@@ -166,6 +172,7 @@ class CliAgentRuntime(SharedCliAgentRuntime):
         # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id
+        command = self.build_command(request.prompt, session_id, request.reasoning_effort, environment=environment)
         from ..agent_home import PREPARED_ENV, prepare_agent_environment
 
         environment = prepare_agent_environment(request.workspace, environment, session_id)
@@ -267,7 +274,7 @@ class CliAgentRuntime(SharedCliAgentRuntime):
         # WorkflowExportReader consumes normalized public observations, not the
         # private capture/native transcript tree. Include setup/V1 invocations,
         # even when no Episode was reached or the optional capture is disabled.
-        from aka.legacy.agent.public_output import record_invocation
+        from aka.agent.public_output import record_invocation
 
         try:
             record_invocation(
@@ -345,9 +352,10 @@ def build_agent_runtime(
     process_runner: ProcessRunner = run_bounded,
     runtime_assets_dir: Path | None = None,
     registry: BackendAdapterRegistry = DEFAULT_BACKEND_REGISTRY,
+    environment=None,
 ) -> AgentRuntime:
     adapter = registry.create(runtime_id, runtime_assets_dir)
-    return CliAgentRuntime(adapter, process_runner=process_runner)
+    return CliAgentRuntime(adapter, process_runner=process_runner, environment=environment)
 
 
 def build_session_command(

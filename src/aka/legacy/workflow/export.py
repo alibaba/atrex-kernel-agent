@@ -12,7 +12,7 @@ import subprocess
 
 from aka.contracts.workflow_export import (
     EXPORT_VERSION, CampaignRef, CandidateFact, EpisodeFact, ExportArtifact,
-    ProgressFact, ResultFact, WorkflowExportSnapshot, snapshot_from_document,
+    ProgressFact, ResultFact, SessionFact, WorkflowExportSnapshot, snapshot_from_document,
 )
 from aka.core.keys import ServiceKey
 from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
@@ -20,7 +20,7 @@ from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
 WORKFLOW_EXPORT = ServiceKey('workflow_export', 'WorkflowExportReader', module='aka.contracts.workflow_export')
 name = 'export'
 provide = ('workflow_export',)
-identity_packages = ('aka.legacy.workflow', 'aka.legacy.agent')
+identity_packages = ('aka.legacy.workflow', 'aka.agent')
 Config = {'type': 'object', 'properties': {}, 'additionalProperties': False}
 Defaults = {}
 RUNTIME = '.atrex_long_horizon'
@@ -465,7 +465,7 @@ class RetainedWorkflowExport:
 
     def read(self, workspace):
         from .public_state import writer_active
-        from aka.legacy.agent.public_output import read_sessions
+        from aka.agent.public_output import read_sessions
         workspace = Path(workspace).resolve()
         if not (workspace/RUNTIME).exists() and (workspace/'workflow-export.json').is_file():
             return snapshot_from_document(document(workspace/'workflow-export.json'))
@@ -562,7 +562,11 @@ class RetainedWorkflowExport:
         sessions = list(read_sessions(workspace))
         for directory in sorted(runtime.glob('episodes/e*/agent_observations')):
             sessions.extend(read_sessions(directory, direct=True))
-        sessions = tuple(replace(s, episode=next((e.episode for e in episodes if e.session_id==s.session_id),s.episode)) for s in sessions)
+        sessions = tuple(SessionFact(
+            s.session_id, s.runtime,
+            next((e.episode for e in episodes if e.session_id == s.session_id), None),
+            s.status, s.updated_at, s.usage, s.events, s.resume_supported,
+        ) for s in sessions)
         observed = [p.stat().st_mtime for p in (runtime/'state.json', runtime/'active_episode.json', workspace/'memory/live.json') if p.is_file()]
         observed.extend(datetime.fromisoformat(s.updated_at).timestamp() for s in sessions if s.updated_at)
         updated = datetime.fromtimestamp(max(observed), timezone.utc).isoformat() if observed else None

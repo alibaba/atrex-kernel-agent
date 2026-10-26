@@ -40,6 +40,7 @@ def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
         f"/{RUNTIME_DIR}/",
         f"/{VERIFY_DIR}/",
         f"/{STALL_STATE_FILE}",
+        "/framework_baseline_resume.json",
         f"/{LIVE_MEMORY_FILE}",
         *wiki_trace_rules,
         *agent_runtime_rules,

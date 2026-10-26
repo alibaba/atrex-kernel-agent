@@ -39,7 +39,7 @@
     },
     {
       "id": "agent",
-      "name": "aka.legacy.agent.plugin",
+      "name": "aka.legacy.workflow.agent_plugin",
       "required": true
     },
     {

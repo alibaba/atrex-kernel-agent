@@ -20,7 +20,7 @@ from aka.legacy.workflow.store import VERIFY_DIR
 from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.legacy.task.durable import durable_write_json
-from aka.legacy.agent.availability import check_review_service
+from aka.agent.availability import check_review_service
 from aka.legacy.experiment.retry import retry_infrastructure
 from aka.contracts.execution import ExecutionPending
 from aka.legacy.workflow.review_trace import ReviewTrace
@@ -149,7 +149,7 @@ def _sources(campaign, workspace, *, harness=None):
 
 
 def _request_review(campaign, workspace, files, digest, previous=None):
-    from aka.legacy.agent.session import run_session
+    from aka.legacy.workflow.agent_session import run_session
 
     def review_once():
         timeout = campaign.production_review_timeout
@@ -168,11 +168,17 @@ def _request_review(campaign, workspace, files, digest, previous=None):
                 request = {"evidence_digest": digest, "previous_validation": previous}
                 (root / "review_request.json").write_text(json.dumps(request, indent=2))
                 trace.write_private_json("review-request.json", request)
+                access_options = {}
+                if campaign.agent.capabilities.filesystem_isolation:
+                    from .agent_access import for_workspace
+                    access_options["access"] = for_workspace(campaign, root, resources=False,
+                        read_only=tuple(root / name for name in (*files, "review_request.json")))
                 result = run_session(
                     root, PROMPT.read_text(), timeout=timeout,
                     agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
                     runtime=campaign.agent_runtime,
                     observation_directory=trace.observation_directory,
+                    **access_options,
                 )
                 trace.record_session(result)
                 campaign._account(result, "numerical supplemental-test planning")

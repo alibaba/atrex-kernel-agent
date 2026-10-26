@@ -29,9 +29,7 @@ class ManagedCampaign(Campaign):
             problem_generation_timeout=min(settings.setup_timeout, 1800),
             v1_ask_codex="codex" in settings.framework_baseline_reviewers,
             v1_ask_qoder="qoder" in settings.framework_baseline_reviewers,
-            agent_sandbox=workflow.agent.options.sandbox,
-            bwrap_executable=workflow.agent.options.bwrap_executable,
-            agent_read_only_paths=workflow.agent.options.read_only_paths)
+            agent_sandbox="bwrap" if workflow.agent.capabilities.filesystem_isolation else "none")
         campaign.request = request
         campaign.problem = problem
         campaign.problem_provider = workflow.problem

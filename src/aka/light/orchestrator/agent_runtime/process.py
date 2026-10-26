@@ -9,10 +9,25 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from aka.legacy.agent.process import (
-    ProcessRunner, protected_gateway_identity,
-    DEFAULT_PROTECTED_GATEWAY_SCREEN, DEFAULT_PROTECTED_GATEWAY_STATE_NAME,
-)
+from aka.agent.process import ProcessRunner
+
+DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
+DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
+def protected_gateway_identity(
+    environment: dict[str, str] | None = None,
+) -> tuple[str, str]:
+    """Resolve shared gateway protection targets without embedding host paths."""
+    values = os.environ if environment is None else environment
+    screen = values.get(
+        "ATREX_PROTECTED_GATEWAY_SCREEN", DEFAULT_PROTECTED_GATEWAY_SCREEN
+    )
+    state_dir = values.get("ATREX_PROTECTED_GATEWAY_STATE_DIR")
+    if not state_dir:
+        cache_home = values.get("XDG_CACHE_HOME")
+        cache_root = Path(cache_home).expanduser() if cache_home else Path.home() / ".cache"
+        state_dir = str(cache_root / DEFAULT_PROTECTED_GATEWAY_STATE_NAME)
+    return screen, state_dir
+
 
 from ..recovery_processes import spawn_owned_session
 
@@ -455,27 +470,27 @@ def run_bounded(
     cwd: Path,
     timeout: int | None,
     env: dict | None = None,
-    *, auxiliary_input_files: dict[str, Path] | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None, session_control=None, agent_access=None,
 ) -> tuple[str, str, int, bool]:
     from aka.light.agent.execution_clock import SessionControl
     environment = dict(os.environ if env is None else env)
-    control = SessionControl()
+    control = session_control or SessionControl()
     if not environment.get("ATREX_AKA_RUNTIME_OWNER"):
         return _run_bounded(command, cwd, timeout, environment,
-                            auxiliary_input_files=auxiliary_input_files, session_control=control)
+                            auxiliary_input_files=auxiliary_input_files, session_control=control, agent_access=agent_access)
     from ..supervisor_runtime import session_environment
 
     with session_environment(cwd, environment, session_control=control) as environment:
         if environment.get("ATREX_EPISODE_WORKSPACE") and command[:2] == ["codex", "exec"]:
             command = [*command[:2], "--skip-git-repo-check", *command[2:]]
         return _run_bounded(command, cwd, timeout, environment,
-                            auxiliary_input_files=auxiliary_input_files, session_control=control)
+                            auxiliary_input_files=auxiliary_input_files, session_control=control, agent_access=agent_access)
 
 
 def _run_bounded(
     command: list[str], cwd: Path, timeout: int | None, env: dict | None = None,
     *, auxiliary_input_files: dict[str, Path] | None = None,
-    session_control=None,
+    session_control=None, agent_access=None,
 ) -> tuple[str, str, int, bool]:
     """Run with an active-time deadline excluding authenticated Runtime waits."""
     from aka.light.agent.execution_clock import (
@@ -514,7 +529,7 @@ def _run_bounded(
         # suspension remains authoritative if a shell backgrounds/disconnects.
         command = foreground_command(command, cwd, max(default_timeout, DEFAULT_TIMEOUT_SECONDS))
     launch, view = wrap_agent_command(
-        command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
+        command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files, agent_access=agent_access,
     )
     capture = None
     proc = None
@@ -541,9 +556,10 @@ def _run_bounded(
         finish_session_capture(capture, interrupted=True)
         if view:
             view.close()
+        launch.close()
         raise
     finally:
-        launch.close()
+        launch.release_arguments()
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
@@ -621,8 +637,11 @@ def _run_bounded(
                 except (OSError, ValueError):
                     pass  # The planner timeout path will record unusable evidence.
         finally:
-            if view is not None:
-                view.close()
+            try:
+                if view is not None:
+                    view.close()
+            finally:
+                launch.close()
     returncode = proc.returncode
     if timed_out:
         stderr = (stderr or "") + (
