@@ -26,7 +26,7 @@ class EpisodeWorktree:
         base_commit: str,
         root: Path | None = None,
     ) -> "EpisodeWorktree":
-        branch = f"atrex/long-e{episode:04d}-{uuid.uuid4().hex[:8]}"
+        branch = f"atrex/long-e{episode:04d}-{uuid.uuid4().hex[:8]}/candidate"
         worktree_root = root or (
             incumbent_workspace.parent
             / ".atrex_long_horizon_worktrees"

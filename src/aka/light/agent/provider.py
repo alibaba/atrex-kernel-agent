@@ -70,6 +70,8 @@ class LightAgent:
         self._runtimes = {}
         self._sessions = WeakSet()
         self._lock = threading.RLock()
+        self._idle = threading.Condition(self._lock)
+        self._controls = {}
         self._closed = False
 
     def check_open(self):
@@ -77,10 +79,32 @@ class LightAgent:
             raise RuntimeError("Agent selection has been closed")
 
     def _execute(self, command, cwd, timeout, env=None):
-        self.check_open()
         environment = dict(env or {})
         environment.update(self.options.environment())
-        return self._process(command, cwd=cwd, timeout=timeout, env=environment)
+        from .execution_clock import SessionControl
+        with self._lock:
+            self.check_open()
+            control = SessionControl() if self._process is run_bounded else None
+            if control is not None:
+                self._controls[control] = environment.get("ATREX_AGENT_PREPARED_HOME")
+        if control is None:
+            # A custom runner retains its own process ownership contract.
+            return self._process(command, cwd=cwd, timeout=timeout, env=environment)
+        try:
+            return self._process(command, cwd=cwd, timeout=timeout, env=environment,
+                                 session_control=control)
+        finally:
+            control.close()
+            with self._idle:
+                self._controls.pop(control, None)
+                self._idle.notify_all()
+
+    def _cancel(self, environment):
+        home = environment.get("ATREX_AGENT_PREPARED_HOME")
+        with self._lock:
+            controls = tuple(c for c, value in self._controls.items() if home and value == home)
+        for control in controls:
+            control.kill()
 
     def runtime(self, runtime_id):
         with self._lock:
@@ -101,6 +125,7 @@ class LightAgent:
             session = NativeSession(
                 runtime_id, workspace, session_id or str(uuid.uuid4()), self._execute,
                 values, self.check_open, runtime=self.runtime(runtime_id).runtime,
+                cancel_environment=self._cancel,
             )
             self._sessions.add(session)
             return session
@@ -108,7 +133,14 @@ class LightAgent:
     def close(self):
         with self._lock:
             self._closed = True
-            for session in self._sessions:
-                session.close()
+            controls = tuple(self._controls)
+            sessions = tuple(self._sessions)
+        for control in controls:
+            control.kill()
+        with self._idle:
+            self._idle.wait_for(lambda: not self._controls, timeout=10)
+        for session in sessions:
+            session.close()
+        with self._lock:
             self._sessions.clear()
             self._runtimes.clear()

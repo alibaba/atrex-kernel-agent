@@ -1835,6 +1835,11 @@ class LongHorizonCampaign:
                 )
             usage_receipt = uuid.uuid4().hex
             try:
+                access_options = {}
+                runner_agent = getattr(runner, "agent", None)
+                if getattr(runner_agent, "options", None) is not None and runner_agent.options.sandbox == "bwrap":
+                    from .agent_access import for_workspace
+                    access_options["access"] = for_workspace(self.base_campaign, worktree.path)
                 result = runner.run(
                     worktree.path,
                     prompt,
@@ -1859,6 +1864,7 @@ class LongHorizonCampaign:
                     record_usage=lambda tokens: store.record_usage(
                         state, usage_receipt, tokens
                     ),
+                    **access_options,
                 )
                 # Also persist before verification: a GPU outage there must not
                 # discard the coding session's usage. Receipt replay is harmless.

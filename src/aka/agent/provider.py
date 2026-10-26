@@ -38,10 +38,13 @@ class AgentOptions:
     bwrap_executable: str = "bwrap"
     timeout_seconds: float | None = None
     state_directory: Path | None = None
+    proc_mode: str = "private"
 
     def __post_init__(self):
         if self.sandbox not in {"none", "bwrap"}:
             raise ValueError("Agent sandbox must be none or bwrap")
+        if self.proc_mode not in {"private", "projected"}:
+            raise ValueError("Agent proc_mode must be private or projected")
         validate_timeout(self.timeout_seconds)
 
 
@@ -94,7 +97,7 @@ class Agent:
                 raise ValueError("Bubblewrap requires an FD-aware spawn adapter")
             from .execution.bubblewrap import BubblewrapExecution
 
-            self._execution = BubblewrapExecution(options.bwrap_executable)
+            self._execution = BubblewrapExecution(options.bwrap_executable, proc_mode=options.proc_mode)
 
     def _check_open(self):
         if self._closed:
@@ -143,6 +146,7 @@ class Agent:
         if self.options.sandbox == "bwrap":
             standard = {
                 "PATH",
+                "PYTHONPATH",
                 "HOME",
                 "TERM",
                 "LANG",
@@ -208,11 +212,11 @@ class Agent:
                         access.mounts,
                         access.hidden_paths,
                         access.read_only_paths
-                        if guard in access.read_only_paths
+                        if any(guard.is_relative_to(path) for path in access.read_only_paths)
                         else (*access.read_only_paths, guard),
                     )
                 elif not system_visible(guard) and not any(
-                    m.source == guard and m.target == guard and not m.writable
+                    guard.is_relative_to(m.source) and m.source == m.target and not m.writable
                     for m in mounts
                 ):
                     mounts.append(AgentMount(guard, guard))

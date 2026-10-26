@@ -420,24 +420,9 @@ def wrap_agent_command(
         argv.extend(("--chdir", str(workspace)))
         if not projected_proc:
             return SandboxLaunch.with_bwrap_environment(argv, command, values), view
-        child_values = dict(values, LD_PRELOAD=SHIM_TARGET, ATREX_PROC_MAPS_SOCKET="/proc/.maps.sock")
-        # Wait for the first namespace-local census, with a bounded readiness
-        # failure rather than letting the Provider start against an empty view.
-        ready = ["/bin/sh", "-c", 'n=0; while [ ! -r /proc/self/stat ]; do '
-                 'n=$((n+1)); if [ "$n" -ge 1200 ]; then '
-                 'echo "Agent process view did not become ready" >&2; exit 125; fi; '
-                 'sleep 0.025; done; exec "$@"', "aka-proc-ready", *command]
-        launch = SandboxLaunch.with_bwrap_environment(argv, ready, child_values)
-        # The shim belongs inside bwrap only, not in its trusted Python parent.
-        launch.environment = values
-        prefix = [sys.executable, "-m", "aka.light.orchestrator.proc_view",
-                  "--workspace", str(workspace), "--argument-fd", str(launch.pass_fds[0])]
+        from aka.agent.execution.proc_view import prepare_launch
         provider = shutil.which(command[0], path=values.get("PATH")) if command else None
-        if provider:
-            # The same exact executable has already passed installation_mounts.
-            prefix.extend(("--provider-executable", str(Path(provider).resolve(strict=True))))
-        launch.command = [*prefix, "--", *launch.command]
-        return launch, view
+        return prepare_launch(argv, command, values, workspace, provider_executable=provider), view
     except BaseException:
         if view:
             view.close()

@@ -20,7 +20,12 @@ def violation(argv, environment):
 
 
 def prepare_environment(values, explicit_environment=()):
+    from importlib.resources import files
+
     values = dict(values)
+    # The matching Workflow runtime is an explicit code dependency. Its parent
+    # is a search path, not a grant to that parent's files or sibling checkouts.
+    values["PYTHONPATH"] = str(Path(str(files("aka"))).resolve().parent)
     for name in (
         "ATREX_PRIVATE_REFERENCE_DIR",
         "ATREX_SANDBOX_REQUIREMENTS_FILE",

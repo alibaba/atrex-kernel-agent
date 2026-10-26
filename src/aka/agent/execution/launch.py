@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import tempfile
 from dataclasses import dataclass, field
-from typing import BinaryIO
+from typing import BinaryIO, Callable
 
 
 @dataclass(slots=True)
@@ -13,6 +13,7 @@ class SandboxLaunch:
     command: list[str]
     environment: dict[str, str] = field(repr=False)
     _arguments: BinaryIO | None = field(default=None, repr=False)
+    _cleanup: Callable[[], None] | None = field(default=None, repr=False)
 
     @classmethod
     def with_bwrap_environment(
@@ -54,8 +55,17 @@ class SandboxLaunch:
     def pass_fds(self) -> tuple[int, ...]:
         return (self._arguments.fileno(),) if self._arguments is not None else ()
 
-    def close(self) -> None:
+    def release_arguments(self) -> None:
+        """Release the parent's FD after spawn without ending the filesystem view."""
         arguments = self._arguments
         self._arguments = None
         if arguments is not None:
             arguments.close()
+
+    def close(self) -> None:
+        cleanup, self._cleanup = self._cleanup, None
+        try:
+            self.release_arguments()
+        finally:
+            if cleanup is not None:
+                cleanup()

@@ -16,12 +16,13 @@ Config = {
         "session_name": {"type": "string"},
         "sandbox": {"type": "string", "enum": ["none", "bwrap"]},
         "bwrap_executable": {"type": "string", "minLength": 1},
+        "proc_mode": {"type": "string", "enum": ["private", "projected"]},
         "timeout_seconds": {"type": "number", "minimum": 0},
         "state_directory": {"type": "string", "minLength": 1},
     },
     "additionalProperties": False,
 }
-Defaults = {"sandbox": "none", "bwrap_executable": "bwrap", "session_name": ""}
+Defaults = {"sandbox": "none", "bwrap_executable": "bwrap", "proc_mode": "private", "session_name": ""}
 
 
 def options(config):
@@ -33,6 +34,7 @@ def options(config):
         config.get("bwrap_executable", "bwrap"),
         config.get("timeout_seconds"),
         Path(config["state_directory"]) if config.get("state_directory") else None,
+        config.get("proc_mode", "private"),
     )
 
 
@@ -42,6 +44,9 @@ def validate_config(config):
         from .execution.bubblewrap import executable
 
         executable(value.bwrap_executable)
+        if value.proc_mode == "projected":
+            from .execution.proc_view import validate_runtime
+            validate_runtime()
 
 
 def selected_guard(ctx):

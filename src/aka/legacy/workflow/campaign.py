@@ -218,6 +218,7 @@ class Campaign:
                     timeout=min(self.setup_timeout, 1_800),
                     agent_cli=self.agent_cli,
                     reasoning_effort="max",
+                    agent_plugins=False,
                 )
                 self._account(result, f"agent problem generation attempt {attempt + 1}")
                 generated = staging / AGENT_PROBLEM_FILENAME
@@ -1902,10 +1903,21 @@ class Campaign:
                 "combined authoritative gate.\n\n" + prompt
             )
         if framework_baseline_progress_path(self.workspace).is_file():
+            resume_path = ".atrex_long_horizon/framework_baseline/resume.json"
+            if getattr(self.agent, "options", None) is not None and self.agent.options.sandbox == "bwrap":
+                resume_record = self.workspace / resume_path
+                resume_path = "framework_baseline_resume.json"
+                destination = self.workspace / resume_path
+                if destination.is_symlink() or (destination.exists() and destination.stat().st_nlink != 1):
+                    raise ValueError("Workflow resume projection must not have filesystem aliases")
+                if resume_record.is_file():
+                    shutil.copy2(resume_record, destination)
+                else:
+                    destination.unlink(missing_ok=True)
             prompt = (
                 "# Resume V1 from an unexpected-exit handoff\n\n"
                 "Do not start over. Read "
-                "`.atrex_long_horizon/framework_baseline/resume.json` when present, then inspect "
+                f"`{resume_path}` when present, then inspect "
                 "the existing candidate and debug files. Continue at the recorded `next_step` and "
                 "avoid repeating completed research.\n\n" + prompt
             )
@@ -2237,6 +2249,11 @@ class Campaign:
         return self.services.numerical_feedback(workspace, standard_correctness_passed=standard_correctness_passed)
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude", **options):
+        from .agent_access import for_workspace
+
+        if getattr(self.agent, "options", None) is not None and self.agent.options.sandbox == "bwrap":
+            if "access" not in options:
+                options["access"] = for_workspace(self, workspace, resources=options.get("agent_plugins", True))
         runtime = (
             self.agent_runtime
             if agent_cli == self.agent_cli

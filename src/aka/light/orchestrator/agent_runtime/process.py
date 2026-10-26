@@ -470,11 +470,11 @@ def run_bounded(
     cwd: Path,
     timeout: int | None,
     env: dict | None = None,
-    *, auxiliary_input_files: dict[str, Path] | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None, session_control=None,
 ) -> tuple[str, str, int, bool]:
     from aka.light.agent.execution_clock import SessionControl
     environment = dict(os.environ if env is None else env)
-    control = SessionControl()
+    control = session_control or SessionControl()
     if not environment.get("ATREX_AKA_RUNTIME_OWNER"):
         return _run_bounded(command, cwd, timeout, environment,
                             auxiliary_input_files=auxiliary_input_files, session_control=control)
@@ -556,9 +556,10 @@ def _run_bounded(
         finish_session_capture(capture, interrupted=True)
         if view:
             view.close()
+        launch.close()
         raise
     finally:
-        launch.close()
+        launch.release_arguments()
     guard_stop = threading.Event()
     dependency_violations: list[str] = []
     environment_failures: list[str] = []
@@ -636,8 +637,11 @@ def _run_bounded(
                 except (OSError, ValueError):
                     pass  # The planner timeout path will record unusable evidence.
         finally:
-            if view is not None:
-                view.close()
+            try:
+                if view is not None:
+                    view.close()
+            finally:
+                launch.close()
     returncode = proc.returncode
     if timed_out:
         stderr = (stderr or "") + (
