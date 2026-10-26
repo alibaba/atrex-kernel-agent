@@ -175,6 +175,25 @@ class WorkflowBaseline:
     def framework_baseline_problem(
         self, v0_blob, baseline_commit, *, include_policy_review=True
     ):
+        from aka.contracts.acceptance import FrameworkCandidateFacts
+        from aka.legacy.task.git import git_worktree_blob
+        from aka.legacy.task.source.inspection import kernel_is_gluon
+        from aka.legacy.acceptance.source_policy import production_structure_violations
+
+        campaign = self.campaign
+        blob = git_worktree_blob(campaign.workspace, "kernel.py")
+        # Preserve the original ordering: unchanged candidates do not invoke review.
+        violations = ()
+        gluon = False
+        mutated = ()
+        if blob and blob != v0_blob:
+            if campaign.source_checks_enabled:
+                violations = tuple(campaign._production_kernel_violations() if include_policy_review
+                    else production_structure_violations(campaign.workspace, campaign.framework))
+            if not violations:
+                gluon = campaign.source_checks_enabled and campaign.framework.lower() in {"triton", "gluon"} and kernel_is_gluon(campaign.workspace)
+                if not gluon:
+                    mutated = tuple(campaign.candidate_workspace.baseline_changes(campaign.workspace, baseline_commit))
         return self.acceptance.check_framework_candidate(
             FrameworkCandidateRequest(
                 self.campaign.workspace,
@@ -183,6 +202,7 @@ class WorkflowBaseline:
                 baseline_commit,
                 include_policy_review,
                 source_checks_enabled=self.campaign.source_checks_enabled,
+                facts=FrameworkCandidateFacts(blob, mutated, violations, gluon),
             )
         )
 
