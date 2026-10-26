@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -197,12 +198,19 @@ def validate_checkpoint(snapshot, *, check_destinations=False):
 
 
 def restore_checkpoint(snapshot):
+    from .execution.home import open_private_directory, read_regular_bytes
     value = validate_checkpoint(snapshot, check_destinations=True)
     for row in value["files"]:
         target = Path(row["target"])
         if target.exists():
             continue
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with target.open("xb") as stream:
-            stream.write((snapshot.directory / row["file"]).read_bytes())
-        target.chmod(row["mode"])
+        retained = snapshot.directory / row["file"]
+        content = read_regular_bytes(retained, limit=retained.stat().st_size)
+        if _digest(content) != row["sha256"]:
+            raise ValueError("Agent checkpoint content changed")
+        with open_private_directory(target.parent) as parent:
+            descriptor = os.open(target.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                                 row["mode"], dir_fd=parent)
+            with os.fdopen(descriptor, "wb") as stream:
+                os.fchmod(stream.fileno(), row["mode"])
+                stream.write(content)
