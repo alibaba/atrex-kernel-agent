@@ -11,12 +11,21 @@ if TYPE_CHECKING:
     from aka.legacy.workflow.campaign import Campaign
 from aka.legacy.workflow.constants import DEFAULT_CONVERT_AFTER
 from aka.legacy.workflow.hardware import hardware_directive, should_convert_to_gluon
-from aka.legacy.task.source.inspection import head_kernel_is_gluon
+from aka.legacy.task.source.inspection import source_uses_gluon
 from aka.legacy.workflow.policy import install_workspace_policy
 from aka.legacy.execution.sandbox import sandbox_command
 from .runtime_directives import _agent_runtime_directive, _plan_generator_directive
 from aka.legacy.resources.workspace import install_workspace_resources
 from aka.legacy.task.candidate_workspace.state import head_kernel_is_initial_baseline, read_stall, reconstruct_stall, write_stall
+
+
+def committed_kernel_is_gluon(candidate_workspace, workspace: Path) -> bool:
+    """Apply the existing source predicate to the selected committed revision."""
+    revision = candidate_workspace.current_revision(workspace)
+    if not revision:
+        return False
+    content = candidate_workspace.read_revision(workspace, revision, ["kernel.py"]).files["kernel.py"]
+    return content is not None and source_uses_gluon(content.decode("utf-8"))
 
 
 def prepare_campaign(campaign: Campaign) -> None:
@@ -37,7 +46,7 @@ def prepare_campaign(campaign: Campaign) -> None:
         and latest_version(campaign.workspace) > 0
     ):
         violations = campaign._production_kernel_violations(
-            require_gluon=head_kernel_is_gluon(campaign.workspace)
+            require_gluon=committed_kernel_is_gluon(campaign.candidate_workspace, campaign.workspace)
         )
         if violations and not head_kernel_is_initial_baseline(campaign.workspace):
             raise RuntimeError(
@@ -145,12 +154,12 @@ def conversion_required(campaign: Campaign, stall: int, workspace: Path) -> bool
         campaign.framework,
         stall,
         int(getattr(campaign, "convert_after", DEFAULT_CONVERT_AFTER)),
-        head_is_gluon=head_kernel_is_gluon(workspace),
+        head_is_gluon=committed_kernel_is_gluon(campaign.candidate_workspace, workspace),
     )
 
 
-def candidate_is_gluon(workspace: Path) -> bool:
-    return head_kernel_is_gluon(workspace)
+def candidate_is_gluon(workspace: Path, *, candidate_workspace) -> bool:
+    return committed_kernel_is_gluon(candidate_workspace, workspace)
 
 
 def restored_stall(workspace: Path) -> int:
@@ -172,7 +181,6 @@ STALL_STATE_FILE = _constants_STALL_STATE_FILE
 class CampaignEnvironment:
     """Bind Workflow-owned environment operations to one campaign."""
     CONVERT_PERF_TOL = CONVERT_PERF_TOL
-    candidate_is_gluon = staticmethod(candidate_is_gluon)
     restored_stall = staticmethod(restored_stall)
     save_stall = staticmethod(save_stall)
     read_memory = staticmethod(read_memory)
@@ -182,6 +190,9 @@ class CampaignEnvironment:
 
     def __init__(self, campaign):
         self.campaign = campaign
+
+    def candidate_is_gluon(self, workspace):
+        return candidate_is_gluon(workspace, candidate_workspace=self.campaign.candidate_workspace)
 
     def prepare_campaign(self, campaign):
         return prepare_campaign(self.campaign)
