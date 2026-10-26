@@ -3,14 +3,66 @@
 Missing measurements remain None. Episode outcome and measurement completeness
 are independent. No private memory, journal or ledger dictionaries cross here.
 """
-from dataclasses import dataclass, field
+from collections.abc import Mapping
+from dataclasses import dataclass, field, fields, is_dataclass
 import hashlib
+import math
 from pathlib import Path
+from types import MappingProxyType
 from typing import Literal, Protocol
 
 EXPORT_VERSION = 3
 ResultState = Literal['unmeasured', 'running', 'pass', 'correctness_failure',
                       'infrastructure_error', 'rejected', 'interrupted']
+
+
+def _freeze(value):
+    """Copy public JSON data recursively before freezing it."""
+    if isinstance(value, Mapping):
+        if any(not isinstance(key, str) for key in value):
+            raise ValueError('public mapping keys must be strings')
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (tuple, list)):
+        return tuple(_freeze(item) for item in value)
+    if value is None or type(value) in (str, bool, int, float):
+        if type(value) is float and not math.isfinite(value):
+            raise ValueError('public numbers must be finite')
+        return value
+    raise ValueError('public facts must contain JSON data')
+
+
+def _number(value, *, positive=False, optional=False):
+    if optional and value is None:
+        return
+    if type(value) not in (int, float) or not math.isfinite(value) or (positive and value <= 0):
+        raise ValueError('invalid public measurement')
+
+
+def _counter(value, *, optional=False):
+    if optional and value is None:
+        return
+    if type(value) is not int or value < 0:
+        raise ValueError('invalid public counter')
+
+
+def _flag(value):
+    if type(value) is not bool:
+        raise ValueError('invalid public boolean')
+
+
+def _frozen_fields(instance, *names):
+    for name in names:
+        object.__setattr__(instance, name, _freeze(getattr(instance, name)))
+
+
+def _document(value):
+    if is_dataclass(value):
+        return {item.name: _document(getattr(value, item.name)) for item in fields(value)}
+    if isinstance(value, Mapping):
+        return {key: _document(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_document(item) for item in value]
+    return value
 
 
 @dataclass(frozen=True)
@@ -20,13 +72,39 @@ class ResultFact:
     gate: str | None
     complete: bool
     latency_us: float | None
-    case_latencies_us: dict[str, float]
+    case_latencies_us: Mapping[str, float]
     expected_case_ids: tuple[str, ...]
     subject: str | None
     objective: str | None
     score: float | None
-    metrics: dict[str, float] = field(default_factory=dict)
+    metrics: Mapping[str, float] = field(default_factory=dict)
     case_ids_opaque: bool = True
+
+    def __post_init__(self):
+        if (not isinstance(self.case_latencies_us, Mapping) or not isinstance(self.metrics, Mapping)
+                or not isinstance(self.expected_case_ids, (tuple, list))):
+            raise ValueError('invalid public measurement containers')
+        _frozen_fields(self, 'case_latencies_us', 'expected_case_ids', 'metrics')
+        expected = self.expected_case_ids
+        if len(set(expected)) != len(expected) or any(not isinstance(key, str) or not key for key in expected):
+            raise ValueError('invalid public case identities')
+        if self.state not in ('unmeasured', 'running', 'pass', 'correctness_failure',
+                              'infrastructure_error', 'rejected', 'interrupted'):
+            raise ValueError('unsupported public result state')
+        _number(self.latency_us, positive=True, optional=True)
+        _number(self.score, optional=True)
+        for key, value in self.case_latencies_us.items():
+            if not key:
+                raise ValueError('invalid public case identity')
+            _number(value, positive=True)
+        for value in self.metrics.values():
+            _number(value)
+        _flag(self.complete)
+        _flag(self.case_ids_opaque)
+        if self.complete and (not expected or set(self.case_latencies_us) != set(expected) or self.latency_us is None):
+            raise ValueError('complete result lacks required measurements')
+        if self.state == 'pass' and (not self.complete or self.correctness != 'PASS' or self.gate != 'PASS'):
+            raise ValueError('passing result lacks complete verification')
 
 
 @dataclass(frozen=True)
@@ -40,13 +118,29 @@ class CandidateFact:
     result: ResultFact
     summary: str | None = None
 
+    def __post_init__(self):
+        _counter(self.version)
+        _counter(self.episode, optional=True)
+        _flag(self.promoted)
+        if not isinstance(self.result, ResultFact):
+            raise ValueError('candidate lacks a public result')
+
 
 @dataclass(frozen=True)
 class EvaluationFact:
     kind: str
     timestamp: str | None
-    source_sha256: dict[str, str]
+    source_sha256: Mapping[str, str]
     result: ResultFact
+
+    def __post_init__(self):
+        _frozen_fields(self, 'source_sha256')
+        if not isinstance(self.result, ResultFact):
+            raise ValueError('evaluation lacks a public result')
+        if not isinstance(self.kind, str) or not self.kind:
+            raise ValueError('episode evaluation has no kind')
+        if self.timestamp is not None and not isinstance(self.timestamp, str):
+            raise ValueError('invalid episode evaluation timestamp')
 
 
 @dataclass(frozen=True)
@@ -54,8 +148,22 @@ class EpisodeCandidateFact:
     head_revision: str | None
     revision: str | None
     base_revision: str | None
-    artifacts: dict[str, str]
+    artifacts: Mapping[str, str]
     evaluations: tuple[EvaluationFact, ...] = ()
+
+    def __post_init__(self):
+        import re
+        _frozen_fields(self, 'artifacts')
+        object.__setattr__(self, 'evaluations', tuple(self.evaluations))
+        for revision in (self.head_revision, self.revision, self.base_revision):
+            if revision is not None and (not isinstance(revision, str) or not re.fullmatch('[0-9a-f]{40}', revision)):
+                raise ValueError('invalid episode candidate revision')
+        if self.revision is not None and self.revision != self.head_revision:
+            raise ValueError('episode source revision differs from captured HEAD')
+        if 'kernel.py' not in self.artifacts or set(self.artifacts) - {'kernel.py', 'solution.json'}:
+            raise ValueError('invalid final episode source handles')
+        if any(not isinstance(item, EvaluationFact) for item in self.evaluations):
+            raise ValueError('invalid public episode evaluation')
 
 
 @dataclass(frozen=True)
@@ -74,6 +182,15 @@ class EpisodeFact:
     violation: str | None = None
     final_candidate: EpisodeCandidateFact | None = None
 
+    def __post_init__(self):
+        _counter(self.episode)
+        _counter(self.version, optional=True)
+        _flag(self.accepted)
+        _frozen_fields(self, 'experiments', 'phases')
+        for value in (self.mode, self.violation):
+            if value is not None and not isinstance(value, str):
+                raise ValueError('invalid episode mode or violation')
+
 
 @dataclass(frozen=True)
 class SessionFact:
@@ -82,9 +199,19 @@ class SessionFact:
     episode: int | None
     status: str
     updated_at: str | None
-    usage: dict[str, int | str | None]
+    usage: Mapping[str, int | str | None]
     events: tuple[dict, ...] = ()
     resume_supported: bool = False
+
+    def __post_init__(self):
+        _counter(self.episode, optional=True)
+        _flag(self.resume_supported)
+        if not isinstance(self.usage, Mapping):
+            raise ValueError('invalid public usage')
+        _frozen_fields(self, 'usage', 'events')
+        for key, value in self.usage.items():
+            if key.endswith('_tokens'):
+                _counter(value, optional=True)
 
 
 @dataclass(frozen=True)
@@ -97,12 +224,22 @@ class ProgressFact:
     updated_at: str | None
     writer_active: bool
 
+    def __post_init__(self):
+        for value in (self.episode, self.version, self.completed_episodes, self.observed_tokens):
+            _counter(value, optional=True)
+        _flag(self.writer_active)
+
 
 @dataclass(frozen=True)
 class CampaignRef:
     id: str
     workspace: Path
     name: str
+
+    def __post_init__(self):
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError('public campaign has no identity')
+        object.__setattr__(self, 'workspace', Path(self.workspace))
 
 
 @dataclass(frozen=True)
@@ -114,6 +251,20 @@ class ExportArtifact:
     sha256: str
     visibility: Literal['public']
     content: bytes = field(repr=False)
+
+    def __post_init__(self):
+        from pathlib import PurePosixPath
+        filename = PurePosixPath(self.filename)
+        if filename.is_absolute() or '..' in filename.parts or not filename.parts or str(filename) != self.filename:
+            raise ValueError('invalid public artifact filename')
+        if not isinstance(self.id, str) or not self.id:
+            raise ValueError('invalid public artifact identity')
+        if self.visibility != 'public':
+            raise ValueError('non-public artifact in public snapshot')
+        if not isinstance(self.content, bytes):
+            raise ValueError('public artifact content must be bytes')
+        if hashlib.sha256(self.content).hexdigest() != self.sha256:
+            raise ValueError('public artifact content identity changed')
 
     @property
     def size_bytes(self) -> int:
@@ -133,7 +284,51 @@ class WorkflowExportSnapshot:
     progress: ProgressFact
     artifacts: tuple[ExportArtifact, ...]
     warnings: tuple[dict[str, str | bool | None], ...] = ()
-    hardware: dict[str, str] = field(default_factory=dict)
+    hardware: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if type(self.schema_version) is not int or self.schema_version != EXPORT_VERSION:
+            raise ValueError('unsupported public Workflow snapshot')
+        if not isinstance(self.campaign, CampaignRef) or not isinstance(self.progress, ProgressFact):
+            raise ValueError('invalid public campaign or progress')
+        for name in ('candidates', 'episodes', 'sessions', 'artifacts'):
+            object.__setattr__(self, name, tuple(getattr(self, name)))
+        for name, kind in (('episodes', EpisodeFact), ('sessions', SessionFact), ('artifacts', ExportArtifact)):
+            if any(not isinstance(item, kind) for item in getattr(self, name)):
+                raise ValueError('invalid public ' + name)
+        _frozen_fields(self, 'warnings', 'hardware')
+        if len({a.id for a in self.artifacts}) != len(self.artifacts):
+            raise ValueError('duplicate public artifact identity')
+        if any(not isinstance(c, CandidateFact) for c in self.candidates) or len({c.version for c in self.candidates}) != len(self.candidates):
+            raise ValueError('duplicate or absent public candidate identity')
+        if self.baseline is not None and (self.baseline not in self.candidates or self.baseline.version != 0):
+            raise ValueError('baseline differs from declared candidates')
+        if self.incumbent is not None and (self.incumbent not in self.candidates or not self.incumbent.promoted or self.incumbent.result.state != 'pass'):
+            raise ValueError('incumbent differs from verified declared candidates')
+        if len({e.episode for e in self.episodes}) != len(self.episodes):
+            raise ValueError('duplicate public episode identity')
+        by_id = {artifact.id: artifact for artifact in self.artifacts}
+        for episode in self.episodes:
+            final = episode.final_candidate
+            if final is None:
+                continue
+            digests = {}
+            for name, handle in final.artifacts.items():
+                artifact = by_id.get(handle)
+                role = 'episode-candidate-source' if name == 'kernel.py' else 'episode-candidate-manifest'
+                if artifact is None or artifact.role != role or artifact.filename != f'episodes/e{episode.episode:04d}/final/{name}':
+                    raise ValueError('final episode artifact differs from its source handle')
+                digests[name] = artifact.sha256
+            for evaluation in final.evaluations:
+                if evaluation.source_sha256 != digests:
+                    raise ValueError('episode evaluation does not bind final source bytes')
+                if self.baseline is not None and evaluation.result.expected_case_ids != self.baseline.result.expected_case_ids:
+                    raise ValueError('episode evaluation differs from campaign cases')
+        for row in self.warnings:
+            if not isinstance(row.get('code'), str):
+                raise ValueError('public warning has no code')
+            if 'gate_failed' in row:
+                _flag(row['gate_failed'])
 
     def artifact(self, artifact_id: str) -> bytes:
         """Return declared content even after the producer changes."""
@@ -169,9 +364,8 @@ class WorkflowExportReader(Protocol):
 
 def snapshot_document(snapshot: WorkflowExportSnapshot, *, include_content: bool = True) -> dict:
     """Portable public facts; no native runtime paths or evaluator-only content."""
-    from dataclasses import asdict
     import base64
-    value = asdict(snapshot)
+    value = _document(snapshot)
     value['campaign']['workspace'] = str(snapshot.campaign.workspace)
     for artifact in value['artifacts']:
         content = artifact.pop('content')
@@ -183,37 +377,8 @@ def snapshot_document(snapshot: WorkflowExportSnapshot, *, include_content: bool
 
 
 def _result_from_document(row):
-    """Shared semantic check for durable producer output and portable snapshots."""
-    import math
-    def number(value, *, positive=False, optional=False):
-        if optional and value is None:
-            return
-        if type(value) not in (int,float) or not math.isfinite(value) or (positive and value <= 0):
-            raise ValueError('invalid public measurement')
-    def flag(value):
-        if type(value) is not bool:
-            raise ValueError('invalid public boolean')
-    result = dict(row)
-    result['expected_case_ids'] = tuple(result['expected_case_ids'])
-    expected = result['expected_case_ids']
-    if len(set(expected)) != len(expected) or any(not isinstance(key,str) or not key for key in expected):
-        raise ValueError('invalid public case identities')
-    if result['state'] not in ('unmeasured','running','pass','correctness_failure','infrastructure_error','rejected','interrupted'):
-        raise ValueError('unsupported public result state')
-    number(result['latency_us'],positive=True,optional=True)
-    number(result['score'],optional=True)
-    for key, value in result['case_latencies_us'].items():
-        if not isinstance(key,str):
-            raise ValueError('invalid public case identity')
-        number(value,positive=True)
-    for value in result.get('metrics',{}).values():
-        number(value)
-    flag(result['complete']); flag(result.get('case_ids_opaque',True))
-    if result['complete'] and (not expected or set(result['case_latencies_us']) != set(expected) or result['latency_us'] is None):
-        raise ValueError('complete result lacks required measurements')
-    if result['state']=='pass' and (not result['complete'] or result['correctness']!='PASS' or result['gate']!='PASS'):
-        raise ValueError('passing result lacks complete verification')
-    return ResultFact(**result)
+    """Use the same validation and ownership boundary as direct construction."""
+    return ResultFact(**row)
 
 
 def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
