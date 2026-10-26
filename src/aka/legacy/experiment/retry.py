@@ -89,7 +89,9 @@ def _load(path, stage, policy):
 def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None, policy=None):
     """Run once unless an explicit bounded schedule and Execution facts permit retry.
 
-    Stage identifies one experiment step and its immutable inputs. A crash during
+    An empty schedule dispatches once without a retry ledger; Experiment owns
+    the attempt record and any decision to call again. For configured retries,
+    stage identifies one experiment step and its immutable inputs. A crash during
     an attempt, an old record, or a changed policy needs host reconciliation;
     this helper never queries or replaces an existing Job. Elapsed time starts
     at the first infrastructure failure and includes waiting across restarts.
@@ -98,6 +100,10 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None,
     if not isinstance(policy, InfrastructureRetryPolicy):
         raise TypeError("policy must be an InfrastructureRetryPolicy")
     cancel = cancel if cancel is not None else Event()
+    if not policy.delays:
+        if cancel.is_set():
+            raise CancelledError("validation batch cancelled")
+        return operation()
     key = hashlib.sha256(stage.encode()).hexdigest()[:24]
     path = Path(workspace) / ".atrex_long_horizon" / "infrastructure" / f"{key}.json"
     ensure_private_directory(path.parent)
