@@ -118,9 +118,35 @@ class GatewayCommandEvaluator:
         return ()
 
     def observe_step(self, prepared, index, result):
+        assessment = self.diagnose_step(prepared, index, result)
         if prepared.context["measurement"] is None:
-            return StepEvaluation()
-        return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"),))
+            return StepEvaluation(assessment=assessment)
+        return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"),), assessment)
+
+    def diagnose_step(self, prepared, index, result):
+        """Pure per-batch explanation; collecting an original Job is the host's action."""
+        if not prepared.measurement_identities or index >= len(prepared.measurement_identities):
+            return None
+        from .measurement import assess_payload
+        from .transport_results import _optimizer_result_from_eval
+        identity = prepared.measurement_identities[index]
+        payload = None
+        if identity.method != "atrex-bench/profile":
+            try:
+                context = prepared.context
+                measurement = context["measurement"]
+                request = measurement.request_for(index) if measurement is not None else json.loads(context["command"].submission)["request"]
+                job = transport._job_response(result.stdout)
+                if job and isinstance(job.get("result"), dict):
+                    measured = _optimizer_result_from_eval(job["result"],
+                        [point.shape_id for point in identity.points if point.shape_id is not None],
+                        request["reference"].get("metadata"),
+                        require_performance=request.get("mode") != "correctness_only", hardware=context["command"].hardware)
+                    payload = {"runs": [{"revision": "candidate", "repeat": 0,
+                        "exit_code": result.returncode, "result": measured}]}
+            except (TypeError, ValueError, KeyError, json.JSONDecodeError):
+                pass
+        return assess_payload(identity, result, payload)
 
     def interpret(self, prepared, results):
         context = prepared.context

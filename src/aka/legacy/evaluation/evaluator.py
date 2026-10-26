@@ -219,16 +219,41 @@ class LegacyEvaluator:
         if getattr(plan, "gateway", None) is not None:
             from .gateway_command import GatewayCommandEvaluator
             return GatewayCommandEvaluator().observe_step(plan.gateway, index, result)
+        assessment = self.diagnose_step(prepared, index, result)
         if plan.request.mode in {"v0", "framework"}:
             from .baseline import BaselinePreparation
             BaselinePreparation.print_v0_evaluator_output(result)
         if plan.request.mode == "abba" and result.returncode != 0:
-            raise RuntimeError(f"gateway ABBA command exited {result.returncode}: "
-                               + (result.stdout + "\n" + result.stderr)[-3000:])
+            failure = RuntimeError(f"gateway ABBA command exited {result.returncode}: "
+                                   + (result.stdout + "\n" + result.stderr)[-3000:])
+            failure.measurement_assessment = assessment
+            raise failure
         if plan.request.mode == "abba" and result.returncode == 0:
             return StepEvaluation((self._artifact(f"result-{index:04d}.json",
-                _payload_from_stdout(self._dev_stdout(plan.request, result.stdout)), "measurement_batch"),))
-        return StepEvaluation()
+                _payload_from_stdout(self._dev_stdout(plan.request, result.stdout)), "measurement_batch"),), assessment)
+        return StepEvaluation(assessment=assessment)
+
+    def diagnose_step(self, prepared, index, result):
+        """Explain unavailable or partial facts before a host raises on transport."""
+        if not prepared.measurement_identities or index >= len(prepared.measurement_identities):
+            return None
+        gateway = getattr(prepared.context, "gateway", None)
+        if gateway is not None:
+            from .gateway_command import GatewayCommandEvaluator
+            return GatewayCommandEvaluator().diagnose_step(gateway, index, result)
+        from .measurement import assess_payload
+        identity = prepared.measurement_identities[index]
+        payload = None
+        try:
+            if prepared.context.request.mode == "abba":
+                payload = _payload_from_stdout(self._dev_stdout(prepared.context.request, result.stdout))
+            else:
+                measured = result_from_stdout(result.stdout)
+                payload = {"runs": [{"revision": "candidate", "repeat": 0,
+                    "exit_code": result.returncode, "result": measured}]}
+        except (ValueError, RuntimeError, json.JSONDecodeError):
+            pass  # The absence of evidence remains explicit in the assessment.
+        return assess_payload(identity, result, payload)
 
     def interpret(
         self, prepared: PreparedEvaluation, results: Sequence[JobResult]
@@ -252,7 +277,9 @@ class LegacyEvaluator:
             from .baseline import BaselinePreparation
             if getattr(plan, "gateway", None) is not None:
                 BaselinePreparation.print_v0_evaluator_output(result)
-            return self._baseline_result(request, result)
+            verification = self._baseline_result(request, result)
+            return replace(verification, measurements=tuple(assessment for index, raw in enumerate(results)
+                if (assessment := self.diagnose_step(prepared, index, raw)) is not None))
         payloads = []
         for index, result in enumerate(results):
             if result.returncode != 0:
@@ -261,16 +288,30 @@ class LegacyEvaluator:
                     + (result.stdout + "\n" + result.stderr)[-3000:]
                 )
             payloads.append(_payload_from_stdout(self._dev_stdout(request, result.stdout)))
-        payload = _merge_batch_payloads(
-            payloads, list(plan.schedule), list(plan.shape_ids)
-        )
+        assessments = tuple(assessment for index, raw in enumerate(results)
+            if (assessment := self.diagnose_step(prepared, index, raw)) is not None)
+        try:
+            payload = _merge_batch_payloads(
+                payloads, list(plan.schedule), list(plan.shape_ids)
+            )
+        except (ValueError, KeyError, TypeError) as error:
+            error.measurement_assessments = assessments
+            raise
         result = interpret_verification_payload(
             payload,
             schedule=list(plan.schedule),
             repeats=max(1, self.configuration.repeats),
             artifact="result.json",
         )
-        return replace(result, artifacts=(self._artifact("result.json", payload, "evaluation"),))
+        failure = result.failure
+        if failure is None and any(item.validity == "unknown" for item in assessments):
+            timeout = any(diagnostic.category in {"timeout", "deadline"}
+                for item in assessments for diagnostic in item.diagnostics)
+            failure = EvaluationFailure("timeout" if timeout else "incomplete",
+                "abba-timeout" if timeout else "missing-measurement",
+                "ABBA measurement remains incomplete; this does not establish candidate invalidity")
+        return replace(result, artifacts=(self._artifact("result.json", payload, "evaluation"),),
+            measurements=assessments, failure=failure)
 
     @staticmethod
     def _dev_stdout(request, stdout):

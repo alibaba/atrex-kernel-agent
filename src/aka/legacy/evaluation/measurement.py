@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from pathlib import Path
 
 from aka.contracts.measurement import (
@@ -25,7 +26,8 @@ def _content_inputs(workspace, reference, excluded=(), evaluation_input=None):
     skipped = {".git", ".atrex_verify", ".atrex_long_horizon", ".atrex_plugins",
                ".claude", ".agents", ".qoder", "__pycache__", "memory", "profiles",
                "plans", "gpu-wiki", "reference-projects", "skills", "verification_artifacts",
-               "eval_output", "profile_output"}
+               "eval_output", "profile_output", ".mypy_cache", ".pytest_cache", ".ruff_cache",
+               ".atrex_environment"}
     excluded = set(excluded)
     for path in sorted(workspace.rglob("*")):
         relative = path.relative_to(workspace)
@@ -151,3 +153,94 @@ def gateway_identity(request, reference_files, kind="run"):
     method = "atrex-bench/profile" if kind == "profile" else "atrex-bench/abba" if abba else "atrex-bench/eval"
     return MeasurementIdentity(method, points,
         input_digest, parameters, requirements, policy)
+
+
+def assess_payload(identity, result, payload=None):
+    """Interpret one physical receipt without altering the incumbent/candidate score."""
+    from .abba import _result_latency, _result_performance_score
+    observed = []
+    diagnostics = []
+    rows = payload.get("runs", ()) if isinstance(payload, dict) else ()
+    if not isinstance(rows, list):
+        rows = ()
+    valid_rows, invalid, unresolved = [], False, bool(isinstance(payload, dict) and payload.get("error"))
+    matched = set()
+    expected_schedule = list(dict.fromkeys((point.side, point.repeat) for point in identity.points))
+    actual_schedule = [(row.get("revision"), row.get("repeat")) for row in rows if isinstance(row, dict)]
+    if actual_schedule != expected_schedule[:len(actual_schedule)]:
+        diagnostics.append(MeasurementDiagnostic("protocol", "unexpected-measurement-order"))
+        unresolved = True
+    for row in rows:
+        if not isinstance(row, dict):
+            unresolved = True
+            continue
+        side, repeat = row.get("revision"), row.get("repeat")
+        points = tuple(point for point in identity.points if point.side == side and point.repeat == repeat)
+        if not isinstance(side, str) or type(repeat) is not int or not points or (side, repeat) in matched:
+            diagnostics.append(MeasurementDiagnostic("protocol", "unexpected-or-duplicate-measurement-row"))
+            unresolved = True
+            continue
+        matched.add((side, repeat))
+        measured = row.get("result")
+        timed_out = row.get("termination") == "timed_out" or (
+            row.get("exit_code") == -1 and row.get("stderr_tail") == "evaluation timed out")
+        if timed_out:
+            unresolved = True
+            diagnostics.extend(MeasurementDiagnostic("timeout", "abba-run-deadline", point,
+                ("owned-measurement-timeout",)) for point in points)
+            continue
+        if not isinstance(measured, dict):
+            unresolved = True
+            continue
+        by_shape = measured.get("latency_us_by_shape")
+        for point in points:
+            if point.shape_id is None or isinstance(by_shape, dict) and point.shape_id in by_shape:
+                observed.append(point)
+        correctness_only = identity.parameters.get("mode") == "correctness_only"
+        passed = measured.get("all_pass") is True and row.get("exit_code", 0) == 0
+        raw_latency = measured.get("latency_us_geomean")
+        if raw_latency is None and isinstance(measured.get("performance"), dict):
+            raw_latency = measured["performance"].get("latency_us")
+        numeric = type(raw_latency) in (int, float) and math.isfinite(raw_latency) and raw_latency > 0
+        shape_numeric = all(point.shape_id is None or isinstance(by_shape, dict)
+            and type(by_shape.get(point.shape_id)) in (int, float)
+            and math.isfinite(by_shape[point.shape_id]) and by_shape[point.shape_id] > 0 for point in points)
+        if correctness_only and passed:
+            observed.extend(point for point in points if point not in observed)
+            valid_rows.append(True)
+        elif passed and numeric and shape_numeric and _result_latency(measured) is not None and _result_performance_score(measured) is not None:
+            valid_rows.append(True)
+        elif measured.get("all_pass") is False:
+            invalid = True
+            diagnostics.extend(MeasurementDiagnostic("measurement", "measured-check-failure", point,
+                ("structured-measurement-result",)) for point in points)
+        else:
+            unresolved = True
+    missing = tuple(point for point in identity.points if point not in observed)
+    diagnostics.extend(MeasurementDiagnostic("incomplete", "missing-measurement", point) for point in missing)
+    def causes(items):
+        for item in items:
+            yield item
+            yield from causes(item.causes)
+    for cause in causes(getattr(result, "causes", ())):
+        diagnostics.append(MeasurementDiagnostic(cause.category, cause.code, basis=("public-execution-cause",)))
+        if cause.category in {"timeout", "deadline"}:
+            unresolved = True
+    for diagnostic in result.diagnostics:
+        diagnostics.append(MeasurementDiagnostic(diagnostic.category, diagnostic.code,
+            basis=("public-execution-diagnostic",)))
+        if diagnostic.category in {"timeout", "deadline"}:
+            unresolved = True
+    status = result.transport_status
+    if status in {"timed_out", "cancelled", "interrupted", "infrastructure", "protocol", "rejected"}:
+        unresolved = True
+        category = "timeout" if status == "timed_out" else status
+        diagnostics.extend(MeasurementDiagnostic(category, "execution-" + status, point,
+            ("public-execution-result",)) for point in missing)
+    shape_known = bool(identity.points) and all(point.shape_id is not None for point in identity.points)
+    completeness = "complete" if not missing and shape_known else "partial" if shape_known else "unknown"
+    validity = "invalid" if invalid else "valid" if valid_rows and not unresolved and not missing else "unknown"
+    environment = result.environment_identity
+    comparability = "comparable" if environment and identity.dependency_policy != "unknown" else "unknown"
+    return MeasurementAssessment(identity, completeness, validity, tuple(observed), missing,
+        tuple(diagnostics), comparability, environment)

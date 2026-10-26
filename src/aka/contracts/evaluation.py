@@ -221,6 +221,8 @@ class Evaluator(Protocol):
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation: ...
     # Implementations may offer fallback(prepared, results) for a prepared alternative.
     # Hosts invoke it only after all original receipts have been observed.
+    # Implementations may offer pure diagnose_step(prepared, index, result) for
+    # unavailable receipts, before the host raises on Execution transport facts.
     def observe_step(
         self, prepared: PreparedEvaluation, index: int, result: JobResult
     ) -> StepEvaluation: ...
