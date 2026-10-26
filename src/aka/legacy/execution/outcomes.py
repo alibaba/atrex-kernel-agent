@@ -220,13 +220,19 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
     for record in records:
         if record.get("event") != "attempt":
             continue
+        submission = next((item for item in submitted.values() if
+            (record.get("attempt_id") and item.get("attempt_id") == record["attempt_id"]) or
+            (record.get("identifier") and item.get("identifier") == record["identifier"])), {})
+        intent = next((item for item in records if item.get("event") == "submission_intent" and
+            record.get("attempt_id") and item.get("attempt_id") == record["attempt_id"]), {})
         details = tuple(diagnostic(item) for item in record.get("diagnostics", ()))
         attempts.append(ExecutionAttempt(
             record["operation"], record["disposition"],
             ResourceIdentity(record.get("backend", resource.backend), record.get("identifier")),
             record.get("termination"), record.get("exit_code"), details, record.get("attempt_id"),
             tuple(_cause(item) for item in record.get("causes", ())),
-            record.get("idempotency_key"), record.get("request_identity"),
+            record.get("idempotency_key") or submission.get("idempotency_key") or intent.get("idempotency_key"),
+            record.get("request_identity") or submission.get("request_identity") or intent.get("request_identity"),
         ))
         records_diagnostics.extend(details)
     starts = {record["attempt_id"]: record for record in records if record.get("event") == "attempt_started"}
@@ -287,6 +293,8 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
     confirmations = {}
     for record in records:
         if record.get("event") != "attempt":
+            continue
+        if record.get("disposition") == "not_submitted":
             continue
         confirmation = record.get("remote_terminated")
         if "remote_terminated" not in record and type(record.get("exit_code")) is int:
