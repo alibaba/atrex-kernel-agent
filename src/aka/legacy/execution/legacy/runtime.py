@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
-from aka.contracts.execution import Cancellation
+from aka.contracts.execution import Cancellation, JobResult
 
 
 @dataclass(frozen=True)
@@ -31,6 +31,7 @@ class SandboxRequest:
     cancel_event: Cancellation | None = None
     submission: bytes | None = None
     num_gpus: int = 1
+    on_observation: Callable[[JobResult], None] | None = None
 
 
 @dataclass(frozen=True)

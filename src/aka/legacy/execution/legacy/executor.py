@@ -12,9 +12,10 @@ from pathlib import Path
 
 from aka.contracts.execution import BackendCapabilities, CommandSpec, JobResult, ResourceIdentity
 from .runtime import ExecutionHooks, SandboxRequest, current_transport_arguments
+from aka.legacy.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
 
 
-class LegacyExecutor:
+class LegacyExecutor(GatewayRecoveryMixin):
     sandbox_cli_options = True
     sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
@@ -22,9 +23,11 @@ class LegacyExecutor:
     )
     resource_identity = ResourceIdentity("legacy")
 
-    def __init__(self, request=None, hooks=None):
+    def __init__(self, request=None, hooks=None, configuration=None):
         self.request = request
         self.hooks = hooks
+        self.configuration = dict(configuration or {})
+        recovery_policy(self.configuration)
 
     def bind(self, context):
         from .runtime import default_binding
@@ -32,7 +35,11 @@ class LegacyExecutor:
         return self.bind_sandbox(request, hooks)
 
     def bind_sandbox(self, request, hooks):
-        return type(self)(request, hooks)
+        if self.configuration.get("url"):
+            request = replace(request, url=self.configuration["url"], profile="", ssh="")
+        elif self.configuration.get("profile"):
+            request = replace(request, profile=self.configuration["profile"], url="", ssh="")
+        return type(self)(request, hooks, configuration=self.configuration)
 
     def _environment_backend(self):
         from aka.legacy.execution.environment_query import BackendEnvironment
@@ -58,11 +65,27 @@ class LegacyExecutor:
         support = self._environment_backend().check(command_query(command), discover=False)
         require_supported(support)
         from aka.legacy.execution.gateway.requests import bound_limits
+        def observed(result):
+            if command.on_observation is not None:
+                command.on_observation(replace(result, environment_snapshot=support.environment,
+                    environment_identity=support.environment.identity, environment_support=support))
         request = replace(self.request, workspace=command.workspace, command=command.command,
             timeout=command.timeout, environment=bound_limits(command.environment, support), hardware=command.hardware,
             sync=command.artifacts,
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
-            preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus)
+            preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus,
+            on_observation=observed if command.on_observation is not None else None)
+        if not request.ssh:
+            transport = self._job_transport()
+            environment = dict(request.environment)
+            environment.update({key: value for key, value in transport.environment.items() if key.startswith("AGATE_")})
+            import json
+            environment["AKA_EXECUTION_GATEWAY_ROUTE"] = json.dumps({"endpoint": transport.endpoint, "profile": transport.profile})
+            if transport.endpoint:
+                environment["AGATE_URL"] = transport.endpoint
+            environment["AKA_GATEWAY_RECOVERY_RETRY_DELAYS"] = json.dumps(self.configuration.get("recovery_retry_delays", []))
+            environment["AKA_GATEWAY_RECOVERY_RETRY_BUDGET_S"] = str(self.configuration.get("recovery_retry_budget_s", 0))
+            request = replace(request, environment=environment)
         result = self._run_sandbox(request, hooks=self.hooks)
         return replace(result, environment_snapshot=support.environment,
                        environment_identity=support.environment.identity, environment_support=support)
@@ -131,7 +154,7 @@ class LegacyExecutor:
         result = run_owned(cmd, environment=environment, workspace=workspace,
             timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
             cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment,
-            input_payload=request.submission)
+            input_payload=request.submission, on_observation=request.on_observation)
         from aka.legacy.execution.gateway.requests import effective_budget
         return replace(result, budgets=(*result.budgets,
             effective_budget(effective_timeout, scope="local-wait", emit=False)))

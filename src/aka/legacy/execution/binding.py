@@ -17,6 +17,32 @@ class SandboxExecutor:
     def resource_identity(self):
         return self.executor.resource_identity
 
+    @property
+    def recovery_capabilities(self):
+        from aka.contracts.execution_recovery import JobRecoveryCapabilities
+        return getattr(self.executor, "recovery_capabilities", JobRecoveryCapabilities())
+
+    def _recovery(self, method, *args, **kwargs):
+        from aka.contracts.execution import UnsupportedExecution
+        operation = getattr(self.executor, method, None)
+        if operation is None:
+            raise UnsupportedExecution("selected executor does not implement job recovery")
+        return operation(*args, **kwargs)
+
+    def query_job(self, reference, *, timeout, retry=None):
+        arguments = {"timeout": timeout}
+        if retry is not None:
+            arguments["retry"] = retry
+        return self._recovery("query_job", reference, **arguments)
+
+    def cancel_job(self, reference, *, timeout):
+        return self._recovery("cancel_job", reference, timeout=timeout)
+
+    def replay_job(self, command, *, idempotency_key):
+        bound = replace(command, environment={**self.context.environment, **command.environment},
+                        hardware=command.hardware or self.context.hardware)
+        return self._recovery("replay_job", bound, idempotency_key=idempotency_key)
+
     def query_environment(self, query):
         method = getattr(self.executor, "query_environment", None)
         if method is not None:

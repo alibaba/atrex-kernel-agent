@@ -51,9 +51,9 @@ TRANSIENT_MARKERS = (
     "context deadline exceeded",
 )
 
-TYPED_DELAYS = (5, 15, 30)
+TYPED_DELAYS = ()
 
-DEV_DELAYS = (10, 30, 60, 120, 240)
+DEV_DELAYS = ()
 
 def _patch_dev_command_script(command_path: Path, workspace: Path | None) -> None:
     """Map the same Task requirements to dev's raw command transport."""
@@ -136,7 +136,7 @@ def _failed_transiently(process: subprocess.CompletedProcess[str]) -> bool:
     # Retry only a backend-confirmed terminal job or explicit admission rejection.
     if not isinstance(process, TransportCapture):
         return False
-    if process.outcome.facts.disposition == "unknown":
+    if process.outcome.facts.disposition != "not_submitted":
         return False
     return any(marker in output for marker in TRANSIENT_MARKERS)
 
@@ -176,56 +176,10 @@ def run_with_recovery(
     typed_delays: tuple[float, ...] = TYPED_DELAYS,
     dev_delays: tuple[float, ...] = DEV_DELAYS,
 ) -> subprocess.CompletedProcess[str]:
-    """Recover typed evaluator transport failures without retrying kernel failures."""
-    import os
-    configured = os.environ.get("AKA_GATEWAY_RETRY_DELAYS")
-    if configured is not None:
-        typed_delays = dev_delays = tuple(json.loads(configured))
-    if _kind(argv) == "dev":
-        process = runner(argv)
-        stderr_parts = [process.stderr.rstrip()] if process.stderr else []
-        for attempt, delay in enumerate(dev_delays, start=2):
-            if not _failed_transiently(process):
-                break
-            stderr_parts.append(
-                "[sandbox] dev evaluator returned no RESULT_JSON; "
-                f"retrying dev attempt {attempt}/{len(dev_delays) + 1} in {delay}s"
-            )
-            sleep(delay)
-            process = runner(argv)
-            if process.stderr:
-                stderr_parts.append(process.stderr.rstrip())
-        if _failed_transiently(process):
-            stderr_parts.append(
-                "[sandbox] infrastructure retries exhausted without "
-                "RESULT_JSON; this is a GPU gateway failure, not an AKA quality result"
-            )
-        return subprocess.CompletedProcess(
-            process.args, process.returncode, process.stdout, "\n".join(stderr_parts)
-        )
+    """Dispatch once; original-job reads and verified stable-key replay own retries.
 
-    process = runner(argv)
-    stderr_parts = [process.stderr.rstrip()] if process.stderr else []
-    for attempt, delay in enumerate(typed_delays, start=2):
-        if not _failed_transiently(process):
-            break
-        note = (
-            "[sandbox] typed eval returned no RESULT_JSON; "
-            f"retrying typed attempt {attempt}/{len(typed_delays) + 1} in {delay}s"
-        )
-        stderr_parts.append(note)
-        sleep(delay)
-        process = runner(argv)
-        if process.stderr:
-            stderr_parts.append(process.stderr.rstrip())
-
-    if _failed_transiently(process):
-        stderr_parts.append(
-            "[sandbox] infrastructure retries exhausted without "
-            "RESULT_JSON; dev fallback disabled; "
-            "this is a GPU gateway failure, not an AKA quality result"
-        )
-
-    return subprocess.CompletedProcess(
-        process.args, process.returncode, process.stdout, "\n".join(stderr_parts)
-    )
+    Retain the historical call signature for external consumers. A whole launcher
+    retry cannot safely bind admission waiting without truncating measurement
+    budgets, and plain CLI submission provides no stable idempotency key.
+    """
+    return runner(argv)

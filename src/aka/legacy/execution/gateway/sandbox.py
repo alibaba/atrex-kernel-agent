@@ -1420,7 +1420,7 @@ def _oss_artifact(job: dict[str, Any], name: str) -> dict[str, Any]:
     raise RuntimeError(f"gateway returned no OSS artifact named {name!r}")
 
 
-def _download_oss_artifact(artifact: dict[str, Any], destination: Path) -> None:
+def _download_oss_artifact(artifact: dict[str, Any], destination: Path, *, timeout=None) -> None:
     """Download one presigned OSS artifact and verify gateway metadata."""
     name = str(artifact.get("name") or "artifact")
     url = artifact.get("url")
@@ -1432,6 +1432,8 @@ def _download_oss_artifact(artifact: dict[str, Any], destination: Path) -> None:
 
     expected_bytes = artifact.get("bytes")
     expected_sha256 = artifact.get("sha256")
+    wait_budget = MAX_HTTP_REQUEST_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + wait_budget
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary: Path | None = None
     try:
@@ -1445,7 +1447,7 @@ def _download_oss_artifact(artifact: dict[str, Any], destination: Path) -> None:
             digest = hashlib.sha256()
             downloaded = 0
             with urllib.request.urlopen(
-                url, timeout=MAX_HTTP_REQUEST_TIMEOUT
+                url, timeout=wait_budget
             ) as response:
                 final_url = urllib.parse.urlsplit(response.geturl())
                 if final_url.scheme not in {"http", "https"} or not final_url.hostname:
@@ -1453,6 +1455,8 @@ def _download_oss_artifact(artifact: dict[str, Any], destination: Path) -> None:
                         f"OSS artifact {name!r} redirected to an invalid URL"
                     )
                 while chunk := response.read(1024 * 1024):
+                    if time.monotonic() >= deadline:
+                        raise TimeoutError("artifact collection exceeded its wait budget")
                     output.write(chunk)
                     digest.update(chunk)
                     downloaded += len(chunk)
@@ -2356,15 +2360,16 @@ def _record_environment_failure(
     durable_write_json(path, payload, indent=2, ensure_ascii=False)
 
 
-def _auth_headers() -> dict[str, str]:
+def _auth_headers(environment=None) -> dict[str, str]:
     """Generate token or AK/SK headers matching agate's auth precedence."""
     import hashlib
 
-    private_token = os.environ.get("AGATE_TOKEN", "")
+    environment = os.environ if environment is None else environment
+    private_token = environment.get("AGATE_TOKEN", "")
     if private_token:
         return {"Authorization": f"Bearer {private_token}"}
-    ak = os.environ.get("AGATE_AK", "")
-    sk = os.environ.get("AGATE_SK", "")
+    ak = environment.get("AGATE_AK", "")
+    sk = environment.get("AGATE_SK", "")
     if not ak or not sk:
         return {}
     ts = str(int(time.time() * 1000))
@@ -2385,10 +2390,10 @@ def _gateway_json(
     path: str,
     payload: dict | None,
     timeout: float,
-    *, allow_list: bool = False,
+    *, allow_list: bool = False, environment=None,
 ) -> dict | list:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
-    headers = dict(_auth_headers())
+    headers = dict(_auth_headers(environment))
     if body is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
@@ -2417,63 +2422,55 @@ def _run_direct_job(
     queue_wait_grace: int,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
-    prior_note = ""
-    for submission in range(2):
-        import uuid
-        attempt_id = uuid.uuid4().hex
-        emit_fact({"event": "attempt_started", "attempt_id": attempt_id, "operation": kind, "backend": "gateway"})
+    import uuid
+    from .jobs import GatewayJobs
+    from aka.legacy.execution.outcomes import observe_attempt
+    attempt_id = uuid.uuid4().hex
+    endpoint, profile = _submission_route(url)
+    identity = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    key = payload.get("idempotency_key")
+    emit_fact({"event": "attempt_started", "attempt_id": attempt_id, "operation": kind, "backend": "gateway"})
+    emit_fact({"event": "submission_intent", "attempt_id": attempt_id, "request_identity": identity,
+               "idempotency_key": key})
+    try:
+        accepted = _gateway_json(endpoint or url, "POST", f"/v1/jobs/{kind}", payload, 30)
+    except GatewayHTTPError as error:
         try:
-            accepted = _gateway_json(url, "POST", f"/v1/jobs/{kind}", payload, 30)
-        except GatewayHTTPError as error:
-            from aka.legacy.execution.outcomes import observe_attempt
-            observe_attempt(subprocess.CompletedProcess((), 1, "", f"agate: [{error.status}]"),
-                            operation=kind, attempt_id=attempt_id)
-            raise
-        job_id = accepted.get("job_id")
-        if not isinstance(job_id, str) or not job_id:
-            raise RuntimeError(f"gateway submission returned no job_id: {accepted}")
-        emit_fact({"event": "submitted", "attempt_id": attempt_id, "identifier": job_id, "operation": kind, "backend": "gateway"})
-        deadline = time.monotonic() + timeout + queue_wait_grace
-        try:
-            while True:
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    raise TimeoutError(f"gateway job {job_id} exceeded client timeout")
-                wait_for = min(30.0, remaining)
-                job = _gateway_json(
-                    url,
-                    "GET",
-                    f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}",
-                    None,
-                    wait_for + 10,
-                )
-                if job.get("status") in ("succeeded", "failed", "cancelled"):
-                    from aka.legacy.execution.outcomes import observe_attempt
-                    observe_attempt(subprocess.CompletedProcess(
-                        (), 0 if job.get("status") == "succeeded" else 1, json.dumps(job), ""),
+            native = json.loads(error.detail)
+        except (TypeError, ValueError):
+            native = error.detail
+        if isinstance(native, dict):
+            native = native.get("error", native)
+        observe_attempt(subprocess.CompletedProcess((), 1, json.dumps({"error": native}), f"agate: [{error.status}]"),
                         operation=kind, attempt_id=attempt_id)
-                    if submission == 0 and _cancelled_without_outcome(job):
-                        prior_note = (
-                            f"[sandbox] gateway cancelled job_id={job_id} without a "
-                            "result/error; resubmitted once"
-                        )
-                        break
-                    return subprocess.CompletedProcess(
-                        args=["direct-gateway", kind, job_id],
-                        returncode=0 if job.get("status") == "succeeded" else 1,
-                        stdout=json.dumps(job),
-                        stderr=prior_note,
-                    )
-        except BaseException:
-            try:
-                _gateway_json(url, "POST", f"/v1/jobs/{job_id}/cancel", {}, 10)
-            except Exception:
-                pass
-            raise
-
-    raise AssertionError(
-        "unreachable: direct gateway retry loop returned no terminal job"
-    )
+        raise
+    job_id = accepted.get("job_id")
+    if not isinstance(job_id, str) or not job_id:
+        raise RuntimeError("gateway submission returned no confirmed job identity")
+    emit_fact({"event": "submitted", "attempt_id": attempt_id, "identifier": job_id,
+               "operation": kind, "backend": "gateway", "endpoint": endpoint, "profile": profile,
+               "request_identity": identity, "idempotency_key": key})
+    deadline = time.monotonic() + timeout + queue_wait_grace
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"gateway job {job_id} exceeded client timeout")
+            wait_for = min(30.0, remaining)
+            job = _gateway_json(endpoint or url, "GET",
+                f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}", None, wait_for + 10)
+            if job.get("status") in ("succeeded", "failed", "cancelled"):
+                process = subprocess.CompletedProcess(args=["direct-gateway", kind, job_id],
+                    returncode=0 if job.get("status") == "succeeded" else 1, stdout=json.dumps(job), stderr="")
+                observe_attempt(process, operation=kind, attempt_id=attempt_id)
+                return process
+    except BaseException:
+        emit_fact({"event": "cancel_requested", "identifier": job_id})
+        from aka.contracts.execution_recovery import JobReference
+        reference = JobReference("gateway", job_id, kind, endpoint or url, profile, identity, key)
+        jobs = GatewayJobs(endpoint=reference.endpoint, profile=profile, http=_gateway_json)
+        _observe_cancel_cleanup(jobs.cancel(reference, timeout=10), job_id, kind, attempt_id)
+        raise
 
 
 def _run_direct_gateway(
@@ -2612,11 +2609,37 @@ def _submitted_job_id(proc: subprocess.CompletedProcess[str]) -> str | None:
 
 
 def _track_agate_job(
-    job_id: str, executable: str, url: str, gateway_profile: str | None, operation: str = "unknown"
+    job_id: str, executable: str, url: str, gateway_profile: str | None, operation: str = "unknown",
+    request_identity: str = "",
 ) -> None:
-    emit_fact({"event": "submitted", "identifier": job_id, "backend": "gateway", "operation": operation})
+    endpoint, profile = _submission_route(url, gateway_profile)
+    emit_fact({"event": "submitted", "identifier": job_id, "backend": "gateway", "operation": operation,
+               "endpoint": endpoint, "profile": profile, "request_identity": request_identity})
     with ACTIVE_AGATE_JOBS_LOCK:
-        ACTIVE_AGATE_JOBS[job_id] = (executable, url, gateway_profile)
+        ACTIVE_AGATE_JOBS[job_id] = (executable, endpoint, profile)
+
+
+def _submission_route(url="", profile=None):
+    """Use the selected provider route even when the CLI flags use a profile alias."""
+    from .jobs import selected_route
+    route = json.loads(os.environ.get("AKA_EXECUTION_GATEWAY_ROUTE", "{}"))
+    if route.get("endpoint"):
+        return route["endpoint"], route.get("profile", "")
+    endpoint, profile, _ = selected_route(url, profile or "", environment=os.environ,
+                                        executable=_find_agate())
+    return endpoint, profile
+
+
+def _observe_cancel_cleanup(result, job_id, operation="cancel", attempt_id=None):
+    from aka.legacy.execution.outcomes import observe_attempt
+    if result.stdout:
+        observe_attempt(subprocess.CompletedProcess((), result.transport_returncode, result.stdout, ""),
+                        operation=operation, attempt_id=attempt_id)
+    failed = result.facts.remote_cleanup == "failed" or result.facts.disposition == "unknown"
+    emit_fact({"event": "cleanup", "identifier": job_id,
+               "status": "failed" if failed else "completed", "code": "cancel-confirmation-incomplete"})
+    for item in result.diagnostics:
+        emit_diagnostic({"failure_class": "cleanup", "reason": item.code, "job_id": job_id})
 
 
 def _forget_agate_job(job_id: str) -> None:
@@ -2628,22 +2651,15 @@ def _cancel_active_agate_jobs() -> None:
     with ACTIVE_AGATE_JOBS_LOCK:
         jobs = list(ACTIVE_AGATE_JOBS.items())
     for job_id, (executable, url, gateway_profile) in jobs:
-        command = [executable, "cancel"]
-        if url:
-            command += ["--url", url]
-        elif gateway_profile:
-            command += ["--profile", gateway_profile]
-        command += ["--http-timeout", "10", job_id]
         emit_fact({"event": "cancel_requested", "identifier": job_id})
         try:
-            subprocess.run(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=10,
-            )
-        except (OSError, subprocess.TimeoutExpired):
-            pass
+            from .jobs import GatewayJobs
+            from aka.contracts.execution_recovery import JobReference
+            reference = JobReference("gateway", job_id, "cancel", url, gateway_profile or "")
+            jobs = GatewayJobs(endpoint=url, profile=gateway_profile or "", executable=executable)
+            _observe_cancel_cleanup(jobs.cancel(reference, timeout=10), job_id)
+        except (OSError, ValueError, subprocess.SubprocessError) as error:
+            emit_fact({"event": "cleanup", "identifier": job_id, "status": "failed", "code": type(error).__name__})
 
 
 def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
@@ -2748,6 +2764,16 @@ def _run_agate_once_unchecked(
     # local sandbox processes; release before polling so GPU jobs remain parallel.
     endpoint = url or gateway_profile or os.environ.get("AGATE_URL") or "default"
     key = hashlib.sha256(endpoint.encode()).hexdigest()[:16]
+    files = []
+    for argument in agate[2:]:
+        path = Path(argument.split("=", 1)[-1])
+        try:
+            if path.is_file():
+                files.append((argument, hashlib.sha256(path.read_bytes()).hexdigest()))
+        except (OSError, ValueError):
+            pass
+    identity = hashlib.sha256(json.dumps({"argv": agate, "files": files}, sort_keys=True).encode()).hexdigest()
+    emit_fact({"event": "submission_intent", "request_identity": identity, "idempotency_key": None})
     lock_path = Path(tempfile.gettempdir()) / f"atrex-agate-submit-{os.getuid()}-{key}.lock"
     with lock_path.open("a") as admission:
         fcntl.flock(admission, fcntl.LOCK_EX)
@@ -2761,15 +2787,16 @@ def _run_agate_once_unchecked(
         except subprocess.TimeoutExpired:
             return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
     job = _job_response(submitted.stdout or "")
-    if submitted.returncode or not job:
+    job_id = job.get("job_id") if job else _submitted_job_id(submitted)
+    if not isinstance(job_id, str) or not job_id:
         return submitted
-    job_id = job["job_id"]
-    _track_agate_job(job_id, executable, url, gateway_profile, agate[1])
+    _track_agate_job(job_id, executable, url, gateway_profile, agate[1], identity)
+    endpoint, profile = _submission_route(url, gateway_profile)
     try:
         completed = _resume_interrupted_agate_wait(
             executable=executable,
-            url=url,
-            gateway_profile=gateway_profile,
+            url=endpoint,
+            gateway_profile=profile,
             command_timeout=command_timeout,
             wait_budget=wait_budget,
             elapsed=time.monotonic() - wait_started,
@@ -2793,70 +2820,9 @@ def _run_agate_with_cancel_retry(
     command_timeout: int,
     wait_budget: int,
 ) -> subprocess.CompletedProcess[str]:
-    """Retry transient gateway-only failures without blaming the submitted kernel."""
-    deadline = time.monotonic() + wait_budget
-    first = _run_agate_once(
-        agate=agate,
-        executable=executable,
-        url=url,
-        gateway_profile=gateway_profile,
-        command_timeout=command_timeout,
-        wait_budget=wait_budget,
-    )
-    first_job = _job_response(first.stdout or "")
-    while (first_job and first_job.get("status") in {"failed", "cancelled"}
-           and (_ray_submit_version_mismatch(first_job) or _queue_timeout_before_start(first_job))):
-        remaining = int(deadline - time.monotonic())
-        if remaining <= 1:
-            return first
-        delay = min(60, remaining - 1) if _ray_submit_version_mismatch(first_job) else 0
-        if delay:
-            print(
-                f"[sandbox] gateway Ray submit compatibility outage; retrying in {delay}s",
-                file=sys.stderr,
-                flush=True,
-            )
-            time.sleep(delay)
-        else:
-            print(
-                "[sandbox] gateway queue timeout before job start; resubmitting",
-                file=sys.stderr,
-                flush=True,
-            )
-        first = _run_agate_once(
-            agate=agate,
-            executable=executable,
-            url=url,
-            gateway_profile=gateway_profile,
-            command_timeout=command_timeout,
-            wait_budget=remaining - delay,
-        )
-        first_job = _job_response(first.stdout or "")
-    if not _cancelled_without_outcome(first_job):
-        return first
-
-    first_job_id = first_job.get("job_id")
-    second = _run_agate_once(
-        agate=agate,
-        executable=executable,
-        url=url,
-        gateway_profile=gateway_profile,
-        command_timeout=command_timeout,
-        wait_budget=wait_budget,
-    )
-    note = (
-        f"[sandbox] gateway cancelled job_id={first_job_id} without a result/error; "
-        "resubmitted once"
-    )
-    stderr_parts = [
-        part.rstrip() for part in (first.stderr, note, second.stderr) if part
-    ]
-    return subprocess.CompletedProcess(
-        args=second.args,
-        returncode=second.returncode,
-        stdout=second.stdout,
-        stderr="\n".join(stderr_parts),
-    )
+    """Submit once; Experiment owns any new measurement attempt."""
+    return _run_agate_once(agate=agate, executable=executable, url=url,
+        gateway_profile=gateway_profile, command_timeout=command_timeout, wait_budget=wait_budget)
 
 
 def _typed_agate_command(

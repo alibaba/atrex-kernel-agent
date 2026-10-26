@@ -10,10 +10,18 @@ Config = {"type":"object", "properties":{
     "url":{"type":"string"}, "profile":{"type":"string"},
     "warmup_iters":{"type":"string"},
     "retry_delays":{"type":"array", "items":{"type":"integer", "minimum":0}},
+    "idempotent_replay":{"type":"boolean"},
+    "recovery_retry_delays":{"type":"array", "items":{"type":"number", "minimum":0}},
+    "recovery_retry_budget_s":{"type":"number", "minimum":0},
     "dev_dependencies":{"type":"array", "items":{"type":"string"}}, "profiling": PROFILING_CONFIG}, "additionalProperties":False}
-Defaults = {"warmup_iters":"5", "retry_delays":[5,15,30], "dev_dependencies":[], "profiling":[]}
+Defaults = {"warmup_iters":"5", "retry_delays":[], "dev_dependencies":[], "profiling":[],
+            "idempotent_replay":False, "recovery_retry_delays":[], "recovery_retry_budget_s":0}
 def validate_config(config):
     validate_profiling(config["profiling"])
+    from aka.legacy.execution.job_recovery import recovery_policy
+    recovery_policy(config)
+    if config.get("idempotent_replay") and not config.get("url"):
+        raise ValueError("stable-key replay requires a verified explicit gateway URL")
     if config.get("url") and config.get("profile"):
         raise ValueError("gateway url and profile are mutually exclusive")
     warmup = config["warmup_iters"]
