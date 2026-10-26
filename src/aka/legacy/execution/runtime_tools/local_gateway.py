@@ -1244,6 +1244,7 @@ class LocalScheduler:
             *common,
             "--output", str(workdir / "eval_output"),
             "--bench-iters", str(options.get("bench_iters", 100)),
+            "--skip-kernel-attribution",
         ]
         if request.get("lock_clocks", False):
             argv.append("--clock-locked")
@@ -1424,6 +1425,7 @@ class LocalScheduler:
                     )
                     return
                 if isinstance(result, dict):
+                    result["kernel_attribution"] = "not_collected"
                     # Candidate compile/correctness failure is an evaluation outcome, not
                     # gateway infrastructure failure. run_eval intentionally exits nonzero
                     # in that case, while the public job still completes successfully.

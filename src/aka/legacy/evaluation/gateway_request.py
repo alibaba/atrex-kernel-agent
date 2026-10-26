@@ -208,6 +208,9 @@ def prepare_request(
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
+        # Ordinary measurements need correctness and latency. Kernel attribution
+        # is a separate profiler pass and belongs to the explicit Profile route.
+        request["runner_overrides"] = {"skip_kernel_attribution": True}
         version = str(_option_value(command, "--version", "v0"))
         request["mode"] = (
             "correctness_only"

@@ -575,6 +575,7 @@ def main(argv: list[str] | None = None) -> int:
             str(args.candidate_timeout_s),
             "--perf-timeout-s",
             str(args.perf_timeout_s),
+            "--skip-kernel-attribution",
         ]
         correctness_max_rel_l2 = args.correctness_max_rel_l2
         if correctness_max_rel_l2 is None:

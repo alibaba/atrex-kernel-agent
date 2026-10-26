@@ -2960,6 +2960,10 @@ def _typed_agate_command(
             "--set",
             f"correctness_max_rel_l2={json.dumps(correctness_max_rel_l2)}",
         ]
+    if kind == "run":
+        # Keep the Evaluation policy explicit even for replayed older requests.
+        # The extra torch.profiler pass is reserved for explicit profiling.
+        command += ["--set", "skip_kernel_attribution=true"]
     for item in args.env:
         command += ["--env-var", item]
     if kind == "profile":

@@ -138,6 +138,8 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
                         if _number(v)
                     }
                 kernels = value.get("kernel_events")
+                if payload.get("kernel_attribution") == "not_collected" or kernels is None:
+                    info["kernel_attribution"] = "not_collected"
                 if isinstance(kernels, list):
                     info["kernel_events"] = [
                         {
