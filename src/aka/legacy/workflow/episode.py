@@ -18,7 +18,7 @@ from aka.legacy.workflow.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TR
 from aka.legacy.task.hardware import hardware_vendor
 
 from aka.contracts.workspace import CandidateHandle
-from aka.legacy.task.git import git_head, git_text, working_changes
+from aka.legacy.task.git import git_text, working_changes
 from .git_episode import record_episode_outcome
 from .records import promotion_files
 from .journal import initialize as initialize_journal
@@ -1116,7 +1116,7 @@ class LongHorizonCampaign:
             "violation": violation or None,
             "base_commit": base_commit,
             "episode_branch": worktree.branch,
-            "episode_head": git_head(worktree.path),
+            "episode_head": self.base_campaign.candidate_workspace.current_revision(worktree.path),
             "candidate_commit": candidate_commit or None,
             "changed_paths": paths,
             "session_id": session_id or None,
@@ -1211,6 +1211,7 @@ class LongHorizonCampaign:
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
+                candidate_workspace=self.base_campaign.candidate_workspace,
                 base_commit=base_commit,
                 version=memory_version,
                 episode=episode,
@@ -1389,7 +1390,7 @@ class LongHorizonCampaign:
             if line.startswith("worktree ")
         }
         resumable_worktree = bool(
-            git_head(self.workspace) == base_commit
+            self.base_campaign.candidate_workspace.current_revision(self.workspace) == base_commit
             and phase
             in {
                 "preparing",
@@ -1462,7 +1463,7 @@ class LongHorizonCampaign:
                 flush=True,
             )
             return worktree, active
-        if git_head(self.workspace) != base_commit:
+        if self.base_campaign.candidate_workspace.current_revision(self.workspace) != base_commit:
             message = git_text(self.workspace, "log", "-1", "--format=%s", check=False)
             parent = git_text(self.workspace, "rev-parse", "HEAD^", check=False)
             evidence = git_text(
@@ -1515,10 +1516,10 @@ class LongHorizonCampaign:
                 if promoted:
                     state.accepted += 1
                     state.consecutive_without_promotion = 0
-                    recovered_attempt["promotion_commit"] = git_head(self.workspace)
+                    recovered_attempt["promotion_commit"] = self.base_campaign.candidate_workspace.current_revision(self.workspace)
                 else:
                     state.consecutive_without_promotion += 1
-                    recovered_attempt["outcome_commit"] = git_head(self.workspace)
+                    recovered_attempt["outcome_commit"] = self.base_campaign.candidate_workspace.current_revision(self.workspace)
                     if terminal_status == "pivot":
                         state.pivoted += 1
                     elif terminal_status == "blocked":
@@ -1600,6 +1601,7 @@ class LongHorizonCampaign:
             )
             outcome_commit = record_episode_outcome(
                 self.workspace,
+                candidate_workspace=self.base_campaign.candidate_workspace,
                 base_commit=base_commit,
                 version=memory_version,
                 episode=episode,
@@ -1737,7 +1739,7 @@ class LongHorizonCampaign:
                     )
             else:
                 memory_version = self.environment.latest_version(self.workspace) + 1
-                base_commit = git_head(self.workspace)
+                base_commit = self.base_campaign.candidate_workspace.current_revision(self.workspace)
                 worktree = self.base_campaign.candidate_workspace.plan(
                     self.workspace,
                     episode,

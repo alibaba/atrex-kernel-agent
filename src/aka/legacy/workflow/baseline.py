@@ -7,6 +7,7 @@ import shlex
 import subprocess
 import sys
 from pathlib import Path
+from aka.contracts.content import WorkspaceFile
 from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from contextvars import copy_context
@@ -223,6 +224,7 @@ class WorkflowBaseline:
         extra_paths: tuple[str, ...] = (),
     ) -> None:
         """Commit V0 measurement metadata without rewriting its source commit SHA."""
+        expected = self.campaign.candidate_workspace.current_revision(self.campaign.workspace)
         memory_path = self.campaign.workspace / "memory" / "v0.json"
         memory = json.loads(memory_path.read_text(encoding="utf-8"))
         memory["git_commit_hash"] = source_commit
@@ -247,26 +249,14 @@ class WorkflowBaseline:
         staged.extend(
             path for path in extra_paths if (self.campaign.workspace / path).is_file()
         )
-        subprocess.run(
-            ["git", "add", *staged], cwd=str(self.campaign.workspace), check=True
+        revision = self.campaign.candidate_workspace.record(
+            self.campaign.workspace, expected_revision=expected,
+            files=tuple(WorkspaceFile(path=name, source=self.campaign.workspace / name)
+                        for name in staged),
+            message="V0: record baseline measurement",
         )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.campaign.workspace),
-                check=False,
-            ).returncode
-            == 0
-        ):
-            raise RuntimeError(
-                "V0 evaluator produced no measurement metadata to commit"
-            )
-        subprocess.run(
-            ["git", "commit", "-m", "V0: record baseline measurement"],
-            cwd=str(self.campaign.workspace),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+        if revision == expected:
+            raise RuntimeError("V0 evaluator produced no measurement metadata to commit")
         recorded = read_memory(self.campaign.workspace, 0) or {}
         if recorded.get("git_commit_hash") != source_commit:
             raise RuntimeError("memory/v0.json does not point to the V0 source commit")
@@ -277,6 +267,7 @@ class WorkflowBaseline:
 
     def setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
         """Seed native Atrex-Bench V0 without launching a coding Agent."""
+        expected = self.campaign.candidate_workspace.current_revision(self.campaign.workspace)
         kernel_path = self.campaign.workspace / "kernel.py"
         reference_path = self.campaign.workspace / "reference.py"
         if not kernel_path.is_file() or not reference_path.is_file():
@@ -302,23 +293,13 @@ class WorkflowBaseline:
                 if (self.campaign.workspace / path).is_file()
             )
         )
-        subprocess.run(
-            ["git", "add", *source_paths], cwd=str(self.campaign.workspace), check=True
+        self.campaign.candidate_workspace.record(
+            self.campaign.workspace,
+            expected_revision=expected,
+            files=tuple(WorkspaceFile(path=name, source=self.campaign.workspace / name)
+                        for name in source_paths),
+            message="V0: baseline kernel",
         )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.campaign.workspace),
-                check=False,
-            ).returncode
-            != 0
-        ):
-            subprocess.run(
-                ["git", "commit", "-m", "V0: baseline kernel"],
-                cwd=str(self.campaign.workspace),
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
         source_commit = v0_baseline_commit(self.campaign.workspace)
         if not source_commit:
             raise RuntimeError("native V0 has no committed kernel.py")

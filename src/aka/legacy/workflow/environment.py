@@ -16,7 +16,7 @@ from aka.legacy.workflow.policy import install_workspace_policy
 from aka.legacy.execution.sandbox import sandbox_command
 from .runtime_directives import _agent_runtime_directive, _plan_generator_directive
 from aka.legacy.resources.workspace import install_workspace_resources
-from aka.legacy.task.candidate_workspace.state import git_head, head_kernel_is_initial_baseline, read_stall, reconstruct_stall, write_stall
+from aka.legacy.task.candidate_workspace.state import head_kernel_is_initial_baseline, read_stall, reconstruct_stall, write_stall
 
 
 def prepare_campaign(campaign: Campaign) -> None:
@@ -24,7 +24,7 @@ def prepare_campaign(campaign: Campaign) -> None:
     if latest_version(campaign.workspace) < 0:
         campaign.setup_baseline()
     else:
-        if not git_head(campaign.workspace):
+        if not campaign.candidate_workspace.current_revision(campaign.workspace):
             raise RuntimeError("existing campaign workspace has no Git HEAD")
         print(
             f"[orchestrator] resuming: latest = v{latest_version(campaign.workspace)}",

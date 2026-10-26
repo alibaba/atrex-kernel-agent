@@ -1,49 +1,28 @@
-"""Record non-promoted episode outcome in canonical Workflow history."""
-
+"""Record non-promoted episode outcome through the selected Workspace."""
 from pathlib import Path
 from typing import Any
-import subprocess
-from aka.legacy.task.git import git_head
-from .records import write_memory
+import json
+from aka.contracts.content import WorkspaceFile
+from aka.contracts.workspace import CandidateWorkspace
 
 
 def record_episode_outcome(
     incumbent_workspace: Path,
     *,
+    candidate_workspace: CandidateWorkspace,
     base_commit: str,
     version: int,
     episode: int,
     status: str,
     memory_record: dict[str, Any],
 ) -> str:
-    """Advance main-compatible version history without changing the incumbent kernel."""
-    if git_head(incumbent_workspace) != base_commit:
-        raise RuntimeError("incumbent advanced during episode; refusing outcome record")
-    memory_path = incumbent_workspace / "memory" / f"v{version}.json"
-    memory_path.parent.mkdir(parents=True, exist_ok=True)
-    write_memory(incumbent_workspace, version, memory_record)
-    subprocess.run(
-        ["git", "add", str(memory_path.relative_to(incumbent_workspace))],
-        cwd=str(incumbent_workspace),
-        check=True,
+    """Advance canonical history without changing the incumbent kernel."""
+    if type(version) is not int or version < 0:
+        raise ValueError("invalid canonical record version")
+    content = json.dumps(memory_record, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    return candidate_workspace.record(
+        incumbent_workspace,
+        expected_revision=base_commit,
+        files=(WorkspaceFile(path=f"memory/v{version}.json", text=content),),
+        message=f"v{version}: long-horizon episode {episode} {status}",
     )
-    subprocess.run(
-        [
-            "git",
-            "-c",
-            "user.name=atrex-long-horizon",
-            "-c",
-            "user.email=atrex-long-horizon@local",
-            "commit",
-            "--only",
-            "-m",
-            f"v{version}: long-horizon episode {episode} {status}",
-            "--",
-            str(memory_path.relative_to(incumbent_workspace)),
-        ],
-        cwd=str(incumbent_workspace),
-        check=True,
-        capture_output=True,
-        text=True,
-    )
-    return git_head(incumbent_workspace)

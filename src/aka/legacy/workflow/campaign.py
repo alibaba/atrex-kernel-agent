@@ -15,6 +15,7 @@ from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
 from functools import cached_property
 from pathlib import Path
+from aka.contracts.content import WorkspaceFile
 from typing import Optional
 
 
@@ -68,7 +69,7 @@ from .records import _record_local_test_result
 from aka.legacy.resources.prompts import render_prompt
 from .runtime_directives import _agent_runtime_directive, _baseline_driver_directive
 from .records import latest_version, read_memory
-from aka.legacy.task.candidate_workspace.state import git_head, git_kernel_blob, git_path_blob, git_worktree_blob, head_kernel_is_initial_baseline, resolve_framework_baseline_commit, v0_baseline_commit, write_stall
+from aka.legacy.task.candidate_workspace.state import git_kernel_blob, git_path_blob, git_worktree_blob, head_kernel_is_initial_baseline, resolve_framework_baseline_commit, v0_baseline_commit, write_stall
 
 _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
@@ -368,7 +369,7 @@ class Campaign:
         """Require the public problem to be part of the immutable V0 history."""
         if self.private_reference_dir is None:
             return ""
-        head = git_head(self.workspace)
+        head = self.candidate_workspace.current_revision(self.workspace)
         if head and not git_path_blob(self.workspace, head, AGENT_PROBLEM_FILENAME):
             return "agent_problem.json is not tracked by the V0 baseline commit"
         return ""
@@ -755,7 +756,7 @@ class Campaign:
             )
         baseline_memory = read_memory(self.workspace, 0)
         baseline_problem = "missing memory/v0.json" if baseline_memory is None else ""
-        if baseline_memory is not None and not git_head(self.workspace):
+        if baseline_memory is not None and not self.candidate_workspace.current_revision(self.workspace):
             baseline_problem = "memory/v0.json exists but the workspace has no Git HEAD"
         if not baseline_problem:
             baseline_problem = self._generalized_memory_coverage_problem(
@@ -807,7 +808,7 @@ class Campaign:
             recovery_problem = (
                 "missing memory/v0.json" if recovered_memory is None else ""
             )
-            if recovered_memory is not None and not git_head(self.workspace):
+            if recovered_memory is not None and not self.candidate_workspace.current_revision(self.workspace):
                 recovery_problem = (
                     "memory/v0.json exists but the workspace still has no Git HEAD"
                 )
@@ -882,7 +883,7 @@ class Campaign:
         n = FRAMEWORK_BASELINE_VERSION
         baseline_commit = self._v0_baseline_commit()
         v0_blob = git_path_blob(self.workspace, baseline_commit, "kernel.py")
-        pre_head = git_head(self.workspace)
+        pre_head = self.candidate_workspace.current_revision(self.workspace)
         self.evaluation.ensure_framework_baseline_solution_manifest()
 
         if action == "run":
@@ -958,7 +959,7 @@ class Campaign:
         if problem:
             # Undo any session-authored commits while retaining every worktree file.  A hard reset
             # here used to erase the exact candidate and debugging experience needed by a restart.
-            if pre_head and git_head(self.workspace) != pre_head:
+            if pre_head and self.candidate_workspace.current_revision(self.workspace) != pre_head:
                 subprocess.run(
                     ["git", "reset", "--mixed", pre_head],
                     cwd=str(self.workspace),
@@ -1093,7 +1094,7 @@ class Campaign:
                 "schema_version": 1,
                 "episode": 0,
                 "memory_version": FRAMEWORK_BASELINE_VERSION,
-                "base_commit": git_head(self.workspace),
+                "base_commit": self.candidate_workspace.current_revision(self.workspace),
                 "episode_branch": "framework-baseline",
                 "state": state,
                 "experiments": [],
@@ -1120,7 +1121,7 @@ class Campaign:
         """Resolve what the stage should do: skip | pin | run | adopt, with the reason."""
         if self.framework_baseline == "never":
             return "skip", ""
-        if latest_version(self.workspace) < 0 or not git_head(self.workspace):
+        if latest_version(self.workspace) < 0 or not self.candidate_workspace.current_revision(self.workspace):
             raise RuntimeError(
                 "framework baseline requires a committed V0 baseline first"
             )
@@ -2051,7 +2052,7 @@ class Campaign:
             file=sys.stderr,
             flush=True,
         )
-        if pre_head and git_head(self.workspace) != pre_head:
+        if pre_head and self.candidate_workspace.current_revision(self.workspace) != pre_head:
             # Undo the session's commits, keep its files: the recovery session needs to read them.
             subprocess.run(
                 ["git", "reset", "--mixed", pre_head],
@@ -2121,6 +2122,7 @@ class Campaign:
 
     def _commit_framework_baseline(self, n: int, result: dict) -> str:
         """Commit the accepted kernel (C1) and then pin it in a metadata-only commit (C2)."""
+        expected = self.candidate_workspace.current_revision(self.workspace)
         staged = [
             path
             for path in (
@@ -2136,32 +2138,11 @@ class Campaign:
             str(path.relative_to(self.workspace))
             for path in sorted(self.workspace.glob(f"plans/v{n}_*.md"))
         ]
-        subprocess.run(
-            ["git", "add", *staged],
-            cwd=str(self.workspace),
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+        self.candidate_workspace.record(
+            self.workspace, expected_revision=expected,
+            files=tuple(WorkspaceFile(path=name, source=self.workspace / name) for name in staged),
+            message=f"v{n}: framework baseline ({self.framework}) replacing the V0 PyTorch wrapper",
         )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            != 0
-        ):
-            subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    "-m",
-                    f"v{n}: framework baseline ({self.framework}) replacing the V0 PyTorch wrapper",
-                ],
-                cwd=str(self.workspace),
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
         kernel_commit = subprocess.run(
             ["git", "rev-list", "-1", "HEAD", "--", "kernel.py"],
             cwd=str(self.workspace),
@@ -2202,6 +2183,7 @@ class Campaign:
         commit whose sha the marker records, leaving a dangling pointer. This commit does not
         touch kernel.py, so it never registers as an optimization win.
         """
+        expected = self.candidate_workspace.current_revision(self.workspace)
         marker = {
             "schema_version": 1,
             "version": f"v{version}",
@@ -2212,37 +2194,15 @@ class Campaign:
             "kernel_blob": git_path_blob(self.workspace, commit, "kernel.py"),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
-        (self.workspace / FRAMEWORK_BASELINE_FILE).write_text(
-            json.dumps(marker, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+        records = [WorkspaceFile(path=FRAMEWORK_BASELINE_FILE,
+                                 text=json.dumps(marker, indent=2, ensure_ascii=False) + "\n")]
+        memory_path = self.workspace / "memory" / f"v{version}.json"
+        if memory_path.exists():
+            records.append(WorkspaceFile(path=f"memory/v{version}.json", source=memory_path))
+        self.candidate_workspace.record(
+            self.workspace, expected_revision=expected,
+            files=tuple(records), message=f"v{version}: pin framework baseline {commit[:8]}",
         )
-        paths = [FRAMEWORK_BASELINE_FILE]
-        if (self.workspace / "memory" / f"v{version}.json").exists():
-            paths.append(f"memory/v{version}.json")
-        subprocess.run(
-            ["git", "add", *paths],
-            cwd=str(self.workspace),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            != 0
-        ):
-            subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    "-m",
-                    f"v{version}: pin framework baseline {commit[:8]}",
-                ],
-                cwd=str(self.workspace),
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
         # The metadata commit must not read as a stalled optimization round on the next resume.
         write_stall(self.workspace, 0)
 
