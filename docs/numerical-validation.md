@@ -31,16 +31,16 @@ Reference non-finite outputs, invalid generation or incomplete receipts return t
 
 Each planner uses `--production-review-timeout` (default 600 seconds). A bounded plan recovered from a timeout remains untrusted until schema/evidence validation and execution. Without a usable plan, a timeout permits a recorded `skipped_planner_timeout` only after ordinary correctness passed, evidence is unchanged and no measured supplemental candidate failure remains. Malformed non-timeout responses do not receive this exemption.
 
-GPU probes use the same private MeasurementStore and exact-task reuse as other Supervisor requests. A case has a 540-second evaluator deadline inside a 600-second Dev allocation. Confirmed service outages use fixed 60-second outer Supervisor retry waits; the inner Gateway backoff is unchanged. On resume, older longer waits are shortened to 60 seconds after the recorded failure without resetting retry counts or extending earlier deadlines. Uncertain submissions are not blindly replayed. Nested requests share the parent report's deadline and revocation. Total outage waiting is otherwise unbounded while the controller remains active.
+GPU probes use the same private MeasurementStore and exact-task reuse as other Supervisor requests. A case has a 540-second evaluator deadline inside a 600-second Dev allocation. Confirmed service outages use fixed 60-second outer Supervisor retry waits; the inner Gateway backoff is unchanged. On resume, older longer waits are shortened to 60 seconds after the recorded failure without resetting retry counts or extending earlier deadlines. Gateway recovery first probes a saved Agate Job ID once. A terminal result is reused; a missing, unreadable, queued or running Job, or a prior CLI submission without a confirmed ID, receives at most one fresh submission in that invocation. This bounded rule can leave an older remote Job running because the CLI polling abstraction cannot safely cancel it. Nested requests share the parent report's deadline and revocation. Total outage waiting is otherwise unbounded while the controller remains active.
 
 The probe request explicitly carries Light's ordinary Evaluate candidate timeout
-(`CANDIDATE_TIMEOUT`, currently 120 seconds), including model construction/JIT
-compilation. It must not accidentally inherit the shared Legacy harness's
-20-second default: the evaluator constructs the candidate before generating the
-first input receipt, so a short initialization timeout otherwise appears as zero
-observed probes. This policy is part of the recorded request identity. Legacy's
-default, the case deadline, and the full-coverage acceptance requirement are
-unchanged. Pre-receipt failures return the original evaluator failure when
+(`CANDIDATE_TIMEOUT`, currently 600 seconds), including model construction/JIT
+compilation. It must not rely on an evaluator-library fallback: the evaluator
+constructs the candidate before generating the first input receipt, so a shorter
+implicit initialization timeout can otherwise appear as zero observed probes.
+This policy is part of the recorded request identity. The case deadline and the
+full-coverage acceptance requirement are unchanged. Pre-receipt failures return
+the original evaluator failure when
 available, rather than attributing every missing receipt to the generator.
 
 ## Evidence and limits

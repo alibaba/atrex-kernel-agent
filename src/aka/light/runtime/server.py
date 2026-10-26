@@ -22,6 +22,7 @@ from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from aka.contracts.evaluation import derived_evaluation_timeout
 
 from aka.light.evaluation.gateway import (
     EPISODE_EVALUATIONS_PATH,
@@ -39,8 +40,8 @@ from aka.light.workspace.files import (
     relative_path,
     snapshot,
 )
-from aka.light.experiment.store import JOB_ROOT_ENV
-from aka.light.experiment.records import QUERY_KINDS
+from aka.light.experiment.store import ABBA_BATCH_ROOT_ENV, BATCH_ROOT_ENV, JOB_ROOT_ENV, TaskRunning
+from aka.light.experiment.records import QUERY_KINDS, task_conflict_response
 from aka.light.workflow.journal_service import SupervisorJournalService, load_journal, journal_lock
 from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError, error_response
 from aka.light.runtime.request_feedback import augment_error
@@ -141,12 +142,12 @@ def parse_gateway(argv):
 
 
 def failure(message: str, *, repairable: bool = True, next_action: str | None = None,
-            code: str | None = None) -> dict:
+            code: str | None = None, **details) -> dict:
     from aka.light.runtime.request_errors import UNKNOWN_OUTCOME
     return error_response(message, code=code or ("invalid_request" if repairable else "outcome_unknown"),
                           repairable=repairable, next_action=next_action or (
                               "Correct the arguments, using full option names, then retry."
-                              if repairable else UNKNOWN_OUTCOME))
+                              if repairable else UNKNOWN_OUTCOME), **details)
 
 
 def validated_argv(value: object) -> list[str]:
@@ -185,7 +186,9 @@ def filter_options(argv: list[str], owned: frozenset[str], forbidden: frozenset[
 def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if
             not key.startswith(("AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_", "ATREX_GPU_WIKI_"))
-            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, JOB_ROOT_ENV, "ATREX_AKA_MEASUREMENT_REPETITIONS",
+            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, JOB_ROOT_ENV, BATCH_ROOT_ENV,
+                            ABBA_BATCH_ROOT_ENV,
+                            "ATREX_AKA_MEASUREMENT_REPETITIONS",
                             "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT",
                             "ATREX_AKA_IDENTITY_KEY"}}
 
@@ -193,7 +196,7 @@ def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
 @dataclass(frozen=True)
 class RuntimeConfig:
     hardware: str
-    timeout: int = 600
+    timeout: int = derived_evaluation_timeout()
     url: str = ""
     profile: str = ""
     ssh: str = ""
@@ -210,12 +213,15 @@ class RuntimeConfig:
     request_timeout: float | None = None
     queue_timeout: float = 60
     measurement_repetitions: int = 1
+    pause_agent_during_requests: bool = True
     wiki_enabled: bool = True
     wiki_options: WikiConfig = field(default_factory=WikiConfig)
     # Selected aka.contracts.wiki.WikiProvider; None selects the built-in local store.
     wiki_provider: object | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
+        if type(self.pause_agent_during_requests) is not bool:
+            raise TypeError("Runtime pause_agent_during_requests must be a boolean")
         for name in ("request_timeout", "queue_timeout"):
             value = getattr(self, name)
             if name == "request_timeout" and value is None:
@@ -345,16 +351,39 @@ class _Handler(BaseHTTPRequestHandler):
                 if not isinstance(request, dict):
                     raise ValueError("Request must be a JSON object")
                 self.decoded_request = request
-            # A complete authenticated request pauses only its Provider tree.
-            # This handler/executor is outside that tree. Release before reply:
-            # the stopped CLI cannot drain a large response. Disconnection does
-            # not release this scope early or cancel an already submitted job.
-            wait = capability.session_control.request() if capability.session_control else nullcontext()
+            # Suspension is optional. When enabled, stop only this Session's
+            # Provider tree; the handler/executor remains outside that tree.
+            # Release before reply because a stopped CLI cannot drain a large
+            # response. Disconnection never releases the scope early or cancels
+            # an already submitted job.
+            wait = (
+                capability.session_control.request()
+                if capability.session_control and owner.config.pause_agent_during_requests
+                else nullcontext()
+            )
             with wait:
                 if owner.is_wiki_request(self.path, request):
                     result = owner.execute(capability, self.path, request)
                 else:
-                    with owner.request_lock(capability, deadline, self.request_id):
+                    identity, prepared = None, False
+
+                    def check_running():
+                        # A repeated call must not spend the Session queue
+                        # timeout before reaching the nonblocking task lock.
+                        # Use the full staged identity, not argv alone: the
+                        # Agent may have edited sources since the first call.
+                        nonlocal identity, prepared
+                        if not prepared:
+                            identity = owner.execute(capability, self.path, request,
+                                                     prepare_identity_only=True)
+                            prepared = True
+                        if identity is not None:
+                            owner.measurements.check_running(identity)
+
+                    with owner.request_lock(
+                        capability, deadline, self.request_id,
+                        before_wait=check_running if self.path == "/v1/gateway/execute" else None,
+                    ):
                         with owner.lock:
                             if owner.closed or owner.capabilities.get(token) is not capability:
                                 raise SessionRevokedError("Session capability revoked")
@@ -366,6 +395,8 @@ class _Handler(BaseHTTPRequestHandler):
                 execution_exit_code = result["exit_code"]
                 result = result["agent_result"]
             self.reply(200, result, execution_exit_code=execution_exit_code)
+        except TaskRunning as error:
+            self.reply(200, task_conflict_response(error))
         except AgentRequestError as error:
             self.reply(400, error.response)
         except RuntimeStateError as error:
@@ -384,6 +415,31 @@ class _Handler(BaseHTTPRequestHandler):
                 "Supervisor Runtime request %s timed out before dispatch; safe to retry after backoff",
                 self.request_id)
             self.reply(429, result, retry_after=DISPATCH_RETRY_SECONDS)
+        except GatewayExecutionUnavailable as error:
+            next_action = (
+                "The Gateway process started, so this request may already have created or completed "
+                "an Agate job. Keep the candidate and request unchanged. Inspect available Kernel/Record "
+                "history first; if no terminal Record is visible, report this request_id to the operator "
+                "for Job reconciliation. Do not loop or submit a modified replacement blindly."
+            )
+            logging.getLogger(__name__).warning(
+                "Supervisor Runtime request %s ended with unknown Gateway outcome: %s",
+                self.request_id, error.code,
+            )
+            self.reply(503, failure(
+                str(error),
+                repairable=False,
+                code=error.code,
+                next_action=next_action,
+                reason=error.reason,
+                outcome="unknown",
+                phase="gateway_execution",
+                gateway_started=True,
+                cancellation_requested=error.cancellation_requested,
+                cancellation_confirmed=False,
+                request_id=self.request_id,
+                **error.details,
+            ))
         except SessionRevokedError:
             self.reply(401, failure("Session capability revoked", repairable=False, code="session_revoked"))
         except (BrokenPipeError, ConnectionResetError):
@@ -472,7 +528,10 @@ class SupervisorRuntime:
     def request_timeout_seconds(self) -> float:
         if self.config.request_timeout is not None:
             return self.config.request_timeout
-        return self.config.timeout + self.gateway_queue_wait_grace + 120
+        # Physical-job recovery gets one complete second wait window.  Size the
+        # default Supervisor watchdog for both windows; explicit operator
+        # request timeouts remain authoritative.
+        return 2 * (self.config.timeout + self.gateway_queue_wait_grace) + 120
 
     def close(self):
         with self.lock:
@@ -622,11 +681,13 @@ class SupervisorRuntime:
             return (not self.closed and any(value is capability for value in self.capabilities.values())
                     and (capability.parent is None or self._live(capability.parent)))
 
-    def _acquire(self, lock, capability, deadline):
+    def _acquire(self, lock, capability, deadline, *, before_wait=None):
         wait_deadline = min(deadline, time.monotonic() + self.config.queue_timeout)
         while True:
             if not self._live(capability):
                 raise SessionRevokedError("Session revoked")
+            if before_wait is not None and lock.locked():
+                before_wait()
             remaining = wait_deadline - time.monotonic()
             if remaining <= 0:
                 raise RequestDispatchTimeout("Supervisor request queue deadline exceeded; no executor started")
@@ -634,8 +695,8 @@ class SupervisorRuntime:
                 return
 
     @contextmanager
-    def request_lock(self, capability, deadline, request_id):
-        self._acquire(capability.lock, capability, deadline)
+    def request_lock(self, capability, deadline, request_id, *, before_wait=None):
+        self._acquire(capability.lock, capability, deadline, before_wait=before_wait)
         capability.deadline, capability.request_id = deadline, request_id
         try:
             yield
@@ -680,7 +741,10 @@ class SupervisorRuntime:
 
     def execute(self, capability: Capability, route: str, request: dict, *,
                 reuse_completed=False, reuse_correctness=False, candidate_source: bytes | None = None,
-                execution_timeout: int | None = None, reference_snapshot: Path | None = None) -> dict:
+                execution_timeout: int | None = None, reference_snapshot: Path | None = None,
+                prepare_identity_only: bool = False) -> dict | None:
+        if prepare_identity_only and route != "/v1/gateway/execute":
+            return None
         if route == "/v1/plugins/execute":
             return self.execute_plugin(capability, request)
         if route == "/v1/journal/execute":
@@ -703,6 +767,9 @@ class SupervisorRuntime:
                 else:
                     argv = filter_options(argv, AUTHORITY, FORBIDDEN)
                     parsed = parse_gateway(argv)
+                    if prepare_identity_only and (parsed is None or parsed.kind in QUERY_KINDS
+                                                  or parsed.kind == "env" or parsed.dry_run):
+                        return None
                     if parsed is not None and parsed.kind in QUERY_KINDS:
                         return self.experiments.query(parsed, capability.workspace)
                     if parsed is not None and not self.config.ssh:
@@ -758,10 +825,11 @@ class SupervisorRuntime:
                                 # operations enforce their inputs in measurement_inputs.
                                 pass
                             else:
-                                kernel = self.measurements.kernel(source)
-                                publish(capability.journal.view.worktree,
-                                        ".atrex_long_horizon/policy_review_request.json",
-                                        json.dumps({"schema_version": 1, "kernel_id": kernel["kernel_id"]}).encode())
+                                if not prepare_identity_only:
+                                    kernel = self.measurements.kernel(source)
+                                    publish(capability.journal.view.worktree,
+                                            ".atrex_long_horizon/policy_review_request.json",
+                                            json.dumps({"schema_version": 1, "kernel_id": kernel["kernel_id"]}).encode())
                     (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
                     # The canonical driver is trusted code, not a mutable Agent input.
                     if self.config.atrex_bench_root:
@@ -807,6 +875,11 @@ class SupervisorRuntime:
                 # Parse the Supervisor's authority flags too, so the exact target,
                 # execution timeout and transport enter the task identity.
                 effective = parse_gateway(command[2:])
+                if prepare_identity_only:
+                    return self.experiments.task_identity(
+                        staged, effective, environment, mode=self.config.optimization_mode,
+                        repetitions=self.measurement_repetitions,
+                    )
                 effects = MeasurementEffects(
                     mode=self.config.optimization_mode, repetitions=self.measurement_repetitions,
                     private_reference_dir=self.config.private_reference_dir,
@@ -816,6 +889,7 @@ class SupervisorRuntime:
                     audit=lambda argv, process, record: self.audit_process(capability, "gateway", argv, process, record),
                     publish_log=lambda staged: self.publish_evaluation_log(capability.workspace, staged),
                     publish_outputs=lambda staged, args: self.publish_legacy_outputs(capability.workspace, staged, args),
+                    deadline=capability.deadline, request_id=capability.request_id,
                 )
                 return self.experiments.execute(staged, effective, argv, environment, command, effects=effects,
                                                reuse_completed=reuse_completed, reuse_correctness=reuse_correctness)

@@ -19,6 +19,8 @@ from pathlib import Path
 from aka.light.experiment.store import JOB_ROOT_ENV, EvidenceUnavailable, digest, private_write, read_json
 from aka.light.evaluation.evaluation_failures import embedded_device_failure
 
+DEFAULT_MAX_INFRA_RETRIES = 2
+
 
 def retry_delay(count: int) -> float:
     return float(5 * 2 ** (count - 1)) if count < 5 else 60.0
@@ -46,6 +48,14 @@ class SubmissionUncertain(RuntimeError):
 
 class EvaluationDeviceUnavailable(EvidenceUnavailable):
     """Bounded device recovery exhausted; never negative Kernel evidence."""
+
+
+class AcceptedJobMissing(RuntimeError):
+    """A previously accepted Job ID is definitively absent from the Gateway."""
+
+    def __init__(self, job_id: str):
+        self.job_id = job_id
+        super().__init__(f"Accepted Gateway Job {job_id} is no longer available")
 
 
 class SubmissionRejected(RuntimeError):
@@ -87,7 +97,7 @@ def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionReje
 
 
 def retry_kind(job: object) -> str | None:
-    """Match Runtime: only explicitly failed infra Jobs get a replacement."""
+    """Match Runtime: only explicitly failed infra Jobs are resubmitted."""
     if not isinstance(job, dict) or job.get("status") != "failed":
         return None
     error = job.get("error") or {}
@@ -276,11 +286,32 @@ def execute_job(
     wait_budget: float,
     retry_classifier=retry_kind,
     max_retries: int | None = None,
+    max_infra_retries: int | None = DEFAULT_MAX_INFRA_RETRIES,
     idempotent_submission: bool = False,
     max_device_retries: int | None = None,
     device_retry_delay: float | None = None,
+    max_wait_retries: int = 1,
 ) -> subprocess.CompletedProcess:
-    """Persist each submission before polling. Never guess after an uncertain POST."""
+    """Persist each submission before polling and recover one exhausted wait.
+
+    A fresh invocation starts by reading the durable accepted Job ID when one
+    exists.  That old Job receives exactly one non-waiting recovery probe.  A
+    terminal result is returned directly; a missing, unreadable, queued or
+    running old Job causes one bounded fresh submission.  This deliberately
+    favors bounded recovery latency over remote GPU efficiency: the polling
+    abstraction has no authenticated ownership/cancellation handle, so it cannot
+    safely cancel the saved Job before replacing it, and one recovery may leave
+    that Job running concurrently.  Newly submitted Jobs still receive the
+    complete poll budget.  A prior CLI submission without a confirmed ID also
+    gets one bounded fresh submission on the later invocation.
+
+    Explicit ``error_class=infra`` terminal failures are retried only while both
+    ``max_infra_retries`` and the current wait deadline allow another attempt.
+    """
+    if max_wait_retries < 0:
+        raise ValueError("max_wait_retries must be non-negative")
+    if max_infra_retries is not None and max_infra_retries < 0:
+        raise ValueError("max_infra_retries must be non-negative")
     retry_classifier = retry_kind if retry_classifier is None else retry_classifier
     directory = Path(os.environ[JOB_ROOT_ENV]) / "jobs" / digest(identity) if os.environ.get(JOB_ROOT_ENV) else None
     state = {}
@@ -292,6 +323,8 @@ def execute_job(
         if state and state.get("identity") != identity:
             raise EvidenceUnavailable("Gateway job checkpoint identity is inconsistent; operator reconciliation required")
     deadline = time.monotonic() + wait_budget
+    wait_retries = 0
+    probe_saved_job = state.get("phase") == "accepted"
     submission = state.get("submission", 0)
     retries = state.get("retries", {})
     wire_key = state.get("idempotency_key")
@@ -311,6 +344,39 @@ def execute_job(
                 private_write(directory / f"submission-{submission:04d}-{phase}.json", value)
         return value
 
+    def saved_job_id() -> str | None:
+        data = state.get("process")
+        if not isinstance(data, dict):
+            return None
+        saved = job_from_process(subprocess.CompletedProcess(
+            [], data.get("returncode", 1), data.get("stdout", ""), data.get("stderr", "")
+        ))
+        job_id = saved.get("job_id") if isinstance(saved, dict) else None
+        return job_id if isinstance(job_id, str) and job_id else None
+
+    def retry_wait(*, previous_job_id: str | None = None) -> bool:
+        """Start one fresh wait window by resubmitting the Agate task once."""
+        nonlocal deadline, state, wire_key, wait_retries
+        if wait_retries >= max_wait_retries:
+            return False
+        wait_retries += 1
+        deadline = time.monotonic() + wait_budget
+        if idempotent_submission:
+            # A resubmission must not resolve to the old queued/running Job.
+            # Derive a stable new key so a crash while submitting this
+            # resubmission can safely replay the same task, not create a
+            # third Job.
+            source = previous_job_id or wire_key
+            wire_key = "wait-retry:" + hashlib.sha256(source.encode()).hexdigest()
+        state = save("retry_pending")
+        print(
+            f"[sandbox] Gateway wait did not reach a terminal result; "
+            f"recovering the saved request (attempt {wait_retries + 1}/{max_wait_retries + 1})",
+            file=sys.stderr,
+            flush=True,
+        )
+        return True
+
     rejection = None
     if state.get("phase") == "submitting":
         data = state.get("process")
@@ -318,13 +384,33 @@ def execute_job(
             rejection = submission_rejection(subprocess.CompletedProcess(
                 [], data["returncode"], data["stdout"], data["stderr"]))
         if rejection is None and not idempotent_submission:
-            raise EvidenceUnavailable("Prior Gateway submission has no confirmed job ID; operator reconciliation required")
-        # Recover old checkpoints only when they actually contain a definitive
-        # rejection. A bare pre-POST marker still has an unknown outcome.
+            # A previous CLI invocation returned without a confirmed Job ID.
+            # There is no ID to collect, so a later identical Runtime call gets
+            # one bounded fresh submission instead of remaining permanently
+            # stuck on an unrecoverable checkpoint.  Count this as the call's
+            # wait recovery so it cannot also create another replacement after
+            # the new Job exhausts its polling window.
+            if wait_retries >= max_wait_retries:
+                raise EvidenceUnavailable(
+                    "Prior Gateway submission has no confirmed job ID and automatic resubmission is disabled"
+                )
+            wait_retries += 1
+            state = save("retry_pending")
+            print(
+                "[sandbox] Prior CLI submission has no confirmed job ID; "
+                "resubmitting the saved request once",
+                file=sys.stderr,
+                flush=True,
+            )
+        # A definitive rejection follows the normal rejection path.  A bare
+        # pre-POST marker or unparseable CLI response takes the bounded fresh
+        # submission path above.
 
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if retry_wait(previous_job_id=saved_job_id()):
+                continue
             raise EvidenceUnavailable(
                 "Gateway request retry/poll deadline reached; saved Job state requires reconciliation"
             )
@@ -373,10 +459,41 @@ def execute_job(
         else:
             job = job_from_process(process)
             if state.get("phase") != "terminal":
-                process = poll(process, max(1, int(deadline - time.monotonic())))
+                recovery_probe = probe_saved_job
+                probe_saved_job = False
+                try:
+                    process = poll(
+                        process,
+                        max(1, int(deadline - time.monotonic())),
+                        recovery_probe=recovery_probe,
+                    )
+                except AcceptedJobMissing as error:
+                    if retry_wait(previous_job_id=error.job_id):
+                        continue
+                    raise EvidenceUnavailable(
+                        "Accepted Gateway Job is missing after automatic recovery; "
+                        "saved request requires reconciliation"
+                    ) from error
+                except EvidenceUnavailable:
+                    previous_job_id = job.get("job_id") if isinstance(job, dict) else None
+                    if retry_wait(previous_job_id=previous_job_id):
+                        continue
+                    raise
                 job = job_from_process(process)
                 if not job or job.get("status") not in {"succeeded", "failed", "cancelled", "canceled"}:
-                    # Keep the accepted ID so a later request polls that same job.
+                    poll_rejection = submission_rejection(process)
+                    if poll_rejection is not None and poll_rejection.status == 404:
+                        missing_job_id = saved_job_id()
+                        if isinstance(missing_job_id, str) and retry_wait(previous_job_id=missing_job_id):
+                            continue
+                    previous_job_id = (
+                        job.get("job_id") if isinstance(job, dict)
+                        else saved_job_id()
+                    )
+                    if retry_wait(previous_job_id=previous_job_id):
+                        continue
+                    # Keep the accepted ID so a later request polls that same
+                    # Job before resubmitting the Agate task.
                     return process
                 state = save("terminal", process)
             kind = retry_classifier(job)
@@ -392,7 +509,7 @@ def execute_job(
                     )
                 kind = "device"
             if kind is not None and idempotent_submission:
-                # Stable replacement identity for the failed job, including crash replay.
+                # Stable resubmission identity for the failed job, including crash replay.
                 error = job.get("error")
                 reason = error.get("reason") if isinstance(error, dict) else None
                 prefix = "eval-device-retry:" if kind == "device" else (
@@ -401,6 +518,8 @@ def execute_job(
                 wire_key = prefix + hashlib.sha256(job["job_id"].encode()).hexdigest()
         if (
             kind is None
+            or (kind == "infra" and max_infra_retries is not None
+                and retries.get("infra", 0) >= max_infra_retries)
             or (max_retries is not None and sum(retries.values()) >= max_retries)
         ):
             return process

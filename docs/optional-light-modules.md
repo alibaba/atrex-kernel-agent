@@ -285,9 +285,9 @@ Patches replace a module's whole configuration; omitted fields receive that prov
 | Provider | Options and defaults |
 | --- | --- |
 | `aka.light.agent.plugin` | `sandbox: none`, `capture: false`, `bwrap_executable: bwrap`, `read_only_paths: []`, `proc_mode: private`, `timeout_seconds: 28800` |
-| `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `wiki: true`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
+| `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `pause_agent_during_requests: true`, `wiki: true`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
 | `aka.light.wiki.plugin` | `root: ""` (the selected checkout's `gpu-wiki`); see [Wiki providers](#wiki-providers) |
-| `aka.light.workflow.plugin` | `numerical_validation: true`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 2`, `episode_timeout_seconds: 28800`; optional `search` and `source_tree` |
+| `aka.light.workflow.plugin` | `numerical_validation: true`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 2`, `episode_timeout_seconds: 14400`; optional `search` and `source_tree` |
 | `aka.light.workspace.plugin` | `inherit_state: true`; carry custom Skills/tools across Episodes independently of Kernel promotion |
 | `aka.light.execution.plugin` | No options; endpoint/timeouts remain prepared Execution request values |
 | `aka.light.evaluation.plugin` | No options; constructs measurement plans and projects/aggregates results |
@@ -311,21 +311,25 @@ are not evidence that this execution container has a working compiler.
 
 ### Agent active-time limit and blocking Runtime calls
 
-Light defaults to **28,800 seconds (8 hours) of Agent active time per Episode**,
-matching Runtime. Configure `workflow.config.episode_timeout_seconds` with a
+Light defaults to **14,400 seconds (4 hours) of Agent active time per optimization Episode**.
+The preceding Framework Bootstrap session has its own 28,800-second (8-hour)
+wall-clock budget. Configure `workflow.config.episode_timeout_seconds` with a
 finite positive number of seconds, for example:
 
 ```json
-{"api_version":1,"patches":[{"id":"workflow","config":{"episode_timeout_seconds":28800}}]}
+{"api_version":1,"patches":[{"id":"workflow","config":{"episode_timeout_seconds":14400}}]}
 ```
 
 Report-repair continuations and fresh output-limit recovery sessions share that
 Episode budget within the running controller; they do not reset it. The budget
 is in memory, not a persisted allowance across controller restarts. Separately,
 `agent.config.timeout_seconds` sets the default per-invocation active-time ceiling
-(also 28,800 seconds); explicit auxiliary-session timeouts remain in force. An
+(28,800 seconds); explicit auxiliary-session timeouts, including Framework
+Bootstrap, remain in force. An
 invocation uses the smaller of its ceiling and the remaining Episode budget. To
-allow a single invocation longer than 8 hours, increase both options.
+allow an optimization invocation longer than 4 hours, increase the Workflow
+Episode budget; to exceed the Agent provider's 8-hour ceiling, increase both
+options.
 
 After receiving a complete authenticated GPU, Wiki, Journal or plugin request,
 the independent Supervisor HTTP handler uses `SIGSTOP` to suspend only the
@@ -984,7 +988,7 @@ finite GeoMean/per-Shape latencies and full V0 Shape coverage. Historical reads
 retain their passing-status, Shape-coverage and Episode source-binding checks,
 and carry a valid reference score when present. The Legacy gates are unchanged.
 
-Light's shared defaults are defined in `aka.light.evaluation.policy`. Performance sampling matches Legacy: 20 timing iterations and 5 warmup iterations. Execution controls retain a 600-second candidate initialization limit, a 120-second performance limit, clock locking, and a 600-second default allocation timeout. Correctness preserves the legacy candidate gate: full Evaluate and candidate correctness use 6 cases (base plus 5 additional). Full Bootstrap/V1 measurements use the same sampling defaults; explicitly targeted bring-up smoke remains one case. Evaluate and ABBA split into one Shape per batch, with up to 16 batches in parallel. Explicit operator/request overrides remain part of task identity. Changing these defaults changes measurement identity, so records made with the previous 100/10 sampling policy remain readable but are not reused for new default requests.
+Light's shared defaults are defined in `aka.light.evaluation.policy`. Performance sampling matches Legacy: 20 timing iterations and 5 warmup iterations. Execution controls retain a 600-second candidate initialization/correctness limit and use a 300-second steady-state Performance limit. With the default two measurements per side, one A or B run receives the 300-second Performance limit and the enclosing allocation is 1230 seconds, including 30 seconds of scheduling overhead. If a request increases ABBA repeats without explicitly increasing the allocation, the implicit per-run limit is reduced to the equal share that fits; an explicit per-run limit is never silently reduced. Clock locking remains enabled. Correctness preserves the legacy candidate gate: full Evaluate and candidate correctness use 6 cases (base plus 5 additional). Full Bootstrap/V1 measurements use the same sampling defaults; explicitly targeted bring-up smoke remains one case. Evaluate and ABBA split into one Shape per batch, with up to 16 batches in parallel. Explicit operator/request overrides remain part of task identity. Changing these defaults changes measurement identity, so records made with the previous 100/10 sampling policy remain readable but are not reused for new default requests.
 
 ABBA submits native `Eval` requests with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Agent exploration defaults to 6 correctness cases; the exact Supervisor retention request uses 1 case after the separate six-case candidate gate. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume; the former Dev-driver fallback is removed. SOL/SSH comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
 

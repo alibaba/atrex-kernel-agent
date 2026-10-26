@@ -28,9 +28,9 @@ For each call, identify the uncertainty it will resolve and the observation that
 support or contradict your hypothesis. Do not promote a plausible explanation to a fact
 because one aggregate metric looks consistent with it. No separate plan document is needed.
 
-Follow `CLAUDE.md`'s foreground/wait rules: Runtime requests block, managed Agent trees pause
-while they run, and waiting does not consume the Agent active-time budget. Do not wrap
-commands in shell timeouts, background them, or edit the candidate while a call is pending.
+Follow `CLAUDE.md`'s foreground/wait rules. Runtime requests block; the session Prompt states
+whether the Supervisor also pauses the Agent tree and excludes that wait from active time.
+Do not wrap commands in shell timeouts, background them, or edit the candidate while a call is pending.
 After completion, inspect the JSON result before choosing the next action.
 
 `memory_sol_pct` describes the busiest memory subsystem, not DRAM bandwidth.
@@ -47,6 +47,11 @@ Version labels do not request a fresh measurement. See the record-query examples
 in [requests.md](references/requests.md). Record reads return the saved result,
 not another GPU execution. A successful read exits zero even when the saved
 operation failed; inspect `status` and `result.correct`.
+An identical call that is still executing returns `gateway_task_running` immediately
+after local input identity checks. Wait for the original call; do not submit it again
+or try `record-read` before a completed Record ID exists. `remaining_seconds` counts
+down the original Runtime request deadline, not a guaranteed Agate completion time;
+the original call may return a timeout after cleanup. A null value means no estimate.
 
 `result.error.code: "candidate_source_rejected"` is a source
 repair, not an infrastructure blocker. Fix the listed forbidden imports,

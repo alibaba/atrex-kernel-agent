@@ -492,7 +492,7 @@ def _run_bounded(
     *, auxiliary_input_files: dict[str, Path] | None = None,
     session_control=None,
 ) -> tuple[str, str, int, bool]:
-    """Run with an active-time deadline excluding authenticated Runtime waits."""
+    """Run with an active-time deadline excluding only configured suspended waits."""
     from aka.light.agent.execution_clock import (
         ActiveCommunication, DEFAULT_TIMEOUT_SECONDS, SessionControl, current_budget, validate_timeout,
     )
@@ -518,7 +518,7 @@ def _run_bounded(
         from aka.light.agent.claude_tools import foreground_command
         # Like Runtime, keep these calls foreground; the authenticated server
         # suspension remains authoritative if a shell backgrounds/disconnects.
-        command = foreground_command(command, cwd, max(default_timeout, DEFAULT_TIMEOUT_SECONDS))
+        command = foreground_command(command, cwd, limit)
     launch, view = wrap_agent_command(
         command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
     )
@@ -636,7 +636,7 @@ def _run_bounded(
     if timed_out:
         stderr = (stderr or "") + (
             f"\n[orchestrator] Agent active-time limit exceeded ({limit:g}s); "
-            f"{control.wait_seconds:.3f}s of Runtime tool waiting excluded.\n"
+            f"{control.wait_seconds:.3f}s of suspended Runtime waiting excluded.\n"
         )
     if environment_failures:
         environment_message = (

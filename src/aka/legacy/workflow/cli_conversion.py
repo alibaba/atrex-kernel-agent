@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse, json, os, re, sys
 from pathlib import Path
 from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S, GATEWAY_CANDIDATE_RECOVERY_MODES
-from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT, MAX_SANDBOX_TIMEOUT
 from aka.legacy.execution.recovery import DEFAULT_SSH_HEALTH_COMMAND
 from aka.legacy.task.hardware import _workspace_slug
 from aka.legacy.workflow.policy import OPTIMIZATION_MODE_CHOICES
@@ -111,10 +110,11 @@ def parse_arguments(argv):
     ap.add_argument(
         "--sandbox-timeout",
         type=int,
-        default=DEFAULT_SANDBOX_TIMEOUT,
+        default=None,
         help=(
-            "Per sandbox test/profile command execution timeout in seconds "
-            "(1..600; queue wait is budgeted separately)."
+            "Override the derived sandbox allocation timeout in seconds. By default it is "
+            "derived from Eval candidate/performance and ABBA run limits; queue wait is "
+            "budgeted separately."
         ),
     )
     ap.add_argument(
@@ -235,9 +235,9 @@ def parse_arguments(argv):
         "--verify-run-timeout",
         type=int,
         default=DEFAULT_VERIFY_RUN_TIMEOUT,
-        help="Evaluator budget for each ABBA run (default: 120s; the remote driver "
-        "allows up to 60s cold-start/finalization grace within the unchanged "
-        "whole-allocation timeout).",
+        help=f"Evaluator budget for each ABBA run (default: {DEFAULT_VERIFY_RUN_TIMEOUT}s, "
+        "matching the Performance timeout; the enclosing allocation is derived from "
+        "the complete schedule).",
     )
     ap.add_argument(
         "--min-improvement-pct",
@@ -310,11 +310,10 @@ def parse_arguments(argv):
         ap.error(
             "--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix"
         )
-    if not 1 <= args.sandbox_timeout <= MAX_SANDBOX_TIMEOUT:
-        ap.error(
-            "--sandbox-timeout must be in the gateway-supported range "
-            f"1..{MAX_SANDBOX_TIMEOUT}"
-        )
+    if args.sandbox_timeout is not None and args.sandbox_timeout < 1:
+        ap.error("--sandbox-timeout must be positive")
+    if args.setup_timeout <= 0:
+        ap.error("--setup-timeout must be positive")
     if args.convert_after < 0:
         ap.error("--convert-after must be non-negative")
     if args.fast_episodes < 0:
@@ -331,7 +330,8 @@ def parse_arguments(argv):
         ap.error("--verify-run-timeout must be positive")
     if not 0.0 <= args.min_improvement_pct < 100.0:
         ap.error("--min-improvement-pct must be in [0, 100)")
-    if args.verify_run_timeout * args.verify_repeats * 2 + 30 > args.sandbox_timeout:
+    if (args.sandbox_timeout is not None
+            and args.verify_run_timeout * args.verify_repeats * 2 + 30 > args.sandbox_timeout):
         ap.error(
             "ABBA verification must fit one sandbox allocation: "
             "2 * --verify-repeats * --verify-run-timeout + 30 <= --sandbox-timeout"

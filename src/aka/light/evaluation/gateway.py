@@ -92,6 +92,12 @@ from typing import Any, Iterable, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+from aka.contracts.evaluation import (  # noqa: E402
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+    typed_gateway_job_timeout,
+)
 from aka.legacy.execution.gateway.request_values import (
     safe_relative as _safe_relative,
     is_fp4_dtype as _is_fp4_dtype,
@@ -111,7 +117,7 @@ from aka.light.execution.config import queue_wait_grace  # noqa: E402
 from aka.light.execution.config import distributed_evaluation_world_size as _distributed_evaluation_world_size
 from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command  # noqa: E402
 from aka.light.runtime.request_errors import GatewayConfigurationError  # noqa: E402
-from aka.light.experiment.store import JOB_ROOT_ENV, EvidenceUnavailable  # noqa: E402
+from aka.light.experiment.store import BATCH_ROOT_ENV, JOB_ROOT_ENV, EvidenceUnavailable  # noqa: E402
 from aka.light.evaluation.policy import (  # noqa: E402
     CORRECTNESS_CASES, BENCH_ITERS, WARMUP_ITERS, SHAPE_BATCH_SIZE, BATCH_WORKERS,
     runner_overrides, measurement_defaults,
@@ -131,6 +137,7 @@ from aka.light.evaluation.projection import (  # noqa: E402
     redact_diagnostics,
 )
 from aka.light.execution.gateway_jobs import (  # noqa: E402
+    DEFAULT_MAX_INFRA_RETRIES,
     SubmissionRejected,
     SubmissionUncertain,
     bundle_digest,
@@ -226,14 +233,13 @@ INPUT_SKIP_SUFFIXES = {
 }
 OUTPUT_BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
-DEFAULT_COMMAND_TIMEOUT = 600
+DEFAULT_COMMAND_TIMEOUT = derived_evaluation_timeout()
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = SHAPE_BATCH_SIZE
 DEFAULT_EVAL_BATCH_WORKERS = BATCH_WORKERS
 FP4_MAX_REL_L2 = 0.2
-MAX_COMMAND_TIMEOUT = 600
-MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
+RECOVERY_GET_TIMEOUT = 30
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
@@ -990,9 +996,9 @@ def runtime_requirements(path: str) -> list[str]:
             if line.strip() and not line.lstrip().startswith("#")]
 
 
-def _runtime_pins(request):
+def _runtime_pins(request, *, include_bench_version: bool = True):
     version = os.environ.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip()
-    if version:
+    if include_bench_version and version:
         request["atrex_bench_version"] = version
     path = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if path:
@@ -1400,7 +1406,12 @@ def build_typed_request(
         else:
             request["fmt"] = disassembly_format
         from aka.light.evaluation.source_transport import diagnostic_request
-        return diagnostic_request(_runtime_pins(request), workspace, kind, timeout=timeout)
+        return diagnostic_request(
+            _runtime_pins(request, include_bench_version=False),
+            workspace,
+            kind,
+            timeout=timeout,
+        )
 
     requested_shape_ids = _option_values(command, "--shape-id")
     if requested_shape_ids:
@@ -1521,7 +1532,7 @@ def build_typed_request(
         if deps_mode is not None:
             request["deps_mode"] = deps_mode
     from aka.light.evaluation.source_transport import attach, diagnostic_request
-    request = _runtime_pins(request)
+    request = _runtime_pins(request, include_bench_version=kind == "run")
     return attach(request, workspace) if kind == "run" else diagnostic_request(request, workspace, kind, timeout=timeout)
 
 
@@ -1974,8 +1985,8 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
             os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))
         ),
         help=(
-            "Remote command execution timeout in seconds, 1..600 "
-            "(default: 600; queue wait is budgeted separately)."
+            "Positive remote command execution timeout in seconds "
+            f"(default: {DEFAULT_COMMAND_TIMEOUT}; queue wait is budgeted separately)."
         ),
     )
     parser.add_argument(
@@ -2116,13 +2127,16 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
     parser.add_argument(
             "--comparison-repeats",
             type=int,
-            default=2,
+            default=DEFAULT_ABBA_REPEATS,
             metavar="N",
             help="Measurements per side, even 2..16 (default: 2 = one native A/B/B/A block).",
         )
     parser.add_argument(
             "--comparison-run-timeout", type=int, default=None,
-            help="Seconds per ABBA run; must fit the allocation timeout. Default: up to 120.",
+            help=(
+                "Seconds per ABBA run; must fit the allocation timeout. "
+                f"Default: {DEFAULT_ABBA_RUN_TIMEOUT}, matching Performance timeout."
+            ),
         )
     parser.add_argument(
             "--input-path",
@@ -2956,8 +2970,10 @@ def run_direct_job(
     payload: dict[str, Any],
     timeout: int,
     queue_wait_grace: int,
+    max_infra_retries: int | None = DEFAULT_MAX_INFRA_RETRIES,
     max_device_retries: int = 2,
     device_retry_delay: float | None = None,
+    identity_extra: dict[str, Any] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     eval_request = kind == "eval"
@@ -3009,10 +3025,41 @@ def run_direct_job(
             ))
         return subprocess.CompletedProcess([], 0, json.dumps(accepted), "")
 
-    def poll(initial, remaining):
+    def poll(initial, remaining, *, recovery_probe=False):
         job = json.loads(initial.stdout)
         job_id = job["job_id"]
         _track_agate_job(job_id, "", url, None)
+        if recovery_probe:
+            try:
+                try:
+                    job = _gateway_json(
+                        url,
+                        "GET",
+                        f"/v1/jobs/{job_id}",
+                        None,
+                        min(RECOVERY_GET_TIMEOUT, max(1, remaining)),
+                    )
+                except InvalidURL:
+                    raise
+                except (OSError, GatewayHTTPError, GatewayResponseError) as error:
+                    if isinstance(error, GatewayHTTPError) and error.status == 404:
+                        from aka.light.execution.gateway_jobs import AcceptedJobMissing
+                        raise AcceptedJobMissing(job_id) from error
+                    if (isinstance(error, GatewayHTTPError) and error.status < 500
+                            and error.status not in {408, 429} and not request_is_infrastructure(
+                                subprocess.CompletedProcess([], 1, error.detail, ""))):
+                        raise
+                    raise EvidenceUnavailable(
+                        "Saved Gateway Job could not be read by the recovery probe"
+                    ) from error
+                return subprocess.CompletedProcess(
+                    args=["direct-gateway", kind, job_id],
+                    returncode=0 if job.get("status") == "succeeded" else 1,
+                    stdout=json.dumps(job),
+                    stderr="",
+                )
+            finally:
+                _forget_agate_job(job_id)
         deadline = time.monotonic() + remaining
         failures = 0
         try:
@@ -3034,6 +3081,9 @@ def run_direct_job(
                 except InvalidURL:
                     raise
                 except (OSError, GatewayHTTPError, GatewayResponseError) as error:
+                    if isinstance(error, GatewayHTTPError) and error.status == 404:
+                        from aka.light.execution.gateway_jobs import AcceptedJobMissing
+                        raise AcceptedJobMissing(job_id) from error
                     if (isinstance(error, GatewayHTTPError) and error.status < 500
                             and error.status not in {408, 429} and not request_is_infrastructure(
                                 subprocess.CompletedProcess([], 1, error.detail, ""))):
@@ -3050,10 +3100,14 @@ def run_direct_job(
         finally:
             _forget_agate_job(job_id)
 
-    return execute_job({"url_fingerprint": private_value_fingerprint(url),
-                        "kind": kind, "payload": payload_identity(payload)}, submit, poll,
+    identity = {"url_fingerprint": private_value_fingerprint(url),
+                "kind": kind, "payload": payload_identity(payload)}
+    if identity_extra:
+        identity["execution_context"] = identity_extra
+    return execute_job(identity, submit, poll,
                        wait_budget=timeout + queue_wait_grace,
                        retry_classifier=eval_retry_kind if eval_request else None,
+                       max_infra_retries=max_infra_retries,
                        idempotent_submission=True,
                        max_device_retries=max_device_retries if eval_request else None,
                        device_retry_delay=device_retry_delay)
@@ -3189,7 +3243,17 @@ def gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
     timeout.  Give that job deadline as much of the configured queue grace as the
     service permits.
     """
-    return min(MAX_GATEWAY_JOB_TIMEOUT, command_timeout + queue_wait_grace)
+    try:
+        return typed_gateway_job_timeout(command_timeout, queue_wait_grace)
+    except ValueError as exc:
+        raise GatewayConfigurationError(
+            str(exc),
+            next_action=(
+                "Ask the operator to reduce the evaluation allocation, ABBA repeats/run timeout, "
+                "or ATREX_SANDBOX_QUEUE_WAIT_GRACE, then restart the Campaign. Do not alter the "
+                "candidate or bypass the Runtime."
+            ),
+        ) from exc
 
 
 def _dev_gateway_job_timeout(command_timeout: int) -> int:
@@ -3212,6 +3276,7 @@ def _resume_interrupted_agate_wait(
     wait_budget: int,
     elapsed: float,
     initial: subprocess.CompletedProcess[str],
+    recovery_probe: bool = False,
 ) -> subprocess.CompletedProcess[str]:
     """Wait for an already-submitted job without resubmitting it.
 
@@ -3239,6 +3304,27 @@ def _resume_interrupted_agate_wait(
         get_command += ["--profile", gateway_profile]
     note = f"submitted job_id={job_id}; polling..."
     stderr_parts = [part.rstrip() for part in (initial.stderr, note) if part]
+    if recovery_probe:
+        timeout = min(RECOVERY_GET_TIMEOUT, max(1, remaining))
+        try:
+            resumed = subprocess.run(
+                [*get_command, "--http-timeout", str(timeout), job_id],
+                capture_output=True,
+                text=True,
+                timeout=timeout + 5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            resumed = subprocess.CompletedProcess(
+                [], ENVIRONMENT_TEMPFAIL, "", "Gateway collection transport unavailable"
+            )
+        if resumed.stderr:
+            stderr_parts.append(resumed.stderr.rstrip())
+        return subprocess.CompletedProcess(
+            args=resumed.args,
+            returncode=resumed.returncode,
+            stdout=resumed.stdout,
+            stderr="\n".join(stderr_parts),
+        )
     deadline = time.monotonic() + remaining
     resumed = initial
     failures = 0
@@ -3292,6 +3378,7 @@ def run_agate_with_cancel_retry(
     command_timeout: int,
     wait_budget: int,
     request_identity: dict | None = None,
+    max_infra_retries: int | None = DEFAULT_MAX_INFRA_RETRIES,
     max_device_retries: int = 2,
     device_retry_delay: float | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -3310,7 +3397,7 @@ def run_agate_with_cancel_retry(
             # operations, without leaking argv or partial private output.
             return subprocess.CompletedProcess([], ENVIRONMENT_TEMPFAIL, "", "")
 
-    def poll(initial, remaining):
+    def poll(initial, remaining, *, recovery_probe=False):
         job = parse_job_response(initial.stdout or "")
         if job is None:
             return initial
@@ -3320,6 +3407,7 @@ def run_agate_with_cancel_retry(
             result = _resume_interrupted_agate_wait(
                 executable=executable, url=url, gateway_profile=gateway_profile,
                 command_timeout=command_timeout, wait_budget=remaining, elapsed=0, initial=initial,
+                recovery_probe=recovery_probe,
             )
             if _ray_submit_version_mismatch(parse_job_response(result.stdout or "")):
                 fallback = _l20n_failover_command(current)
@@ -3337,6 +3425,7 @@ def run_agate_with_cancel_retry(
                                    "profile": gateway_profile},
                        submit, poll, wait_budget=wait_budget,
                        retry_classifier=eval_retry_kind if eval_request else None,
+                       max_infra_retries=max_infra_retries,
                        max_device_retries=max_device_retries if eval_request else None,
                        device_retry_delay=device_retry_delay)
 
@@ -3416,7 +3505,10 @@ def build_typed_agate_command(
         if kind != "run":
             raise ValueError("Agate Profile CLI does not support multi-GPU requests")
         command += ["--num-gpus", str(num_gpus)]
-    if request.get("atrex_bench_version"):
+    # The version selector belongs to Eval. Agate Profile rejects this option,
+    # while still using the pinned evaluator files supplied through
+    # --reference-dir and --requirements.
+    if kind == "run" and request.get("atrex_bench_version"):
         command += ["--atrex-bench-version", request["atrex_bench_version"]]
     if request.get("requirements"):
         requirements_path = candidate_path.parent / "runtime-requirements.txt"
@@ -3448,6 +3540,14 @@ def build_typed_agate_command(
             command += ["--deps-mode", request["deps_mode"]]
         for name, value in request.get("runner_overrides", runner_overrides()).items():
             command += ["--set", f"{name}={value}"]
+        # Kernel attribution adds a torch.profiler pass after the ordinary
+        # latency measurement.  A reference composed from many small PyTorch
+        # operations can emit hundreds of thousands of GPU events per forward,
+        # turning a seconds-long measurement into a minutes-long Eval.  Agate's
+        # typed Eval CLI exposes run_eval.py's --skip-kernel-attribution through
+        # the runner-config channel, so keep this final to prevent a request
+        # override from enabling the profiler again.
+        command += ["--set", "skip_kernel_attribution=true"]
         for name in ("atol", "rtol"):
             command += ["--set", f"{name}={options[name]}"]
         if request.get("abba"):
@@ -3869,6 +3969,32 @@ def _run_typed_gateway(
         return 0
 
     agate_executable = find_agate()
+    eval_store = None
+    record_eval_store = None
+    if kind == "run":
+        from aka.light.experiment.abba_checkpoints import EvalBatchStore
+
+        checkpoint_root = os.environ.get(BATCH_ROOT_ENV) or os.environ.get(JOB_ROOT_ENV)
+        job_root = os.environ.get(JOB_ROOT_ENV)
+        eval_store = EvalBatchStore(Path(checkpoint_root)) if checkpoint_root else None
+        record_eval_store = EvalBatchStore(Path(job_root)) if job_root else None
+
+    def retain_eval_batch(identity: dict[str, Any], saved: dict[str, Any]) -> None:
+        """Make a fresh Record independently prove every reused batch."""
+        retained = saved
+        if record_eval_store is not None and (
+            eval_store is None or record_eval_store.root != eval_store.root
+        ):
+            retained = record_eval_store.save(
+                identity,
+                saved["payload"],
+                stdout=saved["stdout"],
+                stderr=saved["stderr"],
+                returncode=saved["returncode"],
+            )
+        if record_eval_store is not None:
+            record_eval_store.retain_terminal_job(identity, retained)
+
     try:
         with tempfile.TemporaryDirectory(prefix="atrex-shape-batches-") as temp_dir:
             batch_root = Path(temp_dir)
@@ -3880,48 +4006,88 @@ def _run_typed_gateway(
                 batch_request = (
                     _shape_batch_request(request, shape_ids) if batched else request
                 )
+                batch_identity = (
+                    {
+                        "transport": "agate_native_eval",
+                        "request": payload_identity(batch_request),
+                        "shape_ids": shape_ids,
+                    }
+                    if eval_store is not None
+                    else None
+                )
+                if eval_store is not None and batch_identity is not None and (
+                    saved := eval_store.load(batch_identity)
+                ) is not None:
+                    retain_eval_batch(batch_identity, saved)
+                    return subprocess.CompletedProcess(
+                        [],
+                        saved["returncode"],
+                        saved["stdout"],
+                        saved["stderr"],
+                    )
                 from aka.light.evaluation.source_transport import ARCHIVES, DIAGNOSTIC, run as run_tree
                 if ARCHIVES in batch_request or DIAGNOSTIC in batch_request:
                     import sys
-                    return run_tree(sys.modules[__name__], args, batch_request, kind, queue_wait_grace)
-                if args.url and agate_executable is None:
-                    return run_direct_job(
+                    process = run_tree(
+                        sys.modules[__name__], args, batch_request, kind, queue_wait_grace
+                    )
+                elif args.url and agate_executable is None:
+                    process = run_direct_job(
                         url=args.url,
                         kind="eval" if kind == "run" else kind,
                         payload=batch_request,
                         timeout=args.timeout,
                         queue_wait_grace=queue_wait_grace,
                     )
-                if agate_executable is None:
-                    raise FileNotFoundError("agate")
-                reference_dir = None
-                if kind in {"run", "profile"}:
-                    # Even a single targeted batch needs its filtered reference
-                    # directory. Otherwise the agate CLI would reload the original
-                    # full shapes.json and defeat Evaluate/Profile selection.
-                    reference_dir = batch_root / f"batch-{batch_index:04d}"
-                    _shape_batch_reference(batch_request["reference"], reference_dir)
-                agate = build_typed_agate_command(
-                    agate_executable,
-                    args,
-                    workspace,
-                    kind,
-                    batch_request,
-                    queue_wait_grace,
-                    reference_dir,
-                    batch_root / f"sidecar-{batch_index:04d}",
-                )
-                return run_agate_with_cancel_retry(
-                    agate=agate,
-                    executable=agate_executable,
-                    url=args.url,
-                    gateway_profile=args.gateway_profile,
-                    command_timeout=gateway_job_timeout(
-                        args.timeout, queue_wait_grace
-                    ),
-                    wait_budget=args.timeout + queue_wait_grace,
-                    request_identity={"kind": kind, "request": batch_request},
-                )
+                else:
+                    if agate_executable is None:
+                        raise FileNotFoundError("agate")
+                    reference_dir = None
+                    if kind in {"run", "profile"}:
+                        # Even a single targeted batch needs its filtered reference
+                        # directory. Otherwise the agate CLI would reload the original
+                        # full shapes.json and defeat Evaluate/Profile selection.
+                        reference_dir = batch_root / f"batch-{batch_index:04d}"
+                        _shape_batch_reference(batch_request["reference"], reference_dir)
+                    agate = build_typed_agate_command(
+                        agate_executable,
+                        args,
+                        workspace,
+                        kind,
+                        batch_request,
+                        queue_wait_grace,
+                        reference_dir,
+                        batch_root / f"sidecar-{batch_index:04d}",
+                    )
+                    process = run_agate_with_cancel_retry(
+                        agate=agate,
+                        executable=agate_executable,
+                        url=args.url,
+                        gateway_profile=args.gateway_profile,
+                        command_timeout=gateway_job_timeout(
+                            args.timeout, queue_wait_grace
+                        ),
+                        wait_budget=args.timeout + queue_wait_grace,
+                        request_identity={"kind": kind, "request": batch_request},
+                    )
+                if eval_store is not None and batch_identity is not None:
+                    job = parse_job_response(process.stdout or "")
+                    if job is not None:
+                        try:
+                            saved = eval_store.save(
+                                batch_identity,
+                                job,
+                                stdout=process.stdout,
+                                stderr=process.stderr or "",
+                                returncode=process.returncode,
+                            )
+                        except ValueError:
+                            # Queued, running, incomplete and infrastructure
+                            # outcomes remain only physical-job checkpoints.
+                            pass
+                        else:
+                            retain_eval_batch(batch_identity, saved)
+                return process
 
             batch_items = list(enumerate(shape_batches))
             if batched:
@@ -4120,11 +4286,8 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit("sandbox: --ssh-runtime-bind requires --ssh")
     elif args.ssh_gpu is not None:
         raise SystemExit("sandbox: --ssh-gpu requires --ssh")
-    if not 1 <= args.timeout <= MAX_COMMAND_TIMEOUT:
-        raise SystemExit(
-            "sandbox: --timeout must be in the gateway-supported range "
-            f"1..{MAX_COMMAND_TIMEOUT}"
-        )
+    if args.timeout < 1:
+        raise SystemExit("sandbox: --timeout must be positive")
     if args.shape_batch_size <= 0:
         raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:

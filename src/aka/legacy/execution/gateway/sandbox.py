@@ -82,6 +82,7 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
+from aka.contracts.evaluation import derived_evaluation_timeout, typed_gateway_job_timeout
 from aka.legacy.execution.gateway.request_values import (
     safe_relative as _safe_relative,
     is_fp4_dtype as _is_fp4_dtype,
@@ -176,12 +177,10 @@ INPUT_SKIP_SUFFIXES = {
 }
 OUTPUT_BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
-DEFAULT_COMMAND_TIMEOUT = 600
+DEFAULT_COMMAND_TIMEOUT = derived_evaluation_timeout()
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
 FP4_MAX_REL_L2 = 0.2
-MAX_COMMAND_TIMEOUT = 600
-MAX_GATEWAY_JOB_TIMEOUT = 10_800
 MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
@@ -1824,8 +1823,8 @@ def build_parser() -> argparse.ArgumentParser:
             os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))
         ),
         help=(
-            "Remote command execution timeout in seconds, 1..600 "
-            "(default: 600; queue wait is budgeted separately)."
+            "Positive remote command execution timeout in seconds "
+            f"(default: {DEFAULT_COMMAND_TIMEOUT}; queue wait is budgeted separately)."
         ),
     )
     parser.add_argument(
@@ -2868,7 +2867,7 @@ def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
     timeout.  Give that job deadline as much of the configured queue grace as the
     service permits.
     """
-    return min(MAX_GATEWAY_JOB_TIMEOUT, command_timeout + queue_wait_grace)
+    return typed_gateway_job_timeout(command_timeout, queue_wait_grace)
 
 
 def _dev_gateway_job_timeout(command_timeout: int) -> int:
@@ -3557,11 +3556,8 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit("sandbox: --ssh-runtime-bind requires --ssh")
     elif args.ssh_gpu is not None:
         raise SystemExit("sandbox: --ssh-gpu requires --ssh")
-    if not 1 <= args.timeout <= MAX_COMMAND_TIMEOUT:
-        raise SystemExit(
-            "sandbox: --timeout must be in the gateway-supported range "
-            f"1..{MAX_COMMAND_TIMEOUT}"
-        )
+    if args.timeout < 1:
+        raise SystemExit("sandbox: --timeout must be positive")
     if args.shape_batch_size <= 0:
         raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:

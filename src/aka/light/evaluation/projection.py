@@ -991,8 +991,12 @@ def _agent_abba_public_result(
         side.update(bound_feedback(side, max_bytes=128 * 1024))
     baseline_us = _positive_number(baseline.get("latency_us_geomean"))
     candidate_us = _positive_number(candidate.get("latency_us_geomean"))
+    terminal_failure = payload.get("terminal_failure")
     correct = (
-        baseline["correct"] is True and candidate["correct"] is True and not payload.get("error")
+        baseline["correct"] is True
+        and candidate["correct"] is True
+        and not payload.get("error")
+        and not terminal_failure
     )
     speedup = baseline_us / candidate_us if correct and baseline_us and candidate_us else None
     return {
@@ -1031,7 +1035,11 @@ def _agent_abba_public_result(
             for row in rows
         ],
         "shape_batch_count": payload.get("shape_batch_count", 1),
-        "error": bounded_error(payload.get("error")) if payload.get("error") else None,
+        "error": (
+            bounded_error(payload.get("error") or terminal_failure)
+            if payload.get("error") or terminal_failure
+            else None
+        ),
     }
 
 def abba(payload, schedule, shape_ids, repeats):

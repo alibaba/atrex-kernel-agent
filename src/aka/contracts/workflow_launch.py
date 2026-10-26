@@ -46,8 +46,8 @@ class WorkflowLaunch:
             )
         if type(settings.resume_framework_candidate) is not bool:
             raise TypeError("resume_framework_candidate must be a boolean")
-        if runtime.timeout > 600 or 2 * runtime.verify_repeats * runtime.verify_run_timeout + 30 > runtime.timeout:
-            raise ValueError("ABBA verification must fit one allocation of at most 600 seconds")
+        if 2 * runtime.verify_repeats * runtime.verify_run_timeout + 30 > runtime.timeout:
+            raise ValueError("ABBA verification must fit the configured allocation timeout")
         if not 0 <= runtime.min_improvement_pct < 100:
             raise ValueError("min_improvement_pct must be in [0, 100)")
         for name in ("convert_after", "fast_episodes", "handoff_resumes"):

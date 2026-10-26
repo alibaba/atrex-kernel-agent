@@ -6,6 +6,12 @@ from pathlib import Path
 from typing import Protocol
 from collections.abc import Callable
 
+from .evaluation import (
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+)
+
 
 @dataclass(frozen=True)
 class WorkflowSettings:
@@ -25,7 +31,7 @@ class WorkflowSettings:
     optimization_mode: str = "leaderboard"
     framework_baseline: str = "auto"
     gateway_candidate_recovery: str = "disabled"
-    framework_baseline_timeout: int = 10800
+    framework_baseline_timeout: int = 28800
     handoff_resumes: int = 2
     production_review_timeout: int = 600
     review_trace_mode: str = "errors"
@@ -37,6 +43,14 @@ class WorkflowSettings:
     resume_framework_candidate: bool = False
 
     def __post_init__(self):
+        for name in (
+            "setup_timeout",
+            "framework_baseline_timeout",
+            "production_review_timeout",
+        ):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{name} must be a positive integer")
         if self.review_trace_mode not in {"off", "errors", "all"}:
             raise ValueError(
                 "review_trace_mode must be one of: off, errors, all"
@@ -55,13 +69,20 @@ class ProblemSource:
 class CampaignRuntimeSettings:
     """Selected execution and measurement settings for one Campaign."""
     hardware: str = ""
-    timeout: int = 600
-    verify_repeats: int = 2
-    verify_run_timeout: int = 120
+    # None derives the enclosing allocation from the inner Eval/ABBA limits.
+    # An explicit value remains an advanced operator override.
+    timeout: int | None = None
+    verify_repeats: int = DEFAULT_ABBA_REPEATS
+    verify_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT
     min_improvement_pct: float = 0.0
     shape_batch_size: int = 4
 
     def __post_init__(self):
+        if self.timeout is None:
+            object.__setattr__(self, "timeout", derived_evaluation_timeout(
+                repeats=self.verify_repeats,
+                per_run_timeout=self.verify_run_timeout,
+            ))
         if type(self.shape_batch_size) is not int or self.shape_batch_size <= 0:
             raise ValueError("shape_batch_size must be a positive integer")
 

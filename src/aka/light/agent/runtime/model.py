@@ -3,6 +3,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
+from aka.contracts.evaluation import derived_evaluation_timeout
 from aka.contracts.agent import (
     TokenUsage, NormalizedAgentEvent, AgentRuntimeCapabilities,
     sum_token_usages, token_usage_exceeds, subtract_token_usage, resequence_agent_events,
@@ -35,7 +36,7 @@ class AgentRunRequest:
     sandbox_hardware: str = ""
     sandbox_profile: str = ""
     sandbox_url: str = ""
-    sandbox_timeout_s: int = 600
+    sandbox_timeout_s: int = derived_evaluation_timeout()
     session_id: str | None = None
     extra_environment: Mapping[str, str] | None = None
     sandbox_ssh: str = ""

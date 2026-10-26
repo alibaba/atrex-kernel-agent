@@ -29,7 +29,6 @@ from aka.light.workflow.constants import (
     ATREX_PRIVATE_REFERENCE_ENV,
     DEFAULT_CONVERT_AFTER,
     DEFAULT_HANDOFF_RESUMES,
-    DEFAULT_SANDBOX_TIMEOUT,
     DEFAULT_VERIFY_REPEATS,
     DEFAULT_VERIFY_RUN_TIMEOUT,
     DEPENDENCY_REVIEW_PROMPT,
@@ -40,7 +39,7 @@ from aka.light.workflow.constants import (
     FRAMEWORK_BASELINE_TIMEOUT_S,
     FRAMEWORK_BASELINE_VERSION,
     IMMUTABLE_BASELINE_PATHS,
-    MAX_PROBLEM_GENERATION_TIMEOUT_S,
+    DEFAULT_PROBLEM_GENERATION_TIMEOUT_S,
     PROFILE_DRIVER,
     PROMPTS_DIR,
     REPO_ROOT,
@@ -162,7 +161,7 @@ class Campaign:
     max_iters: int = 20
     token_budget: int = 0  # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
-    problem_generation_timeout: int = MAX_PROBLEM_GENERATION_TIMEOUT_S  # per authoring attempt
+    problem_generation_timeout: int = DEFAULT_PROBLEM_GENERATION_TIMEOUT_S  # per authoring attempt
     max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
     convert_after: int = (
         DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
@@ -172,7 +171,7 @@ class Campaign:
     )
     sandbox_profile: str = ""  # pre/prod; empty preserves normal agate URL resolution
     sandbox_url: str = ""  # explicit endpoint, e.g. http://127.0.0.1:8000
-    sandbox_timeout: int = DEFAULT_SANDBOX_TIMEOUT
+    sandbox_timeout: int | None = None
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
     agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
     agent_sandbox: str = "none"  # opt-in coordinator isolation, independent of GPU transport
@@ -205,6 +204,12 @@ class Campaign:
     )
 
     def __post_init__(self) -> None:
+        if self.sandbox_timeout is None:
+            from aka.contracts.evaluation import derived_evaluation_timeout
+            self.sandbox_timeout = derived_evaluation_timeout(
+                repeats=self.verify_repeats,
+                per_run_timeout=self.verify_run_timeout,
+            )
         if sum(
             bool(value)
             for value in (self.sandbox_ssh, self.sandbox_url, self.sandbox_profile)
@@ -283,7 +288,7 @@ class Campaign:
                 f"{AGENT_PROBLEM_FILENAME}"
             )
 
-        timeout = min(self.problem_generation_timeout, MAX_PROBLEM_GENERATION_TIMEOUT_S)
+        timeout = self.problem_generation_timeout
         print(
             "[orchestrator] generalized problem: production received detailed shapes only; "
             f"starting AKA problem-authoring session (timeout: {timeout}s per attempt, at most 2 attempts)",
@@ -455,7 +460,6 @@ class Campaign:
         return {
             "baseline_kernel_id": runtime.measurements.kernel(incumbent_source)["kernel_id"],
             "measurement_repetitions": runtime.measurement_repetitions,
-            "allocation_timeout_seconds": runtime.config.timeout,
         }
 
     def acceptance_verifier(self, **options):
@@ -2260,6 +2264,7 @@ class Campaign:
                 self.agent_cli,
                 is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
                 wiki=self.tool_runtime.wiki,
+                pause_agent_during_requests=self.tool_runtime.pause_agent_during_requests,
                 knowledge_skills=self.plugin_registry.knowledge_skills() if self.tool_runtime.wiki else (),
             ),
             KNOWLEDGE_RESEARCH=(

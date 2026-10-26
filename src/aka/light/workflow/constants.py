@@ -9,6 +9,11 @@ from pathlib import Path
 from aka.legacy.evaluation.resources import profile_driver_script
 from aka.legacy.task.problem.resources import native_harness_script
 from aka.legacy.acceptance.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
+from aka.contracts.evaluation import (
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+)
 from aka.light.workspace.resource_catalog import resource
 
 import aka.light.agent.runtime as _agent_runtime
@@ -32,19 +37,19 @@ DEFAULT_CONVERT_AFTER = (
 SUPPLEMENTAL_REPAIR_PREFIX = "Supplemental numerical probes"
 SUPPLEMENTAL_PENDING_PREFIX = "Supplemental validation is incomplete"
 DEFAULT_HANDOFF_RESUMES = 2
-DEFAULT_VERIFY_REPEATS = 2
-DEFAULT_VERIFY_RUN_TIMEOUT = 120
+DEFAULT_VERIFY_REPEATS = DEFAULT_ABBA_REPEATS
+DEFAULT_VERIFY_RUN_TIMEOUT = DEFAULT_ABBA_RUN_TIMEOUT
 FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
 FRAMEWORK_BASELINE_VERSION = (
     1  # the framework baseline always occupies v1, retries overwrite it
 )
-FRAMEWORK_BASELINE_TIMEOUT_S = 10800
+FRAMEWORK_BASELINE_TIMEOUT_S = 28800
 FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
 FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
 DEPENDENCY_REVIEW_TIMEOUT_S = 600
 DEPENDENCY_REVIEW_PROMPT = resource("prompts/dependency_review.md")
 AGENT_PROBLEM_GENERATION_PROMPT = resource("prompts/generalize_agent_problem.md")
-MAX_PROBLEM_GENERATION_TIMEOUT_S = 1_800
+DEFAULT_PROBLEM_GENERATION_TIMEOUT_S = 1_800
 ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 IMMUTABLE_BASELINE_PATHS = (
     "test_kernel.py",
@@ -71,8 +76,7 @@ AMD_FRAMEWORKS = ("Triton", "FlyDSL", "TileLang")
 # CuteDSL is omitted: that path has never been validated on PPU silicon.
 PPU_FRAMEWORKS = ("Triton", "Cuda", "TileLang")
 DEFAULT_FRAMEWORKS = ("Triton", "TileLang")
-DEFAULT_SANDBOX_TIMEOUT = 600
-MAX_SANDBOX_TIMEOUT = 600
+DEFAULT_SANDBOX_TIMEOUT = derived_evaluation_timeout()
 
 
 STALL_STATE_FILE = ".orchestrator_state.json"

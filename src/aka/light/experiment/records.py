@@ -9,6 +9,8 @@ from pathlib import Path
 
 from aka.light.execution.gateway_jobs import cacheable_job, job_from_process
 from aka.light.experiment.store import (
+    ABBA_BATCH_ROOT_ENV,
+    BATCH_ROOT_ENV,
     JOB_ROOT_ENV,
     DuplicateTask,
     RecordNotFound,
@@ -24,6 +26,19 @@ from aka.light.evaluation.public_result import seal_response
 from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError, error_response, field_error
 from aka.light.experiment.identifiers import GATEWAY_RECORD_ID_RE, KERNEL_RECORD_ID_RE
 QUERY_KINDS = {"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier"}
+
+
+def _completed_abba_timeout(sample: object, states: list[dict], *, truncated: bool) -> bool:
+    """A twice-timed-out native ABBA is final only after both Jobs are terminal."""
+    from aka.light.evaluation.native_abba import is_terminal_abba_timeout
+    return bool(
+        isinstance(sample, dict)
+        and sample.get("correct") is False
+        and is_terminal_abba_timeout(sample)
+        and states
+        and all(state.get("phase") == "terminal" for state in states)
+        and not truncated
+    )
 
 
 def _read_record(reader, identifier, *, field, pattern):
@@ -192,7 +207,7 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
         if response is not None:
             return response
     try:
-        with store.reserve(request, kernels) as task:
+        with store.reserve(request, kernels, deadline=effects.deadline, request_id=effects.request_id) as task:
             for name, source in inputs.items():
                 private_write_bytes(task.directory / "inputs" / name, source)
             repetitions = plan.repetitions
@@ -207,6 +222,28 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     JOB_ROOT_ENV: str(directory),
                     "ATREX_AKA_IDENTITY_KEY": store.identity_key.hex(),
                 }
+                if operation in {"evaluate", "same_allocation_abba"}:
+                    # A task may finish only a subset of Shape batches before
+                    # an infrastructure outage. Keep completed batches at a
+                    # Campaign location so a fresh Gateway Record dispatches
+                    # only missing Shapes. Evaluate is task/repetition-scoped;
+                    # ABBA keeps its compatible repetition scope. Every
+                    # checkpoint verifies its exact batch request, while the
+                    # Eval task digest also binds policy and runtime pins.
+                    recovery_root = (
+                        store.root
+                        / "eval-recovery"
+                        / task.key
+                        / f"repetition-{repetition + 1}"
+                        if operation == "evaluate"
+                        else store.root
+                        / "abba-recovery"
+                        / f"repetition-{repetition + 1}"
+                    )
+                    env[BATCH_ROOT_ENV] = str(recovery_root)
+                    if operation == "same_allocation_abba":
+                        # Compatibility for older standalone ABBA entrypoints.
+                        env[ABBA_BATCH_ROOT_ENV] = str(recovery_root)
                 if "version" in plan.runtime_pins:
                     env["ATREX_SANDBOX_ATREX_BENCH_VERSION"] = plan.runtime_pins["version"]
                 if "requirements" in plan.runtime_pins:
@@ -241,7 +278,23 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     for state in states)
                 cacheable = cacheable and not response.get("truncated")
                 if operation == "same_allocation_abba":
-                    cacheable = cacheable and sample is not None and isinstance(sample.get("correct"), bool)
+                    terminal_abba_timeout = _completed_abba_timeout(
+                        sample,
+                        states,
+                        truncated=response.get("truncated") is True,
+                    )
+                    if terminal_abba_timeout:
+                        # The native ABBA executor has already submitted one
+                        # fresh retry.  Two terminal wall-clock failures are a
+                        # complete negative promotion result, not uncertain
+                        # infrastructure that the Supervisor should retry forever.
+                        cacheable = True
+                    else:
+                        cacheable = (
+                            cacheable
+                            and sample is not None
+                            and isinstance(sample.get("correct"), bool)
+                        )
                 if sample is not None:
                     samples.append(sample)
                 if process.returncode != 0 or sample is None or not cacheable:
@@ -318,13 +371,15 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
             # reserve() has already validated the exact task identity and its
             # cacheability. This switch is never accepted from HTTP/Agent argv.
             return dict(store.read(error.record_id)["response"], reused=True)
-        info = error.response()
-        recovery = ([{"tool": "record-read", "request": {"record_id": error.record_id},
-                      "command": "python3 tools/sandbox.py --kind record-read --record-id " + error.record_id,
-                      "instruction": "Reuse the completed result; do not resubmit this exact Kernel task."}]
-                    if error.record_id else [{"instruction": info["next_action"]}])
-        response = error_response(info["message"], code=info["code"], repairable=False,
-                                  next_action=info["next_action"], gateway_record_id=error.record_id,
-                                  recovery=recovery)
-        response["previous_gateway_record_id"] = error.record_id
-        return {"exit_code": 2, "stdout": "", "stderr": json.dumps(response) + "\n"}
+        return task_conflict_response(error)
+
+
+def task_conflict_response(error: DuplicateTask) -> dict:
+    info = error.response()
+    recovery = ([{"tool": "record-read", "request": {"record_id": error.record_id},
+                  "command": "python3 tools/sandbox.py --kind record-read --record-id " + error.record_id,
+                  "instruction": "Reuse the completed result; do not resubmit this exact Kernel task."}]
+                if error.record_id else [{"instruction": info["next_action"]}])
+    response = error_response(info.pop("message"), repairable=False, recovery=recovery, **info)
+    response["previous_gateway_record_id"] = error.record_id
+    return {"exit_code": 2, "stdout": "", "stderr": json.dumps(response) + "\n"}

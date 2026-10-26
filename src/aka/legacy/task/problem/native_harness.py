@@ -511,8 +511,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--correctness-max-rel-l2", type=float, default=None)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--timed-runs", type=int, default=100)
-    parser.add_argument("--candidate-timeout-s", type=float, default=20.0)
-    parser.add_argument("--perf-timeout-s", type=float, default=120.0)
+    parser.add_argument("--candidate-timeout-s", type=float, default=300.0)
+    parser.add_argument("--perf-timeout-s", type=float, default=300.0)
     parser.add_argument("--shape-id", action="append", dest="shape_ids")
     return parser
 

@@ -422,7 +422,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
 --framework-baseline MODE        auto (production only), always, or never
---framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 10800)
+--framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 28800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
 --setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
 --sandbox-hardware GPU           Sandbox hardware selector or alias
@@ -432,13 +432,13 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --sandbox-ssh-runtime-bind PATH  Read-only runtime path inside the SSH namespace (repeatable)
 --sandbox-health-command COMMAND GPU health probe used for failure classification
 --environment-poll-interval S    Recovery probe interval (default: 60)
---sandbox-timeout S              Remote command timeout, at most 600 seconds
+--sandbox-timeout S              Advanced override for the derived evaluation allocation
 --workspace DIR                  Campaign parent directory (default: current directory)
 --max-stall N                    Stop after N unpromoted episodes (0 = disabled)
 --convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
 --handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
 --verify-repeats N               Full-mode ABBA repeat pairs (default: 2)
---verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 120)
+--verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 300)
 --min-improvement-pct PCT        Strict gain required in fast or full verification
 --arch ARCH                      Override runtime architecture detection
 ```

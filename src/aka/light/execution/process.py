@@ -41,7 +41,9 @@ def run_gateway(command, cwd, environment, control):
                             control.request_id or "direct", now - started, max(0, deadline - now))
                         next_notice = now + 60
                     oversized = os.fstat(output.fileno()).st_size + os.fstat(errors.fileno()).st_size > 64 * 1024 * 1024
-                    if now >= deadline or not control.is_live() or oversized:
+                    deadline_exceeded = now >= deadline
+                    live = control.is_live()
+                    if deadline_exceeded or not live or oversized:
                         try:
                             os.killpg(process.pid, signal.SIGTERM)
                         except ProcessLookupError:
@@ -56,13 +58,41 @@ def run_gateway(command, cwd, environment, control):
                         except ProcessLookupError:
                             pass
                         process.wait()
-                        raise GatewayExecutionUnavailable("Request interrupted; outcome may be unknown")
+                        if not live:
+                            raise GatewayExecutionUnavailable(
+                                "Session authorization was revoked after Gateway execution began; "
+                                "cancellation was requested, but the Agate job outcome is not confirmed",
+                                code="gateway_session_revoked",
+                                reason="session_revoked_after_dispatch",
+                                cancellation_requested=True,
+                                session_revoked=True,
+                            )
+                        if deadline_exceeded:
+                            raise GatewayExecutionUnavailable(
+                                "Runtime request deadline expired while Gateway was running; "
+                                "cancellation was requested, but the Agate job outcome is not confirmed",
+                                code="gateway_deadline_exceeded",
+                                reason="runtime_request_deadline_exceeded",
+                                cancellation_requested=True,
+                            )
+                        raise GatewayExecutionUnavailable(
+                            "Gateway output exceeded the Runtime spool limit while execution was "
+                            "still active; cancellation was requested and the outcome is not confirmed",
+                            code="gateway_output_spool_exceeded",
+                            reason="gateway_output_spool_exceeded",
+                            cancellation_requested=True,
+                            output_limit_bytes=64 * 1024 * 1024,
+                        )
                     time.sleep(0.1)
                 output.seek(0)
                 errors.seek(0)
                 if os.fstat(output.fileno()).st_size > 4 * 1024 * 1024:
                     raise GatewayExecutionUnavailable(
-                        "GPU output exceeds the parsing limit; outcome cannot be projected safely"
+                        "Gateway completed but its response exceeded the Runtime parsing limit; "
+                        "the operation outcome cannot be projected safely",
+                        code="gateway_response_too_large",
+                        reason="gateway_response_too_large",
+                        output_limit_bytes=4 * 1024 * 1024,
                     )
                 return subprocess.CompletedProcess(command, process.returncode,
                     output.read(4 * 1024 * 1024 + 1).decode("utf-8", "replace"),

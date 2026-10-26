@@ -10,7 +10,7 @@ import json
 import subprocess
 import tempfile
 from pathlib import Path
-from aka.light.evaluation.policy import validate_abba_repeats
+from aka.light.evaluation.policy import PERFORMANCE_TIMEOUT, validate_abba_repeats
 
 from aka.light.evaluation.projection import (
     GATEWAY_ERROR_PREFIX,
@@ -83,7 +83,11 @@ def validate_comparison(args) -> None:
 def comparison_run_timeout(args) -> int:
     available = (args.timeout - 30) // (2 * args.comparison_repeats)
     requested = getattr(args, "comparison_run_timeout", None)
-    seconds = min(120, available) if requested is None else requested
+    # Request-level repeat overrides are valid without a matching allocation
+    # override. Preserve the ordinary Performance timeout when it fits, and
+    # otherwise divide the enclosing allocation across the complete schedule.
+    # An explicit per-run timeout remains strict and is never silently reduced.
+    seconds = min(PERFORMANCE_TIMEOUT, available) if requested is None else requested
     if seconds <= 0 or seconds > available:
         raise ValueError("--comparison-run-timeout must be positive and fit the full ABBA allocation schedule")
     return seconds

@@ -39,8 +39,7 @@ class RecordedABBAValidator(GatewayABBAValidator):
             "--multi-seed", "0",
         ]
 
-    def agent_instructions(self, *, baseline_kernel_id: str, measurement_repetitions: int,
-                           allocation_timeout_seconds: int) -> str:
+    def agent_instructions(self, *, baseline_kernel_id: str, measurement_repetitions: int) -> str:
         read = shlex.join([
             "python3", "tools/sandbox.py", "--kind", "kernel-read", "--kernel-id",
             baseline_kernel_id, "--output-path", self.BASELINE_PATH,
@@ -66,7 +65,7 @@ command/input/Shape/seed/benchmark/dependency overrides.
 The Runtime supplies the evaluator, full workload and target; private inputs stay private.
 
 Supervisor measurement repetitions: **{measurement_repetitions}** per request (one result if 1;
-per-Shape median if 3). Allocation timeout: **{allocation_timeout_seconds} seconds**.
+per-Shape median if 3). The enclosing allocation is derived from the per-run limits above.
 These are Runtime-owned settings, already applied to this request; do not loop the command
 or set environment variables to reproduce them.
 
@@ -106,6 +105,23 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
                 raise ValueError("No authoritative ABBA record: " + response.get("stderr", "")[-1000:])
             if result.get("comparison") != {"method": "abba", "repeats": self.repeats}:
                 raise ValueError("ABBA record does not match the acceptance schedule")
+            from aka.light.evaluation.native_abba import is_terminal_abba_timeout
+            if is_terminal_abba_timeout(result):
+                error = result["error"]
+                verdict = VerificationResult(
+                    "FAIL",
+                    None,
+                    None,
+                    None,
+                    artifact=result["gateway_record_id"],
+                    error=(
+                        "ABBA run exceeded its wall-clock limit on the initial request and one retry: "
+                        + str(error.get("message") or error.get("reason"))
+                    ),
+                )
+                verdict.gateway_record_id = result["gateway_record_id"]
+                verdict.reused = response.get("reused") is True
+                return verdict
             # Gateway validates every schedule row and Shape. Promotion uses
             # latency reduction, never the reference-relative performance score.
             schedule = verification_schedule(1)
