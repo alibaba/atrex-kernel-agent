@@ -16,7 +16,8 @@ from .transport_results import (
 
 
 class GatewayMeasurement:
-    def __init__(self, request, *, workspace, hardware, private, batch_size, profiling=False):
+    def __init__(self, request, *, workspace, hardware, private, batch_size, profiling=False, baseline=None):
+        self.baseline = baseline
         self.request = request
         self.workspace = workspace
         self.hardware = hardware
@@ -42,14 +43,14 @@ class GatewayMeasurement:
         result = (_merge_optimizer_results(results, self.shape_ids, metadata,
             require_performance=performance, hardware=self.hardware)
             if len(results) > 1 else results[0])
-        result = _mask_generalized_result(self.workspace, result, private=self.private)
+        result = _mask_generalized_result(self.workspace, result, private=self.private, baseline=self.baseline)
         return result
 
 
-def prepare_dev_output(workspace, stdout, *, evaluator, private):
+def prepare_dev_output(workspace, stdout, *, evaluator, private, baseline=None):
     if evaluator:
-        stdout = _hydrate_abba_result_lines(workspace, stdout)
-        stdout = _hydrate_result_lines(workspace, stdout)
+        stdout = _hydrate_abba_result_lines(workspace, stdout, baseline=baseline)
+        stdout = _hydrate_result_lines(workspace, stdout, baseline=baseline)
     if private:
         stdout = "\n".join(
             _public_numerical_result_line(line) if line.startswith(NUMERICAL_RESULT_PREFIX) else line
@@ -59,10 +60,10 @@ def prepare_dev_output(workspace, stdout, *, evaluator, private):
 
 
 def _mask_generalized_result(
-    workspace: Path, result: dict[str, Any], *, private: bool
+    workspace: Path, result: dict[str, Any], *, private: bool, baseline=None
 ) -> dict[str, Any]:
     """Hide exact inputs and failures but retain real latency keyed by opaque shape id."""
-    result = _with_workspace_performance_score(workspace, result)
+    result = _with_workspace_performance_score(workspace, result, baseline=baseline)
     if not private:
         return result
     masked = dict(result)

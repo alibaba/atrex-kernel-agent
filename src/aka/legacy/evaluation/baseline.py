@@ -12,7 +12,7 @@ from aka.contracts.problem import LoadedProblem
 from aka.contracts.content import WorkspaceFile
 
 AGENT_PROBLEM_FILENAME = "agent_problem.json"
-from .memory import read_memory
+from aka.contracts.workflow_records import CanonicalMeasurementReader, measurement_document
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,7 @@ class BaselineInputs:
     optimization_mode: str = "leaderboard"
     platform: str = ""
     target_util: float = 0.0
+    measurement_reader: CanonicalMeasurementReader | None = None
 
 
 @dataclass(frozen=True)
@@ -226,9 +227,9 @@ class BaselinePreparation:
 
     def framework_baseline_smoke_shape_ids(self, *, limit: int = 3) -> list[str]:
         """Pick fast/median/slow V0 latency ids for bounded native V1 smoke coverage."""
-        memory = read_memory(self.inputs.workspace, 0) or {}
-        performance = memory.get("performance")
-        performance = performance if isinstance(performance, dict) else {}
+        reader = self.inputs.measurement_reader
+        fact = reader.baseline(self.inputs.workspace) if reader is not None else None
+        performance = measurement_document(fact.result) if fact is not None else {}
         by_shape = performance.get("latency_us_by_shape", {})
         if not isinstance(by_shape, dict):
             return []

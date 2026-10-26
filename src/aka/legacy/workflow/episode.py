@@ -20,6 +20,7 @@ from aka.legacy.task.hardware import hardware_vendor
 from aka.contracts.workspace import CandidateHandle
 from aka.legacy.task.git import git_head, git_text, working_changes
 from .git_episode import record_episode_outcome
+from .records import promotion_files
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
 from .journal import normalize_accepted_ppu_diagnostics
@@ -269,7 +270,7 @@ class LongHorizonCampaign:
         if self.conversion_budget_action != "retain_verified":
             raise ValueError("invalid conversion budget action")
         # Preparation must have produced a measured incumbent before any budget can retain it.
-        from aka.legacy.evaluation.memory import read_memory
+        from .records import read_memory
         memory = read_memory(self.workspace, 0)
         from .export import verified_memory
         if (not verified_memory(self.workspace, memory)
@@ -1183,9 +1184,8 @@ class LongHorizonCampaign:
                 base_commit=base_commit,
                 candidate_commit=candidate_commit,
                 episode=episode,
-                evidence=evidence,
-                memory_version=memory_version,
-                memory_record=memory,
+                record_files=promotion_files(episode=episode, memory_version=memory_version,
+                                             evidence=evidence, memory_record=memory),
             )
             attempt["promotion_commit"] = promotion_commit
             state.accepted += 1

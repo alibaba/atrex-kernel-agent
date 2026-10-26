@@ -13,6 +13,9 @@ from .metadata import distributed_evaluation_world_size
 
 
 class GatewayCommandEvaluator:
+    def __init__(self, *, measurement_reader=None):
+        self.measurement_reader = measurement_reader
+
     def prepare(self, command):
         if command.operation == "preflight" or command.submission is not None:
             identities = ()
@@ -24,6 +27,8 @@ class GatewayCommandEvaluator:
             return PreparedEvaluation((command,), 1, {"command": command, "measurement": None,
                 "kind": command.operation, "private": False, "evaluator": False},
                 measurement_identities=identities)
+        baseline = (self.measurement_reader.baseline(command.workspace)
+                    if self.measurement_reader is not None else None)
         environment = command.environment
         argv = ["--hardware", command.hardware, "--workspace", str(command.workspace),
                 "--timeout", str(command.timeout), "--kind", command.operation,
@@ -42,7 +47,7 @@ class GatewayCommandEvaluator:
         for relative in command.artifacts:
             transport._safe_relative(relative)
         context = {"command": command, "args": args, "kind": kind, "private": private,
-                   "evaluator": evaluator, "measurement": None}
+                   "evaluator": evaluator, "measurement": None, "baseline": baseline}
         if command.operation == "preflight" or not (evaluator or kind == "profile"):
             context["kind"] = "dev"
             command = replace(command, operation="run") if command.operation == "auto" else command
@@ -86,7 +91,7 @@ class GatewayCommandEvaluator:
                 raise
             return PreparedEvaluation((replace(command, operation="dev"),), 1, context)
         measurement = GatewayMeasurement(request, workspace=command.workspace, hardware=command.hardware,
-            private=private, batch_size=args.shape_batch_size, profiling=kind == "profile")
+            private=private, batch_size=args.shape_batch_size, profiling=kind == "profile", baseline=baseline)
         if not measurement.batches:
             raise ValueError("measurement requires at least one shape")
         context["measurement"] = measurement
@@ -155,7 +160,7 @@ class GatewayCommandEvaluator:
         if measurement is None or (len(results) == 1 and any(line.startswith(transport.TEST_RESULT_PREFIX) for line in results[0].stdout.splitlines())):
             result = results[0]
             stdout = prepare_dev_output(command.workspace, result.stdout,
-                evaluator=context["evaluator"], private=context["private"])
+                evaluator=context["evaluator"], private=context["private"], baseline=context.get("baseline"))
             return replace(result, stdout=stdout)
         jobs = []
         for result in results:

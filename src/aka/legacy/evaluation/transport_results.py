@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from aka.legacy.task.problem.inputs import validate_performance_baseline
+from aka.contracts.workflow_records import measurement_document
 
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
@@ -534,7 +535,7 @@ def _positive_number(value: object) -> float | None:
 
 
 def _with_workspace_performance_score(
-    workspace: Path, result: dict[str, Any]
+    workspace: Path, result: dict[str, Any], *, baseline=None
 ) -> dict[str, Any]:
     """Normalize legacy per-shape results to the shared arithmetic-mean score."""
     if result.get("performance_objective") == PERFORMANCE_OBJECTIVE:
@@ -542,12 +543,7 @@ def _with_workspace_performance_score(
     candidate_by_shape = result.get("latency_us_by_shape")
     if not isinstance(candidate_by_shape, dict) or not candidate_by_shape:
         return result
-    try:
-        baseline = _json_object(workspace / "memory" / "v0.json") or {}
-    except ValueError:
-        return result
-    performance = baseline.get("performance")
-    performance = performance if isinstance(performance, dict) else {}
+    performance = measurement_document(baseline.result) if baseline is not None else {}
     baseline_by_shape = performance.get("latency_us_by_shape")
     if not isinstance(baseline_by_shape, dict) or set(candidate_by_shape) != set(
         baseline_by_shape
@@ -571,7 +567,7 @@ def _with_workspace_performance_score(
     return hydrated
 
 
-def _hydrate_result_lines(workspace: Path, stdout: str) -> str:
+def _hydrate_result_lines(workspace: Path, stdout: str, *, baseline=None) -> str:
     """Return ordinary dev evaluator output with the shared score contract."""
     normalized: list[str] = []
     for line in stdout.splitlines():
@@ -589,7 +585,7 @@ def _hydrate_result_lines(workspace: Path, stdout: str) -> str:
         normalized.append(
             TEST_RESULT_PREFIX
             + json.dumps(
-                _with_workspace_performance_score(workspace, result),
+                _with_workspace_performance_score(workspace, result, baseline=baseline),
                 ensure_ascii=False,
                 allow_nan=False,
             )
@@ -665,7 +661,7 @@ def _public_numerical_result_line(line: str) -> str:
     return NUMERICAL_RESULT_PREFIX + json.dumps(public, allow_nan=False)
 
 
-def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
+def _hydrate_abba_result_lines(workspace: Path, stdout: str, *, baseline=None) -> str:
     """Normalize candidate-only ABBA run results for long-lived supervisors."""
     normalized: list[str] = []
     for line in stdout.splitlines():
@@ -686,7 +682,7 @@ def _hydrate_abba_result_lines(workspace: Path, stdout: str) -> str:
             if not isinstance(row, dict) or not isinstance(row.get("result"), dict):
                 runs.append(row)
                 continue
-            result = _with_workspace_performance_score(workspace, row["result"])
+            result = _with_workspace_performance_score(workspace, row["result"], baseline=baseline)
             if result is row["result"]:
                 runs.append(row)
                 continue

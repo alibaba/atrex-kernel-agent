@@ -57,6 +57,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
+from .records import decode_record, write_record
 
 
 SCHEMA_TEMPLATE = {
@@ -113,14 +114,11 @@ def get_iteration_path(workspace: str, version: str) -> Path:
 
 
 def read_json(filepath: Path) -> dict:
-    with open(filepath, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    return decode_record(filepath)
 
 
 def write_json(filepath: Path, data: dict) -> None:
-    with open(filepath, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
+    write_record(filepath, data)
 
 
 def parse_version_number(version_str: str) -> int:

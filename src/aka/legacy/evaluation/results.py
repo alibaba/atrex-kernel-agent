@@ -7,7 +7,7 @@ import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from .memory import read_memory
+from aka.contracts.workflow_records import CanonicalMeasurementReader, measurement_document
 from aka.contracts.evaluation import VerificationResult
 
 EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
@@ -79,6 +79,7 @@ def _latest_complete_canonical_performance(
     before_version: int,
     expected_shape_ids: set[str] | None,
     required_performance_objective: str | None = None,
+    measurement_reader: CanonicalMeasurementReader | None = None,
 ) -> tuple[dict[str, Any], int] | None:
     """Find the newest complete real-shape incumbent measurement before a round.
 
@@ -87,15 +88,13 @@ def _latest_complete_canonical_performance(
     performance of the unchanged canonical incumbent rather than replacing known facts
     with nulls.  Only a complete, finite canonical record is eligible for carry-forward.
     """
-    for version in range(before_version - 1, -1, -1):
-        memory = read_memory(workspace, version)
-        if not isinstance(memory, dict):
+    if measurement_reader is None:
+        return None
+    for fact in measurement_reader.measurements(workspace, before_version=before_version):
+        if fact.gate != "PASS":
             continue
-        if (memory.get("quality_gate") or {}).get("result") != "PASS":
-            continue
-        performance = memory.get("performance")
-        if not isinstance(performance, dict):
-            continue
+        performance = measurement_document(fact.result)
+        version = fact.version
         if (
             required_performance_objective is not None
             and performance.get("performance_objective")

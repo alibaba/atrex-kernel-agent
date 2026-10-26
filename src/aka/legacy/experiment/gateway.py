@@ -11,6 +11,7 @@ from aka.legacy.execution.legacy.runtime import transport_arguments, ExecutionHo
 from aka.legacy.execution.processes import spawn_owned_session
 from aka.legacy.execution.configuration import queue_wait_grace
 from aka.legacy.execution.recovery import raise_if_environment_blocked
+from aka.legacy.workflow.records import WorkflowMeasurementReader
 from .runner import LegacyExperiment
 from .file_records import FileExperimentRecords
 
@@ -31,7 +32,8 @@ def run_sandbox(executor, request, *, hooks):
     command = CommandSpec(request.workspace, request.command, request.timeout, environment, request.hardware,
         request.sync, "preflight" if request.preflight else request.gateway_kind, request.cancel_event)
     records = FileExperimentRecords(request.workspace.resolve().parent / ".aka-experiments", str(request.workspace.resolve()))
-    result = LegacyExperiment(executor, records=records).run_command(command)
+    result = LegacyExperiment(executor, records=records, command_evaluator=GatewayCommandEvaluator(
+        measurement_reader=WorkflowMeasurementReader())).run_command(command)
     result.require_transport()
     return _completed_process(command, result)
 
@@ -52,7 +54,7 @@ def main(argv=None):
             args.timeout, dict(os.environ), args.hardware, tuple(args.sync), args.kind)
         before = arguments[:arguments.index("--")] if "--" in arguments else arguments
         with transport_arguments(tuple(before)):
-            plan = GatewayCommandEvaluator().prepare(command)
+            plan = GatewayCommandEvaluator(measurement_reader=WorkflowMeasurementReader()).prepare(command)
         measurement = plan.context["measurement"]
         if measurement is not None:
             print(json.dumps({"hardware": args.hardware, "workspace": str(command.workspace),

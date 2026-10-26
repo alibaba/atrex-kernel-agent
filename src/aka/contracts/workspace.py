@@ -112,7 +112,14 @@ class CandidateWorkspace(Protocol):
     def archive(self, handle: CandidateHandle, destination: Path, candidate_commit: str = "HEAD") -> Path: ...
     def remove(self, handle: CandidateHandle, workspace: Path) -> None: ...
     def promote(self, workspace: Path, *, base_commit: str, candidate_commit: str, episode: int,
-                evidence: dict[str, Any], memory_version: int, memory_record: dict[str, Any]) -> str: ...
+                record_files: tuple[WorkspaceFile, ...] = (),
+                evidence: dict[str, Any] | None = None, memory_version: int | None = None,
+                memory_record: dict[str, Any] | None = None) -> str:
+        """Commit candidate and opaque owner-prepared files in one transaction.
+
+        Legacy record keywords are retained only by the compatibility adapter.
+        """
+        ...
     def read_revision(self, workspace: Path, revision: str,
                       changed_paths: list[str]) -> RevisionContent:
         """Read committed bytes without creating snapshot files or modifying Git."""

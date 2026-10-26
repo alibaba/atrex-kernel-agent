@@ -8,6 +8,8 @@ from pathlib import Path
 from typing import Any
 from aka.legacy.task.git import (_git, git_text, git_head, working_changes, changed_paths, ignored_evidence_files, protected_violation, _manifest_deleted)
 from aka.legacy.task.io import atomic_write_json
+from aka.contracts.content import WorkspaceFile
+from .content import selected_file_bytes
 from .policy import CANDIDATE_PATHS, TIMELINE_PROBE_MARKERS
 from .excludes import ensure_excluded
 
@@ -166,9 +168,10 @@ def promote_candidate(
     base_commit: str,
     candidate_commit: str,
     episode: int,
-    evidence: dict[str, Any],
-    memory_version: int,
-    memory_record: dict[str, Any],
+    record_files: tuple[WorkspaceFile, ...] = (),
+    evidence: dict[str, Any] | None = None,
+    memory_version: int | None = None,
+    memory_record: dict[str, Any] | None = None,
 ) -> str:
     if git_head(incumbent_workspace) != base_commit:
         raise RuntimeError("incumbent advanced during episode; refusing promotion")
@@ -177,63 +180,67 @@ def promote_candidate(
         raise RuntimeError("promotion requires kernel.py with only an optional solution.json update")
     if _manifest_deleted(incumbent_workspace, base_commit, candidate_commit):
         raise RuntimeError("candidate must preserve the incumbent solution.json manifest")
+    if any(value is not None for value in (evidence, memory_version, memory_record)):
+        if record_files or any(value is None for value in (evidence, memory_version, memory_record)):
+            raise ValueError("promotion requires either opaque files or complete compatibility records")
+        from aka.legacy.compat.workspace_records import promotion_record_files
+        record_files = promotion_record_files(episode=episode, evidence=evidence,
+            memory_version=memory_version, memory_record=memory_record)
+    files = tuple(record_files)
+    selected = selected_file_bytes(incumbent_workspace, files, reserved=CANDIDATE_PATHS)
+    dirty = working_changes(incumbent_workspace)
+    if set(candidate_paths).intersection(dirty):
+        raise RuntimeError("incumbent candidate source has uncommitted changes")
+    index_path = Path(git_text(incumbent_workspace, "rev-parse", "--git-path", "index"))
+    if not index_path.is_absolute():
+        index_path = incumbent_workspace / index_path
+    old_index = index_path.read_bytes() if index_path.exists() else None
+    original = {}
+    new_directories = set()
+    for name in (*candidate_paths, *selected):
+        target = incumbent_workspace / name
+        original[name] = (target.read_bytes(), target.stat().st_mode) if target.is_file() else None
+        parent = target.parent
+        while parent != incumbent_workspace and not parent.exists():
+            new_directories.add(parent)
+            parent = parent.parent
     try:
-        subprocess.run(
-            ["git", "merge", "--squash", "--no-commit", candidate_commit],
-            cwd=str(incumbent_workspace),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-        staged = git_text(
-            incumbent_workspace, "diff", "--cached", "--name-only"
-        ).splitlines()
-        violation = protected_violation([path for path in staged if path])
-        if violation:
-            raise RuntimeError(violation)
-        memory_dir = incumbent_workspace / "memory"
-        memory_dir.mkdir(parents=True, exist_ok=True)
-        atomic_write_json(memory_dir / f"long_horizon_e{episode:04d}.json", evidence)
-        atomic_write_json(memory_dir / f"v{memory_version}.json", memory_record)
-        subprocess.run(
-            [
-                "git",
-                "add",
-                f"memory/long_horizon_e{episode:04d}.json",
-                f"memory/v{memory_version}.json",
-            ],
-            cwd=str(incumbent_workspace),
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git",
-                "-c",
-                "user.name=atrex-long-horizon",
-                "-c",
-                "user.email=atrex-long-horizon@local",
-                "commit",
-                "--only",
-                "-m",
-                f"episode {episode}: promote verified long-horizon candidate",
-                "--",
-                *candidate_paths,
-                f"memory/long_horizon_e{episode:04d}.json",
-                f"memory/v{memory_version}.json",
-            ],
-            cwd=str(incumbent_workspace),
-            check=True,
-            capture_output=True,
-            text=True,
-        )
+        # Materialize only the validated candidate paths; unrelated index/worktree
+        # entries remain untouched and commit --only excludes them.
+        subprocess.run(["git", "checkout", candidate_commit, "--", *candidate_paths],
+                       cwd=incumbent_workspace, check=True, capture_output=True, text=True)
+        for item in files:
+            target = incumbent_workspace / item.path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(selected[item.path])
+            if item.source is not None:
+                target.chmod(item.source.stat().st_mode)
+        if selected:
+            subprocess.run(["git", "add", "--", *selected], cwd=incumbent_workspace, check=True)
+        subprocess.run(["git", "-c", "user.name=atrex-long-horizon", "-c",
+            "user.email=atrex-long-horizon@local", "commit", "--only", "-m",
+            f"episode {episode}: promote verified long-horizon candidate", "--",
+            *candidate_paths, *selected], cwd=incumbent_workspace, check=True,
+            capture_output=True, text=True)
         return git_head(incumbent_workspace)
     except Exception:
-        subprocess.run(
-            ["git", "reset", "--hard", base_commit],
-            cwd=str(incumbent_workspace),
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
+        if git_head(incumbent_workspace) != base_commit:
+            subprocess.run(["git", "reset", "--soft", base_commit], cwd=incumbent_workspace,
+                           check=False, capture_output=True)
+        for name, prior in original.items():
+            target = incumbent_workspace / name
+            if prior is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.write_bytes(prior[0])
+                target.chmod(prior[1])
+        if old_index is None:
+            index_path.unlink(missing_ok=True)
+        else:
+            index_path.write_bytes(old_index)
+        for directory in sorted(new_directories, key=lambda path: len(path.parts), reverse=True):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
         raise
-

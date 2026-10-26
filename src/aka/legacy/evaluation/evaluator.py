@@ -85,7 +85,7 @@ class LegacyEvaluator:
             command = replace(prepared.steps[0], hardware=self.configuration.hardware,
                               environment={**self.configuration.environment,
                                   "ATREX_EVAL_SHAPE_BATCH_SIZE": str(self.configuration.shape_batch_size)})
-            gateway = GatewayCommandEvaluator().prepare(command)
+            gateway = GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).prepare(command)
             prepared = replace(prepared, steps=gateway.steps, max_parallelism=gateway.max_parallelism,
                                context=replace(prepared.context, gateway=gateway), fallback_steps=gateway.fallback_steps)
         if request.mode == "abba":
@@ -209,7 +209,7 @@ class LegacyEvaluator:
         if gateway is None:
             return ()
         from .gateway_command import GatewayCommandEvaluator
-        return GatewayCommandEvaluator().fallback(gateway, results)
+        return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).fallback(gateway, results)
 
     def observe_step(
         self, prepared: PreparedEvaluation, index: int, result: JobResult
@@ -218,7 +218,7 @@ class LegacyEvaluator:
         plan = prepared.context
         if getattr(plan, "gateway", None) is not None:
             from .gateway_command import GatewayCommandEvaluator
-            return GatewayCommandEvaluator().observe_step(plan.gateway, index, result)
+            return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).observe_step(plan.gateway, index, result)
         assessment = self.diagnose_step(prepared, index, result)
         if plan.request.mode in {"v0", "framework"}:
             from .baseline import BaselinePreparation
@@ -240,7 +240,7 @@ class LegacyEvaluator:
         gateway = getattr(prepared.context, "gateway", None)
         if gateway is not None:
             from .gateway_command import GatewayCommandEvaluator
-            return GatewayCommandEvaluator().diagnose_step(gateway, index, result)
+            return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).diagnose_step(gateway, index, result)
         from .measurement import assess_payload
         identity = prepared.measurement_identities[index]
         payload = None
@@ -269,7 +269,7 @@ class LegacyEvaluator:
         if request.mode in {"v0", "framework"}:
             if getattr(plan, "gateway", None) is not None:
                 from .gateway_command import GatewayCommandEvaluator
-                result = GatewayCommandEvaluator().interpret(plan.gateway, results)
+                result = GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).interpret(plan.gateway, results)
             else:
                 from .gateway_measurement import prepare_dev_output
                 result = replace(results[0], stdout=prepare_dev_output(request.workspace, results[0].stdout,
@@ -351,6 +351,7 @@ class LegacyEvaluator:
         incumbent = _latest_complete_canonical_performance(
             request.canonical_workspace,
             before_version=request.memory_version,
+            measurement_reader=self.configuration.measurement_reader,
             expected_shape_ids=expected,
             required_performance_objective="shape_speedup_arithmetic_mean",
         )
@@ -485,7 +486,7 @@ class LegacyEvaluator:
                 else "sandbox V0 baseline failed correctness/performance validation"
             )
         else:
-            error = framework_result_problem(result, request.workspace)
+            error = framework_result_problem(result, request.workspace, measurement_reader=self.configuration.measurement_reader)
         return VerificationResult(
             "FAIL" if error else "PASS",
             result.get("latency_us_geomean"),
@@ -519,8 +520,7 @@ def _framework_actionable_repair_hint(result: dict) -> str:
     return ""
 
 
-def framework_result_problem(result, workspace):
-    from .memory import read_memory
+def framework_result_problem(result, workspace, *, measurement_reader=None):
 
     if not result.get("all_pass"):
         problem = "combined multi-seed correctness validation failed"
@@ -537,11 +537,8 @@ def framework_result_problem(result, workspace):
         or not math.isfinite(float(score))
     ):
         return "validation reported no usable performance_score"
-    baseline = set(
-        ((read_memory(workspace, 0) or {}).get("performance") or {}).get(
-            "latency_us_by_shape", {}
-        )
-    )
+    fact = measurement_reader.baseline(workspace) if measurement_reader is not None else None
+    baseline = set(fact.result.get("latency_us_by_shape") or {}) if fact is not None else set()
     measured = set(result.get("latency_us_by_shape") or {})
     if baseline and measured != baseline:
         return (

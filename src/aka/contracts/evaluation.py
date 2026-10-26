@@ -1,6 +1,7 @@
 """Original evaluation facts and prepare/interpret contract for PR113."""
 
 from __future__ import annotations
+from .workflow_records import CanonicalMeasurementReader
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
@@ -249,6 +250,7 @@ class EvaluationConfiguration:
     native: bool = False
     hardware: str = ""
     environment: Mapping[str, str] = field(default_factory=dict)
+    measurement_reader: CanonicalMeasurementReader | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))

@@ -97,6 +97,10 @@ class WorkflowServices:
             environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(self.campaign.private_reference_dir)
         return environment
 
+    def measurement_reader(self):
+        from .records import WorkflowMeasurementReader
+        return WorkflowMeasurementReader()
+
     def create_evaluator(self):
         s = self.settings
         from aka.legacy.execution.configuration import selected_ssh
@@ -109,6 +113,7 @@ class WorkflowServices:
                 private_reference_dir=self.campaign.private_reference_dir,
                 native=bool(self.campaign.atrex_bench_root),
                 hardware=s.hardware, environment=self._measurement_environment(),
+                measurement_reader=self.measurement_reader(),
             ),
             candidate_workspace=self.campaign.candidate_workspace,
             evaluation_input=self.evaluation_input(),
@@ -133,6 +138,7 @@ class WorkflowServices:
             optimization_mode=c.optimization_mode,
             platform=c.platform,
             target_util=c.target_util,
+            measurement_reader=self.measurement_reader(),
         )
         return BaselinePreparation(
             inputs, BaselineResources(self.evaluation_input().harness,
@@ -154,7 +160,9 @@ class WorkflowServices:
             )
             evaluator = self.create_evaluator()
             from aka.legacy.experiment.runner import evaluation_stage
+            from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
             yield LegacyExperiment(bound, evaluator,
+                command_evaluator=GatewayCommandEvaluator(measurement_reader=self.measurement_reader()),
                 retry=retry_infrastructure if formal else None, stage=evaluation_stage,
                 records=self.experiment_records, purpose="formal" if formal else "development")
 

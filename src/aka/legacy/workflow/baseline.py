@@ -13,8 +13,9 @@ from contextvars import copy_context
 from aka.contracts.evaluation import EvaluationRequest, EvaluationUnavailable
 from aka.contracts.experiment import ExperimentExecutionError
 from aka.contracts.acceptance import FrameworkCandidateRequest
-from aka.legacy.evaluation.local_results import _record_local_test_result
-from aka.legacy.task.candidate_workspace.state import git_path_blob, git_worktree_blob, read_memory, v0_baseline_commit
+from .records import _record_local_test_result
+from .records import read_memory
+from aka.legacy.task.candidate_workspace.state import git_path_blob, git_worktree_blob, v0_baseline_commit
 
 
 class WorkflowBaseline:

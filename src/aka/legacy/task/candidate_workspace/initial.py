@@ -106,20 +106,4 @@ def commit_sol(ws, contribution_paths):
     subprocess.run(["git", "add", *source_paths], cwd=str(ws), check=True)
     subprocess.run(["git", "commit", "-m", "V0: baseline (SOL reference wrapper)"], cwd=str(ws), check=True,
                    stdout=subprocess.DEVNULL)
-    # 7) Record measurement metadata in a second commit. This deliberately leaves
-    # kernel.py untouched, so memory can point at the immutable source commit.
-    v0 = ws / "memory" / "v0.json"
-    if v0.exists():
-        h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ws), capture_output=True, text=True).stdout.strip()
-        mem = json.loads(v0.read_text(encoding="utf-8"))
-        mem["git_commit_hash"] = h
-        mem.setdefault("optimization", {})["action_category"] = "baseline"
-        v0.write_text(json.dumps(mem, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
-        subprocess.run(["git", "add", "memory/v0.json"], cwd=str(ws), check=True)
-        subprocess.run(
-            ["git", "commit", "-m", "V0: record baseline measurement"],
-            cwd=str(ws),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-
+    return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ws, text=True).strip()

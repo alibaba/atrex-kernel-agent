@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Any
 import subprocess
 from aka.legacy.task.git import git_head
-from .protocol import atomic_write_json
+from .records import write_memory
 
 
 def record_episode_outcome(
@@ -21,7 +21,7 @@ def record_episode_outcome(
         raise RuntimeError("incumbent advanced during episode; refusing outcome record")
     memory_path = incumbent_workspace / "memory" / f"v{version}.json"
     memory_path.parent.mkdir(parents=True, exist_ok=True)
-    atomic_write_json(memory_path, memory_record)
+    write_memory(incumbent_workspace, version, memory_record)
     subprocess.run(
         ["git", "add", str(memory_path.relative_to(incumbent_workspace))],
         cwd=str(incumbent_workspace),

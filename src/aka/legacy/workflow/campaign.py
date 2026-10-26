@@ -64,10 +64,11 @@ from aka.legacy.evaluation.metadata import distributed_evaluation_world_size, ev
 from aka.legacy.resources.plugins import PluginRegistry
 from aka.legacy.workflow.agent_session import SessionResult
 from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
-from aka.legacy.evaluation.local_results import _record_local_test_result
+from .records import _record_local_test_result
 from aka.legacy.resources.prompts import render_prompt
 from .runtime_directives import _agent_runtime_directive, _baseline_driver_directive
-from aka.legacy.task.candidate_workspace.state import git_head, git_kernel_blob, git_path_blob, git_worktree_blob, head_kernel_is_initial_baseline, latest_version, read_memory, resolve_framework_baseline_commit, v0_baseline_commit, write_stall
+from .records import latest_version, read_memory
+from aka.legacy.task.candidate_workspace.state import git_head, git_kernel_blob, git_path_blob, git_worktree_blob, head_kernel_is_initial_baseline, resolve_framework_baseline_commit, v0_baseline_commit, write_stall
 
 _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
