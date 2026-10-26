@@ -72,6 +72,20 @@ class CandidateCheckpointState:
 
 
 class CandidateWorkspace(Protocol):
+    def current_revision(self, workspace: Path) -> str:
+        """Return the opaque current revision, or an empty string before initialization."""
+        ...
+    def read_working(self, workspace: Path, paths: tuple[str, ...]) -> RevisionContent:
+        """Read selected working bytes without following links or interpreting content."""
+        ...
+    def record(self, workspace: Path, *, expected_revision: str,
+               files: tuple[WorkspaceFile, ...], message: str) -> str:
+        """Record explicit owner files while preserving unrelated working/index content.
+
+        Precommit failure restores partial writes; a committed result survives a
+        lost return and remains inspectable through the public revision methods.
+        """
+        ...
     def filesystem_access(self, workspace: Path, *, include_git: bool = False) -> FilesystemAccess:
         """Describe immutable inputs; reject Git grants unsupported by this implementation."""
         ...

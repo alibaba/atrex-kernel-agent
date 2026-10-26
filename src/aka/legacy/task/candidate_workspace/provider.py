@@ -9,6 +9,19 @@ def _legacy(handle):
 
 
 class GitCandidateWorkspace(GitSnapshots):
+    def current_revision(self, workspace):
+        from .records import current_revision
+        return current_revision(workspace)
+
+    def read_working(self, workspace, paths):
+        from .records import read_working
+        return read_working(workspace, paths)
+
+    def record(self, workspace, *, expected_revision, files, message):
+        from .records import record
+        return record(workspace, expected_revision=expected_revision,
+                      files=files, message=message)
+
     def filesystem_access(self, workspace, *, include_git=False):
         from .access import filesystem_access
         return filesystem_access(workspace, include_git=include_git)
