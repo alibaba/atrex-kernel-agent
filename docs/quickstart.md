@@ -18,9 +18,9 @@ aka optimize --repo-root "$PWD" -- \
 
 Light uses managed drafts, session capture, private HTTP measurements and unified Episodes.
 Bubblewrap is **not** enabled by this default; choose `--profile light-sandbox` explicitly
-on Linux. Wiki, Direction/Experiment records and generated memory remain disabled unless
-configured. See [Light options and workflow](optional-light-modules.md) for the full interface.
-Missing `atrex-aka-light` causes an installation error, not a silent Legacy fallback.
+on Linux. Wiki is enabled by default; Direction/Experiment records and generated memory
+remain disabled unless configured. See [Light options and workflow](optional-light-modules.md)
+for the full interface. Missing `atrex-aka-light` causes an installation error, not a silent Legacy fallback.
 
 The detailed Fast/Full workflow and command examples below are the **Legacy reference**:
 they use `--profile workflow`. Keep that explicit selection when manually resuming an old

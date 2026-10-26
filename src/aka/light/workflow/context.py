@@ -87,6 +87,7 @@ def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
             campaign.agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
             wiki=campaign.tool_runtime.wiki,
             pause_agent_during_requests=campaign.tool_runtime.pause_agent_during_requests,
+            knowledge_skills=campaign.plugin_registry.knowledge_skills() if campaign.tool_runtime.wiki else (),
         ),
     }
 

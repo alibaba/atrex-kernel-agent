@@ -525,13 +525,15 @@ class LongHorizonCampaign:
                 + template
             )
         # Insert fragments before substituting values so nested task placeholders resolve too.
+        overrides = {"WIKI_DIRECTIVE": self.base_campaign.wiki_prompt("episode")} if fragments["WIKI_DIRECTIVE"] else {}
         for marker, name in fragments.items():
-            template = template.replace(
-                "{{" + marker + "}}",
-                (PROMPTS_DIR / name).read_text(encoding="utf-8").strip() if name else "",
-            )
+            text = overrides.get(marker)
+            if text is None:
+                text = (PROMPTS_DIR / name).read_text(encoding="utf-8").strip() if name else ""
+            template = template.replace("{{" + marker + "}}", text)
         template = template.replace("{{CONVERSION_RESEARCH}}", (
-            (PROMPTS_DIR / "conversion_research.md").read_text(encoding="utf-8").strip()
+            (self.base_campaign.wiki_prompt("conversion")
+             or (PROMPTS_DIR / "conversion_research.md").read_text(encoding="utf-8").strip())
             if self.base_campaign.tool_runtime.wiki else
             "Wiki is disabled. Use supplied public conversion knowledge and compiler evidence; "
             "do not guess architecture-specific layouts. Report a blocker if necessary information is unavailable."
@@ -1864,6 +1866,7 @@ class LongHorizonCampaign:
             result = runner.run(
                 agent_workspace,
                 prompt,
+                output_directory=store.episode_dir(episode),
                 episode_timeout_seconds=self.base_campaign.module_options.episode_timeout_seconds,
                 handoff_path=handoff_path,
                 handoff_resumes=(

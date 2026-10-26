@@ -30,6 +30,11 @@
       "id": "light_journal",
       "name": "aka.light.workflow.journal_plugin",
       "required": true
+    },
+    {
+      "id": "wiki",
+      "name": "aka.light.wiki.plugin",
+      "required": true
     }
   ]
 }

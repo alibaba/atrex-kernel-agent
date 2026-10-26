@@ -25,10 +25,11 @@ def _agent_runtime_directive(
     is_ppu: bool = False,
     wiki: bool = False,
     pause_agent_during_requests: bool = True,
+    knowledge_skills=("KernelWiki",),
 ) -> str:
     root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
     extra = ", PPU profiling" if is_ppu else ""
-    knowledge = ", `KernelWiki`" if wiki else ""
+    knowledge = "".join(f", `{name}`" for name in knowledge_skills) if wiki else ""
     suspension = (
         "Authenticated Runtime requests pause this Agent and its subagents; that wait is excluded "
         "from the Agent active-time budget."

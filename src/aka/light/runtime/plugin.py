@@ -4,8 +4,9 @@ from aka.core.keys import ServiceKey
 TOOL_RUNTIME = ServiceKey("tool_runtime", "ToolRuntimeFactory", module="aka.light.runtime.provider")
 name = "runtime"
 provide = ("tool_runtime",)
-inject = ("executor", "light_experiments", "light_acceptance", "light_journal")
-identity_packages = ("aka.light.runtime", "aka.light.evaluation", "aka.light.workspace", "aka.light.wiki")
+inject = ("executor", "light_experiments", "light_acceptance", "light_journal", "wiki")
+identity_packages = ("aka.light.runtime", "aka.light.evaluation", "aka.light.workspace", "aka.light.wiki",
+                     "aka.contracts.wiki")
 Config = {"type": "object", "properties": {
     "measurement_repetitions": {"type": "integer", "enum": [1, 3]},
     "pause_agent_during_requests": {"type": "boolean"},
@@ -24,7 +25,7 @@ Config = {"type": "object", "properties": {
 Defaults = {
     "measurement_repetitions": 1,
     "pause_agent_during_requests": True,
-    "wiki": False,
+    "wiki": True,
     "queue_timeout": 60,
 }
 
@@ -36,4 +37,4 @@ def apply(ctx, config):
         raise TypeError("light Tool Runtime requires an executor with run_gateway support")
     services = RuntimeServices(ctx.executor, ctx.light_experiments,
                                ctx.light_acceptance, ctx.light_journal)
-    ctx.provide(TOOL_RUNTIME, ManagedRuntimeFactory(**config, services=services))
+    ctx.provide(TOOL_RUNTIME, ManagedRuntimeFactory(**config, services=services, wiki_provider=ctx.wiki))

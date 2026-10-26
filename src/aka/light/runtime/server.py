@@ -23,7 +23,6 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from aka.contracts.evaluation import derived_evaluation_timeout
-from aka.light.runtime.paths import legacy_resource_root
 
 from aka.light.evaluation.gateway import (
     EPISODE_EVALUATIONS_PATH,
@@ -79,6 +78,7 @@ AUTHORITY = frozenset({
 })
 FORBIDDEN = frozenset({"--preflight", "--check-health"})
 WIKI_STORES = {"query_nl": "--store-root", "query_wiki": "--json-store", "query_hardware": "--store"}
+WIKI_RUNTIME_TOOLS = frozenset({"wiki-query", "wiki"})
 
 
 def sol_evaluation_config(workspace: Path) -> bytes | None:
@@ -214,8 +214,10 @@ class RuntimeConfig:
     queue_timeout: float = 60
     measurement_repetitions: int = 1
     pause_agent_during_requests: bool = True
-    wiki_enabled: bool = False
+    wiki_enabled: bool = True
     wiki_options: WikiConfig = field(default_factory=WikiConfig)
+    # Selected aka.contracts.wiki.WikiProvider; None selects the built-in local store.
+    wiki_provider: object | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
         if type(self.pause_agent_during_requests) is not bool:
@@ -460,7 +462,13 @@ class SupervisorRuntime:
         self.executor, self.acceptance = services.executor, services.acceptance
         self.journal_factory = services.journal
         from aka.light.runtime.catalog import PluginRegistry
-        self.plugins = PluginRegistry(enabled=config.wiki_enabled)
+        self.wiki_provider = None
+        if config.wiki_enabled:
+            self.wiki_provider = config.wiki_provider
+            if self.wiki_provider is None:
+                from aka.light.wiki.local import LocalWikiProvider
+                self.wiki_provider = LocalWikiProvider()
+        self.plugins = PluginRegistry(enabled=config.wiki_enabled, provider=self.wiki_provider)
         self.workspace_provider = workspace_provider
         self.environment = {k: v for k, v in os.environ.items() if k not in {OWNER_ENV, URL_ENV, TOKEN_ENV}}
         self.gateway_queue_wait_grace = configured_queue_wait_grace(self.environment)
@@ -492,7 +500,7 @@ class SupervisorRuntime:
         self.plugins.check_lock(plugin_lock)
         publish(plugin_lock, ".atrex_plugins/lock.json", json.dumps(self.plugins.snapshot()).encode())
         self.wiki = WikiService((self.audit_root or self.root) / "wiki", config.wiki_options,
-                                self.plugins.snapshot())
+                                self.plugins.snapshot(), provider=self.wiki_provider)
         self.server = _Server(("127.0.0.1", 0), _Handler)
         self.server.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -708,7 +716,7 @@ class SupervisorRuntime:
         if route == "/v1/wiki/query":
             return True
         if route == "/v1/plugins/execute" and request.get("action") == "call":
-            return any(request.get("tool") == f"{plugin.id}.{name}" and tool.get("runtime_tool") == "wiki-query"
+            return any(request.get("tool") == f"{plugin.id}.{name}" and tool.get("runtime_tool") in WIKI_RUNTIME_TOOLS
                        for plugin in self.plugins.plugins for name, tool in plugin.tools.items())
         return False
 
@@ -1013,6 +1021,59 @@ class SupervisorRuntime:
                     raise_output_error(request["tool"], "result_too_large")
                 project_plugin_output(request["tool"], tool["output_schema"], response["stdout"])
             return response
+        if tool.get("runtime_tool") == "wiki":
+            # Providers receive the same bounded Supervisor environment as subprocess
+            # plugins, plus the explicitly selected Wiki model route. GPU, store and
+            # private-reference authority never crosses this seam.
+            environment = scrub_environment(self.environment)
+            environment.update(capability.context)
+            for name in ("ATREX_ENVIRONMENT_RESTART_HANDOFF_ID", "ATREX_ENVIRONMENT_RESTART_LOCK_FD",
+                         "ATREX_ENVIRONMENT_STATE_FILE"):
+                environment.pop(name, None)
+            if self.config.wiki_profile_root:
+                environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
+            environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
+            from aka.light.evaluation.projection import credential_values, redact_diagnostics
+            from aka.light.wiki.worker import provider_environment
+            try:
+                bridge_values = provider_environment(self.config.wiki_options, environment)
+            except ValueError as error:
+                raise RuntimeStateError(
+                    "Wiki provider settings are invalid or the credential endpoint does not match.",
+                    code="wiki_configuration_invalid",
+                ) from error
+            environment.update(bridge_values)
+
+            with tempfile.TemporaryDirectory(dir=self.root, prefix="wiki-") as temporary:
+                private_paths = (
+                    str(temporary), str(self.root), str(self.audit_root or ""),
+                    str(self.config.private_reference_dir or ""),
+                    str(self.config.wiki_profile_root or ""),
+                    self.config.wiki_options.settings_file, self.config.wiki_options.base_url,
+                )
+                private_values = credential_values(environment)
+
+                def redact(value):
+                    return redact_diagnostics(
+                        value, private_paths=private_paths, private_values=private_values,
+                    )
+
+                def project(result):
+                    # Redact and validate before the result can become reusable evidence.
+                    # Output drift is a provider failure, never an Agent-repairable input error.
+                    result = redact(result)
+                    return json.loads(project_plugin_output(
+                        request["tool"], tool["output_schema"],
+                        json.dumps(result, ensure_ascii=False, allow_nan=False),
+                    ))
+
+                result = self.wiki.invoke(
+                    self, capability, request["tool"].partition(".")[2],
+                    request["input"], Path(temporary), environment, project=project,
+                    redact_error=redact,
+                )
+            return {"exit_code": 0, "stdout": json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n",
+                    "stderr": ""}
         with tempfile.TemporaryDirectory(dir=self.root, prefix="plugin-") as temporary:
             staged = Path(temporary)
             with _validating_request():
@@ -1047,6 +1108,12 @@ class SupervisorRuntime:
             raise AgentRequestError("GPU Wiki is disabled in the selected Workflow configuration",
                                     code="wiki_disabled", repairable=False,
                                     next_action="Continue with the enabled tools. Only the operator can enable Wiki; do not retry or access its private store directly.")
+        cli_root = self.wiki_provider.cli_root
+        if cli_root is None:
+            raise AgentRequestError("The selected Wiki provider has no command-line Wiki tools",
+                                    code="wiki_operation_unsupported", repairable=False,
+                                    next_action="List the provider's Wiki operations with `python3 tools/plugin.py list` "
+                                                "and call them with `python3 tools/plugin.py call`.")
         if not isinstance(tool, str) or tool not in WIKI_STORES:
             raise ValueError("Unsupported Wiki tool")
         if "--" in argv:
@@ -1091,7 +1158,7 @@ class SupervisorRuntime:
         if self.config.wiki_profile_root:
             environment["ATREX_WIKI_PROFILE_ROOT"] = str(self.config.wiki_profile_root)
         environment["ATREX_WIKI_TASK_ID"] = self.config.task_id
-        return [sys.executable, str(legacy_resource_root() / "gpu-wiki/tools" / f"{tool}.py"), *argv]
+        return [sys.executable, str(Path(cli_root) / f"{tool}.py"), *argv]
 
     def publish_legacy_outputs(self, workspace, staged, args):
         # Profile artifacts remain part of the old Agent workflow. Only these

@@ -414,6 +414,10 @@ class Campaign:
             OPERATOR=self.name,
         )
 
+    def wiki_prompt(self, slot: str) -> str | None:
+        """The selected Wiki provider's replacement for a built-in Wiki prompt fragment."""
+        return self.plugin_registry.wiki_prompt(slot) if self.tool_runtime.wiki else None
+
     def measure_for_acceptance(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
                                parent=None, reference_snapshot: Path | None = None) -> dict:
         self.start_runtime()
@@ -1006,8 +1010,9 @@ class Campaign:
         runtime_arch = self.arch or "unknown (use the runtime GPU API before choosing codegen)"
         notes = self.notes.strip() or "none"
         hardware_evidence = (
-            "Before an optimization plan uses a hardware limit, source it through "
-            "`--kind wiki-query` and cite the returned record. "
+            (self.wiki_prompt("hardware_evidence") or
+             "Before an optimization plan uses a hardware limit, source it through "
+             "`--kind wiki-query` and cite the returned record.") + " "
             if self.tool_runtime.wiki else
             "Wiki queries are disabled. Use supplied, attributable hardware evidence; "
             "do not guess missing peak specifications. "
@@ -2260,9 +2265,11 @@ class Campaign:
                 is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
                 wiki=self.tool_runtime.wiki,
                 pause_agent_during_requests=self.tool_runtime.pause_agent_during_requests,
+                knowledge_skills=self.plugin_registry.knowledge_skills() if self.tool_runtime.wiki else (),
             ),
             KNOWLEDGE_RESEARCH=(
-                (PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8")
+                (self.wiki_prompt("framework_baseline")
+                 or (PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8"))
                 .replace("{{PLATFORM}}", self.platform).replace("{{ARCH}}", self.arch)
                 .replace("{{FRAMEWORK}}", self.framework)
                 if self.tool_runtime.wiki else

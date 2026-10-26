@@ -14,10 +14,28 @@ PLUGIN_DIR = Path(__file__).resolve().parent / "catalogs"
 
 
 class PluginRegistry(Registry):
-    def __init__(self, *, plugin_root: Path | None = None, enabled: bool = False):
+    def __init__(self, *, plugin_root: Path | None = None, enabled: bool = False, provider=None):
         from aka.light.runtime.paths import legacy_resource_root
-        super().__init__(PLUGIN_DIR, plugin_root=plugin_root,
+        plugin_dir = PLUGIN_DIR
+        if enabled and provider is not None and plugin_root is None:
+            # The selected Wiki provider owns the Agent-visible catalog.
+            plugin_root = Path(provider.catalog_root).resolve()
+            plugin_dir = plugin_root.parent
+        super().__init__(plugin_dir, plugin_root=plugin_root,
                          resource_root=legacy_resource_root(), enabled=enabled)
+
+    def wiki_prompt(self, slot: str) -> str | None:
+        """Provider-supplied replacement for a built-in Wiki prompt fragment, if declared."""
+        from aka.light.runtime.plugins.registry import local_file
+        for plugin in self.plugins:
+            relative = plugin.manifest.get("instructions", {}).get("wiki_" + slot)
+            if relative:
+                return read_text(local_file(plugin.root, relative)).strip()
+        return None
+
+    def knowledge_skills(self) -> list[str]:
+        names = ["KernelWiki"] if any(plugin.id == "gpu-wiki" for plugin in self.plugins) else []
+        return names + [row["name"] for row in self.skill_catalog() if row["name"] not in names]
 
     def resource_snapshot(self) -> dict:
         """Freeze Light resources for the shared startup's launch context.
