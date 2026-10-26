@@ -7,7 +7,7 @@ def prepare_runtime(launch, problem):
     from .recovery_runtime import configure_recovery
     from aka.legacy.execution.recovery import raise_if_environment_blocked
     from aka.legacy.execution.health import runtime_health_command
-    from aka.legacy.execution.sandbox import check_ssh_environment, detect_arch
+    from aka.legacy.execution.sandbox import check_ssh_environment
     from aka.legacy.execution.selection import selected_execution
     from aka.contracts.workflow_launch import encode_launch
     from types import SimpleNamespace
@@ -34,6 +34,11 @@ def prepare_runtime(launch, problem):
                 framework=launch.request.settings.framework))
         raise_if_environment_blocked()
         check_ssh_environment(launch.workspace_base, hardware, settings.ssh, settings.ssh_init, settings.health_command)
-    arch = launch.request.settings.arch or detect_arch(hardware, settings.profile, settings.url,
-        settings.ssh, settings.ssh_init, settings.health_command)
+    from aka.contracts.execution_environment import EnvironmentQuery
+    from aka.legacy.execution.selection import execution_scope
+    from aka.legacy.execution.binding import sandbox_executor
+    with execution_scope() as executor:
+        bound = sandbox_executor(executor, hardware=hardware, timeout=launch.request.runtime.timeout)
+        snapshot = bound.query_environment(EnvironmentQuery(hardware))
+    arch = launch.request.settings.arch or str(snapshot.observed.get("arch") or "")
     return arch, settings.ssh or settings.url or settings.profile or "selected execution"

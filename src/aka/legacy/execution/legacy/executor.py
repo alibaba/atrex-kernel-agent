@@ -18,7 +18,7 @@ class LegacyExecutor:
     sandbox_cli_options = True
     sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
-        operations=frozenset(("auto", "run", "profile", "dev", "preflight")), cancellation=True, prepared_requests=True,
+        operations=frozenset(("auto", "run", "profile", "dev", "preflight", "check", "disassemble")), cancellation=True, prepared_requests=True,
     )
     resource_identity = ResourceIdentity("legacy")
 
@@ -34,17 +34,37 @@ class LegacyExecutor:
     def bind_sandbox(self, request, hooks):
         return type(self)(request, hooks)
 
+    def _environment_backend(self):
+        from aka.legacy.execution.environment_query import BackendEnvironment
+        from aka.legacy.execution.configuration import legacy_settings
+        request = self.request
+        environment = request.environment if request else os.environ.copy()
+        settings = request or legacy_settings(environment)
+        return BackendEnvironment(backend=self.resource_identity.backend, operations=self.capabilities.operations,
+            environment=environment, url=settings.url, profile=settings.profile, ssh=settings.ssh)
+
+    def query_environment(self, query):
+        return self._environment_backend().query(query)
+
+    def check_environment(self, query):
+        return self._environment_backend().check(query)
+
     def run(self, command: CommandSpec) -> JobResult:
         self.capabilities.require(command)
         if self.request is None:
             from aka.contracts.execution import ExecutionContext
             return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout)).run(command)
+        from aka.legacy.execution.environment_query import command_query, require_supported
+        support = self._environment_backend().check(command_query(command), discover=False)
+        require_supported(support)
         request = replace(self.request, workspace=command.workspace, command=command.command,
             timeout=command.timeout, environment=command.environment, hardware=command.hardware,
             sync=command.artifacts,
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
             preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus)
-        return self._run_sandbox(request, hooks=self.hooks)
+        result = self._run_sandbox(request, hooks=self.hooks)
+        return replace(result, environment_snapshot=support.environment,
+                       environment_identity=support.environment.identity, environment_support=support)
 
     def _run_sandbox(self, request: SandboxRequest, *, hooks: ExecutionHooks) -> JobResult:
         workspace = request.workspace

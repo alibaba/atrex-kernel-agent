@@ -17,6 +17,23 @@ class SandboxExecutor:
     def resource_identity(self):
         return self.executor.resource_identity
 
+    def query_environment(self, query):
+        method = getattr(self.executor, "query_environment", None)
+        if method is not None:
+            return method(replace(query, hardware=query.hardware or self.context.hardware))
+        from aka.contracts.execution_environment import EnvironmentSnapshot
+        resource = self.resource_identity
+        return EnvironmentSnapshot(resource.backend if resource else "custom", None,
+            query.hardware or self.context.hardware, None,
+            {"operations": sorted(self.capabilities.operations)}, diagnostics=("environment-query-not-supported",))
+
+    def check_environment(self, query):
+        method = getattr(self.executor, "check_environment", None)
+        if method is not None:
+            return method(replace(query, hardware=query.hardware or self.context.hardware))
+        from .environment_query import match_environment
+        return match_environment(query, self.query_environment(query))
+
     def run(self, command: CommandSpec) -> JobResult:
         environment = {**self.context.environment, **command.environment}
         for key in ("ATREX_SANDBOX_REQUIREMENTS_FILE", "ATREX_PRIVATE_REFERENCE_DIR"):

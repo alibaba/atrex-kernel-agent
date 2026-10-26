@@ -1043,26 +1043,10 @@ def _runtime_requirements(
         contents = Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError) as exc:
         raise ValueError(f"cannot read runtime requirements file {path}: {exc}") from exc
-    selected_languages: set[str] | None = None
-    for line in contents.splitlines():
-        if line.casefold().startswith(REQUIREMENTS_LANGUAGES_PREFIX):
-            selected_languages = {
-                value.casefold()
-                for value in re.split(r"[\s,]+", line.split(":", 1)[1].strip())
-                if value
-            }
-            if not selected_languages:
-                raise ValueError(
-                    f"runtime requirements selector in {path} declares no languages"
-                )
-            break
-    declared = {str(value).casefold() for value in candidate_languages}
-    if selected_languages is not None and selected_languages.isdisjoint(declared):
-        return []
-    return [
-        line.strip() for line in contents.splitlines()
-        if line.strip() and not line.lstrip().startswith("#")
-    ]
+    if len(contents.encode("utf-8")) > 128 * 1024:
+        raise ValueError("runtime requirements file exceeds 128 KiB")
+    from aka.legacy.execution.environment_query import select_requirements
+    return list(select_requirements(contents, candidate_languages))
 
 
 def _is_generalized_workspace(workspace: Path) -> bool:

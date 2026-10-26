@@ -63,7 +63,7 @@ def default_binding(context):
     from aka.legacy.execution.configuration import legacy_settings, queue_wait_grace
     from aka.legacy.execution.processes import spawn_owned_session
     from aka.legacy.execution.recovery import raise_if_environment_blocked
-    settings = legacy_settings()
+    settings = legacy_settings(context.environment)
     request = SandboxRequest(
         workspace=Path("."), launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
         hardware=context.hardware, timeout=context.timeout, command=(),

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
 from typing import Protocol, runtime_checkable
 from types import MappingProxyType
+from .execution_environment import EnvironmentSnapshot, EnvironmentSupport
 
 
 class Cancellation(Protocol):
@@ -25,6 +26,14 @@ class CommandSpec:
     cancel_event: Cancellation | None = None
     submission: bytes | None = field(default=None, repr=False)
     num_gpus: int = 1
+    languages: tuple[str, ...] = ()
+    requirements: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        object.__setattr__(self, "command", tuple(self.command))
+        object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
+        object.__setattr__(self, "languages", tuple(self.languages))
+        object.__setattr__(self, "requirements", tuple(self.requirements))
 
 
 @dataclass(frozen=True)
@@ -72,6 +81,23 @@ class UnsupportedExecution(ValueError):
 class ResourceIdentity:
     backend: str
     identifier: str | None = None
+
+
+@dataclass(frozen=True)
+class ExecutionBudget:
+    scope: str
+    requested: int | None
+    effective: int
+    hard_limit: int | None = None
+    reason: str = "requested"
+
+    def __post_init__(self):
+        if type(self.effective) is not int or self.effective < 1:
+            raise ValueError("effective execution budget must be positive")
+        if self.requested is not None and (type(self.requested) is not int or self.requested < 1):
+            raise ValueError("requested execution budget must be positive or unspecified")
+        if self.hard_limit is not None and (type(self.hard_limit) is not int or self.hard_limit < 1):
+            raise ValueError("execution hard limit must be positive")
 
 
 @dataclass(frozen=True)
@@ -187,11 +213,15 @@ class JobResult:
     environment_identity: str | None = None
     files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
     file_receipts: tuple[ExecutionFileReceipt, ...] = ()
+    environment_snapshot: EnvironmentSnapshot | None = None
+    budgets: tuple[ExecutionBudget, ...] = ()
+    environment_support: EnvironmentSupport | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "attempts", tuple(self.attempts))
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
         object.__setattr__(self, "files", tuple(self.files))
+        object.__setattr__(self, "budgets", tuple(self.budgets))
         import hashlib
         receipts = tuple(ExecutionFileReceipt(item.path, item.mode, len(item.content),
                          hashlib.sha256(item.content).hexdigest()) for item in self.files)

@@ -2,6 +2,7 @@
 import os
 from pathlib import Path
 import sys
+from dataclasses import replace
 from aka.contracts.execution import BackendCapabilities, JobResult, ResourceIdentity
 from aka.legacy.execution.configuration import queue_wait_grace
 
@@ -11,13 +12,30 @@ class GatewayExecutor:
     sandbox_cli_endpoint_environment = True
     def __init__(self, configuration=None):
         self.configuration = dict(configuration or {})
+        self.environment = os.environ.copy()
         if "requirements_file" in self.configuration:
             raise ValueError("worker requirements belong to Task, not gateway provider configuration")
-    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile")), True, True)
+    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile", "check", "disassemble")), True, True)
     resource_identity = ResourceIdentity("gateway")
+
+    def _environment_backend(self, environment=None):
+        from aka.legacy.execution.environment_query import BackendEnvironment
+        env = {**self.environment, **(environment or {})}
+        return BackendEnvironment(backend=self.resource_identity.backend, operations=self.capabilities.operations,
+            environment=env, url=self.configuration.get("url") or env.get("ATREX_SANDBOX_URL", ""),
+            profile=self.configuration.get("profile") or env.get("ATREX_SANDBOX_PROFILE", ""))
+
+    def query_environment(self, query):
+        return self._environment_backend().query(query)
+
+    def check_environment(self, query):
+        return self._environment_backend().check(query)
 
     def run(self, command):
         self.capabilities.require(command)
+        from aka.legacy.execution.environment_query import command_query, require_supported
+        support = self._environment_backend(command.environment).check(command_query(command), discover=False)
+        require_supported(support)
         if type(command.timeout) is not int or command.timeout <= 0:
             raise ValueError("execution timeout must be a positive integer")
         argv = [sys.executable, "-m", "aka.legacy.execution.gateway.entrypoint",
@@ -55,6 +73,8 @@ class GatewayExecutor:
 
         grace = queue_wait_grace(environment)
         from aka.legacy.execution.outcomes import run_owned
-        return run_owned(argv, environment=environment, workspace=command.workspace,
+        result = run_owned(argv, environment=environment, workspace=command.workspace,
             timeout=command.timeout + grace + 240, resource=self.resource_identity,
             hardware=command.hardware, cancel_event=command.cancel_event, input_payload=command.submission)
+        return replace(result, environment_snapshot=support.environment,
+                       environment_identity=support.environment.identity, environment_support=support)
