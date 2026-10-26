@@ -14,7 +14,10 @@
     "light_evaluation": "aka.light.evaluation.plugin:EVALUATION",
     "light_experiments": "aka.light.experiment.plugin:EXPERIMENTS",
     "light_acceptance": "aka.light.acceptance.plugin:ACCEPTANCE",
-    "light_journal": "aka.light.workflow.journal_plugin:JOURNAL"
+    "light_journal": "aka.light.workflow.journal_plugin:JOURNAL",
+    "evaluation_defaults": "aka.legacy.evaluation.plugin:EVALUATION_DEFAULTS",
+    "execution_context": "aka.legacy.execution.plugin:EXECUTION_CONTEXT",
+    "measurement_parallelism": "aka.legacy.execution.plugin:MEASUREMENT_PARALLELISM"
   },
   "composition": "light",
   "environment_values": {
@@ -33,7 +36,10 @@
     "light_evaluation",
     "light_experiments",
     "light_acceptance",
-    "light_journal"
+    "light_journal",
+    "evaluation_defaults",
+    "execution_context",
+    "measurement_parallelism"
   ],
   "tokens": [
     "problem",
@@ -48,7 +54,10 @@
     "light_evaluation",
     "light_experiments",
     "light_acceptance",
-    "light_journal"
+    "light_journal",
+    "evaluation_defaults",
+    "execution_context",
+    "measurement_parallelism"
   ],
   "doc": "Opt-in AKA-light services with native Agent execution; the default Workflow profile is unchanged."
 }

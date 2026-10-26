@@ -4,46 +4,100 @@ from .dependencies import CampaignDependencies
 
 
 def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
-                     evaluator_factory=None,
-                     workflow_observer=None):
+                     evaluator_factory=None, executor=None, experiment_factory=None,
+                     execution_environment=None, measurement_parallelism=None,
+                     canonical_measurement_reader=None, workflow_observer=None):
+    from contextlib import ExitStack
     from .agent_host import create_agent
     from aka.legacy.task.problem.legacy import LegacyProblemProvider
     from aka.legacy.task.source.legacy import LegacySourceProvider
     from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
+    from aka.contracts.execution import validate_executor
 
-    owned_agent = agent is None
-    agent = agent if agent is not None else create_agent()
-    task = task if task is not None else dict(
-        problem=LegacyProblemProvider(optimization_mode),
-        source=LegacySourceProvider(), workspace=GitCandidateWorkspace(),
-    )
+    owned = ExitStack()
+    try:
+        if executor is None:
+            import os
+            from aka.legacy.execution.assembly import compose_execution
+            selected = compose_execution()
+            owned.callback(selected.dispose)
+            executor = selected.executor
+            if execution_environment is None:
+                execution_environment = dict(os.environ)
+        validate_executor(executor)
+        if measurement_parallelism is None:
+            measurement_parallelism = 1 if (execution_environment or {}).get("ATREX_SANDBOX_SSH") else 4
+        if evaluator_factory is None:
+            from aka.legacy.evaluation.plugin import LegacyEvaluatorFactory
+            evaluator_factory = LegacyEvaluatorFactory()
+        if canonical_measurement_reader is None:
+            from .records import WorkflowMeasurementReader
+            canonical_measurement_reader = WorkflowMeasurementReader()
+        if experiment_factory is None:
+            from aka.legacy.experiment.factory import LegacyExperimentFactory
+            experiment_factory = LegacyExperimentFactory(measurement_reader=canonical_measurement_reader)
+            owned.callback(experiment_factory.close)
+        if not callable(getattr(experiment_factory, "open", None)):
+            raise TypeError("provider does not implement ExperimentFactory")
+        if not callable(getattr(evaluator_factory, "create", None)):
+            raise TypeError("provider does not implement EvaluatorFactory")
+        if agent is None:
+            agent = create_agent()
+            owned.callback(agent.close)
+        task = task if task is not None else dict(
+            problem=LegacyProblemProvider(optimization_mode),
+            source=LegacySourceProvider(), workspace=GitCandidateWorkspace(),
+        )
+        # Validate all task keys while owned module resources are still guarded.
+        problem, source, candidate = task["problem"], task["source"], task["workspace"]
+    except BaseException:
+        owned.close()
+        raise
 
+    opened_services = []
     def services(campaign):
         from aka.legacy.workflow.services import WorkflowServices
-        return WorkflowServices(campaign.request.runtime, campaign,
+        selected = WorkflowServices(campaign.request.runtime, campaign,
+                                executor=executor, experiment_factory=experiment_factory,
                                 evaluator_factory=evaluator_factory,
+                                execution_environment=execution_environment,
+                                measurement_parallelism=measurement_parallelism,
+                                canonical_measurement_reader=canonical_measurement_reader,
                                 workflow_observer=workflow_observer)
+        opened_services.append(selected)
+        return selected
 
     def execution(campaign):
         from aka.legacy.workflow.campaign_execution import CampaignExecution
-        return CampaignExecution(campaign.services.settings)
+        return CampaignExecution(campaign.services.settings, environment=execution_environment)
 
-    dependencies = CampaignDependencies(
-        agent, task["problem"], task["source"], task["workspace"],
-        lambda campaign: campaign.services.baseline(),
-        run_campaign, execution,
-        services=services,
-    )
+    try:
+        dependencies = CampaignDependencies(
+            agent, problem, source, candidate,
+            lambda campaign: campaign.services.baseline(),
+            run_campaign, execution,
+            services=services,
+        )
+    except BaseException:
+        owned.close()
+        raise
 
     class AssembledWorkflow(LegacyWorkflow):
         def close(self):
             if self._closed:
                 return
             super().close()
-            if owned_agent:
-                agent.close()
+            try:
+                for selected in reversed(opened_services):
+                    selected.close()
+            finally:
+                owned.close()
 
-    return AssembledWorkflow(dependencies)
+    try:
+        return AssembledWorkflow(dependencies)
+    except BaseException:
+        owned.close()
+        raise
 
 
 def run_campaign(campaign):
@@ -73,7 +127,7 @@ def run_campaign(campaign):
     )
     engine.evaluation = EpisodeMeasurements(
         campaign.workspace, campaign.private_reference_dir, settings.min_improvement_pct,
-        evaluator=services.evaluator, acceptance=services.acceptance,
+        experiment=services.baseline_experiment, acceptance=services.acceptance,
         records=services.records, command=services.sandbox_command,
     )
     return campaign._finish(engine.run())

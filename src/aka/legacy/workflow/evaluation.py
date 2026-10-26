@@ -44,7 +44,7 @@ class EpisodeMeasurements:
         private_reference_dir,
         threshold,
         *,
-        evaluator,
+        experiment,
         acceptance,
         records,
         command,
@@ -52,7 +52,7 @@ class EpisodeMeasurements:
         self.workspace = workspace
         self.private_reference_dir = private_reference_dir
         self.threshold = threshold
-        self.evaluator = evaluator
+        self.experiment = experiment
         self.acceptance = acceptance
         self.records = records
         self.command = command
@@ -80,8 +80,7 @@ class EpisodeMeasurements:
             canonical_workspace=self.workspace,
             expected_shape_ids=frozenset(shapes) if shapes is not None else None,
         )
-        prepared = self.evaluator.prepare(request)
-        measurement = self.evaluator.interpret(prepared, ())
+        measurement = self.experiment.run(request)
         return self.acceptance.decide(
             measurement, AcceptanceRequirements(self.threshold, mode="fast")
         ).verification

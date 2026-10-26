@@ -3,7 +3,6 @@ import os
 import signal
 import sys
 
-from aka.legacy.execution.selection import execution_scope
 from aka.legacy.workflow.process_environment import invocation_environment, use_launch_environment
 from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked
 from .recovery_runtime import launch_recovery_monitor, signal_restart_ready
@@ -13,11 +12,16 @@ from .preparation import prepare_request
 
 
 class WorkflowStartup:
-    def __init__(self, workflow, *, configuration=None, observer=None, evaluator_factory=None):
+    def __init__(self, workflow, *, configuration=None, observer=None, evaluation_defaults=None,
+                 execution_environment=None, evaluator_factory=None):
         self._workflow = workflow
         self.configuration = configuration or {}
         self.observer = observer
-        self.evaluator_factory = evaluator_factory
+        from aka.contracts.evaluation import EvaluationConfiguration
+        self.evaluation_defaults = evaluation_defaults if evaluation_defaults is not None else EvaluationConfiguration()
+        if not isinstance(self.evaluation_defaults, EvaluationConfiguration):
+            raise TypeError("evaluation defaults must use EvaluationConfiguration")
+        self.execution_environment = dict(execution_environment or {})
 
     def _notify(self, name, *args):
         callback = getattr(self.observer, name, None)
@@ -33,7 +37,7 @@ class WorkflowStartup:
         if launch.provided_settings is not None and "conversion_budget_action" not in launch.provided_settings:
             settings = replace(settings, conversion_budget_action=self.configuration.get("conversion_budget_action", "fail"))
         if launch.provided_runtime is not None and "shape_batch_size" not in launch.provided_runtime:
-            runtime = replace(runtime, shape_batch_size=getattr(self.evaluator_factory, "shape_batch_size", runtime.shape_batch_size))
+            runtime = replace(runtime, shape_batch_size=self.evaluation_defaults.shape_batch_size)
         return replace(launch, request=replace(launch.request,settings=settings,runtime=runtime),
                        provided_settings=None, provided_runtime=None)
 
@@ -49,20 +53,19 @@ class WorkflowStartup:
         with invocation_environment(values), use_launch_environment(values):
             self._notify("run_started", launch)
             try:
-                with execution_scope():
-                    try:
-                        result = self._run(launch)
-                    except EnvironmentUnavailable:
-                        result = ENVIRONMENT_TEMPFAIL
-                    if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
-                        context = current_recovery_context()
-                        supervised = os.environ.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") == "1"
-                        pid = launch_recovery_monitor(context) if context is not None and not supervised else None
-                        if pid is not None:
-                            print("[orchestrator] remote GPU environment unavailable; optimization stopped; "
-                                  f"recovery monitor pid={pid} state={context.directory}", file=sys.stderr, flush=True)
-                        result = ENVIRONMENT_TEMPFAIL
-                    return result
+                try:
+                    result = self._run(launch)
+                except EnvironmentUnavailable:
+                    result = ENVIRONMENT_TEMPFAIL
+                if result == ENVIRONMENT_TEMPFAIL or environment_is_blocked():
+                    context = current_recovery_context()
+                    supervised = os.environ.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") == "1"
+                    pid = launch_recovery_monitor(context) if context is not None and not supervised else None
+                    if pid is not None:
+                        print("[orchestrator] remote GPU environment unavailable; optimization stopped; "
+                              f"recovery monitor pid={pid} state={context.directory}", file=sys.stderr, flush=True)
+                    result = ENVIRONMENT_TEMPFAIL
+                return result
             except BaseException as caught:
                 result = 130 if isinstance(caught,KeyboardInterrupt) else (caught.code if isinstance(caught,SystemExit) and type(caught.code) is int else 1)
                 error = type(caught).__name__
@@ -75,8 +78,7 @@ class WorkflowStartup:
         runtime = launch.request.settings.agent_cli
         if shutil.which(runtime) is None:
             raise ValueError(f'Agent CLI is unavailable: {runtime}')
-        from aka.legacy.execution.configuration import selected_ssh
-        if selected_ssh() and any(shutil.which(command) is None for command in ('ssh', 'scp')):
+        if self.execution_environment.get("ATREX_SANDBOX_SSH") and any(shutil.which(command) is None for command in ('ssh', 'scp')):
             raise ValueError('selected SSH execution requires ssh and scp')
         # These are private calls within the Workflow implementation, not a
         # second module Interface. Problem is loaded once, before preparation.
@@ -96,16 +98,16 @@ class WorkflowStartup:
             def run_framework(framework):
                 # Each selected DSL keeps its own trusted preflight, without
                 # reloading Task or rebuilding the selected modules.
-                from aka.legacy.execution.configuration import selected_ssh, legacy_settings
-                if selected_ssh():
+                if self.execution_environment.get("ATREX_SANDBOX_SSH"):
                     from aka.legacy.execution.health import runtime_health_command
                     from aka.legacy.execution.sandbox import check_ssh_environment
                     os.environ["ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND"] = runtime_health_command(
                         sol=problem.initial_source.kind == "sol", framework=framework)
-                    connection = legacy_settings()
                     check_ssh_environment(launch.workspace_base,
                         request.runtime.hardware or request.settings.platform,
-                        connection.ssh, connection.ssh_init, connection.health_command)
+                        self.execution_environment["ATREX_SANDBOX_SSH"],
+                        self.execution_environment.get("ATREX_SANDBOX_SSH_INIT", ""),
+                        self.execution_environment.get("ATREX_SANDBOX_HEALTH_COMMAND", ""))
                 suffix = framework_workspace_suffix(framework, request.settings.platform, request.settings.optimization_mode)
                 child_request = replace(request, settings=replace(request.settings, framework=framework))
                 child_request = replace(child_request,

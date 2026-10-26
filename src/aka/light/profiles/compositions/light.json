@@ -5,6 +5,20 @@
   ],
   "patches": [
     {
+      "id": "experiment",
+      "remove": true
+    },
+    {
+      "id": "canonical-reader",
+      "remove": true
+    },
+    {
+      "id": "execution",
+      "isolate": [
+        "executor"
+      ]
+    },
+    {
       "id": "agent",
       "remove": true
     },

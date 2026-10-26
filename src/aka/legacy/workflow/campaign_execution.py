@@ -5,27 +5,32 @@ from .execution_instructions import sandbox_directive, fast_sandbox_directive
 
 
 class CampaignExecution:
-    def __init__(self, settings):
+    def __init__(self, settings, *, environment=None):
         self.settings = settings
-        from aka.legacy.execution.configuration import selected_ssh, legacy_settings
-        self.uses_ssh = selected_ssh()
-        from aka.legacy.execution.selection import selected_execution
-        self.connection = legacy_settings() if selected_execution().get("profile", "legacy") == "legacy" else None
+        # Session instructions expose declared execution configuration, not the
+        # host operation's inherited environment or private evaluator binding.
+        names = {"ATREX_SANDBOX_GPU", "ATREX_SANDBOX_TIMEOUT", "ATREX_SANDBOX_PROFILE",
+            "ATREX_SANDBOX_URL", "ATREX_SANDBOX_SSH", "ATREX_SANDBOX_SSH_INIT",
+            "ATREX_SANDBOX_SSH_GPU", "ATREX_SANDBOX_HEALTH_COMMAND", "ATREX_SANDBOX_SSH_RUNTIME_BINDS",
+            "ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND", "ATREX_ENVIRONMENT_STATE_FILE", "AKA_EXECUTION_SELECTION"}
+        self._environment = {key: value for key, value in (environment or {}).items() if key in names}
+        self.uses_ssh = bool(self._environment.get("ATREX_SANDBOX_SSH"))
+        from types import SimpleNamespace
+        self.connection = SimpleNamespace(
+            profile=self._environment.get("ATREX_SANDBOX_PROFILE", ""),
+            url=self._environment.get("ATREX_SANDBOX_URL", ""),
+            ssh=self._environment.get("ATREX_SANDBOX_SSH", ""),
+            ssh_init=self._environment.get("ATREX_SANDBOX_SSH_INIT", ""),
+            health_command=self._environment.get("ATREX_SANDBOX_HEALTH_COMMAND", ""))
 
     def environment(self):
-        from aka.legacy.execution.configuration import legacy_settings
-        from aka.legacy.execution.selection import selected_execution
-        if selected_execution().get("profile", "legacy") != "legacy":
-            from aka.legacy.execution.environment import session_environment
-            return session_environment(hardware=self.settings.hardware, timeout=self.settings.timeout)
-        s = legacy_settings()
+        s = self.connection
         from aka.legacy.execution.environment import session_environment
         return session_environment(hardware=self.settings.hardware, timeout=self.settings.timeout,
                                    profile=s.profile, url=s.url, ssh=s.ssh, ssh_init=s.ssh_init,
-                                   health_command=s.health_command)
+                                   health_command=s.health_command, extra=self._environment)
 
     def directive(self, *, fast=False):
-        from aka.legacy.execution.configuration import legacy_settings
         render = fast_sandbox_directive if fast else sandbox_directive
         s = self.connection
         return render(self.settings.hardware, s.profile if s else "", s.url if s else "", s.ssh if s else "")

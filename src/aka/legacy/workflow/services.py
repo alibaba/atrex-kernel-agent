@@ -9,14 +9,13 @@ from aka.legacy.evaluation.baseline import (
     BaselinePreparation,
 )
 from aka.legacy.evaluation import records
-from aka.legacy.experiment import LegacyExperiment, FileExperimentRecords
 from aka.legacy.acceptance import LegacyAcceptancePolicy
-from aka.legacy.execution.selection import execution_scope
-from aka.legacy.execution.binding import sandbox_executor
+from aka.contracts.execution import ExecutionContext, validate_executor
+from aka.legacy.execution.binding import SandboxExecutor
 
 
 class BorrowedExperiment:
-    """Enter the selected execution scope at the host boundary for each operation."""
+    """Borrow the selected Factory for operations in one canonical namespace."""
 
     def __init__(self, services, *, formal=False):
         self.services = services
@@ -27,38 +26,70 @@ class BorrowedExperiment:
             return experiment.run(request)
 
     def run_command(self, command):
-        with self.services.experiment() as experiment:
+        with self.services.experiment(formal=self.formal) as experiment:
             return experiment.run_command(command)
 
     def run_recorded(self, request, *, request_id):
         with self.services.experiment(formal=self.formal) as experiment:
+            self._recorded(experiment, "run_recorded")
             return experiment.run_recorded(request, request_id=request_id)
 
+    @staticmethod
+    def _recorded(experiment, method):
+        if not callable(getattr(experiment, method, None)):
+            raise TypeError("selected Experiment does not implement " + method)
+
+    def resume_recorded(self, request, *, request_id, recovery_timeout=None, max_remeasurements=0):
+        with self.services.experiment(formal=self.formal) as experiment:
+            self._recorded(experiment, "resume_recorded")
+            return experiment.resume_recorded(request, request_id=request_id,
+                recovery_timeout=recovery_timeout, max_remeasurements=max_remeasurements)
+
     def get(self, ref):
-        return self.services.experiment_records.get(ref)
+        with self.services.experiment(formal=self.formal) as experiment:
+            self._recorded(experiment, "get")
+            return experiment.get(ref)
 
     def find(self, request_id):
-        return self.services.experiment_records.find(request_id)
+        with self.services.experiment(formal=self.formal) as experiment:
+            self._recorded(experiment, "find")
+            return experiment.find(request_id)
 
     def unresolved(self):
-        return self.services.experiment_records.unresolved()
+        with self.services.experiment(formal=self.formal) as experiment:
+            self._recorded(experiment, "unresolved")
+            return experiment.unresolved()
 
     def read_artifact(self, artifact):
-        return self.services.experiment_records.read_artifact(artifact)
+        with self.services.experiment(formal=self.formal) as experiment:
+            self._recorded(experiment, "read_artifact")
+            return experiment.read_artifact(artifact)
 
 
 class WorkflowServices:
-    def __init__(self, settings, campaign, *, evaluator_factory=None,
-                 workflow_observer=None):
+    def __init__(self, settings, campaign, *, executor, experiment_factory,
+                 evaluator_factory, execution_environment=None, measurement_parallelism=4,
+                 canonical_measurement_reader, workflow_observer=None):
         self.settings = settings
         self.campaign = campaign
         self.problem_provider = campaign.problem_provider
-        if evaluator_factory is None:
-            from aka.legacy.evaluation.plugin import LegacyEvaluatorFactory
-            evaluator_factory = LegacyEvaluatorFactory()
+        validate_executor(executor)
+        if not callable(getattr(experiment_factory, "open", None)):
+            raise TypeError("provider does not implement ExperimentFactory")
         if not callable(getattr(evaluator_factory, "create", None)):
             raise TypeError("provider does not implement EvaluatorFactory")
         self.evaluator_factory = evaluator_factory
+        if type(measurement_parallelism) is not int or measurement_parallelism < 1:
+            raise ValueError("measurement_parallelism must be positive")
+        self.executor = executor
+        self.experiment_factory = experiment_factory
+        self.execution_environment = dict(execution_environment or {})
+        self.measurement_parallelism = measurement_parallelism
+        if any(not callable(getattr(canonical_measurement_reader, method, None))
+               for method in ("baseline", "measurements")):
+            raise TypeError("provider does not implement CanonicalMeasurementReader")
+        self.canonical_measurement_reader = canonical_measurement_reader
+        self._closed = False
         if workflow_observer is not None:
             try:
                 workflow_observer.campaign_started(campaign.request)
@@ -72,12 +103,6 @@ class WorkflowServices:
         self._evaluation_input = self.problem_provider.content(
             self.campaign.problem, self.campaign.workspace
         ).evaluation
-        self.evaluator = self.create_evaluator()
-        # A sibling root survives candidate workspace reset/clean operations.
-        from pathlib import Path
-        workspace = Path(campaign.workspace).resolve()
-        self.experiment_records = FileExperimentRecords(
-            workspace.parent / ".aka-experiments", str(workspace))
         self.records = records
         self.baseline_experiment = BorrowedExperiment(self)
         self.formal_experiment = BorrowedExperiment(self, formal=True)
@@ -92,24 +117,28 @@ class WorkflowServices:
 
     def _measurement_environment(self):
         import os
-        environment = {**os.environ, **self.task_environment()}
+        environment = dict(os.environ)
+        for key, value in self.execution_environment.items():
+            if value is None:
+                environment.pop(key, None)
+            else:
+                environment[key] = value
+        environment.update(self.task_environment())
         if self.campaign.private_reference_dir is not None:
             environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(self.campaign.private_reference_dir)
         return environment
 
     def measurement_reader(self):
-        from .records import WorkflowMeasurementReader
-        return WorkflowMeasurementReader()
+        return self.canonical_measurement_reader
 
     def create_evaluator(self):
         s = self.settings
-        from aka.legacy.execution.configuration import selected_ssh
         evaluator = self.evaluator_factory.create(
             EvaluationConfiguration(
                 timeout=s.timeout, repeats=s.verify_repeats,
                 per_run_timeout=s.verify_run_timeout,
                 shape_batch_size=s.shape_batch_size,
-                max_parallelism=1 if selected_ssh() else 4,
+                max_parallelism=self.measurement_parallelism,
                 private_reference_dir=self.campaign.private_reference_dir,
                 native=bool(self.campaign.atrex_bench_root),
                 hardware=s.hardware, environment=self._measurement_environment(),
@@ -147,24 +176,22 @@ class WorkflowServices:
 
     @contextmanager
     def experiment(self, *, formal=False):
-        from aka.legacy.experiment.retry import retry_infrastructure
-
+        if self._closed:
+            raise RuntimeError("Workflow services have been closed")
         s = self.settings
-        with execution_scope() as selected:
-            bound = sandbox_executor(
-                selected,
-                hardware=s.hardware,
-                timeout=s.timeout, formal=formal,
-                private_reference_dir=self.campaign.private_reference_dir,
-                worker_requirements=self.evaluation_input().worker_requirements,
-            )
-            evaluator = self.create_evaluator()
-            from aka.legacy.experiment.runner import evaluation_stage
-            from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
-            yield LegacyExperiment(bound, evaluator,
-                command_evaluator=GatewayCommandEvaluator(measurement_reader=self.measurement_reader()),
-                retry=retry_infrastructure if formal else None, stage=evaluation_stage,
-                records=self.experiment_records, purpose="formal" if formal else "development")
+        bound = SandboxExecutor(self.executor, ExecutionContext(
+            self._measurement_environment(), s.hardware, s.timeout, formal))
+        evaluator = self.create_evaluator()
+        with self.experiment_factory.open(workspace=self.campaign.workspace,
+                purpose="formal" if formal else "development", executor=bound, evaluator=evaluator) as experiment:
+            if any(not callable(getattr(experiment, method, None)) for method in ("run", "run_command")):
+                raise TypeError("factory did not return an Experiment")
+            yield experiment
+
+    def close(self):
+        if self._closed:
+            return
+        self._closed = True
 
     def sandbox_command(self, command):
         import shlex
