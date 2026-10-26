@@ -165,6 +165,28 @@ class AgentSkillsRegistryMixin:
             return self._resource_result()
         return self._installation or self._resource_result()
 
+    def filesystem_access(self, workspace):
+        """Describe and revalidate Agent-visible links from the selected installation."""
+        from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
+        from aka.core.plugin_runtime.schema import PluginError
+        from .plugin_runtime.registry import STATE_DIR
+        workspace = Path(workspace).resolve(strict=True)
+        self.check_lock(workspace)
+        mounts, protected = [], []
+        for name, source in self.mounts().items():
+            source = Path(source).resolve(strict=True)
+            link = workspace / name
+            if not link.is_symlink() or link.resolve(strict=True) != source:
+                raise PluginError("mount_conflict", "Selected resource link changed")
+            if source.is_relative_to(workspace):
+                protected.append(source)
+            else:
+                mounts.append(FilesystemMount(source, source))
+        lock = workspace / STATE_DIR
+        if lock.exists():
+            protected.append(lock)
+        return FilesystemAccess(tuple(mounts), (), tuple(protected))
+
     def catalog(self):
         return self.resource_result().catalog()
 

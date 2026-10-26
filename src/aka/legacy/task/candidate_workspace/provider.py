@@ -9,6 +9,10 @@ def _legacy(handle):
 
 
 class GitCandidateWorkspace(GitSnapshots):
+    def filesystem_access(self, workspace, *, include_git=False):
+        from .access import filesystem_access
+        return filesystem_access(workspace, include_git=include_git)
+
     def export_checkpoint(self, workspace, destination, *, candidates=()):
         from .checkpoint import export_checkpoint
         return export_checkpoint(workspace, destination, candidates=candidates)

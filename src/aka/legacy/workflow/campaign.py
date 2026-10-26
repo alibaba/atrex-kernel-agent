@@ -1904,7 +1904,7 @@ class Campaign:
             )
         if framework_baseline_progress_path(self.workspace).is_file():
             resume_path = ".atrex_long_horizon/framework_baseline/resume.json"
-            if getattr(self.agent, "options", None) is not None and self.agent.options.sandbox == "bwrap":
+            if self.agent.capabilities.filesystem_isolation:
                 resume_record = self.workspace / resume_path
                 resume_path = "framework_baseline_resume.json"
                 destination = self.workspace / resume_path
@@ -2251,7 +2251,7 @@ class Campaign:
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude", **options):
         from .agent_access import for_workspace
 
-        if getattr(self.agent, "options", None) is not None and self.agent.options.sandbox == "bwrap":
+        if self.agent.capabilities.filesystem_isolation:
             if "access" not in options:
                 options["access"] = for_workspace(self, workspace, resources=options.get("agent_plugins", True))
         runtime = (

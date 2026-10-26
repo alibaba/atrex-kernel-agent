@@ -169,7 +169,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
                 (root / "review_request.json").write_text(json.dumps(request, indent=2))
                 trace.write_private_json("review-request.json", request)
                 access_options = {}
-                if getattr(campaign.agent, "options", None) is not None and campaign.agent.options.sandbox == "bwrap":
+                if campaign.agent.capabilities.filesystem_isolation:
                     from .agent_access import for_workspace
                     access_options["access"] = for_workspace(campaign, root, resources=False,
                         read_only=tuple(root / name for name in (*files, "review_request.json")))

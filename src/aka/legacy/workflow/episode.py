@@ -612,9 +612,10 @@ class LongHorizonCampaign:
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
-        observations = worktree.path / '.aka-agent-observations'
-        if observations.is_dir():
-            shutil.copytree(observations, episode_dir / 'agent_observations', dirs_exist_ok=True)
+        destination = episode_dir / 'agent_observations'
+        if destination.exists():
+            shutil.rmtree(destination)
+        self.base_campaign.agent.export_observations(worktree.path, destination)
         verification = worktree.path / VERIFY_DIR
         if verification.is_dir():
             destination = episode_dir / "verification_runtime"
@@ -1837,7 +1838,7 @@ class LongHorizonCampaign:
             try:
                 access_options = {}
                 runner_agent = getattr(runner, "agent", None)
-                if getattr(runner_agent, "options", None) is not None and runner_agent.options.sandbox == "bwrap":
+                if runner_agent.capabilities.filesystem_isolation:
                     from .agent_access import for_workspace
                     access_options["access"] = for_workspace(self.base_campaign, worktree.path)
                 result = runner.run(
