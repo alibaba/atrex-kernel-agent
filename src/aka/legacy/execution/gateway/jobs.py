@@ -16,7 +16,7 @@ from pathlib import Path
 from urllib.parse import quote
 
 from aka.contracts.execution import (
-    ExecutionAttempt, ExecutionDiagnostic, ExecutionFacts, ExecutionFile, JobResult,
+    ExecutionAttempt, ExecutionBudget, ExecutionDiagnostic, ExecutionFacts, ExecutionFile, JobResult,
     ResourceIdentity, UnsupportedExecution,
 )
 from aka.contracts.execution_recovery import (
@@ -33,6 +33,17 @@ def causes_from_error(error):
     except (TypeError, ValueError):
         return (ExecutionCause("infrastructure", type(error).__name__, str(error)),)
     return causes_from_job({"error": value.get("error", value) if isinstance(value, dict) else value})
+
+
+def client_wait_budget(scope, requested, effective):
+    """Record allocated client waiting without claiming a backend runtime limit."""
+    reason = "infrastructure-retry-budget" if effective < requested else "requested"
+    if int(requested) == requested and int(effective) == effective:
+        return (ExecutionBudget(scope, int(requested), int(effective), reason=reason),), ()
+    # The inherited ExecutionBudget encodes whole seconds. Preserve fractional
+    # API waits exactly instead of rounding them into an untrue effective budget.
+    return (), (ExecutionDiagnostic("budget", "fractional-client-wait-budget",
+        {"scope": scope, "requested_s": str(requested), "effective_s": str(effective), "reason": reason}),)
 
 
 def gateway_environment(environment):
@@ -200,6 +211,7 @@ class GatewayJobs:
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("query timeout must be positive")
         elapsed_budget = min(timeout, retry.max_elapsed_s) if retry.delays else timeout
+        wait_budgets, wait_diagnostics = client_wait_budget("query-wait", timeout, elapsed_budget)
         deadline = self.clock() + elapsed_budget
         attempts = []
         diagnostics = []
@@ -239,13 +251,15 @@ class GatewayJobs:
         if result is None:
             result = unknown_result(reference, "query-budget-exhausted")
         return replace(result, attempts=tuple(attempts) or result.attempts,
-                       diagnostics=tuple(diagnostics) or result.diagnostics)
+                       diagnostics=(tuple(diagnostics) or result.diagnostics) + wait_diagnostics,
+                       budgets=(*result.budgets, *wait_budgets))
 
     def cancel(self, reference, *, timeout):
         self._require(reference)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("cancel timeout must be positive")
         deadline = self.clock() + timeout
+        wait_budgets, wait_diagnostics = client_wait_budget("cancel-wait", timeout, timeout)
         request_diagnostics = ()
         request_causes = ()
         try:
@@ -266,7 +280,8 @@ class GatewayJobs:
             request_causes = causes_from_error(error)
         remaining = deadline - self.clock()
         result = self.query(reference, timeout=remaining) if remaining > 0 else unknown_result(reference, "cancel-confirmation-budget-exhausted")
-        return replace(result, diagnostics=(*request_diagnostics, *result.diagnostics),
+        return replace(result, diagnostics=(*request_diagnostics, *result.diagnostics, *wait_diagnostics),
+                       budgets=(*result.budgets, *wait_budgets),
                        causes=(*request_causes, *result.causes),
                        facts=replace(result.facts, cancellation_requested=True,
                            cleanup_diagnostics=request_diagnostics,
@@ -289,13 +304,17 @@ class GatewayJobs:
         if prepared["request"].get("idempotency_key") not in (None, idempotency_key):
             raise ValueError("replay cannot change the prepared idempotency key")
         payload["idempotency_key"] = idempotency_key
-        budgets = ()
+        elapsed_budget = min(command.timeout, retry.max_elapsed_s) if retry.delays else command.timeout
+        budgets, budget_diagnostics = client_wait_budget("replay-wait", command.timeout, elapsed_budget)
         if kind in {"run", "profile"}:
             runtime = effective_budget(command.timeout, limit=hard_limit(command.environment, kind), emit=False)
             payload.setdefault("options", {})["timeout_s"] = runtime.effective
-            budgets = (runtime,)
+            budgets = (*budgets, runtime)
+        else:
+            budget_diagnostics = (*budget_diagnostics, ExecutionDiagnostic("budget", "job-runtime-budget-unconfirmed",
+                                    {"operation": kind}))
         identity = hashlib.sha256(command.submission).hexdigest()
-        deadline = self.clock() + (min(command.timeout, retry.max_elapsed_s) if retry.delays else command.timeout)
+        deadline = self.clock() + elapsed_budget
         attempts, diagnostics = [], []
         last = None
         for index in range(len(retry.delays) + 1):
@@ -305,7 +324,7 @@ class GatewayJobs:
             if command.cancel_event is not None and command.cancel_event.is_set():
                 last = JobResult(1, resource=ResourceIdentity("gateway"), transport_status="cancelled",
                     facts=ExecutionFacts("not_submitted", cancellation_requested=True,
-                        local_stopped=True, cleanup="not_required"), budgets=budgets)
+                        local_stopped=True, cleanup="not_required"), budgets=budgets, diagnostics=budget_diagnostics)
                 break
             try:
                 accepted = self.http(self.endpoint, "POST", "/v1/jobs/" + {"run": "eval", "check": "compile"}.get(kind, kind), payload, remaining)
@@ -327,7 +346,7 @@ class GatewayJobs:
                 last = JobResult(75 if category == "infrastructure" else 2,
                     resource=ResourceIdentity("gateway"), transport_status="infrastructure" if category == "infrastructure" else "rejected",
                     facts=ExecutionFacts(attempt.disposition, local_stopped=True, cleanup="not_required"),
-                    attempts=(attempt,), diagnostics=(diag,), causes=native_causes, budgets=budgets)
+                    attempts=(attempt,), diagnostics=(diag, *budget_diagnostics), causes=native_causes, budgets=budgets)
                 if command.on_observation is not None:
                     command.on_observation(last)
                 if category != "infrastructure" or index == len(retry.delays):
@@ -338,16 +357,21 @@ class GatewayJobs:
                 self.sleep(delay)
                 continue
             # Callback failure after confirmed admission must never enter POST retry.
-            last = replace(result_from_job(accepted, reference, operation="replay"), budgets=budgets)
+            last = replace(result_from_job(accepted, reference, operation="replay"), budgets=budgets,
+                           diagnostics=budget_diagnostics)
             attempts.extend(last.attempts)
             if command.on_observation is not None:
                 command.on_observation(last)
             remaining = deadline - self.clock()
             if command.cancel_event is not None and command.cancel_event.is_set() and remaining > 0:
-                last = replace(self.cancel(reference, timeout=remaining), budgets=budgets)
+                queried = self.cancel(reference, timeout=remaining)
+                last = replace(queried, budgets=(*budgets, *queried.budgets),
+                               diagnostics=(*budget_diagnostics, *queried.diagnostics))
                 attempts.extend(last.attempts)
             elif last.facts.disposition != "terminal" and remaining > 0:
-                last = replace(self.query(reference, timeout=remaining, retry=retry), budgets=budgets)
+                queried = self.query(reference, timeout=remaining, retry=retry)
+                last = replace(queried, budgets=(*budgets, *queried.budgets),
+                               diagnostics=(*budget_diagnostics, *queried.diagnostics))
                 attempts.extend(last.attempts)
             break  # Confirmed IDs proceed exclusively to original-job GET.
         if last is None:
