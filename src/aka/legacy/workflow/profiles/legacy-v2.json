@@ -1,0 +1,5 @@
+{
+  "extends": "aka.legacy.workflow:profiles/workflow.json",
+  "composition": "legacy-v2",
+  "doc": "Legacy Workflow with Agent/Candidate protocol 2; none/private"
+}

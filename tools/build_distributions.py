@@ -19,7 +19,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = {
     'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/core', 'aka/contracts', 'aka/bootstrap'),
-    'atrex-aka-legacy': ('aka/legacy',),
+    'atrex-aka-legacy': ('aka/legacy', 'aka/agent'),
     'atrex-aka-light': ('aka/light',),
     'atrex-aka-dashboard': ('aka/dashboard',),
     'atrex-aka-observation-long-horizon': ('aka/observation/long_horizon',),
@@ -38,7 +38,10 @@ def owned(distribution: str) -> tuple[Path, ...]:
         # extensionless attachments as well as prompts and Skills; never stage
         # checkout-level tools, resources or generated caches.
         package = 'legacy' if distribution == 'atrex-aka-legacy' else 'light'
-        files = sorted(p for p in (ROOT / 'src' / 'aka' / package).rglob('*')
+        roots = (ROOT / 'src' / 'aka' / package,)
+        if package == 'legacy':
+            roots += (ROOT / 'src' / 'aka' / 'agent',)
+        files = sorted(p for root in roots for p in root.rglob('*')
             if p.is_file() and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
             and p.suffix not in {'.pyc', '.pyo'})
     return tuple(dict.fromkeys(files))

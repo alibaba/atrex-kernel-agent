@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-legacy"
-version = "0.1.0"
+version = "0.2.0"
 description = "AKA Task, Agent, Workflow and Execution implementations"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-framework==0.1.0"]
+dependencies = ["atrex-aka-framework==0.2.0"]
 
 [project.entry-points."aka.commands"]
 optimize = "aka.legacy.compat.command:main"

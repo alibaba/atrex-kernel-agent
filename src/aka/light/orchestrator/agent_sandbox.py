@@ -182,7 +182,7 @@ def wrap_agent_command(
     command: list[str],
     workspace: Path,
     environment: dict[str, str],
-    *, auxiliary_input_files: dict[str, Path] | None = None,
+    *, auxiliary_input_files: dict[str, Path] | None = None, agent_access=None,
 ) -> tuple[SandboxLaunch, AuxiliaryWorkspace | None]:
     executable = sandbox_executable(environment)
     if executable is None:
@@ -380,6 +380,36 @@ def wrap_agent_command(
             if path in {Path("/"), host_home, REPOSITORY_ROOT}:
                 raise ValueError(f"Read-only grant is too broad: {path}")
             _mount(argv, path, path)
+        if agent_access is not None:
+            from aka.agent.execution.bubblewrap import validate_access, mount_path, overlap
+            _, extra_hidden, extra_readonly, extra_mounts = validate_access(workspace, home, host_home, agent_access)
+            # An auxiliary role cannot gain optimizer files through external aliases.
+            for grant in extra_mounts:
+                if any(overlap(grant.source, p) or overlap(grant.target, p) for p in
+                       (*private_paths, REPOSITORY_ROOT / ".git")):
+                    raise ValueError("Agent access exposes private Light state")
+                if (grant.writable and any(overlap(grant.target, REPOSITORY_ROOT / name)
+                                          for name in (*assets, "src/aka"))):
+                    raise ValueError("Agent access cannot make installed code writable")
+                if (view or environment.get("ATREX_AKA_RUNTIME_URL")) and overlap(grant.source, REPOSITORY_ROOT):
+                    raise ValueError("Agent access cannot expose the checkout to a managed role")
+                mount_path(argv, grant.source, grant.target, writable=grant.writable)
+            for path in extra_readonly:
+                source = path
+                if view:
+                    relative = path.relative_to(workspace)
+                    if not any(relative == Path(name) or relative.is_relative_to(Path(name))
+                               for name in view.inputs):
+                        raise ValueError("Agent access cannot expose optimizer files to an auxiliary role")
+                    source = view.root / relative
+                if any(overlap(path, p) for p in private_paths):
+                    raise ValueError("Agent access exposes private Light state")
+                mount_path(argv, source, path)
+            for path in extra_hidden:
+                if path.is_dir() or not path.exists():
+                    argv.extend(("--tmpfs", str(path)))
+                else:
+                    argv.extend(("--ro-bind", "/dev/null", str(path)))
         # Preserve the pre-PR CLI command and cwd; no prompt rewriting is needed.
         # Secrets are set by bwrap from an anonymous FD, never KEY=value argv.
         values = {

@@ -470,27 +470,27 @@ def run_bounded(
     cwd: Path,
     timeout: int | None,
     env: dict | None = None,
-    *, auxiliary_input_files: dict[str, Path] | None = None, session_control=None,
+    *, auxiliary_input_files: dict[str, Path] | None = None, session_control=None, agent_access=None,
 ) -> tuple[str, str, int, bool]:
     from aka.light.agent.execution_clock import SessionControl
     environment = dict(os.environ if env is None else env)
     control = session_control or SessionControl()
     if not environment.get("ATREX_AKA_RUNTIME_OWNER"):
         return _run_bounded(command, cwd, timeout, environment,
-                            auxiliary_input_files=auxiliary_input_files, session_control=control)
+                            auxiliary_input_files=auxiliary_input_files, session_control=control, agent_access=agent_access)
     from ..supervisor_runtime import session_environment
 
     with session_environment(cwd, environment, session_control=control) as environment:
         if environment.get("ATREX_EPISODE_WORKSPACE") and command[:2] == ["codex", "exec"]:
             command = [*command[:2], "--skip-git-repo-check", *command[2:]]
         return _run_bounded(command, cwd, timeout, environment,
-                            auxiliary_input_files=auxiliary_input_files, session_control=control)
+                            auxiliary_input_files=auxiliary_input_files, session_control=control, agent_access=agent_access)
 
 
 def _run_bounded(
     command: list[str], cwd: Path, timeout: int | None, env: dict | None = None,
     *, auxiliary_input_files: dict[str, Path] | None = None,
-    session_control=None,
+    session_control=None, agent_access=None,
 ) -> tuple[str, str, int, bool]:
     """Run with an active-time deadline excluding authenticated Runtime waits."""
     from aka.light.agent.execution_clock import (
@@ -529,7 +529,7 @@ def _run_bounded(
         # suspension remains authoritative if a shell backgrounds/disconnects.
         command = foreground_command(command, cwd, max(default_timeout, DEFAULT_TIMEOUT_SECONDS))
     launch, view = wrap_agent_command(
-        command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
+        command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files, agent_access=agent_access,
     )
     capture = None
     proc = None

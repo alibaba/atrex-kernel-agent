@@ -5,7 +5,7 @@ import threading
 import uuid
 from weakref import WeakSet
 
-from aka.contracts.agent import AgentRunResult
+from aka.contracts.agent import AgentRunResult, AgentCapabilities
 from aka.light.orchestrator.agent_runtime.model import AgentRunRequest as LegacyRequest
 from aka.light.orchestrator.agent_runtime.runtime import build_agent_runtime
 from aka.light.orchestrator.agent_runtime.process import run_bounded
@@ -23,6 +23,8 @@ class AgentOptions:
 
     def __post_init__(self):
         from .execution_clock import validate_timeout
+        if self.sandbox not in {"none", "bwrap"} or self.proc_mode not in {"private", "projected"}:
+            raise ValueError("Invalid Agent sandbox or proc mode")
         validate_timeout(self.timeout_seconds, "timeout_seconds")
 
     def environment(self):
@@ -45,12 +47,16 @@ class _Runtime:
         self.owner.check_open()
         environment = dict(request.environment or {})
         environment.update(self.owner.options.environment())
-        result = self.runtime.run(LegacyRequest(
-            workspace=request.workspace, prompt=request.prompt,
-            timeout_s=request.timeout_s, reasoning_effort=request.reasoning_effort,
-            session_id=request.session_id, extra_environment=environment,
-            observation_directory=request.observation_directory,
-        ))
+        token = self.owner._access.set(request.access)
+        try:
+            result = self.runtime.run(LegacyRequest(
+                workspace=request.workspace, prompt=request.prompt,
+                timeout_s=request.timeout_s, reasoning_effort=request.reasoning_effort,
+                session_id=request.session_id, extra_environment=environment,
+                observation_directory=request.observation_directory,
+            ))
+        finally:
+            self.owner._access.reset(token)
         return AgentRunResult(
             runtime_id=self.id, exit_status=result.exit_status, timed_out=result.timed_out,
             terminal_usage=result.terminal_usage, events=result.events,
@@ -64,7 +70,13 @@ class LightAgent:
     """Public PR114 Agent contract, with no process-global policy overrides."""
     supports_tool_runtime = True
 
-    def __init__(self, options=AgentOptions(), *, process_runner=run_bounded):
+    def __init__(self, options=AgentOptions(), *, process_runner=run_bounded, environment=None):
+        import os
+        from contextvars import ContextVar
+        self._environment = dict(os.environ if environment is None else environment)
+        if options.sandbox == "bwrap" and process_runner is not run_bounded:
+            raise ValueError("Bubblewrap requires the FD-aware owned process runner")
+        self._access = ContextVar("light_agent_access", default=None)
         self.options = options
         self._process = process_runner
         self._runtimes = {}
@@ -74,11 +86,40 @@ class LightAgent:
         self._controls = {}
         self._closed = False
 
+    @property
+    def capabilities(self):
+        return AgentCapabilities(self.options.sandbox == "bwrap", True)
+
+    @property
+    def configuration_identity(self):
+        import hashlib
+        from dataclasses import asdict
+        settings = {key: value for key, value in self._environment.items()
+                    if key.endswith("_SESSION_SETTINGS") or key == "ATREX_CLAUDE_SESSION_NAME"}
+        return hashlib.sha256(json.dumps({"options": asdict(self.options), "settings": settings},
+                                        sort_keys=True).encode()).hexdigest()
+
+    def export_observations(self, workspace, destination):
+        from aka.agent.public_output import export_observations
+        return export_observations(workspace, destination)
+
+    def export_checkpoint(self, workspace, destination):
+        from aka.agent.checkpoint import export_checkpoint
+        return export_checkpoint(workspace, destination)
+
+    def validate_checkpoint(self, snapshot, *, check_destinations=False):
+        from aka.agent.checkpoint import validate_checkpoint
+        return validate_checkpoint(snapshot, check_destinations=check_destinations)
+
+    def restore_checkpoint(self, snapshot):
+        from aka.agent.checkpoint import restore_checkpoint
+        return restore_checkpoint(snapshot)
+
     def check_open(self):
         if self._closed:
             raise RuntimeError("Agent selection has been closed")
 
-    def _execute(self, command, cwd, timeout, env=None):
+    def _execute(self, command, cwd, timeout, env=None, *, access=None):
         environment = dict(env or {})
         environment.update(self.options.environment())
         from .execution_clock import SessionControl
@@ -92,7 +133,7 @@ class LightAgent:
             return self._process(command, cwd=cwd, timeout=timeout, env=environment)
         try:
             return self._process(command, cwd=cwd, timeout=timeout, env=environment,
-                                 session_control=control)
+                                 session_control=control, agent_access=access or self._access.get())
         finally:
             control.close()
             with self._idle:
@@ -110,11 +151,11 @@ class LightAgent:
         with self._lock:
             self.check_open()
             if runtime_id not in self._runtimes:
-                runtime = build_agent_runtime(runtime_id, process_runner=self._execute)
+                runtime = build_agent_runtime(runtime_id, process_runner=self._execute, environment=self._environment)
                 self._runtimes[runtime_id] = _Runtime(self, runtime)
             return self._runtimes[runtime_id]
 
-    def open_session(self, runtime_id, workspace, *, session_id="", environment=None):
+    def open_session(self, runtime_id, workspace, *, session_id="", environment=None, output_directory=None, access=None):
         from .native import NativeSession
         with self._lock:
             self.check_open()
@@ -123,9 +164,11 @@ class LightAgent:
             values = {"BASH_ENV": str(SESSION_SHELL_GUARD), **(environment or {})}
             values.update(self.options.environment())
             session = NativeSession(
-                runtime_id, workspace, session_id or str(uuid.uuid4()), self._execute,
+                runtime_id, workspace, session_id or str(uuid.uuid4()),
+                lambda command, cwd, timeout, env: self._execute(command, cwd, timeout, env, access=access),
                 values, self.check_open, runtime=self.runtime(runtime_id).runtime,
                 cancel_environment=self._cancel,
+                output_directory=output_directory,
             )
             self._sessions.add(session)
             return session

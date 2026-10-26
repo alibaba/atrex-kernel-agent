@@ -3,7 +3,7 @@ from aka.agent.plugin import AGENT
 
 name = "agent"
 provide = ("agent",)
-identity_packages = ("aka.light.agent", "aka.light.orchestrator", "aka.contracts.agent")
+identity_packages = ("aka.light.agent", "aka.light.orchestrator", "aka.agent", "aka.contracts.agent", "aka.contracts.filesystem")
 Config = {"type": "object", "properties": {
     "sandbox": {"type": "string", "enum": ["none", "bwrap"]},
     "capture": {"type": "boolean"},
