@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable
 from types import MappingProxyType
 from .execution_environment import EnvironmentSnapshot, EnvironmentSupport
+from .execution_recovery import ExecutionCause, JobReference
 
 
 class Cancellation(Protocol):
@@ -28,6 +29,7 @@ class CommandSpec:
     num_gpus: int = 1
     languages: tuple[str, ...] = ()
     requirements: tuple[str, ...] = ()
+    on_observation: Callable[[JobResult], None] | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         object.__setattr__(self, "command", tuple(self.command))
@@ -123,9 +125,13 @@ class ExecutionAttempt:
     exit_code: int | None = None
     diagnostics: tuple[ExecutionDiagnostic, ...] = ()
     attempt_id: str | None = None
+    causes: tuple[ExecutionCause, ...] = ()
+    idempotency_key: str | None = None
+    request_identity: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
+        object.__setattr__(self, "causes", tuple(self.causes))
 
 
 @dataclass(frozen=True)
@@ -216,8 +222,12 @@ class JobResult:
     environment_snapshot: EnvironmentSnapshot | None = None
     budgets: tuple[ExecutionBudget, ...] = ()
     environment_support: EnvironmentSupport | None = None
+    causes: tuple[ExecutionCause, ...] = ()
+    job_references: tuple[JobReference, ...] = ()
 
     def __post_init__(self):
+        object.__setattr__(self, "causes", tuple(self.causes))
+        object.__setattr__(self, "job_references", tuple(self.job_references))
         object.__setattr__(self, "attempts", tuple(self.attempts))
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
         object.__setattr__(self, "files", tuple(self.files))

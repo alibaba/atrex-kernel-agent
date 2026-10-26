@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 import uuid
 import json
+import base64
 import os
 import select
 import signal
@@ -14,8 +15,9 @@ import threading
 import time
 
 from aka.contracts.execution import (
-    ExecutionAttempt, ExecutionDiagnostic, ExecutionFacts, JobResult, ResourceIdentity,
+    ExecutionAttempt, ExecutionBudget, ExecutionDiagnostic, ExecutionFacts, JobResult, ResourceIdentity,
 )
+from aka.contracts.execution_recovery import ExecutionCause, JobReference
 from .gateway.protocol import classify_gateway_outcome, protocol_failure
 from .transport import INFRASTRUCTURE_EXIT_CODE, INFRASTRUCTURE_MARKER
 
@@ -46,7 +48,12 @@ def emit_fact(record):
     data = (json.dumps(record, separators=(",", ":")) + "\n").encode()
     # Writes within PIPE_BUF stay atomic across concurrent shape workers.
     if len(data) > 4096:
-        raise ValueError("execution fact exceeds pipe record limit")
+        identifier = uuid.uuid4().hex
+        pieces = [data[index:index + 2400] for index in range(0, len(data), 2400)]
+        for index, piece in enumerate(pieces):
+            emit_fact({"event": "fact_chunk", "identifier": identifier, "index": index,
+                       "count": len(pieces), "content": base64.b64encode(piece).decode()})
+        return
     try:
         os.write(int(value), data)
     except BrokenPipeError:
@@ -83,6 +90,15 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
     result = job.get("result")
     code = result.get("exit_code") if isinstance(result, dict) else None
     identifier = job.get("job_id")
+    from .gateway.diagnostics import causes_from_job, remote_termination
+    causes = causes_from_job(job)
+    native_diagnostics = []
+    if causes:
+        category = {"infra": "infrastructure", "validation": "request", "code": "measurement"}.get(causes[0].category, causes[0].category)
+        native_diagnostics.append({"failure_class": category, "reason": causes[0].code})
+    def encode(cause):
+        return {"category": cause.category, "code": cause.code, "message": cause.message,
+                "details": _json(cause.details), "causes": [encode(item) for item in cause.causes]}
     emit_fact({
         **({"attempt_id": attempt_id} if attempt_id is not None else {}),
         "event": "attempt", "operation": operation, "backend": backend,
@@ -90,9 +106,26 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
         "disposition": "terminal" if terminal else "not_submitted" if rejected else "unknown",
         "termination": "cancelled" if status == "cancelled" else "exited" if terminal else None,
         "exit_code": code if type(code) is int else None,
-        "diagnostics": [record] if record else [],
+        "diagnostics": native_diagnostics + ([record] if record else []),
+        "causes": [encode(item) for item in causes],
+        "remote_terminated": remote_termination(job),
     })
     return process
+
+
+def _json(value):
+    from collections.abc import Mapping
+    if isinstance(value, Mapping):
+        return {key: _json(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_json(item) for item in value]
+    return value
+
+
+def _cause(value):
+    data = dict(value)
+    data["causes"] = tuple(_cause(item) for item in data.get("causes", ()))
+    return ExecutionCause(**data)
 
 
 class FactChannel:
@@ -100,6 +133,8 @@ class FactChannel:
         self.forward = forward
         self.reader, self.writer = os.pipe()
         self.records = []
+        self.chunks = {}
+        self.forward_error = None
         self.stopped = threading.Event()
         self.thread = threading.Thread(target=self._read, daemon=True)
         self.thread.start()
@@ -110,11 +145,13 @@ class FactChannel:
             ready, _, _ = select.select([self.reader], [], [], .1)
             if not ready:
                 if self.stopped.is_set():
+                    if pending or self.chunks:
+                        self.records.append({"event": "invalid"})
                     return
                 continue
             data = os.read(self.reader, 65536)
             if not data:
-                if pending:
+                if pending or self.chunks:
                     self.records.append({"event": "invalid"})
                 return
             pending += data
@@ -126,9 +163,32 @@ class FactChannel:
                     self.records.append({"event": "invalid"})
                 else:
                     record = record if isinstance(record, dict) else {"event": "invalid"}
-                    self.records.append(record)
-                    if self.forward is not None:
-                        self.forward(record)
+                    self._accept(record)
+
+    def _accept(self, record):
+        if record.get("event") == "fact_chunk":
+            try:
+                key, index, count = record["identifier"], record["index"], record["count"]
+                if type(count) is not int or type(index) is not int or not 0 <= index < count <= 32768:
+                    raise ValueError("invalid fact chunk")
+                pieces = self.chunks.setdefault(key, [None] * count)
+                if len(pieces) != count or pieces[index] is not None:
+                    raise ValueError("conflicting fact chunk")
+                pieces[index] = base64.b64decode(record["content"], validate=True)
+                if any(piece is None for piece in pieces):
+                    return
+                record = json.loads(b"".join(pieces))
+                del self.chunks[key]
+                if not isinstance(record, dict):
+                    raise ValueError("invalid reassembled fact")
+            except (KeyError, TypeError, ValueError):
+                record = {"event": "invalid"}
+        self.records.append(record)
+        if self.forward is not None:
+            try:
+                self.forward(record)
+            except BaseException as error:
+                self.forward_error = self.forward_error or error
 
     def close(self):
         os.close(self.writer)
@@ -143,9 +203,20 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
     records_diagnostics = []
     attempts = []
     submitted = {}
+    job_references = []
+    budgets = []
     for record in records:
         if record.get("event") == "submitted":
             submitted[record["identifier"]] = record
+            if record.get("backend", "gateway") == "gateway":
+                reference = JobReference("gateway", record["identifier"], record.get("operation", "run"),
+                    record.get("endpoint", ""), record.get("profile", ""), record.get("request_identity", ""),
+                    record.get("idempotency_key"))
+                if reference not in job_references:
+                    job_references.append(reference)
+        elif record.get("event") == "budget":
+            budgets.append(ExecutionBudget(**{key: record[key] for key in
+                ("scope", "requested", "effective", "hard_limit", "reason") if key in record}))
     for record in records:
         if record.get("event") != "attempt":
             continue
@@ -154,6 +225,8 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
             record["operation"], record["disposition"],
             ResourceIdentity(record.get("backend", resource.backend), record.get("identifier")),
             record.get("termination"), record.get("exit_code"), details, record.get("attempt_id"),
+            tuple(_cause(item) for item in record.get("causes", ())),
+            record.get("idempotency_key"), record.get("request_identity"),
         ))
         records_diagnostics.extend(details)
     starts = {record["attempt_id"]: record for record in records if record.get("event") == "attempt_started"}
@@ -162,8 +235,10 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
         if attempt_id in completed:
             continue
         submission = next((item for item in submitted.values() if item.get("attempt_id") == attempt_id), {})
+        intent = next((item for item in records if item.get("event") == "submission_intent" and item.get("attempt_id") == attempt_id), {})
         attempts.append(ExecutionAttempt(record["operation"], resource=ResourceIdentity(
-            record.get("backend", "gateway"), submission.get("identifier")), attempt_id=attempt_id))
+            record.get("backend", "gateway"), submission.get("identifier")), attempt_id=attempt_id,
+            idempotency_key=intent.get("idempotency_key"), request_identity=intent.get("request_identity")))
     observed = {item.resource.identifier for item in attempts if item.resource}
     for identifier, record in submitted.items():
         if identifier not in observed:
@@ -177,7 +252,7 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
             ([outcome.primary_diagnostic] if outcome.primary_diagnostic else [])
             + list(outcome.secondary_diagnostics)))
     diagnostics += tuple(item for item in records_diagnostics if item not in diagnostics)
-    rank = {"cancelled": 0, "authentication": 1, "request": 2, "infrastructure": 3}
+    rank = {"cancelled": 0, "authentication": 1, "request": 2, "timeout": 3, "infrastructure": 4}
     diagnostics = tuple(sorted(diagnostics, key=lambda item: rank.get(item.category, 4)))
     has_result = bool(outcome and outcome.has_result) or any(record.get("event") == "result_available" for record in records)
     if attempts and attempts[-1].disposition == "terminal" and attempts[-1].exit_code is not None:
@@ -202,11 +277,23 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
             status = "rejected"
         elif process.returncode and not has_result and diagnostics and diagnostics[0].category == "cancelled":
             status = "cancelled"
+        elif process.returncode and diagnostics and diagnostics[0].category == "timeout":
+            status = "timed_out"
         elif process.returncode and not has_result and diagnostics:
             status = "infrastructure" if diagnostics[0].category == "infrastructure" else "protocol"
         elif process.returncode and attempts and attempts[-1].termination == "cancelled":
             status = "cancelled"
     remote_cleanup = "unknown"
+    confirmations = {}
+    for record in records:
+        if record.get("event") != "attempt":
+            continue
+        confirmation = record.get("remote_terminated")
+        if "remote_terminated" not in record and type(record.get("exit_code")) is int:
+            confirmation = True  # An owned backend process-exit receipt.
+        confirmations[record.get("identifier", record.get("attempt_id"))] = confirmation
+    values = tuple(confirmations.values())
+    remote_terminated = False if False in values else True if values and all(value is True for value in values) and disposition == "terminal" else None
     for record in records:
         if record.get("event") == "cleanup":
             if remote_cleanup != "failed":
@@ -220,16 +307,23 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
         exit_code=attempts[-1].exit_code if attempts else None,
         resource=resource, transport_status=status,
         facts=ExecutionFacts(disposition, termination, cancelled, local_stopped,
-            True if disposition == "terminal" else None, cleanup, tuple(cleanup_errors),
+            remote_terminated, cleanup, tuple(cleanup_errors),
             ("launcher-reaped",) if local_stopped else (), remote_cleanup),
         attempts=tuple(attempts), diagnostics=diagnostics, hardware=hardware,
+        causes=tuple(cause for attempt in attempts for cause in attempt.causes),
+        job_references=tuple(job_references), budgets=tuple(budgets),
     )
 
 
 def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
-              cancel_event=None, spawn=None, check_environment=lambda: None, input_payload=None):
+              cancel_event=None, spawn=None, check_environment=lambda: None, input_payload=None,
+              on_observation=None):
     """Return operational failures with cleanup evidence; preserve host interrupts."""
     channel = FactChannel()
+    if on_observation is not None:
+        channel.forward = lambda _record: on_observation(captured_result(
+            subprocess.CompletedProcess(argv, 0, "", ""), resource=resource, hardware=hardware,
+            records=channel.records, status="unknown", local_stopped=False, decode_output=False))
     import tempfile
     from .gateway.returned_files import FILES_FD, read as read_files
     returned = tempfile.TemporaryFile()
@@ -264,6 +358,8 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
             process = spawn(argv, role="sandbox", environment=environment, inherited_descriptors=descriptors, **options)
         deadline = time.monotonic() + timeout
         while True:
+            if channel.forward_error is not None:
+                raise channel.forward_error
             if cancel_event is not None and cancel_event.is_set():
                 cancelled = True
                 status = "cancelled"
@@ -322,6 +418,8 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
         returned.close()
     if process is None:
         result = replace(result, facts=replace(result.facts, disposition="not_submitted"))
+    if interruption is None and channel.forward_error is not None:
+        interruption = channel.forward_error
     if interruption is not None:
         # EnvironmentUnavailable/KeyboardInterrupt keep the established host boundary,
         # with the complete attempt and cleanup facts available to recovery owners.

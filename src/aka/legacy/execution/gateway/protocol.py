@@ -87,8 +87,7 @@ def classify_gateway_outcome(
 
 def terminal_cancellation(job: dict | None) -> bool:
     """An explicit cancellation outcome must survive evaluator redaction."""
-    return bool(job and job.get("status") == "cancelled"
-                and (job.get("result") or job.get("error")))
+    return bool(job and job.get("status") == "cancelled")
 
 def _response_failure(stdout: str) -> tuple[str, str] | None:
     if not stdout.strip():
