@@ -1,0 +1,38 @@
+"""Own Legacy command evaluation and storage for one borrowed operation."""
+from contextlib import contextmanager
+from pathlib import Path
+
+from aka.contracts.execution import validate_executor
+from .file_records import FileExperimentRecords
+from .runner import LegacyExperiment, evaluation_stage
+
+
+class LegacyExperimentFactory:
+    def __init__(self, *, measurement_reader=None, records_root=None):
+        self.measurement_reader = measurement_reader
+        self.records_root = Path(records_root).expanduser().resolve() if records_root is not None else None
+        self._closed = False
+
+    def close(self):
+        self._closed = True
+
+    @contextmanager
+    def open(self, *, workspace, purpose, executor, evaluator):
+        if self._closed:
+            raise RuntimeError("Experiment selection has been closed")
+        if purpose not in {"development", "formal"}:
+            raise ValueError("unsupported experiment purpose")
+        validate_executor(executor)
+        if any(not callable(getattr(evaluator, method, None))
+               for method in ("prepare", "observe_step", "interpret")):
+            raise TypeError("provider does not implement Evaluator")
+        from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
+        from .retry import retry_infrastructure
+
+        workspace = Path(workspace).resolve()
+        # This storage choice stays inside the selected Factory. Canonical and
+        # episode operations receive the same canonical workspace from the host.
+        records = FileExperimentRecords(self.records_root or workspace.parent / ".aka-experiments", str(workspace))
+        yield LegacyExperiment(executor, evaluator, records=records, purpose=purpose,
+            command_evaluator=GatewayCommandEvaluator(measurement_reader=self.measurement_reader),
+            retry=retry_infrastructure if purpose == "formal" else None, stage=evaluation_stage)

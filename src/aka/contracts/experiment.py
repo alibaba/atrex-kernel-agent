@@ -8,11 +8,12 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Literal, Protocol
+from typing import Any, ContextManager, Literal, Protocol
+from pathlib import Path
 import math
 
-from .execution import CommandSpec, JobResult
-from .evaluation import EvaluationFailure, EvaluationRequest, VerificationResult
+from .execution import CommandSpec, Executor, JobResult
+from .evaluation import EvaluationFailure, EvaluationRequest, Evaluator, VerificationResult
 from .experiment_identity import ExperimentRef
 from .measurement import MeasurementAssessment, MeasurementIdentity
 
@@ -22,6 +23,19 @@ class Experiment(Protocol):
     def run_command(self, command: CommandSpec) -> JobResult:
         """Execute once without requiring an Evaluator or changing its result."""
         ...
+
+
+class ExperimentFactory(Protocol):
+    """Open one operation in the selected workspace's recording namespace.
+
+    The factory owns its command evaluator and storage implementation. Exiting
+    the operation releases only factory-owned resources; injected Executor and
+    Evaluator lifetimes remain with their host. Record-reading and recovery
+    consumers require the existing RecordedExperiment capability.
+    """
+
+    def open(self, *, workspace: Path, purpose: Literal["development", "formal"],
+             executor: Executor, evaluator: Evaluator) -> ContextManager[Experiment]: ...
 
 
 class ExperimentExecutionError(RuntimeError):
