@@ -329,7 +329,7 @@
     text('performance-note', incumbent ? `${ver(incumbent.version)} · ${incumbent.label}` : 'Awaiting a verified baseline or promotion');
     text('episodes-count', c.counts.episodes == null ? '-' : number(c.counts.episodes));
     text('counts', `Accepted ${number(c.counts.accepted)} · Rejected ${number(c.counts.rejected)}`);
-    text('tokens-total', number(c.tokens.total)); text('tokens-note', `${quality[c.tokens.measurement]} · ${c.tokens.receipt_count} deduplicated receipts`);
+    text('tokens-total', number(c.tokens.total)); text('tokens-note', `${quality[c.tokens.measurement]} · ${number(c.tokens.receipt_count)} deduplicated receipts`);
     $('tokens-total').dataset.available = String(Number.isFinite(c.tokens.total));
     const issues = [...new Set([...c.issues, ...(detail?.issues || [])].map(i => `${i.file}: ${i.code}${i.code === 'unsupported_schema_version' ? ` (expected ${i.expected}; received ${i.actual})` : ''}`))];
     $('issues').hidden = !issues.length;
@@ -370,7 +370,7 @@
     text('detail-summary', d?.summary || d?.violation || '');
     const v = d?.verification;
     text('verification', v?.gate ? `${v.gate} · Candidate ${number(v.candidate_latency_us)} μs · Incumbent ${number(v.incumbent_latency_us)} μs${v.error ? ` · ${v.error}` : ''}` : '');
-    text('detail-availability', d?.detail_available ? 'Structured experiment records loaded.' : 'Experiment details are unavailable; the active worktree may have been removed.');
+    text('detail-availability', d?.detail_available ? 'Structured experiment records loaded.' : 'Experiment details are unavailable in this snapshot.');
     $('experiments').replaceChildren(); $('evidence').replaceChildren();
     for (const e of d?.experiments || []) $('experiments').append(element('li', [e.name, e.hypothesis, e.change, e.result, e.conclusion, e.summary].filter(Boolean).join(' · ')));
     if (d && !d.experiments.length && d.latest_experiment?.name) $('experiments').append(element('li', `${d.latest_experiment.name} · ${d.latest_experiment.conclusion || ''}`));

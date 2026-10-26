@@ -11,7 +11,10 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, Protocol
 
+from aka.core.keys import ServiceKey
+
 EXPORT_VERSION = 3
+WORKFLOW_EXPORT = ServiceKey('workflow_export', 'WorkflowExportReader', module='aka.contracts.workflow_export')
 ResultState = Literal['unmeasured', 'running', 'pass', 'correctness_failure',
                       'infrastructure_error', 'rejected', 'interrupted']
 
@@ -53,6 +56,16 @@ def _flag(value):
 def _frozen_fields(instance, *names):
     for name in names:
         object.__setattr__(instance, name, _freeze(getattr(instance, name)))
+
+
+def _usage_summary(value):
+    measurement = value.get('measurement', 'unavailable')
+    if measurement not in ('exact', 'partial', 'unavailable'):
+        raise ValueError('invalid public usage measurement')
+    total = value.get('total')
+    _counter(total, optional=True)
+    if (measurement == 'unavailable') != (total is None):
+        raise ValueError('public usage total contradicts its measurement')
 
 
 def _document(value):
@@ -117,11 +130,13 @@ class CandidateFact:
     timestamp: str | None
     result: ResultFact
     summary: str | None = None
+    comparability: Mapping = field(default_factory=dict)
 
     def __post_init__(self):
         _counter(self.version)
         _counter(self.episode, optional=True)
         _flag(self.promoted)
+        _frozen_fields(self, 'comparability')
         if not isinstance(self.result, ResultFact):
             raise ValueError('candidate lacks a public result')
 
@@ -181,12 +196,19 @@ class EpisodeFact:
     mode: str | None = None
     violation: str | None = None
     final_candidate: EpisodeCandidateFact | None = None
+    usage: Mapping = field(default_factory=dict)
+    verification: Mapping = field(default_factory=dict)
+    detail_available: bool = False
 
     def __post_init__(self):
         _counter(self.episode)
         _counter(self.version, optional=True)
         _flag(self.accepted)
-        _frozen_fields(self, 'experiments', 'phases')
+        _frozen_fields(self, 'experiments', 'phases', 'usage', 'verification')
+        _flag(self.detail_available)
+        for key in ('total', 'control_tokens', 'raw_control_tokens'):
+            _counter(self.usage.get(key), optional=True)
+        _usage_summary(self.usage)
         for value in (self.mode, self.violation):
             if value is not None and not isinstance(value, str):
                 raise ValueError('invalid episode mode or violation')
@@ -223,11 +245,21 @@ class ProgressFact:
     observed_tokens: int | None
     updated_at: str | None
     writer_active: bool
+    mode: str | None = None
+    experiment_count: int | None = None
+    latest_experiment: Mapping = field(default_factory=dict)
+    record_updating: bool = False
+    pending_tokens: bool = False
+    last_terminal: Mapping = field(default_factory=dict)
 
     def __post_init__(self):
         for value in (self.episode, self.version, self.completed_episodes, self.observed_tokens):
             _counter(value, optional=True)
         _flag(self.writer_active)
+        _counter(self.experiment_count, optional=True)
+        _flag(self.record_updating)
+        _flag(self.pending_tokens)
+        _frozen_fields(self, 'latest_experiment', 'last_terminal')
 
 
 @dataclass(frozen=True)
@@ -285,6 +317,8 @@ class WorkflowExportSnapshot:
     artifacts: tuple[ExportArtifact, ...]
     warnings: tuple[dict[str, str | bool | None], ...] = ()
     hardware: Mapping[str, str] = field(default_factory=dict)
+    token_summary: Mapping = field(default_factory=dict)
+    counts: Mapping = field(default_factory=dict)
 
     def __post_init__(self):
         if type(self.schema_version) is not int or self.schema_version != EXPORT_VERSION:
@@ -296,7 +330,12 @@ class WorkflowExportSnapshot:
         for name, kind in (('episodes', EpisodeFact), ('sessions', SessionFact), ('artifacts', ExportArtifact)):
             if any(not isinstance(item, kind) for item in getattr(self, name)):
                 raise ValueError('invalid public ' + name)
-        _frozen_fields(self, 'warnings', 'hardware')
+        _frozen_fields(self, 'warnings', 'hardware', 'token_summary', 'counts')
+        for key in ('episodes', 'accepted', 'rejected'):
+            _counter(self.counts.get(key), optional=True)
+        for key in ('total', 'control_total', 'receipt_count'):
+            _counter(self.token_summary.get(key), optional=True)
+        _usage_summary(self.token_summary)
         if len({a.id for a in self.artifacts}) != len(self.artifacts):
             raise ValueError('duplicate public artifact identity')
         if any(not isinstance(c, CandidateFact) for c in self.candidates) or len({c.version for c in self.candidates}) != len(self.candidates):
@@ -351,10 +390,13 @@ class CheckpointInfo:
     selection_identity: str
 
 
-class WorkflowExportReader(Protocol):
+class WorkflowSnapshotReader(Protocol):
+    """Read-only facts and declared content, without checkpoint/control authority."""
     def discover(self, directory: Path) -> tuple[CampaignRef, ...]: ...
     def read(self, workspace: Path) -> WorkflowExportSnapshot: ...
 
+
+class WorkflowExportReader(WorkflowSnapshotReader, Protocol):
     def request_pause(self, workspace: Path) -> None: ...
     def resume_checkpoint(self, workspace: Path, *, campaign_id: str) -> int: ...
     def generate_checkpoint(self, workspace: Path) -> bytes: ...
@@ -497,6 +539,7 @@ def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
         if not isinstance(ref.id,str) or not ref.id:
             raise ValueError('public campaign has no identity')
         return WorkflowExportSnapshot(EXPORT_VERSION,ref,value['framework'],candidates,baseline,incumbent,
-            tuple(episodes),tuple(sessions),progress,tuple(artifacts),warnings,dict(value.get('hardware',{})))
+            tuple(episodes),tuple(sessions),progress,tuple(artifacts),warnings,dict(value.get('hardware',{})),
+            value.get('token_summary', {}), value.get('counts', {}))
     except (KeyError,TypeError,AttributeError) as error:
         raise ValueError('malformed public Workflow snapshot') from error

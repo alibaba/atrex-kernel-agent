@@ -2,6 +2,13 @@
   "api_version": 1,
   "patches": [
     {
+      "id": "workflow-export",
+      "insert": {
+        "name": "aka.legacy.workflow.export",
+        "required": true
+      }
+    },
+    {
       "id": "observation-source",
       "insert": {
         "name": "aka.observation.long_horizon.plugin",

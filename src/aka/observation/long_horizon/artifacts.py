@@ -1,45 +1,41 @@
-"""Capture public outputs once and bind download IDs to exact content."""
+"""Bind declared Workflow output bytes to detached observation downloads."""
 import hashlib
 import io
 import json
-import re
-import subprocess
-from pathlib import Path
-from zipfile import ZIP_DEFLATED, ZipFile
+from pathlib import PurePosixPath
+from zipfile import ZIP_DEFLATED, ZipFile, ZipInfo
 
 from aka.contracts.observation import check_observation_version
 
-OUTPUTS = (('kernel', 'kernel.py', 'Kernel source', 'text/x-python'),
-           ('solution', 'solution.json', 'Solution manifest', 'application/json'))
-SCOPE = 'Measured incumbent revision content captured with this observation; evaluator truth is excluded.'
+SCOPE = 'Declared Workflow public outputs captured with this observation; evaluator truth is excluded.'
 
 
-def capture_artifacts(workspace: Path, snapshot):
-    # Never publish snapshot-scoped artifact semantics under an older protocol.
+def capture_artifacts(facts, snapshot):
     check_observation_version(snapshot.get('observation_version'))
-    contents, descriptions = {}, []
     report = {key: snapshot[key] for key in ('observation_version', 'name', 'framework',
               'platform', 'arch', 'updated_at', 'canonical', 'counts', 'tokens', 'progress', 'issues')}
-    summary = (json.dumps(report, ensure_ascii=False, sort_keys=True, allow_nan=False)+'\n').encode()
+    summary = (json.dumps(report, ensure_ascii=False, sort_keys=True, allow_nan=False) + '\n').encode()
     files = []
-    revision = (snapshot.get('canonical', {}).get('incumbent') or {}).get('revision')
-    if isinstance(revision, str) and re.fullmatch(r'[0-9a-f]{40}', revision):
-        for identifier, filename, label, mime in OUTPUTS:
-            blob = subprocess.run(['git','show',f'{revision}:{filename}'], cwd=workspace,capture_output=True)
-            if blob.returncode == 0:
-                files.append((identifier, filename, label, mime, blob.stdout, 'file'))
-    files.append(('summary', 'result-summary.json', 'Optimization summary', 'application/json', summary, 'file'))
+    for artifact in facts.artifacts:
+        identifier = 'output_' + hashlib.sha256(artifact.id.encode()).hexdigest()
+        files.append((identifier, artifact.filename, artifact.role.replace('-', ' ').capitalize(),
+                      artifact.content_type, facts.artifact(artifact.id), 'file'))
+    files.append(('summary', '_observation/result-summary.json', 'Optimization summary', 'application/json', summary, 'file'))
     buffer = io.BytesIO()
     with ZipFile(buffer, 'w', compression=ZIP_DEFLATED) as archive:
         for _, filename, _, _, content, _ in files:
-            archive.writestr(filename, content)
+            entry = ZipInfo(filename, date_time=(1980, 1, 1, 0, 0, 0))
+            entry.compress_type = ZIP_DEFLATED
+            archive.writestr(entry, content)
     files.append(('bundle', 'results.zip', 'Result bundle', 'application/zip', buffer.getvalue(), 'bundle'))
-    snapshot_id = hashlib.sha256(summary + b''.join(hashlib.sha256(row[4]).digest() for row in files)).hexdigest()
+    identity = json.dumps([(row[0], row[1], hashlib.sha256(row[4]).hexdigest()) for row in files],
+                          ensure_ascii=False, separators=(',', ':')).encode()
+    snapshot_id = hashlib.sha256(identity).hexdigest()
+    contents, descriptions = {}, []
     for identifier, filename, label, mime, content, kind in files:
-        digest = hashlib.sha256(content).hexdigest()
         download_id = identifier + '_' + snapshot_id
         contents[download_id] = content
-        descriptions.append({'id': download_id, 'filename': filename, 'label': label,
+        descriptions.append({'id': download_id, 'filename': PurePosixPath(filename).name, 'label': label,
                              'content_type': mime, 'kind': kind, 'size_bytes': len(content),
-                             'sha256': digest, 'snapshot_id': snapshot_id, 'visibility': 'public'})
+                             'sha256': hashlib.sha256(content).hexdigest(), 'snapshot_id': snapshot_id, 'visibility': 'public'})
     return descriptions, contents

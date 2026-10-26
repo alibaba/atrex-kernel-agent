@@ -12,12 +12,10 @@ import subprocess
 
 from aka.contracts.workflow_export import (
     EXPORT_VERSION, CampaignRef, CandidateFact, EpisodeFact, ExportArtifact,
-    ProgressFact, ResultFact, SessionFact, WorkflowExportSnapshot, snapshot_from_document,
+    ProgressFact, ResultFact, SessionFact, WorkflowExportSnapshot, snapshot_from_document, WORKFLOW_EXPORT,
 )
-from aka.core.keys import ServiceKey
 from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
 
-WORKFLOW_EXPORT = ServiceKey('workflow_export', 'WorkflowExportReader', module='aka.contracts.workflow_export')
 name = 'export'
 provide = ('workflow_export',)
 identity_packages = ('aka.legacy.workflow', 'aka.agent')
@@ -152,6 +150,14 @@ def _result(memory, attempt, expected):
 def _artifact(identifier, filename, role, content, content_type='application/json'):
     return ExportArtifact(identifier, filename, content_type, role,
                           hashlib.sha256(content).hexdigest(), 'public', content)
+
+
+def _comparability(memory, baseline):
+    performance = memory.get('performance') or {}
+    return {'objective': performance.get('performance_objective'),
+            'case_ids': sorted(str(key) for key in (performance.get('latency_us_by_shape') or {})),
+            'device_identity': performance.get('device_identity'),
+            'platform': baseline.get('platform'), 'arch': baseline.get('arch')}
 
 
 def _numerical_supplement_artifact(workspace):
@@ -448,6 +454,8 @@ class RetainedWorkflowExport:
         directory = Path(directory).resolve()
         if not directory.is_dir():
             return ()
+        if (directory / RUNTIME).is_dir() or (directory / 'workflow-export.json').is_file():
+            return (self._reference(directory),)
         # Layout recognition stays in the producer. Consumers never infer names.
         found = []
         for path in sorted(directory.iterdir()):
@@ -465,6 +473,7 @@ class RetainedWorkflowExport:
 
     def read(self, workspace):
         from .public_state import writer_active
+        from . import observation_facts
         from aka.agent.public_output import read_sessions
         workspace = Path(workspace).resolve()
         if not (workspace/RUNTIME).exists() and (workspace/'workflow-export.json').is_file():
@@ -483,6 +492,7 @@ class RetainedWorkflowExport:
         by_version = {row.get('version'): row for row in attempts.values()}
         memories = _version_records(workspace)
         baseline_memory = next((m for n,m,_ in memories if n == 0), {}) or {}
+        baseline_metadata = document(workspace / 'framework_baseline.json') or {}
         expected = tuple(sorted(str(k) for k in (baseline_memory.get('performance') or {}).get('latency_us_by_shape', {})))
         candidates = []
         for version, memory, path in sorted(memories):
@@ -494,7 +504,7 @@ class RetainedWorkflowExport:
             candidates.append(CandidateFact(version, _integer(attempt.get('episode')),
                 revision if isinstance(revision, str) else None, record_revision, promoted,
                 memory.get('timestamp'), _result(memory, attempt, expected),
-                (memory.get('optimization') or {}).get('action_description')))
+                (memory.get('optimization') or {}).get('action_description'), _comparability(memory, baseline_metadata)))
         known = {candidate.version for candidate in candidates}
         for version, attempt in by_version.items():
             if type(version) is int and version >= 0 and version not in known:
@@ -532,28 +542,43 @@ class RetainedWorkflowExport:
             artifacts.append(_artifact('output_' + hashlib.sha256(relative.encode()).hexdigest(),
                                        relative, role, content, 'text/plain'))
         episodes = []
+        warnings = list(_warning_records(runtime / 'warnings.jsonl'))
+        settled_usage = []
+        public_attempts = dict(attempts)
+        active_number = _integer(active.get('episode'))
+        if active_number is not None and active_number not in public_attempts:
+            public_attempts[active_number] = {'episode': active_number, 'version': active.get('memory_version'),
+                'mode': active.get('mode'), 'status': 'observed_active', 'accepted': False}
         from .episode_output import read as read_episode_output
-        for number, attempt in sorted(attempts.items()):
+        for number, attempt in sorted(public_attempts.items()):
             artifacts.extend(read_episode_evidence(runtime / f'episodes/e{number:04d}', episode=number))
             final_candidate, final_artifacts = read_episode_output(
                 runtime / f'episodes/e{number:04d}', episode=number,
                 version=_integer(attempt.get('version')), expected_case_ids=expected, attempt=attempt)
             artifacts.extend(final_artifacts)
-            journal = document(runtime / f'episodes/e{number:04d}/episode_runtime/journal.json') or {}
+            journal = observation_facts.journal(workspace, number, attempt, active, document, warnings)
             experiments = journal.get('experiments') or []
             # Only declared experiment facts cross the public boundary.
-            public_experiments = tuple({k: row[k] for k in ('name', 'hypothesis', 'change', 'result', 'decision', 'timestamp')
-                                        if k in row} for row in experiments if isinstance(row, dict))
-            telemetry = document(runtime / f'episodes/e{number:04d}/telemetry.summary.json') or {}
+            public_experiments = tuple(observation_facts.experiment(row) for row in experiments if isinstance(row, dict))
+            telemetry = observation_facts.telemetry(workspace, number, attempt, document, warnings)
             phases = tuple({'phase':phase, 'measurement':row.get('measurement','unavailable'),
                             'usage':row.get('usage'), 'interval_count':row.get('interval_count',0)}
                            for phase,row in (telemetry.get('phase_tokens',{}).get('phases') or {}).items()
                            if isinstance(row,dict))
+            phases += tuple({'phase': phase, 'usage': observation_facts.usage(
+                (telemetry.get('phase_tokens') or {}).get(phase))} for phase in ('orchestration', 'unattributed'))
+            usage = observation_facts.episode_usage(attempt, telemetry)
+            if number in attempts:
+                settled_usage.append(usage)
+            verification = attempt.get('verification') or {}
+            public_verification = {key: verification.get(key) for key in
+                ('gate', 'candidate_latency_us', 'incumbent_latency_us', 'improvement_pct', 'error')}
             episodes.append(EpisodeFact(number, _integer(attempt.get('version')),
                 str(attempt.get('status') or 'unmeasured'), attempt.get('accepted') is True,
-                attempt.get('candidate_commit'), attempt.get('session_id'), attempt.get('summary'),
+                attempt.get('candidate_commit'), attempt.get('session_id'), attempt.get('summary') or (journal.get('outcome') or {}).get('summary'),
                 (attempt.get('verification') or {}).get('gate'), public_experiments, phases,
-                attempt.get('mode'), attempt.get('violation'), final_candidate))
+                attempt.get('mode'), attempt.get('violation'), final_candidate,
+                usage, public_verification, bool(journal)))
         for path in sorted((workspace/'.gpu_wiki_profile/raw/query_events').glob('*/*.json')):
             if path.is_file() and not path.is_symlink() and path.resolve().is_relative_to(workspace):
                 relative = path.relative_to(workspace).as_posix()
@@ -572,11 +597,11 @@ class RetainedWorkflowExport:
         updated = datetime.fromtimestamp(max(observed), timezone.utc).isoformat() if observed else None
         running = writer_active(workspace)
         terminal = document(workspace / 'trace-retention-manifest.json') or {}
-        phase = active.get('phase') if running else ('paused' if (runtime/'pause-requested').exists() else terminal.get('status', 'stopped'))
-        progress = ProgressFact(str(phase or 'preparing'), _integer(active.get('episode')),
-            _integer(active.get('memory_version')), _integer(state.get('episodes')),
-            _integer(state.get('tokens')), updated, running)
-        warnings = _warning_records(runtime / 'warnings.jsonl')
+        detail = observation_facts.progress(workspace, state, active, attempts, terminal, document, warnings)
+        progress = ProgressFact(str(detail.pop('phase')), detail.pop('episode'), detail.pop('version'),
+            _integer(state.get('episodes')), _integer(state.get('tokens')), updated, running,
+            mode=detail['mode'], experiment_count=detail['experiment_count'], latest_experiment=detail['latest_experiment'],
+            record_updating=detail['record_updating'], pending_tokens=detail['pending_tokens'], last_terminal=detail['last_terminal'])
         framework = str((document(workspace / '.orchestrator_mode.json') or {}).get('framework')
                         or (document(workspace / 'framework_baseline.json') or {}).get('framework') or '')
         baseline = next((c for c in candidates if c.version == 0), None)
@@ -585,8 +610,11 @@ class RetainedWorkflowExport:
         return WorkflowExportSnapshot(EXPORT_VERSION, self._reference(workspace), framework,
             tuple(candidates), baseline, incumbent, tuple(episodes), sessions, progress,
             tuple(artifacts), warnings,
-            {key:str(value) for key,value in (terminal.get('hardware') or {}).items()
-             if key in ('platform','arch','sandbox_hardware')})
+            {key:str(value) for key,value in {**{key: baseline_metadata[key] for key in ('platform', 'arch')
+                                               if key in baseline_metadata}, **(terminal.get('hardware') or {})}.items()
+             if key in ('platform','arch','sandbox_hardware')},
+            observation_facts.campaign_usage(state, settled_usage, pending=progress.pending_tokens),
+            {key: _integer(state.get(key)) for key in ('episodes', 'accepted', 'rejected')})
 
 
 def apply(ctx, config):

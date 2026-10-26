@@ -3,12 +3,13 @@
   "composition": "dashboard",
   "target": "startup",
   "tokens": [
-    "observation_source"
+    "observation_source", "workflow_export"
   ],
   "required_services": [
-    "observation_source"
+    "observation_source", "workflow_export"
   ],
   "token_definitions": {
-    "observation_source": "aka.dashboard.tokens:OBSERVATION_SOURCE"
+    "observation_source": "aka.dashboard.tokens:OBSERVATION_SOURCE",
+    "workflow_export": "aka.contracts.workflow_export:WORKFLOW_EXPORT"
   }
 }

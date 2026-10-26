@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = ["atrex-aka-framework==0.2.0"]
 
 [project.optional-dependencies]
-long-horizon = ["atrex-aka-observation-long-horizon==0.2.0"]
+long-horizon = ["atrex-aka-observation-long-horizon==0.2.0", "atrex-aka-legacy==0.2.0"]
 
 [project.entry-points."aka.tokens"]
 observation_source = "aka.dashboard.tokens:OBSERVATION_SOURCE"

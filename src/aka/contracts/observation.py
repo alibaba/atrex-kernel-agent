@@ -50,7 +50,7 @@ class CampaignTokens(TokenTotal):
     """One settled ledger, never the sum of overlapping receipts and telemetry."""
 
     control_total: Optional[int]
-    receipt_count: int
+    receipt_count: Optional[int]
     reason_codes: list[str]
     pending: bool
 
