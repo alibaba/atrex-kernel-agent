@@ -4,14 +4,13 @@ This Workflow-owned output never reads Task's private archive representation.
 Only hash-bound evaluator results for the captured source become public facts.
 """
 import base64
-from dataclasses import asdict
 import hashlib
 import json
 from pathlib import Path
 import re
 import subprocess
 
-from aka.contracts.workflow_export import EpisodeCandidateFact, EvaluationFact, ResultFact, _result_from_document
+from aka.contracts.workflow_export import EpisodeCandidateFact, EvaluationFact, ResultFact, _result_from_document, _document
 
 FILENAME = 'public-candidate.json'
 
@@ -98,7 +97,7 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
                 continue
             evaluation = EvaluationFact(str(row.get('gateway_kind') or 'run'), row.get('timestamp'),
                 digests, _result(row.get('result'),expected_case_ids))
-            evaluations.append(asdict(evaluation))
+            evaluations.append(_document(evaluation))
     # The terminal coding session has stopped. Refuse a concurrent source change.
     if not unavailable:
         for name, content in files.items():
