@@ -57,8 +57,9 @@ class LegacyExecutor:
         from aka.legacy.execution.environment_query import command_query, require_supported
         support = self._environment_backend().check(command_query(command), discover=False)
         require_supported(support)
+        from aka.legacy.execution.gateway.requests import bound_limits
         request = replace(self.request, workspace=command.workspace, command=command.command,
-            timeout=command.timeout, environment=command.environment, hardware=command.hardware,
+            timeout=command.timeout, environment=bound_limits(command.environment, support), hardware=command.hardware,
             sync=command.artifacts,
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
             preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus)
@@ -127,7 +128,10 @@ class LegacyExecutor:
             grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
             effective_timeout = timeout + grace + 240
         from aka.legacy.execution.outcomes import run_owned
-        return run_owned(cmd, environment=environment, workspace=workspace,
+        result = run_owned(cmd, environment=environment, workspace=workspace,
             timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
             cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment,
             input_payload=request.submission)
+        from aka.legacy.execution.gateway.requests import effective_budget
+        return replace(result, budgets=(*result.budgets,
+            effective_budget(effective_timeout, scope="local-wait", emit=False)))

@@ -152,9 +152,6 @@ OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
 DEFAULT_COMMAND_TIMEOUT = 600
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
-MAX_COMMAND_TIMEOUT = 600
-MAX_GATEWAY_JOB_TIMEOUT = 10_800
-MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
@@ -1507,7 +1504,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--kind",
-        choices=("auto", "run", "profile", "dev"),
+        choices=("auto", "run", "profile", "dev", "check", "disassemble"),
         default="auto",
         help=(
             "Gateway interface to use. auto routes test_kernel.py to run, profiler "
@@ -1602,7 +1599,7 @@ def build_parser() -> argparse.ArgumentParser:
             os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))
         ),
         help=(
-            "Remote command execution timeout in seconds, 1..600 "
+            "Remote command execution timeout in positive seconds "
             "(default: 600; queue wait is budgeted separately)."
         ),
     )
@@ -1651,7 +1648,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--profiler",
-        choices=("ncu", "rocprofv3"),
+        choices=("ncu", "nsys", "rocprofv3", "acu"),
         default=None,
         help="Typed profile backend (default: gateway vendor auto-detection).",
     )
@@ -2388,7 +2385,8 @@ def _gateway_json(
     path: str,
     payload: dict | None,
     timeout: float,
-) -> dict:
+    *, allow_list: bool = False,
+) -> dict | list:
     body = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = dict(_auth_headers())
     if body is not None:
@@ -2405,7 +2403,7 @@ def _gateway_json(
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise GatewayHTTPError(exc.code, detail) from exc
-    if not isinstance(result, dict):
+    if not isinstance(result, dict) and not (allow_list and isinstance(result, list)):
         raise RuntimeError("gateway returned a non-object JSON response")
     return result
 
@@ -2505,7 +2503,7 @@ def _run_direct_gateway(
         payload={
             "spec": spec,
             "command": command,
-            "timeout_s": timeout,
+            "timeout_s": _dev_gateway_job_timeout(timeout),
             "env_vars": env_vars,
             "files": {
                 name: path.read_text(encoding="utf-8") for name, path in files.items()
@@ -2654,24 +2652,15 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
 
 
 def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
-    """Budget typed gateway queueing separately from evaluator runtime.
-
-    Typed eval/profile jobs accept a larger enclosing deadline than their evaluator
-    timeout.  Give that job deadline as much of the configured queue grace as the
-    service permits.
-    """
-    return min(MAX_GATEWAY_JOB_TIMEOUT, command_timeout + queue_wait_grace)
+    """Queue grace extends client waiting; only advertised limits bound runtime."""
+    from .requests import effective_budget, hard_limit
+    return effective_budget(command_timeout, limit=hard_limit(os.environ, "run")).effective
 
 
 def _dev_gateway_job_timeout(command_timeout: int) -> int:
-    """Return a service-valid deadline for an agate dev job.
-
-    Unlike typed eval/profile jobs, the dev API currently validates ``timeout_s``
-    against a hard 600-second ceiling.  Passing the longer client-side queue wait
-    budget through ``--job-timeout`` is rejected at submission time with HTTP 422,
-    so keep queue grace exclusively in ``--wait-timeout`` for this route.
-    """
-    return min(MAX_DEV_JOB_TIMEOUT, command_timeout)
+    """Respect this backend's declared dev ceiling without imposing a default."""
+    from .requests import effective_budget, hard_limit
+    return effective_budget(command_timeout, limit=hard_limit(os.environ, "dev")).effective
 
 
 def _resume_interrupted_agate_wait(
@@ -2878,7 +2867,7 @@ def _typed_agate_command(
     request: dict[str, Any],
     queue_wait_grace: int,
     reference_dir: Path | None = None,
-    *, requirements_file: Path | None = None,
+    *, requirements_file: Path | None = None, init_kwargs_file: Path | None = None,
 ) -> list[str]:
     """Build an agate run/profile invocation for a typed request."""
     command = [executable, kind]
@@ -2886,18 +2875,20 @@ def _typed_agate_command(
         command += ["--url", args.url]
     elif args.gateway_profile:
         command += ["--profile", args.gateway_profile]
-    options = request["options"]
+    from .requests import operation_request
+    request = operation_request(request, kind)
+    options = request.get("options", {})
     # Generalized workspaces deliberately expose only agent_problem.json to the
     # optimization agent.  The agate client still needs the evaluator-owned
     # shapes/reference files locally to assemble its typed eval payload, so point
     # --reference-dir at the private source while keeping the candidate in the
     # public workspace.  The private directory is never copied into the workspace.
-    reference_dir = reference_dir or _private_reference_dir(workspace) or workspace
+    reference_dir = (reference_dir or _private_reference_dir(workspace) or workspace) if kind in {"run", "profile"} else workspace
     command += ["--gpu", args.hardware]
     num_gpus = request.get("spec", {}).get("num_gpus", 1)
-    if num_gpus > 1:
+    if num_gpus > 1 and kind in {"run", "profile"}:
         command += ["--num-gpus", str(num_gpus)]
-    if request.get("atrex_bench_version"):
+    if kind == "run" and request.get("atrex_bench_version"):
         command += ["--atrex-bench-version", request["atrex_bench_version"]]
     requirements_file = str(requirements_file) if requirements_file is not None else os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
     if requirements_file:
@@ -2917,27 +2908,30 @@ def _typed_agate_command(
         raise ValueError(
             "ATREX_SANDBOX_REQUIREMENTS_FILE is required to replay the typed request's runtime pins"
         )
-    command += [
-        "--candidate",
-        str(workspace / "kernel.py"),
-        "--reference-dir",
-        str(reference_dir),
-        "--operator",
-        str(request["reference"]["operator"]),
-        *(["--mode", str(request.get("mode") or "full")] if kind == "run" else []),
-        "--num-correctness-cases",
-        str(options["num_correctness_cases"]),
-        "--bench-iters",
-        str(options["bench_iters"]),
-        *(["--set", "warmup_iters=" + os.environ.get("AKA_GATEWAY_WARMUP_ITERS", "5")]
-          if kind == "run" and os.environ.get("AKA_GATEWAY_WARMUP_ITERS", "5") != "default" else []),
-        "--http-timeout",
-        str(MAX_HTTP_REQUEST_TIMEOUT),
-        "--wait-timeout",
-        str(args.timeout + queue_wait_grace),
-        "--job-timeout",
-        str(_gateway_job_timeout(args.timeout, queue_wait_grace)),
-    ]
+    command += ([str(workspace / "kernel.py")] if kind == "check" else ["--candidate", str(workspace / "kernel.py")])
+    if kind in {"run", "profile"}:
+        command += ["--reference-dir", str(reference_dir), "--operator", str(request["reference"]["operator"])]
+    if kind == "run":
+        command += ["--mode", str(request.get("mode") or "full"),
+                    "--num-correctness-cases", str(options["num_correctness_cases"]),
+                    "--bench-iters", str(options["bench_iters"])]
+        warmup = os.environ.get("AKA_GATEWAY_WARMUP_ITERS", "5")
+        if warmup != "default":
+            command += ["--set", "warmup_iters=" + warmup]
+    elif kind == "profile" and "bench_iters" in options:
+        command += ["--bench-iters", str(options["bench_iters"])]
+    command += ["--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
+                "--wait-timeout", str(args.timeout + queue_wait_grace)]
+    if kind in {"run", "profile"}:
+        command += ["--job-timeout", str(_gateway_job_timeout(args.timeout, queue_wait_grace))]
+    if kind == "check":
+        for field in ("arch", "sanitize"):
+            if request.get(field):
+                command += ["--" + field, str(request[field])]
+    if kind == "disassemble" and request.get("fmt"):
+        command += ["--fmt", str(request["fmt"])]
+    if init_kwargs_file is not None and kind in {"check", "disassemble"}:
+        command += ["--init-kwargs", str(init_kwargs_file)]
     correctness_max_rel_l2 = options.get("correctness_max_rel_l2")
     if kind == "run" and correctness_max_rel_l2 is not None:
         command += [
@@ -2951,15 +2945,18 @@ def _typed_agate_command(
     for item in args.env:
         command += ["--env-var", item]
     if kind == "profile":
-        command += ["--level", args.profile_level]
-        if args.profiler:
-            command += ["--profiler", args.profiler]
-        for counter in args.profile_counter:
+        command += ["--level", request.get("level", args.profile_level)]
+        profiler = request.get("profiler", args.profiler)
+        if profiler:
+            command += ["--profiler", profiler]
+        for counter in request.get("counters", args.profile_counter):
             command += ["--counter", counter]
-        if args.kernel_regex:
-            command += ["--kernel-regex", args.kernel_regex]
-        if args.top_kernels is not None:
-            command += ["--top-kernels", str(args.top_kernels)]
+        kernel_regex = request.get("kernel_regex", args.kernel_regex)
+        if kernel_regex:
+            command += ["--kernel-regex", kernel_regex]
+        top_kernels = request.get("top_kernels", args.top_kernels)
+        if top_kernels is not None:
+            command += ["--top-kernels", str(top_kernels)]
     return command
 
 
@@ -3021,17 +3018,18 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit("sandbox: --ssh-runtime-bind requires --ssh")
     elif args.ssh_gpu is not None:
         raise SystemExit("sandbox: --ssh-gpu requires --ssh")
-    if not 1 <= args.timeout <= MAX_COMMAND_TIMEOUT:
-        raise SystemExit(
-            "sandbox: --timeout must be in the gateway-supported range "
-            f"1..{MAX_COMMAND_TIMEOUT}"
-        )
+    if args.timeout < 1:
+        raise SystemExit("sandbox: --timeout must be positive")
     if args.shape_batch_size <= 0:
         raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:
         queue_wait_grace = configured_queue_wait_grace(os.environ)
     except ValueError as exc:
         raise SystemExit(f"sandbox: {exc}") from exc
+    from .requests import effective_budget
+    effective_budget(args.timeout + (0 if args.ssh else queue_wait_grace), scope="wait")
+    if args.ssh:
+        effective_budget(args.timeout, scope="command")
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         raise SystemExit("sandbox: file size limits must be positive")
     args.health_command = combined_health_command(
@@ -3066,7 +3064,7 @@ def _main(argv: list[str] | None = None) -> int:
             return ENVIRONMENT_TEMPFAIL
         return health.returncode
     try:
-        command = _command_text(args.command)
+        command = "" if args.prepared_request_fd is not None else _command_text(args.command)
         sync_paths = (
             []
             if args.no_sync
@@ -3093,6 +3091,9 @@ def _main(argv: list[str] | None = None) -> int:
     if args.prepared_request_fd is not None:
         from .submission import run_prepared
         return run_prepared(args, workspace, sync_paths, queue_wait_grace)
+    if args.kind in {"check", "disassemble"}:
+        from .submission import run_kernel_operation
+        return run_kernel_operation(args, workspace, queue_wait_grace)
     gateway_kind = "dev"
     evaluator_command = _is_test_kernel_command(args.command)
     if evaluator_command:

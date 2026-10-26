@@ -69,6 +69,6 @@ def default_binding(context):
         hardware=context.hardware, timeout=context.timeout, command=(),
         environment=context.environment, profile=settings.profile, url=settings.url,
         ssh=settings.ssh, ssh_init=settings.ssh_init, health_command=settings.health_command,
-        wall_timeout=context.timeout + 14_400 + 120 if context.formal else None,
+        wall_timeout=None,
     )
     return request, ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace)

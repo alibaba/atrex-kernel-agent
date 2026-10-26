@@ -49,6 +49,8 @@ class GatewayExecutor:
         argv += ["--num-gpus", str(command.num_gpus), *current_transport_arguments()]
         argv += ["--", *command.command]
         environment = dict(command.environment)
+        from .requests import bound_limits, effective_budget
+        environment = bound_limits(environment, support)
         if self.configuration.get("profile") or self.configuration.get("url"):
             for key in ("ATREX_SANDBOX_PROFILE", "ATREX_SANDBOX_URL"):
                 environment.pop(key, None)
@@ -77,4 +79,6 @@ class GatewayExecutor:
             timeout=command.timeout + grace + 240, resource=self.resource_identity,
             hardware=command.hardware, cancel_event=command.cancel_event, input_payload=command.submission)
         return replace(result, environment_snapshot=support.environment,
-                       environment_identity=support.environment.identity, environment_support=support)
+                       environment_identity=support.environment.identity, environment_support=support,
+                       budgets=(*result.budgets, effective_budget(command.timeout + grace + 240,
+                           scope="local-wait", emit=False)))

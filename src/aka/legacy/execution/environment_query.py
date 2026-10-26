@@ -60,12 +60,16 @@ def _snapshot(backend, endpoint, query, detail, capabilities, errors, operations
                                      for value in declarations["operations"]]
     observed = {}
     for source in (detail, capabilities):
+        declared = source.get("source") in {"declared", "unknown"}
         for key in ("gpu", "aliases", "vendor", "arch", "gpu_model", "sm_count", "total_memory_mb",
                     "driver_version", "toolchain", "frameworks", "libraries", "profilers",
                     "availability", "available", "ready", "image", "worker", "image_digest",
-                    "worker_id", "environment_identity", "source"):
+                    "worker_id", "environment_identity", "source", "environments"):
             if key in source:
-                observed[key] = source[key]
+                if declared and key not in {"source", "environments"}:
+                    declarations.setdefault("environment", {})[key] = source[key]
+                else:
+                    observed[key] = source[key]
         if source.get("probe_error"):
             errors.append("environment-probe-incomplete")
     explicit_identity = capabilities.get("environment_identity", detail.get("environment_identity"))
@@ -134,7 +138,12 @@ class BackendEnvironment:
                 if destination is capabilities and not query.hardware:
                     continue
                 try:
-                    destination.update(sandbox._gateway_json(self.url, "GET", path + suffix, None, 30))
+                    options = {"allow_list": True} if not query.hardware else {}
+                    value = sandbox._gateway_json(self.url, "GET", path + suffix, None, 30, **options)
+                    if isinstance(value, list):
+                        destination["environments"] = value
+                    else:
+                        destination.update(value)
                 except Exception as error:
                     errors.append("environment-http-" + str(error.status) if isinstance(error, sandbox.GatewayHTTPError)
                                   else "environment-discovery-" + type(error).__name__)
@@ -160,6 +169,9 @@ class BackendEnvironment:
                         errors.append("environment-cli-rejected")
                         continue
                     value = json.loads(completed.stdout)
+                    if isinstance(value, list) and not query.hardware:
+                        destination["environments"] = value
+                        continue
                     if not isinstance(value, dict):
                         raise ValueError("environment response must be an object")
                     destination.update(value)
@@ -197,6 +209,9 @@ def match_environment(query, snapshot):
     dimensions["num_gpus"] = ("unsupported" if type(max_gpus) is int and query.num_gpus > max_gpus else
                                "supported" if type(max_gpus) is int or query.num_gpus == 1 else "unknown")
     frameworks = observed.get("frameworks", {})
+    if not isinstance(frameworks, Mapping):
+        frameworks = {}
+        reasons.append("invalid-framework-capabilities")
     language_unavailable = False
     languages = declarations.get("supported_languages")
     for language in query.languages:
@@ -223,17 +238,24 @@ def match_environment(query, snapshot):
             continue
         for name, value in values.items():
             version = value.get("version") if isinstance(value, Mapping) else value
-            if isinstance(version, str):
+            if isinstance(version, str) and version not in {"unknown", "unavailable"} and not (
+                isinstance(value, Mapping) and value.get("available") is False):
                 installed[re.sub(r"[-_.]+", "-", name).casefold()] = version
     catalog = declarations.get("dependency_catalog", ())
     policy = declarations.get("requirements_supported")
     for index, requirement in enumerate(query.requirements):
-        pin = re.fullmatch(r"\s*([A-Za-z0-9_.-]+)\s*(?:==\s*([^\s;]+))?\s*", requirement)
         available = False
-        if pin:
-            name, version = pin.groups()
-            actual = installed.get(re.sub(r"[-_.]+", "-", name).casefold())
-            available = actual is not None and (version is None or actual == version)
+        parsed = None
+        from packaging.requirements import InvalidRequirement, Requirement
+        from packaging.version import InvalidVersion
+        try:
+            parsed = Requirement(requirement)
+            actual = installed.get(re.sub(r"[-_.]+", "-", parsed.name).casefold())
+            # Host marker/extras evaluation cannot stand in for backend facts.
+            if actual is not None and parsed.url is None and parsed.marker is None and not parsed.extras:
+                available = parsed.specifier.contains(actual, prereleases=True)
+        except (InvalidRequirement, InvalidVersion):
+            pass  # URLs and backend-specific pins remain unknown unless declared in its catalog.
         status = "supported" if available or requirement in catalog else "unsupported" if policy is False else "unknown"
         dimensions[f"requirement:{index}"] = status
     values = set(dimensions.values())
