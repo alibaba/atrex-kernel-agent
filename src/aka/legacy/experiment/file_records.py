@@ -27,6 +27,7 @@ from aka.contracts.execution import ExecutionBudget
 from aka.contracts.execution_environment import EnvironmentSnapshot, EnvironmentSupport
 from aka.contracts.execution_recovery import ExecutionCause, JobReference
 from aka.contracts.measurement import MeasurementIdentity, MeasurementPoint, MeasurementAssessment, MeasurementDiagnostic
+from .artifact_storage import ArtifactCorrupt, ArtifactStorage, read as read_artifact_content
 
 
 def _measurement_identity(value):
@@ -176,6 +177,7 @@ class FileExperimentRecords:
         self.root = Path(root).resolve() / _digest(run_id)
         self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._write_lock = RLock()
+        self._artifact_storage = ArtifactStorage(self.root.parent)
 
     def _ref(self, request_id):
         if not isinstance(request_id, str) or not request_id:
@@ -237,10 +239,7 @@ class FileExperimentRecords:
         try:
             if folder.is_symlink() or path.is_symlink() or not path.is_file():
                 raise ValueError("invalid artifact location")
-            data = path.read_bytes()
-            if len(data) != artifact.size_bytes or hashlib.sha256(data).hexdigest() != artifact.sha256:
-                raise ValueError("artifact content mismatch")
-            return data
+            return read_artifact_content(path, artifact.sha256, artifact.size_bytes)
         except (OSError, ValueError) as error:
             raise ExperimentRecordError("artifact_corrupt", record.ref) from error
 
@@ -413,9 +412,22 @@ class FileExperimentRecords:
                                       hashlib.sha256(content).hexdigest(), len(content))
         try:
             destination = self._directory(ref) / "artifacts" / artifact.artifact_id
-            _atomic(destination, content)
-            self._update(ref, lambda old: replace(old, artifacts=(*old.artifacts, artifact)))
+            identity = self._artifact_storage.publish(destination, content, artifact.sha256)
+            try:
+                self._update(ref, lambda old: replace(old, artifacts=(*old.artifacts, artifact)))
+            except BaseException:
+                # A record replace may succeed before its directory fsync fails.
+                # Retain the evidence whenever commit visibility is uncertain.
+                try:
+                    committed = self.get(ref)
+                    if artifact not in committed.artifacts:
+                        self._artifact_storage.discard(destination, identity)
+                except (OSError, ValueError, ExperimentRecordError, LookupError):
+                    pass
+                raise
             return artifact
+        except ArtifactCorrupt as error:
+            raise ExperimentRecordError("artifact_corrupt", ref) from error
         except ExperimentRecordError:
             raise
         except (OSError, ValueError) as error:
