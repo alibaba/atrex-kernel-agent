@@ -16,6 +16,37 @@ class AgentSkillsRegistryMixin:
     _agent_skills = ()
     _workspace_resources = ()
     _installation = None
+    _retained_snapshot_paths = ()
+
+    def export_snapshot(self, destination, *, content_directory=None):
+        from .snapshots import export_snapshot
+        return export_snapshot(self, destination, content_directory=content_directory)
+
+    def _check_snapshot_paths(self, paths, *, sources=None):
+        from .snapshots import _source_roots
+        sources = _source_roots(self) if sources is None else sources
+        for path in paths:
+            if path.resolve() != path:
+                raise ValueError("retained Resources storage path traverses a link or alias")
+            if any(path == source or path in source.parents or source in path.parents
+                   for source in sources):
+                raise ValueError("retained Resources storage overlaps a selected source root")
+
+    def _retain_snapshot_paths(self, paths, *, sources=None):
+        self._check_snapshot_paths(paths, sources=sources)
+        self._retained_snapshot_paths = tuple(dict.fromkeys((*self._retained_snapshot_paths, *paths)))
+
+    def _snapshot_hidden_paths(self, workspace):
+        hidden = []
+        for path in self._retained_snapshot_paths:
+            if path.resolve() != path:
+                raise ValueError("retained Resources storage path was replaced")
+            if path == workspace or path in workspace.parents:
+                raise ValueError("retained Resources storage contains an Agent workspace")
+            if path.is_relative_to(workspace):
+                hidden.append(path)
+        return tuple(path for path in hidden if not any(other != path and other in path.parents
+                                                       for other in hidden))
 
     def bind_agent_skills(self, skills) -> None:
         from aka.core.plugin_runtime.schema import PluginError
@@ -185,7 +216,7 @@ class AgentSkillsRegistryMixin:
         lock = workspace / STATE_DIR
         if lock.exists():
             protected.append(lock)
-        return FilesystemAccess(tuple(mounts), (), tuple(protected))
+        return FilesystemAccess(tuple(mounts), self._snapshot_hidden_paths(workspace), tuple(protected))
 
     def catalog(self):
         return self.resource_result().catalog()

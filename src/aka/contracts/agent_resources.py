@@ -128,3 +128,36 @@ class AgentResourceRegistry(Protocol):
     def filesystem_access(self, workspace: Path) -> FilesystemAccess:
         """Return locked, installed resource links and read-only content grants."""
         ...
+
+
+@dataclass(frozen=True)
+class ResourcesSnapshot:
+    """Retained selected resources; storage locations do not define identity."""
+
+    directory: Path
+    identity: str
+    content_directory: Path | None = None
+
+
+class ResourcesRegistry(AgentResourceRegistry, Protocol):
+    """Selected resource discovery, installation, calls and retained content."""
+
+    def export_snapshot(self, destination: Path, *,
+                        content_directory: Path | None = None) -> ResourcesSnapshot: ...
+
+    def install(self, workspace: Path) -> AgentResourceInstallation: ...
+
+    def resource_result(self, workspace: Path | None = None) -> AgentResourceInstallation: ...
+
+    def check_lock(self, workspace: Path) -> None: ...
+
+    def catalog(self) -> list[dict]: ...
+
+    def skill_catalog(self) -> list[dict]: ...
+
+    def instructions(self, phase: str, **values: str) -> str: ...
+
+    def environment(self, workspace: Path, campaign_name: str = "") -> dict[str, str]: ...
+
+    def call(self, name: str, request: object, workspace: Path,
+             *, cwd: Path | None = None) -> object: ...
