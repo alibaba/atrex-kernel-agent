@@ -36,6 +36,12 @@ def inspect_snapshot(snapshot: ResourcesSnapshot) -> ResourcesSnapshotFacts:
     return snapshot_facts.inspect_snapshot(snapshot)
 
 
+def validate_runtime_binding(snapshot: ResourcesSnapshot) -> None:
+    """Check current recorded command bindings without constructing or running tools."""
+    from . import snapshot_runtime
+    return snapshot_runtime.validate_runtime_binding(snapshot)
+
+
 def export_snapshot(registry, destination, *, content_directory=None) -> "ResourcesSnapshot":
     """Retain the registry's explicit selected roots and register their access boundary."""
     from . import snapshot_store
