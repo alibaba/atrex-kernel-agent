@@ -49,7 +49,6 @@ class SandboxExecutor:
         if bound.filesystem_access is not None:
             from aka.contracts.execution import UnsupportedExecution
             raise UnsupportedExecution("scoped execution does not provide job replay")
-        bound = replace(bound, environment={**self.context.environment, **command.environment})
         self.capabilities.require(bound)
         return self._recovery("replay_job", bound, idempotency_key=idempotency_key)
 
