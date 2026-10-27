@@ -39,7 +39,7 @@ def _validate_committed_files(workspace: Path, version: int) -> None:
     from aka.light.workspace.sources import from_git, snapshot as source_snapshot
     if from_git(workspace, "HEAD") != source_snapshot(workspace):
         raise ValueError("Kernel source tree differs from the committed promotion")
-    for relative in ("kernel.py", record):
+    for relative in (record,):
         if promotion_git(workspace, "hash-object", "--", relative).strip() != promotion_git(
             workspace, "rev-parse", f"HEAD:{relative}",
         ).strip():

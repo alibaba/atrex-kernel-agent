@@ -77,6 +77,15 @@ def _sha256(path: Path) -> str:
 
 
 def _capture_paths(workspace: Path) -> Iterable[Path]:
+    from aka.light.workspace import native
+    try:
+        value = native.read(workspace)
+        if value:
+            yield from (workspace / name for name in value["source"]["files"])
+    except (OSError, ValueError):
+        # A partially written manifest must not prevent preserving native edits.
+        yield from workspace.glob("*.cu")
+        yield from workspace.glob("*.cuh")
     for relative in ("kernel.py", "solution.json", "memory/v1.json", ".atrex_versions/v1.json"):
         yield workspace / relative
     yield from sorted((workspace / "plans").glob("v1_*.md"))
@@ -268,6 +277,13 @@ def restore_latest_candidate(workspace: Path) -> list[str]:
     snapshot = value.get("latest_snapshot")
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("files"), list):
         return []
+    from aka.light.workspace import native
+    from aka.light.workspace.sources import snapshot as source_snapshot, install
+    root = (workspace / snapshot.get("root", "")).resolve()
+    if root.is_relative_to(workspace) and native.read(root):
+        source = source_snapshot(root)
+        install(workspace, source)
+        return ["solution.json", *native.read(root)["source"]["files"]]
     restored: list[str] = []
     for relative_snapshot in snapshot["files"]:
         if not isinstance(relative_snapshot, str):
@@ -289,5 +305,8 @@ def restore_latest_candidate(workspace: Path) -> list[str]:
 
 
 def candidate_sha256(workspace: Path) -> str:
-    path = workspace / "kernel.py"
-    return _sha256(path) if path.is_file() else ""
+    from aka.light.workspace.sources import snapshot
+    try:
+        return hashlib.sha256(snapshot(workspace)).hexdigest()
+    except FileNotFoundError:
+        return ""

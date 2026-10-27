@@ -201,7 +201,7 @@ def _production_review_candidate_paths(workspace: Path) -> list[Path]:
     from aka.light.workspace.sources import policy_at, collect, POLICY
     policy = policy_at(workspace)
     if policy is not None:
-        return [workspace / name for name in sorted(collect(workspace, policy))] + [workspace / POLICY]
+        return [workspace / name for name in sorted(collect(workspace, policy))] + ([workspace / POLICY] if (workspace / POLICY).is_file() else [])
     paths = [
         workspace / "kernel.py",
         workspace / "solution.json",

@@ -39,7 +39,7 @@ def _agent_runtime_directive(
     )
     return (
         f"- `skills/` (also discoverable under `{root}/skills/`): `gpu-measurement`, "
-        f"`runtime-records`{knowledge}, and optional timeline diagnostics{extra}. "
+        f"`atrex-gpu-gateway`, `runtime-records`{knowledge}, and optional timeline diagnostics{extra}. "
         "Read the relevant Skill for request schemas/examples. "
         "Use `python3 tools/plugin.py list` for additional operator-enabled tools and Skills. "
         + suspension
@@ -150,7 +150,7 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     if plugin_registry is None:
         from aka.light.runtime.catalog import PluginRegistry
         plugin_registry = PluginRegistry()
-    names = ["gpu-measurement", "runtime-records", "autonomous-gpu-kernel-timeline"]
+    names = ["gpu-measurement", "atrex-gpu-gateway", "runtime-records", "autonomous-gpu-kernel-timeline"]
     if any(plugin.id == "gpu-wiki" for plugin in plugin_registry.plugins):
         names.append("KernelWiki")
     if is_ppu:

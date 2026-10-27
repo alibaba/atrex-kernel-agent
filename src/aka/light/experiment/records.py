@@ -196,12 +196,14 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
         raise AgentRequestError(str(error)) from error
     operation = request["operation"]
     from aka.light.workspace.sources import from_inputs, POLICY
-    kernels = {"candidate": store.kernel(from_inputs(inputs))} if "kernel.py" in inputs else {}
+    kernels = ({"candidate": store.kernel(from_inputs(inputs))}
+               if "kernel.py" in inputs or request["options"].get("source_snapshots", {}).get("candidate") else {})
     baseline_path = request["options"]["baseline_path"]
     if baseline_path:
         kernels["baseline"] = store.kernel(
             from_inputs(inputs, prefix=baseline_path + "/")
-            if baseline_path + "/" + POLICY in inputs else inputs[baseline_path])
+            if baseline_path + "/" + POLICY in inputs or "baseline" in request["options"].get("source_snapshots", {})
+            else inputs[baseline_path])
     if reuse_correctness and reuse_completed and "candidate" in kernels:
         response = reuse_correctness_result(store, request, kernels["candidate"]["kernel_id"])
         if response is not None:

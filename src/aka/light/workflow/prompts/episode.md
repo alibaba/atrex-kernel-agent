@@ -1,8 +1,9 @@
 # Kernel optimization episode {{EPISODE}}
 
 Optimize the candidate described in `WORKSPACE.md` through evidence-backed engineering.
-For a single-file task edit `kernel.py`; for a source-tree task keep the fixed adapter and
-edit only the declared source directories. Continue investigating,
+For Python single-file tasks edit `kernel.py`; for imported source trees preserve fixed files
+and edit only the declared directories. CUDA candidates use separate native sources and a manifest;
+read the atrex-gpu-gateway Skill for file organization, JSON configuration and measurement usage. Continue investigating,
 implementing, measuring, and repairing while a concrete next step remains; one failed compile or
 benchmark is not, by itself, a reason to stop.
 

@@ -37,6 +37,20 @@ def attach(request, workspace, *, side="candidate", source=None):
     policy, files = unpack(source if source is not None else snapshot(workspace))
     if policy is None:
         return request
+    from aka.light.workspace import native
+    if policy == native.POLICY:
+        value = native.manifest(files["solution.json"])
+        source_files = {name: files[name].decode() for name in value["source"]["files"]}
+        archive = f"archives/{side}.tar.gz"
+        value["source"] = {"type": "oss_archive", "archive": archive,
+            "sha256": hashlib.sha256(archive_bytes(source_files)).hexdigest(),
+            "files": {name: hashlib.sha256(files[name]).hexdigest() for name in source_files}}
+        request.setdefault(ARCHIVES, {})[archive] = source_files
+        if side == "candidate":
+            request["candidate"] = value
+        else:
+            request["abba"]["baseline"] = value
+        return request
     if policy["package_root"] != ".":
         raise ValueError("Native Eval archives require package_root='.'; no Dev fallback")
     archive = f"archives/{side}.tar.gz"
@@ -117,7 +131,7 @@ def uploaded_request(request, wire_key, *, json_call, upload, kind="eval"):
     if large_dev:
         packed, wire = _dev_archive(request)
     else:
-        if kind != "eval" or request.get("oss_files"):
+        if kind not in {"eval", "profile"} or request.get("oss_files"):
             raise ValueError("Native Eval archives cannot mix existing upload references or Dev tasks")
         packed = {name: archive_bytes(files) for name, files in sorted(request[ARCHIVES].items())}
         wire = {k: v for k, v in request.items() if k != ARCHIVES}
@@ -167,6 +181,11 @@ def diagnostic_request(request, workspace, kind, *, timeout=600):
     policy, files = unpack(snapshot(workspace))
     if policy is None:
         return request
+    from aka.light.workspace import native
+    if policy == native.POLICY:
+        if kind != "profile":
+            raise ValueError("Native CUDA manifests support Evaluate and Profile; use Evaluate correctness_only for a build/correctness check")
+        return attach(request, workspace)
     if request.get("profiler", "ncu") != "ncu" or request.get("fmt") == "isa":
         raise ValueError("Source-tree diagnostics currently support NVIDIA NCU and auto/sass/ptx")
     reference = request.get("reference", request.get("diagnostic_reference"))
@@ -194,7 +213,7 @@ def run(gateway, args, request, kind, queue_wait_grace, *, identity_extra=None):
     if not url:
         raise ValueError("Whole-tree transport requires a resolvable Agate URL and Supervisor HTTP credentials")
     diagnostic = request.get(DIAGNOSTIC)
-    process = gateway.run_direct_job(url=url, kind="dev" if diagnostic else "eval", payload=diagnostic or request,
+    process = gateway.run_direct_job(url=url, kind="dev" if diagnostic else "profile" if kind == "profile" else "eval", payload=diagnostic or request,
         timeout=args.timeout, queue_wait_grace=queue_wait_grace, max_device_retries=10,
         device_retry_delay=60, identity_extra=identity_extra)
     if diagnostic and process.returncode == 0:

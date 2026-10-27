@@ -17,6 +17,7 @@ import time
 
 from aka.light.agent.session_tail import read_regular_bytes
 from aka.light.workspace.files import publish
+from aka.light.workspace import native
 
 POLICY = ".atrex_source.json"
 MAGIC = b"ATREX-SOURCE-TREE-v1\n"
@@ -67,10 +68,14 @@ def source_name(name):
 
 
 def editable(policy, name):
+    if policy == native.POLICY:
+        return native.editable(name)
     return any(name == root or name.startswith(root + "/") for root in policy["editable_roots"])
 
 
 def validate_policy(policy):
+    if policy == native.POLICY:
+        return policy
     if not isinstance(policy, dict) or set(policy) != {
             "schema_version", "source_revision", "seed_digest", "package_root", "editable_roots",
             "immutable_files", "runtime_requirements"} or policy["schema_version"] != 1:
@@ -113,13 +118,14 @@ def policy_at(workspace: Path, *, committed=False):
         if result.returncode:
             if (workspace / POLICY).exists():
                 raise ValueError("Source policy is not pinned in the controller commit")
-            return None
+            candidate = subprocess.run(["git", "show", "HEAD:solution.json"], cwd=workspace, capture_output=True)
+            return native.POLICY if candidate.returncode == 0 and native.manifest(candidate.stdout) else None
         raw = result.stdout
     else:
         try:
             raw = read_regular_bytes(workspace / POLICY, limit=MAX_FILE + 1)
         except FileNotFoundError:
-            return None
+            return native.POLICY if native.read(workspace) else None
     if len(raw) > MAX_FILE:
         raise ValueError("Source policy is too large")
     return validate_policy(json.loads(raw))
@@ -127,6 +133,8 @@ def policy_at(workspace: Path, *, committed=False):
 
 def validate_files(files, policy):
     validate_policy(policy)
+    if policy == native.POLICY:
+        return native.validate(files)
     if len(files) > 4096 or sum(len(data) for data in files.values()) > MAX_TOTAL:
         raise ValueError("Source tree exceeds 4096 files / 64 MiB")
     for name, data in files.items():
@@ -163,6 +171,9 @@ def pack(files, policy):
 
 def from_inputs(inputs, *, prefix=""):
     """Use the already frozen measurement bytes, never reread a mutable draft."""
+    raw = inputs.get(prefix + "solution.json")
+    if raw is not None and (value := native.manifest(raw)) is not None:
+        return pack({name: inputs[prefix + name] for name in ("solution.json", *value["source"]["files"])}, native.POLICY)
     policy = inputs.get(prefix + POLICY)
     if policy is None:
         return inputs[prefix + "kernel.py"]
@@ -185,6 +196,8 @@ def unpack(source):
 
 
 def collect(workspace, policy, *, validate=True):
+    if policy == native.POLICY:
+        return native.collect(workspace)
     files = {}
     for parent, dirs, names in os.walk(workspace, followlinks=False):
         rel = Path(parent).relative_to(workspace)
@@ -212,6 +225,8 @@ _DISCOVER = object()
 
 def snapshot(workspace, *, policy=_DISCOVER):
     policy = policy_at(workspace) if policy is _DISCOVER else policy
+    if policy is None and native.read(workspace) is not None:
+        policy = native.POLICY
     if policy is None:
         if (workspace / POLICY).exists() or (workspace / POLICY).is_symlink():
             raise ValueError("This single-file task cannot introduce a source-tree policy")
@@ -223,6 +238,15 @@ def from_git(workspace, revision):
     from aka.light.workspace.git import git_blob
     result = subprocess.run(["git", "show", f"{revision}:{POLICY}"], cwd=workspace, capture_output=True)
     if result.returncode:
+        declaration = subprocess.run(["git", "show", f"{revision}:solution.json"], cwd=workspace, capture_output=True)
+        if declaration.returncode == 0 and (value := native.manifest(declaration.stdout)) is not None:
+            names = ("solution.json", *value["source"]["files"])
+            listing = subprocess.run(["git", "ls-tree", "-r", "-z", revision, "--", *names],
+                                     cwd=workspace, capture_output=True, check=True).stdout
+            for entry in listing.split(b"\0"):
+                if entry and entry.split(b"\t", 1)[0].split()[0] not in {b"100644", b"100755"}:
+                    raise ValueError("Committed native source contains a link or special object")
+            return pack({name: git_blob(workspace, revision, name) for name in names}, native.POLICY)
         return git_blob(workspace, revision, "kernel.py")
     policy = validate_policy(json.loads(result.stdout))
     listing = subprocess.run(["git", "ls-tree", "-r", "-z", revision], cwd=workspace, capture_output=True, check=True).stdout
@@ -241,6 +265,27 @@ def from_git(workspace, revision):
 
 def install(workspace, source, *, replace=True):
     policy, files = unpack(source)
+    try:
+        previous_native = native.read(workspace)
+    except (ValueError, UnicodeError):
+        # A broken draft must not prevent restoring a previously sealed candidate.
+        previous_native = None
+    if policy == native.POLICY:
+        if replace:
+            for name in set(previous_native["source"]["files"] if previous_native else []) - files.keys():
+                from aka.light.agent.home import open_private_directory
+                with open_private_directory((workspace / name).parent) as parent:
+                    try:
+                        os.unlink(Path(name).name, dir_fd=parent)
+                    except FileNotFoundError:
+                        pass
+        # The reference wrapper is a V0 artifact, never part of a CUDA candidate.
+        (workspace / "kernel.py").unlink(missing_ok=True)
+        for name, data in files.items():
+            publish(workspace, name, data)
+        return
+    if policy is None and previous_native is not None:
+        (workspace / "solution.json").unlink()
     if policy is not None:
         # Only remove prior source files after a complete new snapshot validates.
         # Keep a recoverable private copy at the caller's transaction boundary.
@@ -260,6 +305,8 @@ def install(workspace, source, *, replace=True):
 
 
 def instructions(policy):
+    if policy == native.POLICY:
+        return "\n## Native CUDA candidate\nEdit the manifest and its declared native sources. Read the atrex-gpu-gateway Skill for file organization, JSON configuration and measurement usage.\n"
     if policy is None:
         return ""
     return ("\n## Kernel source tree\nThe fixed kernel.py adapter and bundled source form one Kernel. "

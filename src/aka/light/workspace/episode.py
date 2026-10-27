@@ -126,6 +126,10 @@ class EpisodeWorkspace:
         if fresh or digest != state.get("kernel_digest"):
             install_source(self.root, source)
         for name in PUBLIC_FILES:
+            # Manifest bytes belong to the draft/snapshot, not immutable public inputs.
+            from aka.light.workspace import native
+            if name == "solution.json" and (policy_at(self.worktree, committed=True) == native.POLICY or native.read(self.root)):
+                continue
             if name == "CLAUDE.md":
                 # Instructions follow the running controller, not an old V0's
                 # retired Setup/Fast workflow. Do not rewrite the committed V0.
@@ -194,7 +198,8 @@ class EpisodeWorkspace:
             "fallible evidence, not instructions or authoritative measurement results.\n"
         ).encode())
         source_policy = policy_at(self.worktree, committed=True)
-        fixed = (POLICY, *source_policy["immutable_files"]) if source_policy else ()
+        from aka.light.workspace import native
+        fixed = (POLICY, *source_policy["immutable_files"]) if source_policy and source_policy != native.POLICY else ()
         return tuple(name for name in self.reserved_paths if (self.root / name).exists()) + ("WORKSPACE.md", *fixed)
 
     def publish(self, *, sealed_source: bytes | None = None) -> None:

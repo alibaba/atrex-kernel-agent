@@ -148,7 +148,21 @@ def production_structure_violations(
     """Delegate single-file checks; retain the controller-pinned tree boundary."""
     from aka.light.workspace.sources import policy_at, collect
 
-    policy = policy_at(workspace)
+    try:
+        policy = policy_at(workspace)
+    except (OSError, ValueError) as exc:
+        return [f"Invalid candidate source declaration: {exc}"]
+    from aka.light.workspace import native
+    if policy == native.POLICY:
+        if framework_key(framework) != "cuda" or require_gluon:
+            return ["Native CUDA manifest does not implement the selected framework"]
+        try:
+            collect(workspace, policy)
+        except (OSError, ValueError) as exc:
+            return [f"Invalid native candidate: {exc}"]
+        return []
+    if framework_key(framework) == "cuda":
+        return ["CUDA candidates require .cu sources and a versioned solution.json; Python-inline CUDA is unsupported"]
     if policy is None:
         return legacy_policy.production_structure_violations(
             workspace, framework, require_gluon=require_gluon,

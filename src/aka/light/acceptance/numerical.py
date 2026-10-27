@@ -108,6 +108,9 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
             private = Path(campaign.private_reference_dir) if campaign.private_reference_dir else None
             for name in ("input.py", "reference.py", "shapes.json", "metadata.json", "agent_problem.json",
                          "solution.json", "config.json", "definition.json", "workload.jsonl"):
+                from aka.light.workspace import native
+                if name == "solution.json" and native.read(frozen):
+                    continue
                 if private is not None and name != "solution.json" and (private / name).is_file():
                     data = read_input(private, name)
                 else:
@@ -144,6 +147,9 @@ def _sources(campaign, workspace):
     from aka.light.workflow.session_io import _production_review_candidate_paths
 
     files = {"instructions.md": PROMPT, "driver.py": DRIVER, "numerical_inputs.py": PROBE_ALGORITHMS, "transport.py": HARNESS}
+    from aka.light.workspace import native
+    if native.read(workspace):
+        files["native_transport.py"] = Path(__file__).with_name("native_numerical.py")
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     # Metadata/configuration are part of the pinned public input contract and
@@ -291,6 +297,11 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         raise ValueError("retained probe world_size differs from the trusted contract")
     shapes = json.loads(shapes_path.read_text())
     schedule = validation_schedule(suite, shapes, digest, "thorough")
+    from aka.light.workspace import native
+    if native.read(workspace) is not None:
+        from aka.light.acceptance.native_numerical import run
+        return run(campaign, workspace, suite, shapes, schedule, directory, cancel=cancel,
+                   max_rel_l2=_fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2)
     results = []
     for index, plan in enumerate(schedule):
         cancel.check()
@@ -530,7 +541,7 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     elif status == "needs_repair":
         if flow == "framework_baseline":
             next_step = (
-                "Repair kernel.py, rerun the bounded V1 smoke command, then stop. "
+                "Repair the candidate sources, rerun the bounded V1 smoke command, then stop. "
                 "Do not submit episode-report. "
             )
         elif research_records:

@@ -1517,7 +1517,8 @@ class Campaign:
         if pinned_commit:
             return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
 
-        if policy_at(self.workspace, committed=True) is not None:
+        from aka.light.workspace import native
+        if policy_at(self.workspace, committed=True) not in (None, native.POLICY):
             return "pin", "source-tree task keeps the pinned package/adapter as its Framework baseline"
 
         progressed = not head_kernel_is_initial_baseline(self.workspace)
@@ -1532,7 +1533,7 @@ class Campaign:
         if not progressed and dirty_candidate:
             return "run", "resuming preserved framework-baseline work"
 
-        if self.framework_baseline == "auto" and self.optimization_mode != "production":
+        if self.framework_baseline == "auto" and self.optimization_mode != "production" and self.framework.lower() != "cuda":
             return (
                 "skip",
                 "leaderboard mode keeps the permissive V0 (use --framework-baseline always)",
@@ -2320,7 +2321,8 @@ class Campaign:
         Everything is judged from the worktree: that is what the gateway uploads, and it lets a
         session that wrote the kernel but never committed it still be accepted.
         """
-        candidate_blob = git_worktree_blob(self.workspace, "kernel.py")
+        from aka.light.workspace import native
+        candidate_blob = ("native" if native.read(self.workspace) else git_worktree_blob(self.workspace, "kernel.py"))
         if not candidate_blob or candidate_blob == v0_blob:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
         violations = [] if not self.source_checks_enabled else (
@@ -2557,6 +2559,16 @@ class Campaign:
             )
             if (self.workspace / path).exists()
         ]
+        from aka.light.workspace.sources import snapshot as source_snapshot, unpack
+        from aka.light.workspace import native
+        source = source_snapshot(self.workspace)
+        source_policy, source_files = unpack(source)
+        if source_policy == native.POLICY:
+            staged += list(source_files)
+            if git_path_blob(self.workspace, "HEAD", "kernel.py"):
+                (self.workspace / "kernel.py").unlink(missing_ok=True)
+                staged.append("kernel.py")
+        staged = list(dict.fromkeys(staged))
         staged += [
             str(path.relative_to(self.workspace))
             for path in sorted(self.workspace.glob(f"plans/v{n}_*.md"))
@@ -2588,15 +2600,14 @@ class Campaign:
                 stdout=subprocess.DEVNULL,
             )
         kernel_commit = subprocess.run(
-            ["git", "rev-list", "-1", "HEAD", "--", "kernel.py"],
+            ["git", "rev-list", "-1", "HEAD", "--", *source_files],
             cwd=str(self.workspace),
             capture_output=True,
             text=True,
             check=True,
         ).stdout.strip()
-        if git_kernel_blob(self.workspace) != git_worktree_blob(
-            self.workspace, "kernel.py"
-        ):
+        from aka.light.workspace.sources import from_git
+        if from_git(self.workspace, kernel_commit) != source_snapshot(self.workspace):
             raise RuntimeError(
                 "framework baseline kernel.py differs between the worktree and the commit"
             )
@@ -2638,6 +2649,11 @@ class Campaign:
             "kernel_blob": git_path_blob(self.workspace, commit, "kernel.py"),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
+        from aka.light.workspace.sources import from_git, unpack
+        source = from_git(self.workspace, commit)
+        if unpack(source)[0] is not None:
+            import hashlib
+            marker["source_sha256"] = hashlib.sha256(source).hexdigest()
         (self.workspace / FRAMEWORK_BASELINE_FILE).write_text(
             json.dumps(marker, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )

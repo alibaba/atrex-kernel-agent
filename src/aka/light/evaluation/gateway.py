@@ -1141,7 +1141,9 @@ def _typed_workspace_limitation(
     """Explain why the typed run/profile source contract cannot represent a workspace."""
     from aka.light.workspace.sources import policy_at
     source_tree = policy_at(workspace) is not None
-    required = ("kernel.py", "reference.py", "input.py")
+    from aka.light.workspace import native
+    required = (("solution.json", "reference.py", "input.py") if policy_at(workspace) == native.POLICY
+                else ("kernel.py", "reference.py", "input.py"))
     missing = [name for name in required if not (workspace / name).is_file()]
     if missing:
         return "missing " + ", ".join(missing)
@@ -1380,7 +1382,7 @@ def build_typed_request(
             raise ValueError(f"shape {selected_shape_id!r} init_kwargs must be an object or null")
         request: dict[str, Any] = {
             "spec": {"target_hardware": [hardware]},
-            "candidate": (workspace / "kernel.py").read_text(encoding="utf-8"),
+            "candidate": ((workspace / "kernel.py").read_text(encoding="utf-8") if (workspace / "kernel.py").is_file() else ""),
             "env_vars": _parse_env_items(env_items),
             "init_kwargs": dict(init_value or {}),
             # Local Gateway uses this evaluator-owned input to perform a real
@@ -1468,7 +1470,7 @@ def build_typed_request(
     request: dict[str, Any] = {
         "name": f"{workspace.name}_{kind}",
         "spec": spec,
-        "candidate": (workspace / "kernel.py").read_text(encoding="utf-8"),
+        "candidate": ((workspace / "kernel.py").read_text(encoding="utf-8") if (workspace / "kernel.py").is_file() else ""),
         "reference": reference,
         "options": {
             "num_correctness_cases": 1 + multi_seed,
@@ -1483,6 +1485,11 @@ def build_typed_request(
         reference.get("metadata") if isinstance(reference.get("metadata"), dict) else None,
         reference.get("operator"),
     )
+    explicit_rel_l2 = _option_value(command, "--correctness-max-rel-l2")
+    if explicit_rel_l2 is not None:
+        correctness_max_rel_l2 = float(explicit_rel_l2)
+        if not math.isfinite(correctness_max_rel_l2) or correctness_max_rel_l2 <= 0:
+            raise ValueError("--correctness-max-rel-l2 must be positive and finite")
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
@@ -4447,6 +4454,9 @@ def _main(argv: list[str] | None = None) -> int:
         private_profile_shape = (
             gateway_kind == "profile" and profile_command and _is_generalized_workspace(workspace)
         )
+        from aka.light.workspace import native
+        if native.read(workspace) is not None:
+            raise SystemExit(f"sandbox: native CUDA requires the typed Agate {gateway_kind} route ({typed_limitation}); no Dev fallback was submitted")
         if _requires_typed_request(args, private_profile_shape=private_profile_shape):
             raise SystemExit(
                 f"sandbox: explicit typed {gateway_kind} options cannot be honored "
@@ -5107,7 +5117,7 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
         options.pop("comparison_run_timeout", None)
     if baseline_path and baseline_path not in files and "baseline" not in source_snapshots:
         raise ValueError("--baseline-path must name an existing regular workspace file")
-    if "kernel.py" not in files and operation != "dev":
+    if "kernel.py" not in files and "candidate" not in source_snapshots and operation != "dev":
         raise ValueError("Measurement requires an existing kernel.py")
     gateway_environment = {name: environment[name] for name in (
         "AGATE_URL", "ATREX_SANDBOX_PROFILE", *PROFILE_ENVIRONMENT_KEYS,

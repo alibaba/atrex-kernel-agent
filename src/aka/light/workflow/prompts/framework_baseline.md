@@ -1,6 +1,6 @@
 # Framework baseline
 
-Produce the first self-contained `{{FRAMEWORK}}` implementation of this operator in `kernel.py`.
+Produce the first self-contained `{{FRAMEWORK}}` implementation of this operator. Use `kernel.py` for Python DSLs; for CUDA write separate `.cu` sources and `solution.json` as specified in the atrex-gpu-gateway Skill.
 V0 is the PyTorch reference wrapper; the Supervisor will register the accepted implementation
 as v{{N}} before optimization Episodes begin. If recovering an interrupted session, preserve
 and inspect the candidate already on disk instead of starting over.
@@ -27,7 +27,7 @@ run ABBA, or add a separate benchmark.
 
 ## Step A — Understand the operator
 
-Read workspace `README.md`, the optional `memory/v0.json` if present, the current `kernel.py`, and the available public
+Read workspace `README.md`, the optional `memory/v0.json` if present, the current candidate sources, and the available public
 contract/reference files. For native problems these include `reference.py`, `input.py`, and
 public `agent_problem.json` or legacy `shapes.json`; for SOL, use `definition.json`, `reference.py`,
 and `workload.jsonl`. Cover the full public domain without searching for hidden evaluator inputs.
@@ -44,10 +44,8 @@ Implement the whole operator yourself in `{{FRAMEWORK}}`, preserving the expecte
 interface. Use dependencies only for allocation, compiler/header/ABI/launch plumbing, or other
 non-compute support: no PyTorch compute fallback, prebuilt operators, alternate-DSL compute,
 hidden dispatch, or external implementation loading. For Triton, use plain Triton; Gluon is a
-later, explicitly requested conversion. For CUDA, embed self-authored `__global__` source and
-its supported in-process loader in `kernel.py`, not a separate executable `kernel.cu`. Prefer
-CUDA bindings/NVRTC on SOL workers, where `load_inline` is blocked. Keep any supplied
-`solution.json` consistent with the implementation.
+later, explicitly requested conversion. For CUDA, use separate native sources and a manifest;
+read the atrex-gpu-gateway Skill for the file format, build configuration and supported transports.
 
 After the implementation edit, run this smoke command:
 
@@ -68,7 +66,7 @@ The Supervisor performs full correctness, policy and (in production) supplementa
 validation after smoke. If it returns a measured counterexample, repair the implementation using
 the supplied distributions and metrics; do not change evaluator inputs, probes or thresholds.
 
-After smoke passes, leave those exact bytes in `kernel.py`, print
+After smoke passes, leave those exact candidate files and manifest on disk, print
 `v{{N}}: framework candidate smoke-passed ({{FRAMEWORK}})`, and stop. Do not submit `episode-report`,
 write canonical memory, or commit. If blocked, state the concrete blocker and available Gateway
 Record IDs instead of claiming success.
