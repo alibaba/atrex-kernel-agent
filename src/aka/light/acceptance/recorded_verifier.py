@@ -79,7 +79,7 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
     def verify(self, workspace: Path, *, base_commit: str, candidate_commit: str,
                changed_paths: list[str]) -> VerificationResult:
         try:
-            from aka.light.workspace.candidate import from_git, Artifact, install
+            from aka.light.workspace.sources import from_git, Artifact, install
             candidate = from_git(workspace, candidate_commit)
             baseline = from_git(workspace, base_commit)
             if not Artifact(baseline).allows_changes(changed_paths):

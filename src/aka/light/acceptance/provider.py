@@ -43,7 +43,7 @@ def authoritative_candidate_record(record: dict, source: bytes, *, atrex_bench: 
     options = request.get("options")
     if not isinstance(inputs, dict) or not isinstance(options, dict):
         return False
-    from aka.light.workspace.candidate import Artifact
+    from aka.light.workspace.sources import Artifact
     common = (
         record.get("cacheable") is True
         and record.get("operation") == "evaluate"

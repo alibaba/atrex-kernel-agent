@@ -198,7 +198,7 @@ def run_session(
 
 def _production_review_candidate_paths(workspace: Path) -> list[Path]:
     """Return the complete, bounded source set shown to the production reviewer."""
-    from aka.light.workspace.candidate import review_paths
+    from aka.light.workspace.sources import review_paths
     return review_paths(workspace)
 
 

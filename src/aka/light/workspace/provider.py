@@ -19,12 +19,12 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
             raise ValueError("inherit_state must be boolean")
         self.inherit_state = inherit_state
         if file_system is not None:
-            from .candidate import select
+            from .sources import select
             select(file_system)
         self.file_system = file_system
         self.source_tree = source_tree
         if source_tree is not None:
-            from .candidate import validate_import_options
+            from .sources import validate_import_options
             validate_import_options(source_tree)
 
     def source_options(self, legacy_options=None):
@@ -37,12 +37,12 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
                                      state_root=state_root, native_eval=native_eval)
 
     def select_file_system(self, *, framework, source_tree=False):
-        from .candidate import task_selection
+        from .sources import task_selection
         return task_selection(self.file_system, framework=framework, source_tree=source_tree)
 
     def activate_file_system(self, workspace, system):
-        from .candidate.registry import resolve
-        from .candidate.common import SELECTION
+        from .sources.registry import resolve
+        from .sources.common import SELECTION
         import json
         current, _ = resolve(workspace, revision='HEAD')
         if current.name != system.name:

@@ -7,8 +7,8 @@ from types import SimpleNamespace
 
 import pytest
 
-from aka.light.workspace.candidate import cuda_manifest as native
-from aka.light.workspace import candidate as sources
+from aka.light.workspace.sources import cuda_manifest as native
+from aka.light.workspace import sources
 from aka.light.evaluation import source_transport
 
 
@@ -261,21 +261,21 @@ def test_file_system_owns_format_knowledge():
     root = Path(__file__).resolve().parents[1] / 'src/aka/light'
     violations = []
     for path in root.rglob('*.py'):
-        if path.is_relative_to(root / 'workspace/candidate'):
+        if path.is_relative_to(root / 'workspace/sources'):
             continue
         tree = ast.parse(path.read_text())
         for node in ast.walk(tree):
             if isinstance(node, ast.ImportFrom):
-                if node.module in {'aka.light.workspace.candidate.native', 'aka.light.workspace.candidate.storage'}:
+                if node.module in {'aka.light.workspace.sources.native', 'aka.light.workspace.sources.storage'}:
                     violations.append(str(path))
-                if node.module == 'aka.light.workspace.candidate' and any(n.name in {'native', 'storage'} for n in node.names):
+                if node.module == 'aka.light.workspace.sources' and any(n.name in {'native', 'storage'} for n in node.names):
                     violations.append(str(path))
         assert 'agate_cuda' not in path.read_text(), path
     assert violations == []
 
 
 def test_artifact_roundtrip_and_execution_are_format_independent(workspace, tmp_path):
-    from aka.light.workspace.candidate import Artifact, read
+    from aka.light.workspace.sources import Artifact, read
     compiled = read(workspace)
     plain = Artifact(b'class Model: pass\n')
     for index, artifact in enumerate([plain, compiled]):
@@ -295,7 +295,7 @@ def test_artifact_roundtrip_and_execution_are_format_independent(workspace, tmp_
 
 
 def test_staging_preserves_pinned_files_and_blocks_format_downgrade(workspace, tmp_path):
-    from aka.light.workspace.candidate import freeze_for_execution, stage_frozen, read
+    from aka.light.workspace.sources import freeze_for_execution, stage_frozen, read
     init_git(workspace)
     original = read(workspace).snapshot
     draft = tmp_path/'draft'; draft.mkdir()
@@ -315,7 +315,7 @@ def test_staging_preserves_pinned_files_and_blocks_format_downgrade(workspace, t
 
 
 def test_baseline_commit_paths_remove_obsolete_wrapper(workspace):
-    from aka.light.workspace.candidate import commit_paths, read, from_revision
+    from aka.light.workspace.sources import commit_paths, read, from_revision
     original = read(workspace).snapshot
     sources.install(workspace, b'class Model: pass\n')
     git(workspace, 'init', '-b', 'main')
@@ -335,7 +335,7 @@ def test_baseline_commit_paths_remove_obsolete_wrapper(workspace):
 
 def test_python_legacy_measurement_and_export_remain_supported(tmp_path):
     from datetime import datetime, timezone
-    from aka.light.workspace.candidate import Artifact
+    from aka.light.workspace.sources import Artifact
     artifact = Artifact(b'class Model: pass\n')
     artifact.install(tmp_path)
     assert artifact.matches_measurement(tmp_path, {'schema_version':1,'timestamp':datetime.now(timezone.utc).isoformat()})
@@ -347,7 +347,7 @@ def test_python_legacy_measurement_and_export_remain_supported(tmp_path):
 @pytest.mark.parametrize('compiled', [False, True])
 def test_episode_commit_uses_one_file_system_for_all_formats(workspace, compiled):
     from aka.light.workspace.git import EpisodeWorktree
-    from aka.light.workspace.candidate import read, from_revision
+    from aka.light.workspace.sources import read, from_revision
     if compiled:
         base = init_git(workspace)
         (workspace/'include/offset.h').write_text('#define OFFSET 3\n')
@@ -370,7 +370,7 @@ def test_episode_commit_uses_one_file_system_for_all_formats(workspace, compiled
 
 
 def test_imported_python_tree_keeps_pinned_adapter_and_full_identity(tmp_path):
-    from aka.light.workspace.candidate import Artifact, pack, read, freeze_for_execution
+    from aka.light.workspace.sources import Artifact, pack, read, freeze_for_execution
     adapter=b'from impl import Model\n'
     contract={'schema_version':1,'source_revision':None,'seed_digest':'sha256:'+'0'*64,
               'package_root':'.','editable_roots':['impl'],
@@ -398,7 +398,7 @@ def test_installed_numerical_assets_resolve_venv_aliases(workspace):
 
 def test_baseline_marker_and_recovery_compare_git_identity(workspace, monkeypatch):
     from aka.light.workflow import bootstrap
-    from aka.light.workspace.candidate import read, baseline_marker, workspace_identity
+    from aka.light.workspace.sources import read, baseline_marker, workspace_identity
     compiled=read(workspace).snapshot
     sources.install(workspace,b'class Model: pass\n')
     git(workspace,'init','-b','main');git(workspace,'config','user.name','Test');git(workspace,'config','user.email','test@example.com')
@@ -446,7 +446,7 @@ def test_file_system_implementations_are_independent(name):
 
 
 def test_explicit_selection_never_falls_back(workspace):
-    from aka.light.workspace.candidate.common import SELECTION
+    from aka.light.workspace.sources.common import SELECTION
     artifact = sources.read(workspace)
     artifact.install(workspace, bind=True)
     assert sources.read(workspace, file_system='cuda_manifest').snapshot == artifact.snapshot
@@ -464,7 +464,7 @@ def test_explicit_selection_never_falls_back(workspace):
 
 def test_workspace_plugin_selects_and_pins_one_file_system(workspace):
     from aka.light.workspace.provider import ManagedCandidateWorkspace
-    from aka.light.workspace.candidate.common import SELECTION
+    from aka.light.workspace.sources.common import SELECTION
     init_git(workspace)
     provider = ManagedCandidateWorkspace(file_system='cuda_manifest')
     system = provider.select_file_system(framework='cuda')
@@ -528,7 +528,7 @@ def test_default_source_tree_bootstrap_is_frozen(tmp_path, framework):
 
 
 def test_explicit_file_system_selection_overrides_default():
-    from aka.light.workspace.candidate import task_selection
+    from aka.light.workspace.sources import task_selection
     assert task_selection('single_file', framework='triton').name == 'single_file'
     assert task_selection('cuda_manifest', framework='cuda').name == 'cuda_manifest'
     with pytest.raises(ValueError, match='requires'):
@@ -536,7 +536,7 @@ def test_explicit_file_system_selection_overrides_default():
 
 
 def test_pinned_single_file_cannot_switch_during_execution(tmp_path):
-    from aka.light.workspace.candidate.common import SELECTION
+    from aka.light.workspace.sources.common import SELECTION
     authority = tmp_path/'authority'; authority.mkdir()
     sources.Artifact(b'class Model: pass\n').install(authority, bind=True)
     git(authority,'init','-b','main');git(authority,'config','user.name','Test');git(authority,'config','user.email','test@example.com')

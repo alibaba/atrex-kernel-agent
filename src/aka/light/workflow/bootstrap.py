@@ -1189,7 +1189,7 @@ class Campaign:
         recorded = read_memory(self.workspace, 0) or {}
         if recorded.get("git_commit_hash") != source_commit:
             raise RuntimeError("V0 measurement record does not point to the V0 source commit")
-        from aka.light.workspace.candidate import from_git, snapshot as source_snapshot
+        from aka.light.workspace.sources import from_git, snapshot as source_snapshot
         if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
             raise RuntimeError("V0 candidate source differs from its recorded source commit")
 
@@ -1217,7 +1217,7 @@ class Campaign:
             "profile_driver.py",
             *agent_visible_operator_files(op_dir, generalized=generalized),
         ]
-        from aka.light.workspace.candidate import snapshot as source_snapshot, read
+        from aka.light.workspace.sources import snapshot as source_snapshot, read
         source_paths += list(read(self.workspace).materialized_files)
         source_paths = list(
             dict.fromkeys(
@@ -1244,7 +1244,7 @@ class Campaign:
         source_commit = v0_baseline_commit(self.workspace)
         if not source_commit:
             raise RuntimeError("native V0 has no committed kernel.py")
-        from aka.light.workspace.candidate import from_git
+        from aka.light.workspace.sources import from_git
         if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
             raise RuntimeError("native V0 source history does not match the selected source")
 
@@ -1501,7 +1501,7 @@ class Campaign:
 
     def _framework_baseline_decision(self) -> tuple[str, str]:
         """Resolve what the stage should do: skip | pin | run | adopt, with the reason."""
-        from aka.light.workspace.candidate import layout_at
+        from aka.light.workspace.sources import layout_at
         if self.framework_baseline == "never":
             return "skip", ""
         if latest_version(self.workspace) < 0 or not git_head(self.workspace):
@@ -1519,7 +1519,7 @@ class Campaign:
             return "pin", "source-tree task keeps the pinned package/adapter as its Framework baseline"
 
         progressed = not head_kernel_is_initial_baseline(self.workspace)
-        from aka.light.workspace.candidate import read, from_revision
+        from aka.light.workspace.sources import read, from_revision
         dirty_candidate = read(self.workspace).snapshot != from_revision(self.workspace, "HEAD").snapshot
         restart_journal = framework_baseline_progress_path(self.workspace).is_file()
         # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
@@ -2109,7 +2109,7 @@ class Campaign:
 
     def _restore_framework_baseline_candidate(self, v0_blob: str) -> None:
         """Restore an ignored snapshot only when the worktree fell back to the V0 wrapper."""
-        from aka.light.workspace.candidate import workspace_identity
+        from aka.light.workspace.sources import workspace_identity
         if workspace_identity(self.workspace) != v0_blob:
             return
         try:
@@ -2154,7 +2154,7 @@ class Campaign:
         return [measured[index][0] for index in dict.fromkeys(indexes)]
 
     def _ensure_framework_baseline_solution_manifest(self) -> None:
-        from aka.light.workspace.candidate import seed_baseline_metadata
+        from aka.light.workspace.sources import seed_baseline_metadata
         seed_baseline_metadata(self.workspace, self.framework, self.campaign_name,
                                native_eval=bool(self.atrex_bench_root))
 
@@ -2267,7 +2267,7 @@ class Campaign:
         Everything is judged from the worktree: that is what the gateway uploads, and it lets a
         session that wrote the kernel but never committed it still be accepted.
         """
-        from aka.light.workspace.candidate import workspace_identity
+        from aka.light.workspace.sources import workspace_identity
         candidate_blob = workspace_identity(self.workspace)
         if not candidate_blob or candidate_blob == v0_blob:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
@@ -2494,7 +2494,7 @@ class Campaign:
 
     def _commit_framework_baseline(self, n: int, result: dict) -> str:
         """Commit the accepted kernel (C1) and then pin it in a metadata-only commit (C2)."""
-        from aka.light.workspace.candidate import read, commit_paths
+        from aka.light.workspace.sources import read, commit_paths
         artifact = read(self.workspace)
         source = artifact.snapshot
         source_files = artifact.files
@@ -2541,7 +2541,7 @@ class Campaign:
             text=True,
             check=True,
         ).stdout.strip()
-        from aka.light.workspace.candidate import from_git
+        from aka.light.workspace.sources import from_git
         if from_git(self.workspace, kernel_commit) != read(self.workspace).snapshot:
             raise RuntimeError(
                 "framework baseline candidate differs between the worktree and the commit"
@@ -2574,7 +2574,7 @@ class Campaign:
         commit whose sha the marker records, leaving a dangling pointer. This commit does not
         touch kernel.py, so it never registers as an optimization win.
         """
-        from aka.light.workspace.candidate import baseline_marker
+        from aka.light.workspace.sources import baseline_marker
         marker = {
             "schema_version": 1,
             "version": f"v{version}",

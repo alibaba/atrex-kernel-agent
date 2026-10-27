@@ -74,7 +74,7 @@ def query(store, args, workspace: Path) -> dict:
         if len(path.parts) < 2 or path.parts[0] != "scratch":
             raise ValueError("--output-path must name a file (or tree directory) inside scratch/")
         source = _read_record(store.read_kernel, args.kernel_id, field="kernel_id", pattern=KERNEL_RECORD_ID_RE)
-        from aka.light.workspace.candidate import Artifact
+        from aka.light.workspace.sources import Artifact
         exported = Artifact(source).export(workspace / path)
         result = {"ok": True, "kernel_id": args.kernel_id, "file": str(path), "bytes": len(source)}
         if exported:
@@ -186,7 +186,7 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
         # Let the HTTP boundary attach the effective CLI contract and redaction.
         raise AgentRequestError(str(error)) from error
     operation = request["operation"]
-    from aka.light.workspace.candidate import measurement_artifacts
+    from aka.light.workspace.sources import measurement_artifacts
     kernels = {side: store.kernel(artifact.snapshot)
                for side, artifact in measurement_artifacts(request, inputs).items()}
     if reuse_correctness and reuse_completed and "candidate" in kernels:

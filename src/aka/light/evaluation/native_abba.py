@@ -336,7 +336,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     validate_comparison(args)
     if args.ssh or (workspace / "workload.jsonl").exists():
         raise ValueError("Native Eval ABBA requires an Agate Atrex-Bench input/Shape contract; SOL/SSH Dev fallback is disabled")
-    from aka.light.workspace.candidate import read_path
+    from aka.light.workspace.sources import read_path
     baseline = read_path(workspace / args.baseline_path)
     command = ["python3", "test_kernel.py"]
     for flag, value in (("--multi-seed", args.multi_seed), ("--timed-runs", args.timed_runs)):

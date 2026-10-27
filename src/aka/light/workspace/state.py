@@ -97,13 +97,13 @@ def speedup_vs_reference(
 
 def git_kernel_blob(workspace: Path) -> str:
     """Committed candidate identity, stable across metadata-only commits."""
-    from aka.light.workspace.candidate import revision_identity
+    from aka.light.workspace.sources import revision_identity
     return revision_identity(workspace)
 
 
 def commit_changed_kernel(workspace: Path, commit: str) -> bool:
     """Count changes to the complete candidate through its file system."""
-    from aka.light.workspace.candidate import revision_changed
+    from aka.light.workspace.sources import revision_changed
     commit = _normalize_commit_hash(commit)
     return bool(commit) and revision_changed(workspace, commit)
 
@@ -218,7 +218,7 @@ def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
     marker = read_framework_baseline(workspace)
     if not marker or not marker.get("source_sha256"):
         return _legacy_resolve_framework_baseline_commit(workspace)
-    from aka.light.workspace.candidate import from_git
+    from aka.light.workspace.sources import from_git
     import hashlib
     commit = _normalize_commit_hash(marker.get("commit"))
     if not commit or subprocess.run(["git", "merge-base", "--is-ancestor", commit, "HEAD"],

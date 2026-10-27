@@ -55,10 +55,11 @@ it never parses source declarations or chooses source filenames.
 
 | Selection | Independent implementation | Managed candidate |
 | --- | --- | --- |
-| `single_file` | `candidate/single_file.py` | One Python source file |
-| `source_tree` | `candidate/source_tree.py` | Pinned Python adapter plus editable source directories |
-| `cuda_manifest` | `candidate/cuda_manifest.py` | CUDA sources, headers and `solution.json` |
+| `single_file` | `sources/single_file.py` | One Python source file |
+| `source_tree` | `sources/source_tree.py` | Pinned Python adapter plus editable source directories |
+| `cuda_manifest` | `sources/cuda_manifest.py` | CUDA sources, headers and `solution.json` |
 
+The existing `aka.light.workspace.sources` import path is retained as a package.
 Each implementation owns initial-source preparation, layout, validation, reads,
 execution packaging, restoration and evidence paths. They do not import or call
 one another. `common.py` defines their interface and shared file operations;

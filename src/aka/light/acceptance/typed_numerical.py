@@ -8,7 +8,7 @@ import tempfile
 
 from aka.legacy.evaluation.drivers import numerical_inputs
 from aka.light.workspace.files import publish, read_input
-from aka.light.workspace.candidate import install, snapshot
+from aka.light.workspace.sources import install, snapshot
 
 
 def input_source(original: bytes, case: dict, seed: int) -> bytes:

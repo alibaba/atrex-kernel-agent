@@ -603,7 +603,7 @@ def _make_input_bundle(
     injected_payloads: dict[str, bytes] | None = None,
 ) -> tuple[str, int, list[str]]:
     """Return a base64 tarball containing only explicitly selected inputs."""
-    from aka.light.workspace.candidate import collect, policy_at
+    from aka.light.workspace.sources import collect, policy_at
 
     archive = io.BytesIO()
     seen: set[str] = set()
@@ -696,7 +696,7 @@ def _make_input_bundle(
 
 def _declared_candidate_sources(workspace: Path) -> set[str]:
     """Return the complete contracted tree or legacy solution sources."""
-    from aka.light.workspace.candidate import declared_paths
+    from aka.light.workspace.sources import declared_paths
     return declared_paths(workspace)
 
 
@@ -785,7 +785,7 @@ def _command_input_paths(
     """
     parts = _command_parts(command)
     selected: set[str] = set()
-    from aka.light.workspace.candidate import policy_at
+    from aka.light.workspace.sources import policy_at
     if policy_at(workspace) is not None:
         selected.update(_declared_candidate_sources(workspace))
     for value in explicit_inputs:
@@ -1113,7 +1113,7 @@ def _typed_workspace_limitation(
     workspace: Path, command: list[str], kind: str
 ) -> str | None:
     """Explain why the typed run/profile source contract cannot represent a workspace."""
-    from aka.light.workspace.candidate import typed_limitation
+    from aka.light.workspace.sources import typed_limitation
     limitation = typed_limitation(workspace)
     if limitation:
         return limitation
@@ -1293,7 +1293,7 @@ def build_typed_request(
                 raise ValueError("each --shapes-path record must be a JSON object")
         shapes = custom_shape_value
         custom_shapes = True
-    from aka.light.workspace.candidate import language_hints
+    from aka.light.workspace.sources import language_hints
     languages = language_hints(workspace)
     # Agate's native Eval contract accepts the optional language hint, while
     # the native Profile contract currently rejects it as an extra field.
@@ -3591,7 +3591,7 @@ def _record_episode_evaluation(
     if not (runtime / "journal.json").is_file():
         return
     try:
-        from aka.light.workspace.candidate import snapshot as source_snapshot
+        from aka.light.workspace.sources import snapshot as source_snapshot
         kernel_sha256 = hashlib.sha256(source_snapshot(workspace)).hexdigest()
     except (OSError, ValueError):
         kernel_sha256 = None
@@ -3836,7 +3836,7 @@ def _run_typed_gateway(
 ) -> int | None:
     """Run agate eval/profile; a failed typed Eval never falls back to Dev."""
     generalized = _is_generalized_workspace(workspace)
-    from aka.light.workspace.candidate import layout_at
+    from aka.light.workspace.sources import layout_at
     source_tree = layout_at(workspace).archived
     compatible_fallback = not source_tree and not _requires_typed_request(
         args, private_profile_shape=(kind == "profile" and generalized and _is_profile_command(command_parts)),
@@ -4387,7 +4387,7 @@ def _main(argv: list[str] | None = None) -> int:
         private_profile_shape = (
             gateway_kind == "profile" and profile_command and _is_generalized_workspace(workspace)
         )
-        from aka.light.workspace.candidate import layout_at
+        from aka.light.workspace.sources import layout_at
         if layout_at(workspace).typed_only:
             raise SystemExit(f"sandbox: candidate requires the typed Agate {gateway_kind} route ({typed_limitation}); no Dev fallback was submitted")
         if _requires_typed_request(args, private_profile_shape=private_profile_shape):
@@ -4935,7 +4935,7 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
     evaluator = kind == "run" or bool(baseline_path) or _is_numerical_probe_command(command)
     selected = set(_evaluation_input_paths(workspace, command) if evaluator else
                    _command_input_paths(workspace, command, args.input))
-    from aka.light.workspace.candidate import measurement_paths
+    from aka.light.workspace.sources import measurement_paths
     candidate_paths, source_snapshots = measurement_paths(workspace, baseline_path)
     selected.update(candidate_paths)
     for value in args.input or []:

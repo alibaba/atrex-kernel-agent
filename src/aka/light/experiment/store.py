@@ -20,7 +20,7 @@ from pathlib import Path
 from aka.light.agent.home import open_private_directory
 from aka.legacy.task.persistence import durable_write_json, durable_write_text
 from aka.light.agent.session_tail import read_regular_bytes
-from aka.light.workspace.candidate import MAX_SNAPSHOT, Artifact
+from aka.light.workspace.sources import MAX_SNAPSHOT, Artifact
 
 RECORD_ID = re.compile(r"gateway-[0-9a-f]{32}")
 KERNEL_ID = re.compile(r"kernel-[0-9a-f]{32}")

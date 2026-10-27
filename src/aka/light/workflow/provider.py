@@ -29,7 +29,7 @@ class WorkflowOptions:
                 or not 0 <= self.output_limit_recovery_retries <= 10):
             raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")
         if self.source_tree is not None:
-            from aka.light.workspace.candidate import validate_import_options
+            from aka.light.workspace.sources import validate_import_options
             validate_import_options(self.source_tree)
         if isinstance(self.search, dict):
             object.__setattr__(self, "search", SearchOptions(**self.search) if self.search else None)

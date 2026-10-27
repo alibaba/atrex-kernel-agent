@@ -77,7 +77,7 @@ def _sha256(path: Path) -> str:
 
 
 def _capture_paths(workspace: Path) -> Iterable[Path]:
-    from aka.light.workspace.candidate import capture_paths
+    from aka.light.workspace.sources import capture_paths
     yield from capture_paths(workspace)
     for relative in ("memory/v1.json", ".atrex_versions/v1.json"):
         yield workspace / relative
@@ -270,7 +270,7 @@ def restore_latest_candidate(workspace: Path) -> list[str]:
     snapshot = value.get("latest_snapshot")
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("files"), list):
         return []
-    from aka.light.workspace.candidate import restore_capture
+    from aka.light.workspace.sources import restore_capture
     root = (workspace / snapshot.get("root", "")).resolve()
     if not root.is_relative_to(workspace):
         return []
@@ -282,7 +282,7 @@ def restore_latest_candidate(workspace: Path) -> list[str]:
 
 
 def candidate_sha256(workspace: Path) -> str:
-    from aka.light.workspace.candidate import snapshot
+    from aka.light.workspace.sources import snapshot
     try:
         return hashlib.sha256(snapshot(workspace)).hexdigest()
     except FileNotFoundError:

@@ -103,12 +103,12 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
         state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         with tempfile.TemporaryDirectory(prefix="candidate-", dir=state_root) as temporary:
             frozen = Path(temporary)
-            from aka.light.workspace.candidate import install, snapshot as source_snapshot
+            from aka.light.workspace.sources import install, snapshot as source_snapshot
             install(frozen, source if source is not None else source_snapshot(workspace))
             private = Path(campaign.private_reference_dir) if campaign.private_reference_dir else None
             for name in ("input.py", "reference.py", "shapes.json", "metadata.json", "agent_problem.json",
                          "solution.json", "config.json", "definition.json", "workload.jsonl"):
-                from aka.light.workspace.candidate import layout_at
+                from aka.light.workspace.sources import layout_at
                 if layout_at(frozen).owns(name):
                     continue
                 if private is not None and name != "solution.json" and (private / name).is_file():
@@ -147,7 +147,7 @@ def _sources(campaign, workspace):
     from aka.light.workflow.session_io import _production_review_candidate_paths
 
     files = {"instructions.md": PROMPT, "driver.py": DRIVER, "numerical_inputs.py": PROBE_ALGORITHMS, "transport.py": HARNESS}
-    from aka.light.workspace.candidate import layout_at
+    from aka.light.workspace.sources import layout_at
     if layout_at(workspace).typed_only:
         files["typed_transport.py"] = Path(__file__).resolve().with_name("typed_numerical.py")
     for source in _production_review_candidate_paths(workspace):
@@ -297,7 +297,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         raise ValueError("retained probe world_size differs from the trusted contract")
     shapes = json.loads(shapes_path.read_text())
     schedule = validation_schedule(suite, shapes, digest, "thorough")
-    from aka.light.workspace.candidate import layout_at
+    from aka.light.workspace.sources import layout_at
     if layout_at(workspace).typed_only:
         from aka.light.acceptance.typed_numerical import run
         return run(campaign, workspace, suite, shapes, schedule, directory, cancel=cancel,
@@ -324,7 +324,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         # pipeline. Stable filenames preserve exact-request reuse across restarts.
         with tempfile.TemporaryDirectory(prefix="probe-", dir=directory) as temporary:
             probe = Path(temporary)
-            from aka.light.workspace.candidate import install, snapshot as source_snapshot
+            from aka.light.workspace.sources import install, snapshot as source_snapshot
             install(probe, source_snapshot(workspace))
             for name in ("solution.json", "input.py", "reference.py", "shapes.json",
                          "metadata.json", "agent_problem.json", "config.json", "definition.json", "workload.jsonl"):

@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import stat
 
-from aka.light.workspace.candidate import source_name, read
+from aka.light.workspace.sources import source_name, read
 
 
 def _inventory(workspace: Path) -> dict:

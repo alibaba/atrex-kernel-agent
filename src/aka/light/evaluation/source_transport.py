@@ -16,7 +16,7 @@ import subprocess
 import urllib.parse
 import zipfile
 
-from aka.light.workspace.candidate import archive_bytes
+from aka.light.workspace.sources import archive_bytes
 
 ARCHIVES = "__atrex_eval_archives"
 DIAGNOSTIC = "__atrex_source_diagnostic"
@@ -32,7 +32,7 @@ class SourceUploadError(RuntimeError):
 
 
 def attach(request, workspace, *, side="candidate", source=None):
-    from aka.light.workspace.candidate import Artifact, read
+    from aka.light.workspace.sources import Artifact, read
     artifact = Artifact(source) if source is not None else read(workspace)
     packaged = artifact.execution_source(f"archives/{side}.tar.gz")
     if packaged.archives:
@@ -142,7 +142,7 @@ def upload_bytes(url, data):
 
 
 def diagnostic_request(request, workspace, kind, *, timeout=600):
-    from aka.light.workspace.candidate import read
+    from aka.light.workspace.sources import read
     artifact = read(workspace)
     route = artifact.layout.diagnostic_route(kind)
     if route == "single":

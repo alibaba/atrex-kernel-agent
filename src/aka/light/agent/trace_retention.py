@@ -66,7 +66,7 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
 
     for name in ROOT_FILES:
         add(workspace / name, "extraction-core")
-    from aka.light.workspace.candidate import evidence_paths
+    from aka.light.workspace.sources import evidence_paths
     for relative in evidence_paths(workspace):
         add(workspace / relative, "candidate-source")
 

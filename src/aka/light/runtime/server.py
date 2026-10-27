@@ -778,7 +778,7 @@ class SupervisorRuntime:
                         # Reject before staging, task reservation or execution.
                         find_agate(environment)
                     if parsed is not None and parsed.kind != "env":
-                        from aka.light.workspace.candidate import freeze_for_execution, stage_frozen, layout_at
+                        from aka.light.workspace.sources import freeze_for_execution, stage_frozen, layout_at
                         authority = (capability.journal.view.worktree if capability.journal and capability.journal.view
                                      else self.config.workspace or capability.workspace)
                         frozen_source = freeze_for_execution(authority, capability.workspace, candidate_source)
@@ -798,7 +798,7 @@ class SupervisorRuntime:
                                     continue
                                 publish(staged, name, content)
                             try:
-                                from aka.light.workspace.candidate import snapshot as source_snapshot
+                                from aka.light.workspace.sources import snapshot as source_snapshot
                                 source = source_snapshot(staged)
                             except FileNotFoundError:
                                 # Standalone Dev probes need no candidate. Other

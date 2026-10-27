@@ -146,7 +146,7 @@ def production_structure_violations(
     require_gluon: bool = False,
 ) -> list[str]:
     """Delegate single-file checks; retain the controller-pinned tree boundary."""
-    from aka.light.workspace.candidate import read, required_layout
+    from aka.light.workspace.sources import read, required_layout
 
     try:
         artifact = read(workspace)

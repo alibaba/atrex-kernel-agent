@@ -69,7 +69,7 @@ def warn_kernel_mismatch(workspace: Path, sealed_source: bytes) -> bool:
     from aka.light.workspace.files import read_input
 
     try:
-        from aka.light.workspace.candidate import snapshot as source_snapshot
+        from aka.light.workspace.sources import snapshot as source_snapshot
         mismatch = source_snapshot(workspace) != sealed_source
     except (OSError, ValueError):
         mismatch = True
@@ -184,7 +184,7 @@ class EpisodeWorktree:
         )
         if ancestor.returncode:
             return "candidate_commit is not descended from incumbent", []
-        from aka.light.workspace.candidate import from_revision, read
+        from aka.light.workspace.sources import from_revision, read
         try:
             baseline = from_revision(self.path, self.base_commit)
             candidate = from_revision(self.path, resolved)
@@ -212,7 +212,7 @@ class EpisodeWorktree:
         violation, paths = self.validate_candidate(candidate_commit, require_worktree_match=False)
         if violation:
             return violation, paths
-        from aka.light.workspace.candidate import from_git, install
+        from aka.light.workspace.sources import from_git, install
         if from_git(self.path, candidate_commit) != source:
             return "private report source does not match candidate_commit", paths
         if warn_kernel_mismatch(self.path, source):
@@ -232,7 +232,7 @@ class EpisodeWorktree:
         Never ask Git to reread an Agent-writable candidate or run commit hooks.
         The real Episode worktree is not mounted in the Agent namespace.
         """
-        from aka.light.workspace.candidate import Artifact, commit_candidate
+        from aka.light.workspace.sources import Artifact, commit_candidate
         artifact = Artifact(expected_source)
         if any(marker.encode() in data for data in artifact.files.values()
                for marker in TIMELINE_PROBE_MARKERS):
@@ -323,7 +323,7 @@ def promote_candidate(
             incumbent_workspace, "diff", "--cached", "--name-only", "--no-renames", "-z"
         ).split("\0")
         staged = [name for name in staged if name]
-        from aka.light.workspace.candidate import from_revision
+        from aka.light.workspace.sources import from_revision
         if not from_revision(incumbent_workspace, base_commit).allows_changes(staged):
             raise RuntimeError("Promotion may change only the sealed candidate source")
         violation = protected_violation([path for path in staged if path])
