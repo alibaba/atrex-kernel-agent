@@ -8,71 +8,36 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from functools import cached_property
-import ast
-import gzip
 import hashlib
-import io
 import json
 import subprocess
-import tarfile
 
-from . import native, storage
+from . import storage
+from .common import Layout, ExecutionSource, archive_bytes, SELECTION
+from .registry import for_policy, resolve, select, task_selection
 
 
-@dataclass(frozen=True)
-class Layout:
-    python_entrypoint: str | None
-    framework: str | None = None
-    typed_only: bool = False
-    candidate_metadata: tuple[str, ...] = ()
-    replaceable_baseline: bool = True
-    archived: bool = False
 
-    def owns(self, name: str) -> bool:
-        return name in self.candidate_metadata
-
-    def diagnostic_route(self, kind: str) -> str:
-        if self.typed_only:
-            if kind != "profile":
-                raise ValueError("Compiled manifests support Evaluate and Profile; use Evaluate correctness_only for a build/correctness check")
-            return "typed"
-        return "dev" if self.archived else "single"
 
 
 def layout(policy) -> Layout:
-    if policy == native.POLICY:
-        return Layout(None, "cuda", True, ("solution.json",), archived=True)
-    if policy is not None:
-        return Layout("kernel.py", replaceable_baseline=False, archived=True)
-    return Layout("kernel.py")
+    return for_policy(policy).layout
+
 
 
 def required_layout(framework: str) -> Layout:
-    return layout(native.POLICY if framework.strip().lower() == "cuda" else None)
+    return task_selection(None, framework=framework).layout
+
 
 
 def layout_at(workspace: Path, *, committed: bool = False) -> Layout:
     return layout(storage.policy_at(workspace, committed=committed))
 
 
-def archive_bytes(files: dict[str, str]) -> bytes:
-    output = io.BytesIO()
-    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as gz:
-        with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            for name, text in sorted(files.items()):
-                storage.relative(name)
-                data = text.encode()
-                member = tarfile.TarInfo(name)
-                member.size, member.mode = len(data), 0o644
-                tar.addfile(member, io.BytesIO(data))
-    return output.getvalue()
 
 
-@dataclass(frozen=True)
-class ExecutionSource:
-    candidate: str | dict
-    archives: dict[str, dict[str, str]]
-    requirements: tuple[str, ...] = ()
+
+
 
 
 @dataclass(frozen=True)
@@ -93,10 +58,10 @@ class Artifact:
 
     @property
     def materialized_files(self) -> dict[str, bytes]:
-        files = self.files
-        if self.contract is not None and self.contract != native.POLICY:
-            files[storage.POLICY] = (json.dumps(self.contract, sort_keys=True) + "\n").encode()
-        return files
+        system = for_policy(self.contract)
+        return {**self.files, **system.metadata(self.contract),
+                SELECTION: (json.dumps({'name':system.name}, sort_keys=True)+'\n').encode()}
+
 
     @property
     def layout(self) -> Layout:
@@ -106,8 +71,8 @@ class Artifact:
     def digest(self) -> str:
         return hashlib.sha256(self.snapshot).hexdigest()
 
-    def install(self, workspace: Path, *, replace: bool = True) -> None:
-        storage.install(workspace, self.snapshot, replace=replace)
+    def install(self, workspace: Path, *, replace: bool = True, bind: bool = False) -> None:
+        storage.install(workspace, self.snapshot, replace=replace, bind=bind)
 
     def export(self, destination: Path) -> dict:
         """Export a historical candidate for inspection or baseline comparison."""
@@ -127,21 +92,8 @@ class Artifact:
                 else paths == [self.layout.python_entrypoint])
 
     def execution_source(self, archive: str) -> ExecutionSource:
-        files = self.files
-        if not self.layout.archived:
-            return ExecutionSource(self.snapshot.decode(), {})
-        if self.contract == native.POLICY:
-            value = native.manifest(files['solution.json'])
-            contents = {name: files[name].decode() for name in value['source']['files']}
-            value['source'] = {'type': 'oss_archive', 'archive': archive,
-                'sha256': hashlib.sha256(archive_bytes(contents)).hexdigest(),
-                'files': {name: hashlib.sha256(files[name]).hexdigest() for name in contents}}
-            return ExecutionSource(value, {archive: contents})
-        if self.contract['package_root'] != '.':
-            raise ValueError("Eval archives require package_root='.'; no Dev fallback")
-        requirements = tuple(v['distribution'] + v.get('version', '') for v in self.contract['runtime_requirements'])
-        return ExecutionSource({'archive': archive, 'entry_point': self.layout.python_entrypoint},
-                               {archive: {k: v.decode() for k, v in files.items()}}, requirements)
+        return for_policy(self.contract).execution_source(self.files, self.contract, archive)
+
 
     def diagnostic_source(self) -> dict:
         return {'entrypoint': self.layout.python_entrypoint,
@@ -172,8 +124,14 @@ class Artifact:
                         for n, v in self.files.items()))
 
 
-def read(workspace: Path) -> Artifact:
-    return Artifact(storage.snapshot(workspace))
+def read(workspace: Path, *, file_system: str | None = None) -> Artifact:
+    if file_system is None:
+        return Artifact(storage.snapshot(workspace))
+    system, policy = resolve(workspace)
+    if system.name != file_system:
+        raise ValueError(f'Selected {file_system} file system does not match workspace {system.name}')
+    return Artifact(storage.pack(select(file_system).collect(workspace, policy), policy))
+
 
 
 def from_revision(workspace: Path, revision: str) -> Artifact:
@@ -183,7 +141,7 @@ def from_revision(workspace: Path, revision: str) -> Artifact:
 def review_paths(workspace: Path) -> list[Path]:
     artifact = read(workspace)
     names = set(artifact.files)
-    names.update(n for n in (storage.POLICY, 'solution.json') if (workspace / n).is_file())
+    names.update(n for n in (storage.POLICY, 'solution.json', SELECTION) if (workspace / n).is_file())
     return [workspace / n for n in sorted(names)]
 
 
@@ -195,24 +153,28 @@ def commit_paths(workspace: Path, *, normalize: bool = False) -> list[str]:
     names = set(artifact.files)
     if previous:
         names.update(previous.files)
-    names.update(n for n in (storage.POLICY, 'solution.json') if (workspace / n).is_file())
+    names.update(n for n in (storage.POLICY, 'solution.json', SELECTION) if (workspace / n).is_file())
     return sorted(names)
 
 
 def pinned_paths(workspace: Path) -> tuple[str, ...]:
     policy = storage.policy_at(workspace, committed=True)
-    return (storage.POLICY, *policy['immutable_files']) if policy and not layout(policy).replaceable_baseline else ()
+    names = (storage.POLICY, *policy['immutable_files']) if policy and not layout(policy).replaceable_baseline else ()
+    return (*names, SELECTION) if (workspace / SELECTION).is_file() else names
+
 
 
 def freeze_for_execution(authority: Path, workspace: Path, sealed: bytes | None) -> bytes | None:
     policy = storage.policy_at(authority, committed=True)
     discovered = Artifact(sealed).contract if sealed is not None else storage.policy_at(workspace)
-    if policy is None and layout(discovered).replaceable_baseline:
+    if policy is None and not (authority / SELECTION).is_file() and layout(discovered).replaceable_baseline:
         policy = discovered
     if sealed is not None:
         if Artifact(sealed).contract != policy:
             raise ValueError('Sealed candidate has a different source contract')
         return sealed
+    if (authority / SELECTION).is_file() and discovered != policy:
+        raise ValueError('Candidate file system differs from the selected task file system')
     if policy is not None:
         return storage.snapshot(workspace, policy=policy)
     if (workspace / storage.POLICY).exists() or (workspace / storage.POLICY).is_symlink():
@@ -223,108 +185,60 @@ def freeze_for_execution(authority: Path, workspace: Path, sealed: bytes | None)
 def stage_frozen(workspace: Path, source: bytes) -> None:
     (workspace / storage.POLICY).unlink(missing_ok=True)
     storage.install(workspace, source, replace=False)
-    storage.install(workspace, source)
+    storage.install(workspace, source, bind=True)
 
 
 def declared_paths(workspace: Path) -> set[str]:
-    policy = storage.policy_at(workspace)
-    if policy is not None:
-        return set(storage.collect(workspace, policy)) | {storage.POLICY}
-    path = workspace / 'solution.json'
-    if not path.is_file():
-        return set()
-    value = json.loads(path.read_text())
-    entries = value.get('sources', []) if isinstance(value, dict) else []
-    if not isinstance(entries, list):
-        raise ValueError('Candidate declaration sources must be a list of paths')
-    result = set()
-    for entry in entries:
-        name = entry if isinstance(entry, str) else entry.get('path') if isinstance(entry, dict) else None
-        result.add(storage.relative(name))
-    return result
+    system, policy = resolve(workspace)
+    return system.declared_paths(workspace, policy)
+
 
 
 def evidence_paths(workspace: Path) -> set[str]:
-    """Known candidate evidence, including incomplete initialization attempts."""
-    names = {'solution.json', storage.POLICY, layout(None).python_entrypoint}
     try:
-        names.update(declared_paths(workspace))
+        system, policy = resolve(workspace)
+        names = system.evidence_paths(workspace, policy)
     except (OSError, ValueError):
-        # Terminal evidence must still retain a malformed declaration for diagnosis.
-        pass
+        # Retain format selectors and malformed declarations for terminal diagnosis.
+        names = {'solution.json', storage.POLICY, 'kernel.py'}
+    names.add(SELECTION)
     return {name for name in names if (workspace / name).is_file()}
 
 
+
 def typed_limitation(workspace: Path) -> str | None:
-    description = layout_at(workspace)
-    if description.typed_only:
-        read(workspace)  # Validate the complete declared file closure.
-        return None
-    entry = description.python_entrypoint
-    if not (workspace / entry).is_file():
-        return 'missing ' + entry
-    if description.archived:
-        return None
-    if declared_paths(workspace) - {entry}:
-        return 'candidate declaration includes auxiliary sources'
-    try:
-        tree = ast.parse((workspace / entry).read_text())
-    except (OSError, UnicodeDecodeError, SyntaxError):
-        return None
-    imports = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imports.update(v.name.split('.')[0] for v in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imports.add(node.module.split('.')[0])
-    local = sorted(n for n in imports if n not in {'input', 'reference', Path(entry).stem}
-                   and ((workspace / (n + '.py')).is_file() or (workspace / n / '__init__.py').is_file()))
-    return 'candidate imports local auxiliary modules: ' + ', '.join(local) if local else None
+    system, policy = resolve(workspace)
+    return system.typed_limitation(workspace, policy)
 
 
 def capture_paths(workspace: Path) -> list[Path]:
     try:
         return review_paths(workspace)
     except (OSError, ValueError):
-        # Preserve incomplete edits on crash; only complete artifacts can be executed.
-        return [p for p in workspace.rglob('*') if p.is_file()
-                and (p.relative_to(workspace).as_posix() in {'kernel.py', 'solution.json', storage.POLICY}
-                     or storage.source_name(p.relative_to(workspace).as_posix()) and p.suffix in native.SUFFIXES)]
+        return [workspace / name for name in sorted(evidence_paths(workspace))]
+
 
 
 def restore_capture(workspace: Path, captured: Path) -> list[str]:
     artifact = read(captured)
     artifact.install(workspace)
     names = list(artifact.files)
-    # Python solution metadata is auxiliary, but still needed to resume a draft.
-    if not artifact.layout.owns('solution.json') and (captured / 'solution.json').is_file():
-        from aka.light.workspace.files import publish
-        publish(workspace, 'solution.json', (captured / 'solution.json').read_bytes())
-        names.append('solution.json')
+    from aka.light.workspace.files import publish
+    for name in artifact.layout.auxiliary_metadata:
+        if (captured/name).is_file():
+            publish(workspace, name, (captured/name).read_bytes())
+            names.append(name)
     return names
 
 
 def seed_baseline_metadata(workspace: Path, framework: str, name: str, *, native_eval: bool) -> None:
-    """Seed only Python DSL metadata; compiled manifests are authored from their Skill."""
-    path = workspace / 'solution.json'
-    language = framework.strip().lower()
-    if required_layout(language).typed_only or path.is_file() or not native_eval:
-        return
-    dependencies = {'triton': ['torch','triton'], 'gluon': ['torch','triton','gluon'],
-                    'cutedsl': ['torch','nvidia-cutlass-dsl'], 'flydsl': ['torch','flydsl']}.get(language, ['torch'])
-    reference = workspace / 'reference.py'
-    symbol = 'Model' if reference.is_file() and 'class Model' in reference.read_text() else 'run'
-    value = {'name': f'{name}_v1_{language}',
-             'spec': {'languages': ['python', language], 'dependencies': dependencies, 'entry_point': f'kernel.py::{symbol}'},
-             'sources': [{'path': 'kernel.py', 'role': 'Self-contained candidate implementation and framework loader.'}],
-             'dependency_roles': {v: 'Candidate framework/runtime plumbing; document its non-compute role.' for v in dependencies}}
-    path.write_text(json.dumps(value, indent=2) + '\n')
+    task_selection(None, framework=framework).seed_metadata(workspace, framework, name, native_eval=native_eval)
 
 
 def measurement_paths(workspace: Path, baseline_path: str | None) -> tuple[set[str], dict[str, str]]:
     policy = storage.policy_at(workspace)
     description = layout(policy)
-    paths, snapshots = set(), {}
+    paths, snapshots = {SELECTION}, {}
     if description.archived:
         artifact = read(workspace)
         paths.update(artifact.files)
@@ -351,7 +265,7 @@ def measurement_paths(workspace: Path, baseline_path: str | None) -> tuple[set[s
 def measurement_artifacts(request: dict, inputs: dict[str, bytes]) -> dict[str, Artifact]:
     snapshots = request['options'].get('source_snapshots', {})
     artifacts = ({'candidate': Artifact(storage.from_inputs(inputs))}
-                 if 'kernel.py' in inputs or snapshots.get('candidate') else {})
+                 if select('single_file').layout.python_entrypoint in inputs or snapshots.get('candidate') else {})
     baseline = request['options']['baseline_path']
     if baseline:
         source = (storage.from_inputs(inputs, prefix=baseline + '/')
@@ -361,10 +275,8 @@ def measurement_artifacts(request: dict, inputs: dict[str, bytes]) -> dict[str, 
 
 
 def language_hints(workspace: Path) -> list[str]:
-    path = workspace / 'solution.json'
-    value = json.loads(path.read_text()) if path.is_file() else {}
-    hints = value.get('languages', [])
-    return [str(v) for v in hints] if isinstance(hints, list) else []
+    system, _ = resolve(workspace)
+    return system.language_hints(workspace)
 
 
 def read_path(path: Path) -> Artifact:

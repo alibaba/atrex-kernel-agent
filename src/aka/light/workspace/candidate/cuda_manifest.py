@@ -30,7 +30,7 @@ def manifest(raw):
     names = source["files"]
     if not isinstance(names, list) or not names or any(not isinstance(n, str) for n in names) or len(names) != len(set(names)):
         raise ValueError("source.files must be a nonempty list of distinct local paths")
-    from aka.light.workspace.candidate import relative, source_name
+    from .common import relative, source_name
     for name in names:
         relative(name)
         if not source_name(name) or Path(name).suffix not in SUFFIXES or name.startswith(".agate_dependencies/"):
@@ -77,6 +77,66 @@ def collect(workspace):
 
 
 def editable(name):
-    from aka.light.workspace.candidate import source_name, relative
+    from .common import source_name, relative
     relative(name)
     return name == "solution.json" or source_name(name) and Path(name).suffix in SUFFIXES
+
+
+class CudaManifest:
+    def seed_metadata(self, workspace, framework, name, *, native_eval):pass
+    def prepare_source(self, request, source_provider, *, options, state_root, native_eval):
+        if request.initial.kind == 'sol' or not native_eval:
+            raise ValueError('CUDA manifests require native Atrex-Bench Eval, not SOL/SSH')
+        # V0 is an evaluator-owned reference input; the candidate starts at V1.
+        return source_provider.prepare(request)
+    name = 'cuda_manifest'
+    default_policy = POLICY
+    def inspect_policy(self, get):
+        raw = get('solution.json')
+        return (True, POLICY) if raw is not None and manifest(raw) is not None else (False, None)
+    def validate_restore(self, previous, target):pass
+    from .common import Layout
+    layout = Layout(None, 'cuda', True, ('solution.json',), archived=True)
+    def validate_policy(self, policy):
+        if policy != POLICY:raise ValueError('Invalid CUDA manifest source contract')
+        return policy
+    def validate(self, files, policy):return validate(files)
+    def collect(self, workspace, policy, *, validate=True):return collect(workspace)
+    def from_git(self, workspace, revision, policy):
+        from .common import git_blob,git_files
+        value=manifest(git_blob(workspace,revision,'solution.json'))
+        if value is None:raise ValueError('CUDA candidate requires solution.json')
+        return validate(git_files(workspace,revision,('solution.json',*value['source']['files'])))
+    def from_inputs(self, inputs, policy, prefix):
+        value=manifest(inputs[prefix+'solution.json'])
+        return validate({name:inputs[prefix+name] for name in ('solution.json',*value['source']['files'])})
+    def editable(self, policy, name):return editable(name)
+    def instructions(self, policy):
+        return '\n## Native CUDA candidate\nEdit the manifest and its declared native sources. Read the atrex-gpu-gateway Skill for file organization, JSON configuration and measurement usage.\n'
+    def metadata(self, policy):return {}
+    def obsolete(self, workspace, policy):
+        value=read(workspace)
+        return {'solution.json',*value['source']['files']} if value else set()
+    def install(self, workspace, files, policy):
+        from .common import publish
+        (workspace/'kernel.py').unlink(missing_ok=True)
+        for name,data in files.items():publish(workspace,name,data)
+    def execution_source(self, files, policy, archive):
+        import hashlib
+        from .common import archive_bytes,ExecutionSource
+        value=manifest(files['solution.json'])
+        contents={name:files[name].decode() for name in value['source']['files']}
+        value['source']={'type':'oss_archive','archive':archive,
+            'sha256':hashlib.sha256(archive_bytes(contents)).hexdigest(),
+            'files':{name:hashlib.sha256(files[name]).hexdigest() for name in contents}}
+        return ExecutionSource(value,{archive:contents})
+    def declared_paths(self, workspace, policy):return set(collect(workspace))
+    def evidence_paths(self, workspace, policy):
+        from .common import source_name
+        return {'solution.json'}|{p.relative_to(workspace).as_posix() for p in workspace.rglob('*')
+            if p.is_file() and source_name(p.relative_to(workspace).as_posix()) and p.suffix in SUFFIXES}
+
+    def typed_limitation(self, workspace, policy):
+        collect(workspace)
+        return None
+    def language_hints(self, workspace):return []

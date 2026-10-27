@@ -14,10 +14,48 @@ from aka.light.workspace.resource_catalog import resource
 class ManagedCandidateWorkspace(GitCandidateWorkspace):
     managed_drafts = True
 
-    def __init__(self, *, inherit_state: bool = True):
+    def __init__(self, *, inherit_state: bool = True, file_system: str | None = None, source_tree: dict | None = None):
         if type(inherit_state) is not bool:
             raise ValueError("inherit_state must be boolean")
         self.inherit_state = inherit_state
+        if file_system is not None:
+            from .candidate import select
+            select(file_system)
+        self.file_system = file_system
+        self.source_tree = source_tree
+        if source_tree is not None:
+            from .candidate import validate_import_options
+            validate_import_options(source_tree)
+
+    def source_options(self, legacy_options=None):
+        if self.source_tree is not None and legacy_options is not None and self.source_tree != legacy_options:
+            raise ValueError('Conflicting workspace and legacy workflow source-tree configuration')
+        return self.source_tree if self.source_tree is not None else legacy_options
+
+    def prepare_source(self, system, request, source_provider, *, options, state_root, native_eval):
+        return system.prepare_source(request, source_provider, options=options,
+                                     state_root=state_root, native_eval=native_eval)
+
+    def select_file_system(self, *, framework, source_tree=False):
+        from .candidate import task_selection
+        return task_selection(self.file_system, framework=framework, source_tree=source_tree)
+
+    def activate_file_system(self, workspace, system):
+        from .candidate.registry import resolve
+        from .candidate.common import SELECTION
+        import json
+        current, _ = resolve(workspace, revision='HEAD')
+        if current.name != system.name:
+            raise ValueError(f'Selected {system.name} file system requires a matching candidate; found {current.name}')
+        data = (json.dumps({'name':system.name}, sort_keys=True)+'\n').encode()
+        path = workspace / SELECTION
+        if path.is_file() and path.read_bytes() != data:
+            raise ValueError('File system selection cannot change when resuming a Campaign')
+        publish(workspace, SELECTION, data)
+        subprocess.run(['git','add','--',SELECTION],cwd=workspace,check=True)
+        changed = subprocess.run(['git','diff','--cached','--quiet','--',SELECTION],cwd=workspace)
+        if changed.returncode:
+            subprocess.run(['git','commit','-q','-m','Pin candidate file system','--',SELECTION],cwd=workspace,check=True)
 
     def prepare_sol(self, workspace, content, *, problem_files):
         # SourceProvider owns implementation bytes, not the selected Workflow's

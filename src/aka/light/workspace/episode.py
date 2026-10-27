@@ -124,7 +124,7 @@ class EpisodeWorkspace:
         # Preserve a crashed invocation's draft unless the controller changed
         # its own source since the last publication (e.g. conversion/reset).
         if fresh or digest != state.get("kernel_digest"):
-            install_source(self.root, source)
+            install_source(self.root, source, bind=True)
         for name in PUBLIC_FILES:
             # Manifest bytes belong to the draft/snapshot, not immutable public inputs.
             from aka.light.workspace.candidate import layout_at

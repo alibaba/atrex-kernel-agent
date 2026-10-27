@@ -16,3 +16,5 @@ from .artifacts import (
     stage_frozen, declared_paths, evidence_paths, typed_limitation, capture_paths, restore_capture,
     seed_baseline_metadata, measurement_paths, measurement_artifacts, language_hints,
 )
+
+from .registry import select, task_selection

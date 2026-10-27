@@ -77,6 +77,9 @@ service explicitly; no endpoint or Diamond setting is changed.
 
 The installed `atrex-gpu-gateway` Skill documents the local file-list convenience and
 Agate build/ABI/dependency contract. See [native CUDA input](docs/native-cuda.md).
+The `candidate` module selects an independent `single_file`, `source_tree`, or
+`cuda_manifest` file system through `file_system`; the choice stays fixed for the task.
+File layouts and source imports are configured there, outside the optimization workflow.
 
 ## News
 

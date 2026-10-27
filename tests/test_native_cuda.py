@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from aka.light.workspace.candidate import native
+from aka.light.workspace.candidate import cuda_manifest as native
 from aka.light.workspace import candidate as sources
 from aka.light.evaluation import source_transport
 
@@ -428,3 +428,87 @@ def test_terminal_trace_retains_complete_candidate(workspace):
     (workspace / 'solution.json').write_text('{')
     paths = {entry['path'] for entry in collect_evidence_files(workspace)}
     assert {'kernel.py', 'solution.json'} <= paths
+
+
+@pytest.mark.parametrize('name', ['single_file', 'source_tree', 'cuda_manifest'])
+def test_file_system_implementations_are_independent(name):
+    import ast
+    system = sources.select(name)
+    assert system.name == name
+    module = __import__(system.__class__.__module__, fromlist=['__file__'])
+    tree = ast.parse(Path(module.__file__).read_text())
+    others = {'single_file', 'source_tree', 'cuda_manifest'} - {name}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            assert not set((node.module or '').split('.')) & others
+        elif isinstance(node, ast.Import):
+            assert not any(set(alias.name.split('.')) & others for alias in node.names)
+
+
+def test_explicit_selection_never_falls_back(workspace):
+    from aka.light.workspace.candidate.common import SELECTION
+    artifact = sources.read(workspace)
+    artifact.install(workspace, bind=True)
+    assert sources.read(workspace, file_system='cuda_manifest').snapshot == artifact.snapshot
+    (workspace/'kernel.py').write_text('class Model: pass')
+    (workspace/'solution.json').unlink()
+    with pytest.raises(FileNotFoundError):sources.read(workspace)
+    with pytest.raises(ValueError, match='does not match'):sources.read(workspace, file_system='single_file')
+    artifact.install(workspace)
+    sources.install(workspace, b'class Model: pass\n')
+    assert json.loads((workspace/SELECTION).read_text())['name']=='single_file'
+    # A declaration does not switch a selected single-file workspace.
+    (workspace/'solution.json').write_bytes(artifact.files['solution.json'])
+    assert sources.read(workspace).snapshot == b'class Model: pass\n'
+
+
+def test_workspace_plugin_selects_and_pins_one_file_system(workspace):
+    from aka.light.workspace.provider import ManagedCandidateWorkspace
+    from aka.light.workspace.candidate.common import SELECTION
+    init_git(workspace)
+    provider = ManagedCandidateWorkspace(file_system='cuda_manifest')
+    system = provider.select_file_system(framework='cuda')
+    provider.activate_file_system(workspace, system)
+    assert json.loads(git(workspace,'show','HEAD:'+SELECTION))['name']=='cuda_manifest'
+    assert sources.from_revision(workspace,'HEAD').snapshot == sources.read(workspace).snapshot
+    with pytest.raises(ValueError, match='matching candidate'):
+        provider.activate_file_system(workspace, sources.select('single_file'))
+    with pytest.raises(ValueError, match='requires'):
+        ManagedCandidateWorkspace(file_system='single_file').select_file_system(framework='cuda')
+
+
+def test_selected_file_system_owns_bootstrap_source():
+    from aka.light.workspace.provider import ManagedCandidateWorkspace
+    seed = object()
+    provider = SimpleNamespace(prepare=lambda request: seed)
+    request = SimpleNamespace(initial=SimpleNamespace(kind='native'))
+    workspace = ManagedCandidateWorkspace(file_system='cuda_manifest')
+    selected = workspace.select_file_system(framework='cuda')
+    assert workspace.prepare_source(selected, request, provider, options=None,
+                                    state_root=Path('/unused'), native_eval=True) is seed
+    with pytest.raises(ValueError, match='native Atrex-Bench'):
+        workspace.prepare_source(selected, request, provider, options=None,
+                                 state_root=Path('/unused'), native_eval=False)
+
+
+def test_pinned_single_file_cannot_switch_during_execution(tmp_path):
+    from aka.light.workspace.candidate.common import SELECTION
+    authority = tmp_path/'authority'; authority.mkdir()
+    sources.Artifact(b'class Model: pass\n').install(authority, bind=True)
+    git(authority,'init','-b','main');git(authority,'config','user.name','Test');git(authority,'config','user.email','test@example.com')
+    git(authority,'add','kernel.py',SELECTION);git(authority,'commit','-m','single-file baseline')
+    draft = tmp_path/'draft';draft.mkdir()
+    (draft/'kernel.py').write_text('class Model: pass\n')
+    # A sealed snapshot carrying any other source contract is rejected before execution.
+    value = {'schema_version':1, 'source_revision':None, 'seed_digest':'sha256:'+'0'*64,
+             'package_root':'.','editable_roots':['src'], 'immutable_files':{'kernel.py':hashlib.sha256(b'class Model: pass\n').hexdigest()},
+             'runtime_requirements':[]}
+    snapshot = sources.pack({'kernel.py':b'class Model: pass\n','src/a.py':b'x=1\n'},value)
+    with pytest.raises(ValueError, match='different source contract'):
+        sources.freeze_for_execution(authority,draft,snapshot)
+
+
+def test_snapshot_rejects_changed_native_contract(workspace):
+    value = dict(native.POLICY, extra='not-a-supported-contract')
+    with pytest.raises(ValueError, match='Invalid CUDA manifest source contract'):
+        sources.pack(sources.read(workspace).files, value)
