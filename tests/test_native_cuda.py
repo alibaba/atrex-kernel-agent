@@ -414,3 +414,17 @@ def test_baseline_marker_and_recovery_compare_git_identity(workspace, monkeypatc
     monkeypatch.setattr(bootstrap,'restore_latest_framework_baseline_candidate',restore)
     bootstrap.Campaign._restore_framework_baseline_candidate(campaign,blob)
     assert read(workspace).snapshot==compiled
+
+
+def test_terminal_trace_retains_complete_candidate(workspace):
+    from aka.light.agent.trace_retention import collect_evidence_files
+    paths = {entry['path'] for entry in collect_evidence_files(workspace)}
+    assert {'kernel.cu', 'include/offset.h', 'solution.json'} <= paths
+    assert 'kernel.py' not in paths
+    sources.install(workspace, b'class Model: pass\n')
+    paths = {entry['path'] for entry in collect_evidence_files(workspace)}
+    assert 'kernel.py' in paths
+    assert not {'kernel.cu', 'include/offset.h', 'solution.json'} & paths
+    (workspace / 'solution.json').write_text('{')
+    paths = {entry['path'] for entry in collect_evidence_files(workspace)}
+    assert {'kernel.py', 'solution.json'} <= paths

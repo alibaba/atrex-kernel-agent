@@ -22,7 +22,7 @@ TERMINAL_STATUSES = {"completed", "interrupted", "failed"}
 MEMORY_RE = re.compile(r"v[0-9]+\.json")
 LONG_MEMORY_RE = re.compile(r"long_horizon_e[0-9]+\.json")
 PROFILE_RE = re.compile(r"v[0-9]+(?:[_-].+)?")
-ROOT_FILES = ("kernel.py", "definition.json", "solution.json", "workload.jsonl")
+ROOT_FILES = ("definition.json", "workload.jsonl")
 PROFILE_FILES = (
     "summary.txt", "REPORT.md", "iteration_report.md", "evidence.md",
     "analysis/metrics_key_run.json",
@@ -50,24 +50,6 @@ def _safe_relative(workspace: Path, value: str) -> str | None:
     return path.as_posix()
 
 
-def _solution_sources(workspace: Path) -> list[str]:
-    try:
-        document = json.loads((workspace / "solution.json").read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        return []
-    rows = document.get("sources") if isinstance(document, dict) else None
-    if not isinstance(rows, list):
-        return []
-    result = []
-    for row in rows:
-        value = row.get("path") if isinstance(row, dict) else row
-        if isinstance(value, str):
-            relative = _safe_relative(workspace, value)
-            if relative:
-                result.append(relative)
-    return result
-
-
 def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
     """Collect known semantic files without walking caches or session trees."""
     workspace = workspace.resolve()
@@ -84,7 +66,8 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
 
     for name in ROOT_FILES:
         add(workspace / name, "extraction-core")
-    for relative in _solution_sources(workspace):
+    from aka.light.workspace.candidate import evidence_paths
+    for relative in evidence_paths(workspace):
         add(workspace / relative, "candidate-source")
 
     memory = workspace / "memory"

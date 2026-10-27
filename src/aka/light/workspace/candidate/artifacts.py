@@ -244,6 +244,17 @@ def declared_paths(workspace: Path) -> set[str]:
     return result
 
 
+def evidence_paths(workspace: Path) -> set[str]:
+    """Known candidate evidence, including incomplete initialization attempts."""
+    names = {'solution.json', storage.POLICY, layout(None).python_entrypoint}
+    try:
+        names.update(declared_paths(workspace))
+    except (OSError, ValueError):
+        # Terminal evidence must still retain a malformed declaration for diagnosis.
+        pass
+    return {name for name in names if (workspace / name).is_file()}
+
+
 def typed_limitation(workspace: Path) -> str | None:
     description = layout_at(workspace)
     if description.typed_only:

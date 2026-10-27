@@ -251,7 +251,7 @@ def augment_error(response, *, route, request, research_records=False, superviso
                 "A validation rejection does not complete the Episode. " +
                 ("Select the current Episode's Experiment and close active Directions." if research_records else
                  "Do not create Direction/Experiment records. candidate_ready cites gateway_record_ids, "
-                 "including a passing standard full Evaluate for byte-identical kernel.py."))
+                 "including a passing standard full Evaluate for a byte-identical complete candidate."))
             from aka.light.runtime.request_errors import REPAIR_REQUEST
             if error.get("next_action") == REPAIR_REQUEST:
                 error["next_action"] = instruction

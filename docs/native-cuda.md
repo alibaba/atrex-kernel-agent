@@ -19,7 +19,7 @@ python3 tools/sync_agate_skill.py /path/to/atrex-gpu-gateway
 python3 tools/sync_agate_skill.py /path/to/atrex-gpu-gateway --check
 ```
 
-Validation (2026-10-27): 34 offline regressions cover archive digests, Git promotion,
+Validation (2026-10-27): 35 offline regressions cover archive digests, Git promotion,
 header/declaration identity, crash recovery, measurement deduplication, Skill
 installation, and numerical failure classification. Both Light and Legacy wheels
 build from their source distributions; the bundled Agate Skill is byte-identical
@@ -71,6 +71,6 @@ a downgrade to a Python candidate. The V0 Python reference remains a separate
 evaluator-owned bootstrap input.
 
 Regression coverage includes all three layouts, complete snapshot recovery,
-header deletion, manifest changes, frozen measurement evidence, native-to-Python
+header deletion, manifest changes, complete terminal trace evidence, frozen measurement evidence, native-to-Python
 rejection, sealed Git commits, and legacy Python baseline identity. Tests and
 sdist-to-wheel validation run in Aone Sandbox, not on the workstation.
