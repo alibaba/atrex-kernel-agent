@@ -30,7 +30,7 @@ def manifest(raw):
     names = source["files"]
     if not isinstance(names, list) or not names or any(not isinstance(n, str) for n in names) or len(names) != len(set(names)):
         raise ValueError("source.files must be a nonempty list of distinct local paths")
-    from aka.light.workspace.sources import relative, source_name
+    from aka.light.workspace.candidate import relative, source_name
     for name in names:
         relative(name)
         if not source_name(name) or Path(name).suffix not in SUFFIXES or name.startswith(".agate_dependencies/"):
@@ -77,6 +77,6 @@ def collect(workspace):
 
 
 def editable(name):
-    from aka.light.workspace.sources import source_name, relative
+    from aka.light.workspace.candidate import source_name, relative
     relative(name)
     return name == "solution.json" or source_name(name) and Path(name).suffix in SUFFIXES

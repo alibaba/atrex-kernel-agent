@@ -778,44 +778,19 @@ class SupervisorRuntime:
                         # Reject before staging, task reservation or execution.
                         find_agate(environment)
                     if parsed is not None and parsed.kind != "env":
-                        from aka.light.workspace.sources import (
-                            POLICY,
-                            policy_at,
-                            unpack,
-                            snapshot as source_snapshot,
-                            install as install_source,
-                        )
+                        from aka.light.workspace.candidate import freeze_for_execution, stage_frozen, layout_at
                         authority = (capability.journal.view.worktree if capability.journal and capability.journal.view
                                      else self.config.workspace or capability.workspace)
-                        source_policy = policy_at(authority, committed=True)
-                        from aka.light.workspace import native
-                        if source_policy is None and native.read(capability.workspace):
-                            source_policy = native.POLICY
-                        if candidate_source is not None:
-                            if unpack(candidate_source)[0] != source_policy:
-                                raise ValueError("Sealed candidate has a different source contract")
-                            frozen_source = candidate_source
-                        elif source_policy is not None:
-                            frozen_source = source_snapshot(capability.workspace, policy=source_policy)
-                        else:
-                            if (capability.workspace / POLICY).exists() or (capability.workspace / POLICY).is_symlink():
-                                raise ValueError("This single-file task cannot introduce a source-tree policy")
-                            frozen_source = None
+                        frozen_source = freeze_for_execution(authority, capability.workspace, candidate_source)
                         snapshot(capability.workspace, staged,
                                  custom_tools=bool(capability.journal and capability.journal.view))
                         if frozen_source is not None:
-                            # The staged policy must come from controller state,
-                            # never an editable copy in the Agent draft.
-                            (staged / POLICY).unlink(missing_ok=True)
-                            install_source(staged, frozen_source, replace=False)
-                            if source_policy is not None:
-                                # Remove obsolete editable files copied from the draft.
-                                install_source(staged, frozen_source)
+                            stage_frozen(staged, frozen_source)
                         if capability.journal and capability.journal.view:
                             from aka.light.workspace.episode import PUBLIC_FILES
                             # An Agent draft is never the authority for evaluator inputs.
                             for name in PUBLIC_FILES:
-                                if name == "solution.json" and source_policy == native.POLICY:
+                                if layout_at(staged).owns(name):
                                     continue
                                 try:
                                     content = read_input(capability.journal.view.worktree, name)
@@ -823,7 +798,7 @@ class SupervisorRuntime:
                                     continue
                                 publish(staged, name, content)
                             try:
-                                from aka.light.workspace.sources import snapshot as source_snapshot
+                                from aka.light.workspace.candidate import snapshot as source_snapshot
                                 source = source_snapshot(staged)
                             except FileNotFoundError:
                                 # Standalone Dev probes need no candidate. Other
@@ -961,7 +936,7 @@ class SupervisorRuntime:
                 evidence_hint = (
                     "Use list/load-direction or list/load-experiment for IDs, and record-read for measurement evidence. "
                     if self.journal_factory.research_records else
-                    "Use record-read to check gateway_record_ids; candidate_ready must cite a passing full Evaluate for current kernel.py. "
+                    "Use record-read to check gateway_record_ids; candidate_ready must cite a passing full Evaluate for current candidate. "
                 )
                 raise AgentRequestError(str(error), next_action=(
                     "Correct the indicated field or lifecycle state, then retry. Read skills/runtime-records/references/journal.md. "

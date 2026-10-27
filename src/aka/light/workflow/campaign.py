@@ -102,12 +102,12 @@ class ManagedCampaign(Campaign):
             if initial.kind == "sol" or not self.atrex_bench_root or self.sandbox_ssh:
                 raise ValueError("Source trees require native Atrex-Bench Eval, not SOL/SSH")
             from aka.contracts.content import SourceContent, WorkspaceFile
-            from aka.light.workspace.sources import initial_snapshot, unpack, POLICY
-            import json
-            source = initial_snapshot(self.workspace, self.module_options.source_tree)
-            policy, files = unpack(source)
-            content = SourceContent(tuple(WorkspaceFile(name, text=data.decode()) for name, data in files.items()) +
-                                    (WorkspaceFile(POLICY, text=json.dumps(policy)),))
+            from aka.light.workspace.candidate import initial_snapshot, Artifact
+            from aka.light.runtime.paths import supervisor_campaign_root
+            source = initial_snapshot(self.module_options.source_tree,
+                                      state_root=supervisor_campaign_root(self.workspace) / "initial-source")
+            content = SourceContent(tuple(WorkspaceFile(name, text=data.decode())
+                                          for name, data in Artifact(source).materialized_files.items()))
         else:
             content = self.source_provider.prepare(SourceRequest(
                 initial=initial, name=self.campaign_name, framework=self.framework,

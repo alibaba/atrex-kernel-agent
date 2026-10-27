@@ -17,7 +17,7 @@ import time
 
 from aka.light.agent.session_tail import read_regular_bytes
 from aka.light.workspace.files import publish
-from aka.light.workspace import native
+from aka.light.workspace.candidate import native
 
 POLICY = ".atrex_source.json"
 MAGIC = b"ATREX-SOURCE-TREE-v1\n"
@@ -235,7 +235,9 @@ def snapshot(workspace, *, policy=_DISCOVER):
 
 
 def from_git(workspace, revision):
-    from aka.light.workspace.git import git_blob
+    from aka.legacy.task.git import _git
+    def git_blob(root, ref, name):
+        return _git(root, "show", f"{ref}:{name}", binary=True).stdout
     result = subprocess.run(["git", "show", f"{revision}:{POLICY}"], cwd=workspace, capture_output=True)
     if result.returncode:
         declaration = subprocess.run(["git", "show", f"{revision}:solution.json"], cwd=workspace, capture_output=True)
@@ -319,30 +321,22 @@ def instructions(policy):
 
 
 def allowed_changes(paths, policy):
+    if policy is None:
+        return all(name == "kernel.py" for name in paths)
     return all(editable(policy, name) and name not in policy["immutable_files"] for name in paths)
 
 
-def commit_tree_candidate(handle, source):
+def commit_candidate(handle, source):
     """Seal measured additions/modifications/deletions with a private Git index."""
-    from aka.light.workspace.git import (
-        git_head,
-        git_text,
-        changed_paths,
-        TIMELINE_PROBE_MARKERS,
-        protected_violation,
-        working_changes,
-    )
+    from aka.legacy.task.git import git_head, git_text, changed_paths
     import tempfile
     policy, files = unpack(source)
     baseline_policy, _ = unpack(from_git(handle.path, handle.base_commit))
+    if source == from_git(handle.path, handle.base_commit):
+        raise ValueError("Candidate has no source change relative to its baseline")
     if policy != baseline_policy:
         raise ValueError("Candidate source contract differs from its Episode baseline")
-    if any(marker.encode() in data for data in files.values() for marker in TIMELINE_PROBE_MARKERS):
-        raise ValueError("Candidate source still contains timeline profiling probes")
     head = git_head(handle.path)
-    violation = protected_violation(working_changes(handle.path))
-    if violation:
-        raise ValueError(violation)
     if git_text(handle.path, "symbolic-ref", "--quiet", "--short", "HEAD") != handle.branch:
         raise RuntimeError("Candidate branch differs from its Episode")
     subprocess.run(["git", "merge-base", "--is-ancestor", handle.base_commit, head], cwd=handle.path, check=True)
@@ -368,7 +362,7 @@ def commit_tree_candidate(handle, source):
                     run("update-index", "--add", "--cacheinfo", "100644", blob, name)
             tree = run("write-tree")
             commit = run("-c", "commit.gpgSign=false", "commit-tree", tree, "-p", head,
-                         "-m", f"Episode {handle.episode}: selected source tree")
+                         "-m", f"Episode {handle.episode}: selected candidate")
             run("update-ref", "HEAD", commit, head)
             head = commit
     install(handle.path, source)
@@ -514,15 +508,14 @@ def import_tree(manifest_path, repository=None, *, directory=None):
     return pack(files, policy)
 
 
-def initial_snapshot(workspace, options):
+def initial_snapshot(options, *, state_root):
     """Seal once before V0; failed bootstrap/restarts never reread mutable inputs."""
     import fcntl
     from aka.light.agent.home import open_private_directory
     from aka.legacy.task.persistence import durable_write_json
-    from aka.light.runtime.paths import supervisor_campaign_root
     validate_import_options(options)
     configuration = {key: os.path.abspath(Path(value).expanduser()) for key, value in options.items()}
-    root = supervisor_campaign_root(workspace) / "initial-source"
+    root = state_root
     path = root / "snapshot.json"
     with open_private_directory(root) as parent:
         try:

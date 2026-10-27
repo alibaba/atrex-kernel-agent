@@ -20,7 +20,6 @@ from aka.legacy.task.candidate_workspace.state import (
     read_framework_baseline,
     resolve_framework_baseline_commit as _legacy_resolve_framework_baseline_commit,
     _normalize_commit_hash,
-    commit_changed_kernel as _legacy_commit_changed_kernel,
 )
 from aka.legacy.task.git import git_path_blob, git_worktree_blob
 
@@ -98,25 +97,15 @@ def speedup_vs_reference(
 
 def git_kernel_blob(workspace: Path) -> str:
     """Committed candidate identity, stable across metadata-only commits."""
-    from aka.light.workspace.sources import from_git, unpack
-    import hashlib
-    source = from_git(workspace, "HEAD")
-    return ("sha256:" + hashlib.sha256(source).hexdigest() if unpack(source)[0] is not None
-            else git_path_blob(workspace, "HEAD", "kernel.py"))
+    from aka.light.workspace.candidate import revision_identity
+    return revision_identity(workspace)
 
 
 def commit_changed_kernel(workspace: Path, commit: str) -> bool:
-    """Count changes to complete candidate bytes, including headers and build declarations."""
-    from aka.light.workspace.sources import from_git, unpack
+    """Count changes to the complete candidate through its file system."""
+    from aka.light.workspace.candidate import revision_changed
     commit = _normalize_commit_hash(commit)
-    if not commit:
-        return False
-    source = from_git(workspace, commit)
-    if unpack(source)[0] is None:
-        return _legacy_commit_changed_kernel(workspace, commit)
-    parent = subprocess.run(["git", "rev-parse", "--verify", f"{commit}^"],
-                            cwd=workspace, capture_output=True, text=True)
-    return parent.returncode != 0 or source != from_git(workspace, parent.stdout.strip())
+    return bool(commit) and revision_changed(workspace, commit)
 
 
 def head_kernel_is_initial_baseline(workspace: Path) -> bool:
@@ -229,7 +218,7 @@ def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
     marker = read_framework_baseline(workspace)
     if not marker or not marker.get("source_sha256"):
         return _legacy_resolve_framework_baseline_commit(workspace)
-    from aka.light.workspace.sources import from_git
+    from aka.light.workspace.candidate import from_git
     import hashlib
     commit = _normalize_commit_hash(marker.get("commit"))
     if not commit or subprocess.run(["git", "merge-base", "--is-ancestor", commit, "HEAD"],

@@ -7,8 +7,21 @@ from types import SimpleNamespace
 
 import pytest
 
-from aka.light.workspace import native, sources
+from aka.light.workspace.candidate import native
+from aka.light.workspace import candidate as sources
 from aka.light.evaluation import source_transport
+
+
+def test_cuda_baseline_does_not_seed_python_manifest(tmp_path):
+    from aka.light.workflow.bootstrap import Campaign
+    campaign = SimpleNamespace(workspace=tmp_path, framework="cuda", atrex_bench_root="bench",
+                               campaign_name="native-rmsnorm")
+    Campaign._ensure_framework_baseline_solution_manifest(campaign)
+    assert not (tmp_path / "solution.json").exists()
+    campaign.framework = "triton"
+    Campaign._ensure_framework_baseline_solution_manifest(campaign)
+    value = json.loads((tmp_path / "solution.json").read_text())
+    assert value["spec"]["languages"] == ["python", "triton"]
 
 
 @pytest.fixture
@@ -84,7 +97,7 @@ def test_native_git_commit_and_metadata_only_stall(workspace):
     (workspace / "solution.json").write_text(json.dumps(declaration))
     sealed = sources.snapshot(workspace)
     handle = SimpleNamespace(path=workspace, base_commit=base, branch='main', episode=1)
-    commit = sources.commit_tree_candidate(handle, sealed)
+    commit = sources.commit_candidate(handle, sealed)
     assert sources.from_git(workspace, commit) == sealed
     assert commit_changed_kernel(workspace, commit)
     (workspace / 'note.txt').write_text('metadata')
@@ -161,7 +174,7 @@ def test_agate_skill_is_installed_and_discoverable(tmp_path):
 
 
 def test_native_probe_runs_eval_and_preserves_l2_tolerance(workspace):
-    from aka.light.acceptance.native_numerical import input_source
+    from aka.light.acceptance.typed_numerical import input_source
     from aka.light.evaluation.gateway import build_typed_request
     case={'id':'positive','fields':{'x':{'generator':'constant','value':1}}}
     data=input_source((workspace/'input.py').read_bytes(),case,123)
@@ -192,6 +205,18 @@ def test_measurement_record_restore_and_duplicate_isolation(workspace, tmp_path)
     assert store.kernel(sources.snapshot(workspace))['kernel_id']!=identity['kernel_id']
 
 
+def test_episode_performance_uses_native_snapshot_without_python(workspace):
+    from aka.light.workflow.episode import _latest_complete_episode_performance, EPISODE_EVALUATIONS_PATH
+    path = workspace / EPISODE_EVALUATIONS_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {'schema_version': 2, 'kernel_sha256': hashlib.sha256(sources.snapshot(workspace)).hexdigest(),
+               'result': {'all_pass': True, 'latency_us_geomean': 2.0, 'latency_us_by_shape': {'0': 2.0}}}
+    path.write_text(json.dumps(payload) + '\n')
+    assert _latest_complete_episode_performance(workspace, expected_shape_ids={'0'})['latency_us_geomean'] == 2.0
+    (workspace/'include/offset.h').write_text('#define OFFSET 2\n')
+    assert _latest_complete_episode_performance(workspace, expected_shape_ids={'0'}) is None
+
+
 def test_crash_snapshot_restores_cuda_header_and_manifest(workspace):
     from aka.light.workflow.baseline_progress import _snapshot_after_exit, _atomic_write_json, progress_path, restore_latest_candidate
     original=sources.snapshot(workspace)
@@ -211,8 +236,8 @@ def test_crash_snapshot_restores_cuda_header_and_manifest(workspace):
     (1,{'all_pass':False,'diagnostics':[{'stage':'correctness','check':'outputs','relative_l2':0.1,'message':'mismatch'}]},'needs_repair'),
     (1,{'all_pass':False,'diagnostics':[{'stage':'correctness','message':'input generation failed'}]},'needs_validation'),
 ])
-def test_native_numerical_probe_failures_are_not_passes(workspace,tmp_path,exit_code,result,status):
-    from aka.light.acceptance.native_numerical import run
+def test_typed_numerical_probe_failures_are_not_passes(workspace,tmp_path,exit_code,result,status):
+    from aka.light.acceptance.typed_numerical import run
     class Campaign:
         def measure_for_acceptance(self,root,argv,**kwargs):
             assert '--kind' in argv and argv[argv.index('--kind')+1]=='run'
@@ -225,3 +250,164 @@ def test_native_numerical_probe_failures_are_not_passes(workspace,tmp_path,exit_
     schedule=[{'case_id':'risk','shape_ids':['0'],'seeds':[123],'selection_digest':'exact'}]
     output=run(Campaign(),workspace,suite,{'0':{'input_kwargs':{'n':4}}},schedule,tmp_path.resolve(),cancel=cancel,max_rel_l2=0.001)
     assert output['status']==status
+
+
+def test_file_system_owns_format_knowledge():
+    """Prevent another format-specific branch spreading into workflow consumers."""
+    import ast
+    root = Path(__file__).resolve().parents[1] / 'src/aka/light'
+    violations = []
+    for path in root.rglob('*.py'):
+        if path.is_relative_to(root / 'workspace/candidate'):
+            continue
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                if node.module in {'aka.light.workspace.candidate.native', 'aka.light.workspace.candidate.storage'}:
+                    violations.append(str(path))
+                if node.module == 'aka.light.workspace.candidate' and any(n.name in {'native', 'storage'} for n in node.names):
+                    violations.append(str(path))
+        assert 'agate_cuda' not in path.read_text(), path
+    assert violations == []
+
+
+def test_artifact_roundtrip_and_execution_are_format_independent(workspace, tmp_path):
+    from aka.light.workspace.candidate import Artifact, read
+    compiled = read(workspace)
+    plain = Artifact(b'class Model: pass\n')
+    for index, artifact in enumerate([plain, compiled]):
+        target = tmp_path / f'copy{index}'
+        target.mkdir()
+        artifact.install(target)
+        assert read(target).snapshot == artifact.snapshot
+        assert read(target).digest == artifact.digest
+        packaged = artifact.execution_source('source.tar.gz')
+        if packaged.archives:
+            assert packaged.candidate['source']['type'] == 'oss_archive'
+        else:
+            assert packaged.candidate == artifact.snapshot.decode()
+    assert plain.layout.python_entrypoint == 'kernel.py'
+    assert compiled.layout.python_entrypoint is None
+    assert not (tmp_path / 'copy1/kernel.py').exists()
+
+
+def test_staging_preserves_pinned_files_and_blocks_format_downgrade(workspace, tmp_path):
+    from aka.light.workspace.candidate import freeze_for_execution, stage_frozen, read
+    init_git(workspace)
+    original = read(workspace).snapshot
+    draft = tmp_path/'draft'; draft.mkdir()
+    sources.install(draft, original)
+    (draft/'kernel.py').write_text('stale wrapper')
+    frozen = freeze_for_execution(workspace, draft, None)
+    staged = tmp_path/'staged'; staged.mkdir()
+    (staged/'kernel.py').write_text('stale')
+    stage_frozen(staged, frozen)
+    assert not (staged/'kernel.py').exists()
+    assert read(staged).snapshot == original
+    (draft/'solution.json').write_text('{')
+    # A sealed request uses captured bytes even if the mutable draft changes later.
+    assert freeze_for_execution(workspace, draft, original) == original
+    with pytest.raises(ValueError, match='different source contract'):
+        freeze_for_execution(workspace, draft, b'class Model: pass\n')
+
+
+def test_baseline_commit_paths_remove_obsolete_wrapper(workspace):
+    from aka.light.workspace.candidate import commit_paths, read, from_revision
+    original = read(workspace).snapshot
+    sources.install(workspace, b'class Model: pass\n')
+    git(workspace, 'init', '-b', 'main')
+    git(workspace, 'config', 'user.name', 'Test')
+    git(workspace, 'config', 'user.email', 'test@example.com')
+    git(workspace, 'add', 'kernel.py')
+    git(workspace, 'commit', '-m', 'V0')
+    for n,v in sources.unpack(original)[1].items():
+        (workspace/n).parent.mkdir(parents=True,exist_ok=True);(workspace/n).write_bytes(v)
+    staged = commit_paths(workspace, normalize=True)
+    assert 'kernel.py' in staged
+    assert not (workspace/'kernel.py').exists()
+    git(workspace, 'add', '--', *staged)
+    git(workspace, 'commit', '-m', 'V1')
+    assert from_revision(workspace, 'HEAD').snapshot == original
+
+
+def test_python_legacy_measurement_and_export_remain_supported(tmp_path):
+    from datetime import datetime, timezone
+    from aka.light.workspace.candidate import Artifact
+    artifact = Artifact(b'class Model: pass\n')
+    artifact.install(tmp_path)
+    assert artifact.matches_measurement(tmp_path, {'schema_version':1,'timestamp':datetime.now(timezone.utc).isoformat()})
+    assert not artifact.matches_measurement(tmp_path, {'schema_version':1,'timestamp':'2000-01-01T00:00:00Z'})
+    output=tmp_path/'baseline.py'; assert artifact.export(output)=={}
+    assert output.read_bytes()==artifact.snapshot
+
+
+@pytest.mark.parametrize('compiled', [False, True])
+def test_episode_commit_uses_one_file_system_for_all_formats(workspace, compiled):
+    from aka.light.workspace.git import EpisodeWorktree
+    from aka.light.workspace.candidate import read, from_revision
+    if compiled:
+        base = init_git(workspace)
+        (workspace/'include/offset.h').write_text('#define OFFSET 3\n')
+    else:
+        sources.install(workspace, b'class Model: pass\n')
+        git(workspace, 'init', '-b', 'main')
+        git(workspace, 'config', 'user.name', 'Test')
+        git(workspace, 'config', 'user.email', 'test@example.com')
+        git(workspace, 'add', 'kernel.py', 'input.py', 'reference.py', 'shapes.json')
+        git(workspace, 'commit', '-m', 'baseline')
+        base = git(workspace, 'rev-parse', 'HEAD')
+        (workspace/'kernel.py').write_text('class Model: value=2\n')
+    expected = read(workspace).snapshot
+    handle = EpisodeWorktree(1, base, 'main', workspace)
+    commit = handle.commit_candidate(expected)
+    assert handle.validate_candidate(commit)[0] == ''
+    assert from_revision(workspace, commit).snapshot == expected
+    with pytest.raises(ValueError, match='no source change'):
+        EpisodeWorktree(2, commit, 'main', workspace).commit_candidate(expected)
+
+
+def test_imported_python_tree_keeps_pinned_adapter_and_full_identity(tmp_path):
+    from aka.light.workspace.candidate import Artifact, pack, read, freeze_for_execution
+    adapter=b'from impl import Model\n'
+    contract={'schema_version':1,'source_revision':None,'seed_digest':'sha256:'+'0'*64,
+              'package_root':'.','editable_roots':['impl'],
+              'immutable_files':{'kernel.py':hashlib.sha256(adapter).hexdigest()},
+              'runtime_requirements':[]}
+    artifact=Artifact(pack({'kernel.py':adapter,'impl/__init__.py':b'class Model: pass\n'},contract))
+    artifact.install(tmp_path)
+    git(tmp_path,'init','-b','main');git(tmp_path,'config','user.name','Test');git(tmp_path,'config','user.email','test@example.com')
+    git(tmp_path,'add','kernel.py','impl/__init__.py','.atrex_source.json');git(tmp_path,'commit','-m','import')
+    assert read(tmp_path).snapshot==artifact.snapshot
+    assert artifact.execution_source('tree.tar.gz').candidate['entry_point']=='kernel.py'
+    assert not artifact.allows_changes(['kernel.py'])
+    assert artifact.allows_changes(['impl/new.py'])
+    (tmp_path/'kernel.py').write_text('tampered')
+    with pytest.raises(ValueError,match='Fixed source'):
+        freeze_for_execution(tmp_path,tmp_path,None)
+
+
+def test_installed_numerical_assets_resolve_venv_aliases(workspace):
+    from aka.light.acceptance.numerical import _sources, _digest
+    files, _ = _sources(SimpleNamespace(), workspace)
+    assert files['typed_transport.py'] == files['typed_transport.py'].resolve()
+    assert _digest(files)
+
+
+def test_baseline_marker_and_recovery_compare_git_identity(workspace, monkeypatch):
+    from aka.light.workflow import bootstrap
+    from aka.light.workspace.candidate import read, baseline_marker, workspace_identity
+    compiled=read(workspace).snapshot
+    sources.install(workspace,b'class Model: pass\n')
+    git(workspace,'init','-b','main');git(workspace,'config','user.name','Test');git(workspace,'config','user.email','test@example.com')
+    git(workspace,'add','kernel.py');git(workspace,'commit','-m','V0')
+    blob=git(workspace,'rev-parse','HEAD:kernel.py')
+    assert baseline_marker(workspace,'HEAD')=={'kernel_blob':blob}
+    assert workspace_identity(workspace)==blob
+    campaign=SimpleNamespace(workspace=workspace)
+    monkeypatch.setattr(bootstrap,'load_framework_baseline_progress',lambda _: {'latest_snapshot':{}})
+    def restore(root):
+        sources.install(root,compiled)
+        return ['kernel.cu','solution.json','include/offset.h']
+    monkeypatch.setattr(bootstrap,'restore_latest_framework_baseline_candidate',restore)
+    bootstrap.Campaign._restore_framework_baseline_candidate(campaign,blob)
+    assert read(workspace).snapshot==compiled

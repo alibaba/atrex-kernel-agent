@@ -43,11 +43,11 @@ def authoritative_candidate_record(record: dict, source: bytes, *, atrex_bench: 
     options = request.get("options")
     if not isinstance(inputs, dict) or not isinstance(options, dict):
         return False
+    from aka.light.workspace.candidate import Artifact
     common = (
         record.get("cacheable") is True
         and record.get("operation") == "evaluate"
-        and (options.get("source_snapshots", {}).get("candidate", inputs.get("kernel.py"))
-             == hashlib.sha256(source).hexdigest())
+        and Artifact(source).verify_measurement_inputs(request, "candidate")
     )
     if not common:
         return False
@@ -145,10 +145,10 @@ class RecordedAcceptance:
                 code="candidate_correctness_failed", gateway_record_id=record_id,
                 next_action=(
                     f"Inspect python3 tools/sandbox.py --kind record-read --record-id {record_id}. "
-                    + ("Repair kernel.py, record a passing full Evaluate and its Experiment, then resubmit "
+                    + ("Repair the candidate, record a passing full Evaluate and its Experiment, then resubmit "
                        "episode-report with the matching selected_experiment_id. "
                        if context.research_records else
-                       "Repair kernel.py, obtain a passing full Evaluate, then resubmit episode-report "
+                       "Repair the candidate, obtain a passing full Evaluate, then resubmit episode-report "
                        "with its gateway_record_ids. ") +
                     "The Supervisor runs its "
                     "acceptance check automatically; do not repeat the failed GPU request unchanged. "

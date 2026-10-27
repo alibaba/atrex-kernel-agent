@@ -14,7 +14,7 @@ from typing import Any
 from aka.contracts.workspace import CandidateHandle
 from aka.light.evaluation.hardware import hardware_vendor
 from aka.light.workspace.versions import FACT_FIELDS, version_record_path
-from aka.light.workspace.sources import from_git as source_from_git
+from aka.light.workspace.candidate import from_git as source_from_git
 
 import aka.light.workflow.context as main_adapter
 from aka.light.workspace.git import (git_blob, git_head, git_text, record_episode_outcome, working_changes)
@@ -210,11 +210,8 @@ def _latest_complete_episode_performance(
     path = episode_workspace / EPISODE_EVALUATIONS_PATH
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-        kernel_path = episode_workspace / "kernel.py"
-        from aka.light.workspace.sources import snapshot as source_snapshot
-        kernel_bytes = source_snapshot(episode_workspace)
-        kernel_sha256 = hashlib.sha256(kernel_bytes).hexdigest()
-        kernel_mtime = kernel_path.stat().st_mtime
+        from aka.light.workspace.candidate import read
+        artifact = read(episode_workspace)
     except (OSError, ValueError):
         return None
     for line in reversed(lines):
@@ -225,20 +222,8 @@ def _latest_complete_episode_performance(
         result = payload.get("result") if isinstance(payload, dict) else None
         if not isinstance(result, dict) or result.get("all_pass") is not True:
             continue
-        schema_version = payload.get("schema_version")
-        recorded_kernel_sha256 = payload.get("kernel_sha256")
-        if isinstance(schema_version, int) and schema_version >= 2:
-            if recorded_kernel_sha256 != kernel_sha256:
-                continue
-        else:
-            # Schema v1 predates code fingerprints.  It is safe only when the
-            # current kernel has not been modified since this measurement.
-            try:
-                measured_at = _iso_timestamp(str(payload["timestamp"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-            if measured_at < kernel_mtime:
-                continue
+        if not artifact.matches_measurement(episode_workspace, payload):
+            continue
         by_shape = result.get("latency_us_by_shape")
         if not isinstance(by_shape, dict) or not by_shape:
             continue
@@ -287,7 +272,7 @@ def _episode_head_matches_incumbent(
     if episode_workspace is None:
         return False
     try:
-        from aka.light.workspace.sources import snapshot
+        from aka.light.workspace.candidate import snapshot
         return snapshot(episode_workspace) == snapshot(workspace)
     except (OSError, ValueError):
         return False
@@ -671,7 +656,7 @@ class LongHorizonCampaign:
             )
         if self.base_campaign.optimization_mode == "production":
             try:
-                from aka.light.workspace.sources import from_git
+                from aka.light.workspace.candidate import from_git
                 sealed = from_git(worktree.path, candidate)
                 # Recovered reports must not bypass the newly installed gate.
                 self.base_campaign.selected_episode_evaluation(worktree.episode, sealed)

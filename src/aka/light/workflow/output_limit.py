@@ -1,14 +1,12 @@
 """Runtime-style recovery context: saved files and receipts, not lost thinking."""
 from collections import OrderedDict, deque
-import hashlib
 import io
 import json
 import os
 from pathlib import Path
 import stat
 
-from aka.light.agent.session_tail import read_regular_bytes
-from aka.light.workspace.sources import source_name
+from aka.light.workspace.candidate import source_name, read
 
 
 def _inventory(workspace: Path) -> dict:
@@ -34,12 +32,11 @@ def _inventory(workspace: Path) -> dict:
         except OSError:
             continue  # The inventory is a hint, never a new authority or gate.
     try:
-        source = read_regular_bytes(workspace / "kernel.py", limit=16 * 1024 * 1024 + 1)
-        digest = hashlib.sha256(source).hexdigest() if len(source) <= 16 * 1024 * 1024 else None
+        digest = read(workspace).digest
     except (OSError, ValueError):
         digest = None
-    return {"saved_paths": entries, "kernel_file_sha256": digest,
-            "inventory_scope": "Bounded top-level listing, not exhaustive; file hash is not a Kernel ID."}
+    return {"saved_paths": entries, "candidate_snapshot_sha256": digest,
+            "inventory_scope": "Bounded top-level listing, not exhaustive; snapshot hash is not a Kernel ID."}
 
 
 def _receipts(stdout: str, session_id: str) -> dict:

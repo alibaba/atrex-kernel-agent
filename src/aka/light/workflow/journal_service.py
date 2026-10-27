@@ -474,7 +474,7 @@ def _mutable_journal(path: Path) -> dict[str, Any]:
                 "Do not submit update-direction or record-experiment. Continue optimizing and "
                 "use saved Gateway Records. Submit episode-report with status and summary; for "
                 "candidate_ready include gateway_record_ids citing a passing full Evaluate for "
-                "the exact kernel.py. See skills/runtime-records/references/journal.md."
+                "the exact candidate snapshot. See skills/runtime-records/references/journal.md."
             ),
         )
     if journal.get("state") != "in_progress":
@@ -689,7 +689,7 @@ def sealed_candidate_source(journal: dict[str, Any], git_workspace: Path) -> byt
     if (not journal.get("finalized_at") or not isinstance(commit, str)
             or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", commit) is None):
         raise RuntimeError("Private candidate report has no valid sealed commit")
-    from aka.light.workspace.sources import from_git
+    from aka.light.workspace.candidate import from_git
     source = from_git(git_workspace, commit)
     if journal.get("candidate_kernel_digest") != "sha256:" + hashlib.sha256(source).hexdigest():
         raise RuntimeError("Sealed candidate commit does not match the private report digest")
@@ -928,7 +928,7 @@ def validate_report_evidence(
                 raise ValueError(f"{status} cannot include gateway_record_ids")
             return current, {}, None
         records = _validate_record_ids(campaign_root, gateway_record_ids, label="Episode Report")
-        from aka.light.workspace.sources import snapshot as source_snapshot
+        from aka.light.workspace.candidate import snapshot as source_snapshot
         source = source_snapshot(workspace, policy=source_policy)
         digest = "sha256:" + hashlib.sha256(source).hexdigest()
         if not _has_passing_evaluate(campaign_root, records, digest):
@@ -984,7 +984,7 @@ def validate_report_evidence(
     if directions[direction_id]["status"] not in _CLOSED_STATUSES:
         raise ValueError("selected Experiment Direction must have been started and closed")
     records = _validate_record_ids(campaign_root, selected.get("gateway_record_ids"))
-    from aka.light.workspace.sources import snapshot as source_snapshot
+    from aka.light.workspace.candidate import snapshot as source_snapshot
     kernel_source = source_snapshot(workspace, policy=source_policy)
     kernel_digest = "sha256:" + hashlib.sha256(kernel_source).hexdigest()
     if not _has_passing_evaluate(campaign_root, records, kernel_digest):
@@ -1280,7 +1280,7 @@ class SupervisorJournalService:
         elif blocker is not None and blocker != "":
             raise ValueError(f"Episode Report status {status} cannot include blocker")
         selected_id = raw.get("selected_experiment_id")
-        from aka.light.workspace.sources import policy_at
+        from aka.light.workspace.candidate import policy_at
         current, directions, kernel_source = validate_report_evidence(
             self.path,
             self.campaign_root,
@@ -1298,7 +1298,7 @@ class SupervisorJournalService:
             ):
                 raise ValueError(
                     "candidate_ready requires the full candidate_commit from git rev-parse HEAD; "
-                    "commit kernel.py before reporting"
+                    "commit the candidate before reporting"
                 )
             from aka.light.workspace.git import EpisodeWorktree
 

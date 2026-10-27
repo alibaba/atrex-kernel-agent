@@ -21,7 +21,7 @@ from aka.legacy.task.persistence import durable_write_json, durable_replace
 from aka.light.workspace.versions import version_record_path
 from .search import latency, read_state
 from .search_git import commit_files, git
-from aka.light.workspace.sources import from_git, unpack, snapshot as source_snapshot
+from aka.light.workspace.candidate import from_git, unpack, snapshot as source_snapshot
 
 
 class EpisodeSearchDriver:

@@ -103,13 +103,13 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
         state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         with tempfile.TemporaryDirectory(prefix="candidate-", dir=state_root) as temporary:
             frozen = Path(temporary)
-            from aka.light.workspace.sources import install, snapshot as source_snapshot
+            from aka.light.workspace.candidate import install, snapshot as source_snapshot
             install(frozen, source if source is not None else source_snapshot(workspace))
             private = Path(campaign.private_reference_dir) if campaign.private_reference_dir else None
             for name in ("input.py", "reference.py", "shapes.json", "metadata.json", "agent_problem.json",
                          "solution.json", "config.json", "definition.json", "workload.jsonl"):
-                from aka.light.workspace import native
-                if name == "solution.json" and native.read(frozen):
+                from aka.light.workspace.candidate import layout_at
+                if layout_at(frozen).owns(name):
                     continue
                 if private is not None and name != "solution.json" and (private / name).is_file():
                     data = read_input(private, name)
@@ -127,7 +127,7 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
                 if (frozen / "workload.jsonl").is_file():
                     durable_write_json(state_root / "numerical_feedback.json", {
                         "status": "advisory", "reason": "supplemental input ABI unsupported for SOL",
-                        "kernel_sha256": hashlib.sha256(read_input(frozen, "kernel.py")).hexdigest(),
+                        "kernel_sha256": hashlib.sha256(source_snapshot(frozen)).hexdigest(),
                     })
                     return ""
                 return f"{SUPPLEMENTAL_PENDING_PREFIX}: trusted input.py/reference.py/shapes.json unavailable"
@@ -147,9 +147,9 @@ def _sources(campaign, workspace):
     from aka.light.workflow.session_io import _production_review_candidate_paths
 
     files = {"instructions.md": PROMPT, "driver.py": DRIVER, "numerical_inputs.py": PROBE_ALGORITHMS, "transport.py": HARNESS}
-    from aka.light.workspace import native
-    if native.read(workspace):
-        files["native_transport.py"] = Path(__file__).with_name("native_numerical.py")
+    from aka.light.workspace.candidate import layout_at
+    if layout_at(workspace).typed_only:
+        files["typed_transport.py"] = Path(__file__).resolve().with_name("typed_numerical.py")
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     # Metadata/configuration are part of the pinned public input contract and
@@ -297,9 +297,9 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         raise ValueError("retained probe world_size differs from the trusted contract")
     shapes = json.loads(shapes_path.read_text())
     schedule = validation_schedule(suite, shapes, digest, "thorough")
-    from aka.light.workspace import native
-    if native.read(workspace) is not None:
-        from aka.light.acceptance.native_numerical import run
+    from aka.light.workspace.candidate import layout_at
+    if layout_at(workspace).typed_only:
+        from aka.light.acceptance.typed_numerical import run
         return run(campaign, workspace, suite, shapes, schedule, directory, cancel=cancel,
                    max_rel_l2=_fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2)
     results = []
@@ -324,9 +324,9 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         # pipeline. Stable filenames preserve exact-request reuse across restarts.
         with tempfile.TemporaryDirectory(prefix="probe-", dir=directory) as temporary:
             probe = Path(temporary)
-            from aka.light.workspace.sources import install, snapshot as source_snapshot
+            from aka.light.workspace.candidate import install, snapshot as source_snapshot
             install(probe, source_snapshot(workspace))
-            for name in ("kernel.py", "solution.json", "input.py", "reference.py", "shapes.json",
+            for name in ("solution.json", "input.py", "reference.py", "shapes.json",
                          "metadata.json", "agent_problem.json", "config.json", "definition.json", "workload.jsonl"):
                 if (workspace / name).is_file():
                     publish(probe, name, read_input(workspace, name))

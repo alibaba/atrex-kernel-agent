@@ -294,7 +294,7 @@ def wrap_agent_command(
             protected = ("tools", "skills")
             if managed and PROTECTED_PATHS_ENV in environment:
                 protected = json.loads(environment[PROTECTED_PATHS_ENV])
-                from aka.light.workspace.sources import POLICY, source_name
+                from aka.light.workspace.candidate import POLICY, source_name
                 if not isinstance(protected, list) or any(
                     not isinstance(name, str) or not name or name == "." or "\\" in name
                     or Path(name).is_absolute() or ".." in Path(name).parts

@@ -75,7 +75,7 @@ The Agent no longer embeds CUDA in `kernel.py`. V0 remains the evaluator-owned
 Python reference. Use `--sandbox-profile pre` to select the pre-release Agate
 service explicitly; no endpoint or Diamond setting is changed.
 
-The installed `native-cuda` Skill documents the local file-list convenience and
+The installed `atrex-gpu-gateway` Skill documents the local file-list convenience and
 Agate build/ABI/dependency contract. See [native CUDA input](docs/native-cuda.md).
 
 ## News

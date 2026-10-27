@@ -1,4 +1,4 @@
-"""Native CUDA probes use Agate Eval so Agate owns compilation and dependencies."""
+"""Compiled candidate probes use Agate Eval so Agate owns compilation and dependencies."""
 from __future__ import annotations
 
 import json
@@ -8,7 +8,7 @@ import tempfile
 
 from aka.legacy.evaluation.drivers import numerical_inputs
 from aka.light.workspace.files import publish, read_input
-from aka.light.workspace.sources import install, snapshot
+from aka.light.workspace.candidate import install, snapshot
 
 
 def input_source(original: bytes, case: dict, seed: int) -> bytes:
@@ -22,7 +22,7 @@ def input_source(original: bytes, case: dict, seed: int) -> bytes:
 
 def run(campaign, workspace, suite, shapes, schedule, directory, *, cancel, max_rel_l2):
     if suite["world_size"] != 1:
-        raise ValueError("Native CUDA supplemental probes require one GPU")
+        raise ValueError("Typed supplemental probes require one GPU")
     rows = []
     source = snapshot(workspace)
     for plan in schedule:

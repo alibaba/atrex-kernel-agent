@@ -603,7 +603,7 @@ def _make_input_bundle(
     injected_payloads: dict[str, bytes] | None = None,
 ) -> tuple[str, int, list[str]]:
     """Return a base64 tarball containing only explicitly selected inputs."""
-    from aka.light.workspace.sources import collect, policy_at
+    from aka.light.workspace.candidate import collect, policy_at
 
     archive = io.BytesIO()
     seen: set[str] = set()
@@ -696,34 +696,8 @@ def _make_input_bundle(
 
 def _declared_candidate_sources(workspace: Path) -> set[str]:
     """Return the complete contracted tree or legacy solution sources."""
-    from aka.light.workspace.sources import policy_at, collect, POLICY
-    policy = policy_at(workspace)
-    if policy is not None:
-        return set(collect(workspace, policy)) | {POLICY}
-    selected: set[str] = set()
-    solution_path = workspace / "solution.json"
-    if solution_path.is_file():
-        try:
-            solution = json.loads(solution_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"invalid workspace solution.json: {exc}") from exc
-        sources = solution.get("sources", []) if isinstance(solution, dict) else []
-        if not isinstance(sources, list):
-            raise RuntimeError(
-                "workspace solution.json sources must be a list of paths"
-            )
-        for source in sources:
-            if isinstance(source, str):
-                source_path = source
-            elif isinstance(source, dict) and isinstance(source.get("path"), str):
-                source_path = source["path"]
-            else:
-                raise RuntimeError(
-                    "workspace solution.json source entries must be paths or path objects"
-                )
-            selected.add(_safe_relative(source_path))
-
-    return selected
+    from aka.light.workspace.candidate import declared_paths
+    return declared_paths(workspace)
 
 
 def _evaluation_input_paths(
@@ -811,7 +785,7 @@ def _command_input_paths(
     """
     parts = _command_parts(command)
     selected: set[str] = set()
-    from aka.light.workspace.sources import policy_at
+    from aka.light.workspace.candidate import policy_at
     if policy_at(workspace) is not None:
         selected.update(_declared_candidate_sources(workspace))
     for value in explicit_inputs:
@@ -1139,11 +1113,11 @@ def _typed_workspace_limitation(
     workspace: Path, command: list[str], kind: str
 ) -> str | None:
     """Explain why the typed run/profile source contract cannot represent a workspace."""
-    from aka.light.workspace.sources import policy_at
-    source_tree = policy_at(workspace) is not None
-    from aka.light.workspace import native
-    required = (("solution.json", "reference.py", "input.py") if policy_at(workspace) == native.POLICY
-                else ("kernel.py", "reference.py", "input.py"))
+    from aka.light.workspace.candidate import typed_limitation
+    limitation = typed_limitation(workspace)
+    if limitation:
+        return limitation
+    required = ("reference.py", "input.py")
     missing = [name for name in required if not (workspace / name).is_file()]
     if missing:
         return "missing " + ", ".join(missing)
@@ -1160,45 +1134,6 @@ def _typed_workspace_limitation(
         return (
             "SOL-ExecBench workload.jsonl is not supported by the Atrex-Bench typed API"
         )
-
-    solution = read_json_object(workspace / "solution.json")
-    if solution is not None:
-        sources = solution.get("sources")
-        if isinstance(sources, list):
-            source_paths = {
-                str(item.get("path"))
-                for item in sources
-                if isinstance(item, dict) and item.get("path")
-            }
-            if source_paths - {"kernel.py"} and not source_tree:
-                return "solution.json declares auxiliary candidate sources"
-
-    try:
-        tree = ast.parse((workspace / "kernel.py").read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, SyntaxError):
-        tree = None
-    if tree is not None:
-        imported_roots: set[str] = set()
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                imported_roots.update(
-                    alias.name.split(".", 1)[0] for alias in node.names
-                )
-            elif isinstance(node, ast.ImportFrom) and node.module:
-                imported_roots.add(node.module.split(".", 1)[0])
-        local_imports = sorted(
-            root
-            for root in imported_roots
-            if root not in {"input", "reference", "kernel"}
-            and (
-                (workspace / f"{root}.py").is_file()
-                or (workspace / root / "__init__.py").is_file()
-            )
-        )
-        if local_imports and not source_tree:
-            return "candidate imports local auxiliary modules: " + ", ".join(
-                local_imports
-            )
 
     # These test-harness controls do not exist in the typed request contract.
     # Preserve their exact semantics through dev instead of silently dropping them.
@@ -1358,10 +1293,8 @@ def build_typed_request(
                 raise ValueError("each --shapes-path record must be a JSON object")
         shapes = custom_shape_value
         custom_shapes = True
-    solution = read_json_object(workspace / "solution.json") or {}
-    languages = solution.get("languages")
-    if not isinstance(languages, list):
-        languages = []
+    from aka.light.workspace.candidate import language_hints
+    languages = language_hints(workspace)
     # Agate's native Eval contract accepts the optional language hint, while
     # the native Profile contract currently rejects it as an extra field.
     # Keep the shared hardware selector in both requests and add languages only
@@ -1382,7 +1315,7 @@ def build_typed_request(
             raise ValueError(f"shape {selected_shape_id!r} init_kwargs must be an object or null")
         request: dict[str, Any] = {
             "spec": {"target_hardware": [hardware]},
-            "candidate": ((workspace / "kernel.py").read_text(encoding="utf-8") if (workspace / "kernel.py").is_file() else ""),
+            "candidate": None,
             "env_vars": _parse_env_items(env_items),
             "init_kwargs": dict(init_value or {}),
             # Local Gateway uses this evaluator-owned input to perform a real
@@ -1470,7 +1403,7 @@ def build_typed_request(
     request: dict[str, Any] = {
         "name": f"{workspace.name}_{kind}",
         "spec": spec,
-        "candidate": ((workspace / "kernel.py").read_text(encoding="utf-8") if (workspace / "kernel.py").is_file() else ""),
+        "candidate": None,
         "reference": reference,
         "options": {
             "num_correctness_cases": 1 + multi_seed,
@@ -3658,7 +3591,7 @@ def _record_episode_evaluation(
     if not (runtime / "journal.json").is_file():
         return
     try:
-        from aka.light.workspace.sources import snapshot as source_snapshot
+        from aka.light.workspace.candidate import snapshot as source_snapshot
         kernel_sha256 = hashlib.sha256(source_snapshot(workspace)).hexdigest()
     except (OSError, ValueError):
         kernel_sha256 = None
@@ -3903,8 +3836,8 @@ def _run_typed_gateway(
 ) -> int | None:
     """Run agate eval/profile; a failed typed Eval never falls back to Dev."""
     generalized = _is_generalized_workspace(workspace)
-    from aka.light.workspace.sources import policy_at
-    source_tree = policy_at(workspace) is not None
+    from aka.light.workspace.candidate import layout_at
+    source_tree = layout_at(workspace).archived
     compatible_fallback = not source_tree and not _requires_typed_request(
         args, private_profile_shape=(kind == "profile" and generalized and _is_profile_command(command_parts)),
     )
@@ -4454,9 +4387,9 @@ def _main(argv: list[str] | None = None) -> int:
         private_profile_shape = (
             gateway_kind == "profile" and profile_command and _is_generalized_workspace(workspace)
         )
-        from aka.light.workspace import native
-        if native.read(workspace) is not None:
-            raise SystemExit(f"sandbox: native CUDA requires the typed Agate {gateway_kind} route ({typed_limitation}); no Dev fallback was submitted")
+        from aka.light.workspace.candidate import layout_at
+        if layout_at(workspace).typed_only:
+            raise SystemExit(f"sandbox: candidate requires the typed Agate {gateway_kind} route ({typed_limitation}); no Dev fallback was submitted")
         if _requires_typed_request(args, private_profile_shape=private_profile_shape):
             raise SystemExit(
                 f"sandbox: explicit typed {gateway_kind} options cannot be honored "
@@ -5002,28 +4935,11 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
     evaluator = kind == "run" or bool(baseline_path) or _is_numerical_probe_command(command)
     selected = set(_evaluation_input_paths(workspace, command) if evaluator else
                    _command_input_paths(workspace, command, args.input))
-    selected.add("kernel.py")
-    from aka.light.workspace.sources import policy_at, collect, snapshot as source_snapshot, POLICY
-    source_policy = policy_at(workspace)
-    source_snapshots = {}
-    if source_policy is not None:
-        selected.update(collect(workspace, source_policy))
-        selected.add(POLICY)
-        source_snapshots["candidate"] = hashlib.sha256(source_snapshot(workspace)).hexdigest()
+    from aka.light.workspace.candidate import measurement_paths
+    candidate_paths, source_snapshots = measurement_paths(workspace, baseline_path)
+    selected.update(candidate_paths)
     for value in args.input or []:
         selected.update(_expand_workspace_input(workspace, value))
-    if baseline_path:
-        if (workspace / baseline_path).is_dir():
-            baseline_policy = policy_at(workspace / baseline_path)
-            if source_policy is None or baseline_policy != source_policy:
-                raise ValueError("ABBA tree baseline must carry the same task-owned source contract")
-            selected.update(baseline_path + "/" + name for name in collect(workspace / baseline_path, baseline_policy))
-            selected.add(baseline_path + "/" + POLICY)
-            source_snapshots["baseline"] = hashlib.sha256(source_snapshot(workspace / baseline_path)).hexdigest()
-        else:
-            if source_policy is not None:
-                raise ValueError("Tree comparison requires --baseline-path to name a complete tree directory")
-            selected.add(baseline_path)
     for value in (args.evaluation_input_path, args.evaluation_shapes_path):
         if value:
             selected.add(_safe_relative(value))

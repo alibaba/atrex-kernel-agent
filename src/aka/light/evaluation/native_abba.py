@@ -336,11 +336,8 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     validate_comparison(args)
     if args.ssh or (workspace / "workload.jsonl").exists():
         raise ValueError("Native Eval ABBA requires an Agate Atrex-Bench input/Shape contract; SOL/SSH Dev fallback is disabled")
-    from aka.light.workspace.sources import snapshot as source_snapshot, unpack, policy_at
-    tree = policy_at(workspace) is not None
-    baseline_source = source_snapshot(workspace / args.baseline_path) if tree else None
-    baseline = (unpack(baseline_source)[1].get("kernel.py", b"native CUDA manifest").decode() if tree else
-                gateway.read_workspace_override(workspace, args.baseline_path, field="baseline-path", max_bytes=16 * 1024 * 1024))
+    from aka.light.workspace.candidate import read_path
+    baseline = read_path(workspace / args.baseline_path)
     command = ["python3", "test_kernel.py"]
     for flag, value in (("--multi-seed", args.multi_seed), ("--timed-runs", args.timed_runs)):
         if value is not None:
@@ -352,12 +349,11 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         workspace, args.hardware, args.timeout, args.env, command, "run", evaluation_mode="full",
         requirements=args.requirement or (), deps_mode=args.deps_mode,
     )
-    if not baseline.strip() or not request["candidate"]:
-        raise ValueError("Native ABBA requires two non-empty Kernel sources")
-    request["abba"] = {"baseline": baseline, "repeats": args.comparison_repeats // 2}
-    if tree:
-        from .source_transport import attach
-        attach(request, workspace, side="baseline", source=baseline_source)
+    request["abba"] = {"baseline": None, "repeats": args.comparison_repeats // 2}
+    from .source_transport import attach, ARCHIVES
+    attach(request, workspace, side="baseline", source=baseline.snapshot)
+    if not request["abba"]["baseline"] or not request["candidate"]:
+        raise ValueError("Native ABBA requires two non-empty candidate sources")
     request["runner_overrides"]["perf_timeout_s"] = comparison_run_timeout(args)
     shapes = sorted(request["reference"]["shapes"], key=gateway.shape_id_sort_key)
     if not shapes:
@@ -411,7 +407,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             retry_identity = (
                 {"abba_wall_clock_retry": attempt} if attempt else None
             )
-            if tree:
+            if ARCHIVES in batch:
                 from .source_transport import run as run_tree
                 return run_tree(
                     gateway,

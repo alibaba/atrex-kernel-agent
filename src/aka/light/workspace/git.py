@@ -4,9 +4,7 @@ from __future__ import annotations
 import subprocess
 import uuid
 import shutil
-import os
 import logging
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -71,13 +69,13 @@ def warn_kernel_mismatch(workspace: Path, sealed_source: bytes) -> bool:
     from aka.light.workspace.files import read_input
 
     try:
-        from aka.light.workspace.sources import snapshot as source_snapshot
+        from aka.light.workspace.candidate import snapshot as source_snapshot
         mismatch = source_snapshot(workspace) != sealed_source
     except (OSError, ValueError):
         mismatch = True
     if mismatch:
         logging.getLogger(__name__).warning(
-            "Candidate Kernel integrity warning: %s/kernel.py is unreadable or differs from the sealed commit; "
+            "Candidate Kernel integrity warning: %s source is unreadable or differs from the sealed commit; "
             "acceptance uses the sealed commit", workspace,
         )
     return mismatch
@@ -186,47 +184,35 @@ class EpisodeWorktree:
         )
         if ancestor.returncode:
             return "candidate_commit is not descended from incumbent", []
-        from aka.light.workspace.sources import from_git, unpack, snapshot as source_snapshot, allowed_changes
-        policy, _ = unpack(from_git(self.path, self.base_commit))
-        if policy is not None:
-            try:
-                source = from_git(self.path, resolved)
-                if unpack(source)[0] != policy:
-                    return "candidate changed its source contract", []
-                paths = changed_paths(self.path, self.base_commit, resolved)
-                if not allowed_changes(paths, policy):
-                    return "candidate changed a fixed or out-of-scope file", paths
-                if require_worktree_match and source_snapshot(self.path, policy=policy) != source:
-                    return "worktree source tree must match the sealed candidate", paths
-                if any(marker.encode() in source for marker in TIMELINE_PROBE_MARKERS):
-                    return "candidate contains timeline profiling probes", paths
-                return "", paths
-            except (OSError, ValueError, RuntimeError) as error:
-                return str(error), []
-        dirty = working_changes(self.path)
-        violation = protected_violation(dirty)
-        if violation:
-            return violation, []
-        if require_worktree_match and _git(
-            self.path, "diff", "--quiet", resolved, "--", "kernel.py", check=False,
-        ).returncode:
-            return "worktree kernel.py must match candidate_commit", []
-        paths = changed_paths(self.path, self.base_commit, resolved)
-        if not paths:
-            return "candidate has no changes relative to incumbent", []
-        if paths != ["kernel.py"]:
-            return "candidate commit may change only kernel.py", paths
-        kernel_text = git_blob(self.path, resolved, "kernel.py").decode("utf-8", errors="replace")
-        if any(marker in kernel_text for marker in TIMELINE_PROBE_MARKERS):
-            return "candidate kernel.py still contains timeline profiling probes", paths
-        return "", paths
+        from aka.light.workspace.candidate import from_revision, read
+        try:
+            baseline = from_revision(self.path, self.base_commit)
+            candidate = from_revision(self.path, resolved)
+            if candidate.contract != baseline.contract:
+                return "candidate changed its source contract", []
+            paths = changed_paths(self.path, self.base_commit, resolved)
+            if not paths or candidate.snapshot == baseline.snapshot:
+                return "candidate has no changes relative to incumbent", paths
+            if not baseline.allows_changes(paths):
+                return "candidate changed a fixed or out-of-scope file", paths
+            violation = protected_violation(working_changes(self.path))
+            if violation:
+                return violation, paths
+            if require_worktree_match and read(self.path).snapshot != candidate.snapshot:
+                return "worktree candidate must match the sealed candidate", paths
+            if any(marker.encode() in data for data in candidate.files.values()
+                   for marker in TIMELINE_PROBE_MARKERS):
+                return "candidate contains timeline profiling probes", paths
+            return "", paths
+        except (OSError, ValueError, RuntimeError) as error:
+            return str(error), []
 
     def restore_sealed_candidate(self, candidate_commit: str, source: bytes) -> tuple[str, list[str]]:
         """Refresh the controller copy only from a validated private report/commit."""
         violation, paths = self.validate_candidate(candidate_commit, require_worktree_match=False)
         if violation:
             return violation, paths
-        from aka.light.workspace.sources import from_git, install
+        from aka.light.workspace.candidate import from_git, install
         if from_git(self.path, candidate_commit) != source:
             return "private report source does not match candidate_commit", paths
         if warn_kernel_mismatch(self.path, source):
@@ -246,52 +232,15 @@ class EpisodeWorktree:
         Never ask Git to reread an Agent-writable candidate or run commit hooks.
         The real Episode worktree is not mounted in the Agent namespace.
         """
-        from aka.light.workspace.files import publish
-        from aka.light.workspace.sources import unpack, commit_tree_candidate
-        if unpack(expected_source)[0] is not None:
-            return commit_tree_candidate(self, expected_source)
-
-        head = git_head(self.path)
-        if git_text(self.path, "symbolic-ref", "--quiet", "--short", "HEAD") != self.branch:
-            raise RuntimeError("Supervisor candidate branch does not match the Episode")
-        if _git(self.path, "merge-base", "--is-ancestor", self.base_commit, head, check=False).returncode:
-            raise RuntimeError("candidate is not descended from the Episode baseline")
-        if any(marker.encode() in expected_source for marker in TIMELINE_PROBE_MARKERS):
-            raise ValueError("candidate kernel.py still contains timeline profiling probes")
-        if _git(self.path, "show", f"{self.base_commit}:kernel.py", binary=True).stdout == expected_source:
-            raise ValueError("candidate has no Kernel change; report pivot or select another")
+        from aka.light.workspace.candidate import Artifact, commit_candidate
+        artifact = Artifact(expected_source)
+        if any(marker.encode() in data for data in artifact.files.values()
+               for marker in TIMELINE_PROBE_MARKERS):
+            raise ValueError("Candidate source contains timeline profiling probes")
         violation = protected_violation(working_changes(self.path))
         if violation:
             raise RuntimeError(violation)
-        if any(path != "kernel.py" for path in changed_paths(self.path, self.base_commit, head)):
-            raise RuntimeError("candidate may change only kernel.py relative to its baseline")
-        if any(path != "kernel.py" for path in git_text(self.path, "diff", "--cached", "--name-only").splitlines()):
-            raise RuntimeError("Supervisor index contains unexpected staged files")
-        if _git(self.path, "show", f"{head}:kernel.py", binary=True).stdout != expected_source:
-            blob = subprocess.run(
-                ["git", "hash-object", "-w", "--stdin"], cwd=self.path,
-                input=expected_source, capture_output=True, check=True,
-            ).stdout.decode().strip()
-            with tempfile.TemporaryDirectory(prefix="aka-candidate-index-") as temporary:
-                environment = os.environ | {
-                    "GIT_INDEX_FILE": str(Path(temporary) / "index"),
-                    "GIT_AUTHOR_NAME": "AKA Supervisor", "GIT_COMMITTER_NAME": "AKA Supervisor",
-                    "GIT_AUTHOR_EMAIL": "supervisor@atrex.local", "GIT_COMMITTER_EMAIL": "supervisor@atrex.local",
-                }
-
-                def run(*args: str) -> str:
-                    return subprocess.run(["git", *args], cwd=self.path, env=environment,
-                                          capture_output=True, text=True, check=True).stdout.strip()
-
-                run("read-tree", head)
-                run("update-index", "--add", "--cacheinfo", f"100644,{blob},kernel.py")
-                tree = run("write-tree")
-                commit = run("-c", "commit.gpgSign=false", "commit-tree", tree,
-                             "-p", head, "-m", f"Episode {self.episode}: selected Kernel")
-                run("update-ref", "HEAD", commit, head)
-                head = commit
-        publish(self.path, "kernel.py", expected_source)
-        _git(self.path, "read-tree", head)
+        head = commit_candidate(self, expected_source)
         violation, _ = self.validate_candidate(head)
         if violation:
             raise RuntimeError(violation)
@@ -374,9 +323,8 @@ def promote_candidate(
             incumbent_workspace, "diff", "--cached", "--name-only", "--no-renames", "-z"
         ).split("\0")
         staged = [name for name in staged if name]
-        from aka.light.workspace.sources import from_git, unpack, allowed_changes
-        source_policy, _ = unpack(from_git(incumbent_workspace, base_commit))
-        if (not allowed_changes(staged, source_policy) if source_policy else staged != ["kernel.py"]):
+        from aka.light.workspace.candidate import from_revision
+        if not from_revision(incumbent_workspace, base_commit).allows_changes(staged):
             raise RuntimeError("Promotion may change only the sealed candidate source")
         violation = protected_violation([path for path in staged if path])
         if violation:

@@ -79,11 +79,10 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
     def verify(self, workspace: Path, *, base_commit: str, candidate_commit: str,
                changed_paths: list[str]) -> VerificationResult:
         try:
-            from aka.light.workspace.sources import from_git, unpack, allowed_changes, install
+            from aka.light.workspace.candidate import from_git, Artifact, install
             candidate = from_git(workspace, candidate_commit)
             baseline = from_git(workspace, base_commit)
-            policy, _ = unpack(baseline)
-            if (not allowed_changes(changed_paths, policy) if policy else changed_paths != ["kernel.py"]):
+            if not Artifact(baseline).allows_changes(changed_paths):
                 raise ValueError("Recorded acceptance requires a kernel-only candidate")
             warn_kernel_mismatch(workspace, candidate)
             with tempfile.TemporaryDirectory(prefix="aka-acceptance-") as temporary:
@@ -95,10 +94,7 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
                         continue
                     publish(staged, name, content)
                 install(staged, candidate)
-                if policy:
-                    install(staged / self.BASELINE_PATH, baseline)
-                else:
-                    publish(staged, self.BASELINE_PATH, baseline)
+                Artifact(baseline).export(staged / self.BASELINE_PATH)
                 response = self.execute(staged, self.request_argv())
             result = result_from_response(response, "same_allocation_abba")
             if not result or not result.get("gateway_record_id"):
