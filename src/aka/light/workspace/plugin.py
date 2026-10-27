@@ -12,7 +12,7 @@ Config = {"type": "object", "properties": {
     "inherit_state": {"type": "boolean"},
     "file_system": {"type": "string", "enum": ["single_file", "source_tree", "cuda_manifest"]},
 }, "additionalProperties": False}
-Defaults = {"inherit_state": True}
+Defaults = {"inherit_state": True, "file_system": "source_tree"}
 
 
 def apply(ctx, config):

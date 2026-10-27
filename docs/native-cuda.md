@@ -1,6 +1,7 @@
 # Native CUDA on Agate
 
-Light campaigns with `framework=cuda` author separate CUDA sources and a manifest.
+Light campaigns with explicit `file_system=cuda_manifest` and `framework=cuda`
+author separate CUDA sources and a manifest.
 The Supervisor leaves CUDA manifest authoring to the Skill instead of seeding
 Python-loader metadata. Episode performance records match the complete candidate
 snapshot, including headers and build settings, without requiring `kernel.py`.
@@ -11,8 +12,10 @@ and [Agate manifest v1](../src/aka/light/workspace/resources/skills/atrex-gpu-ga
 Use `--sandbox-profile pre` to explicitly select Agate preproduction for integration tests.
 This does not change global Agate settings or Diamond.
 
-The Skill is copied verbatim from the gateway repository and included in the AKA
-package and Agent Skill discovery. Update it with:
+The Agate Skill is copied from the gateway repository and included in the AKA
+package and Agent Skill discovery. AKA maintains `reference/aka-workspace.md`
+locally to describe its file-system selection; syncing preserves that integration
+guide. Update the upstream Skill files with:
 
 ```bash
 python3 tools/sync_agate_skill.py /path/to/atrex-gpu-gateway
@@ -63,8 +66,14 @@ one another. `common.py` defines their interface and shared file operations;
 codec and Git transaction, and `artifacts.py` exposes format-independent operations.
 Changing one format belongs in its implementation file.
 
-When `file_system` is omitted, task creation chooses once: `source_tree` when
-source import is configured, `cuda_manifest` for CUDA, otherwise `single_file`.
+When `file_system` is omitted, new tasks use `source_tree`, including CUDA tasks.
+Without import configuration, the file system freezes the SourceProvider's initial
+`kernel.py` as `impl/model.py` and creates a fixed `kernel.py` adapter importing
+`Model`. The Agent can edit/add/delete files under `impl/`. No import manifest is
+needed. Source trees require native Atrex-Bench Eval; SOL/SSH tasks must explicitly
+select `single_file`. Select `cuda_manifest` explicitly to use Agate-generated CUDA
+bindings. Existing campaigns retain their format and must resume with that explicit
+selection if it differs from the new default.
 The selected implementation is pinned in `.atrex_file_system.json` after the
 framework baseline. A resumed task must match it. A missing or invalid file fails
 within that implementation; execution never retries through another file system.
@@ -152,3 +161,22 @@ Thus three actual Agent-authored edits have correctness and performance evidence
 but the third autonomous handoff did not complete. The independent comparison
 is supplementary evidence, not an override of the campaign acceptance gate.
 Supplementary GPU jobs: `ev_9c6a67eb9362`, `ev_83048a3d8cec`, `ev_32532da4633d`.
+
+## Default source-directory validation
+
+New tasks default to `source_tree` without requiring an import manifest. The
+47-case regression suite passed in Aone Sandbox. Production Agate L20N validation
+used an empty candidate configuration: automatic bootstrap, expansion to a CUDA/
+C++/header tree, full-directory ABBA, numerical rejection and snapshot restoration.
+Three shapes (1024, 4097, 65536 elements) passed; deliberately changing the header
+offset failed all 18 correctness cases. Restoring the exact snapshot removed an
+extra file and passed all shapes again. Representative production jobs:
+
+- Bootstrap: `ev_2787c0b8bbc2`.
+- Native directory: `ev_4ac735703b98`.
+- ABBA: `ev_115498cdf910`.
+- Expected failure: `ev_60219850f090`.
+- Restored tree: `ev_2c02b39449d3`.
+
+These exercise AKA initialization and its real evaluation path, not additional
+Agent-authored optimization episodes.

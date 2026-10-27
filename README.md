@@ -68,7 +68,8 @@ instead of silently selecting a different runtime.
 
 ## Native CUDA candidates
 
-Light native Atrex-Bench campaigns with `--framework cuda` write `.cu`/header files
+Light native Atrex-Bench campaigns with explicit `file_system=cuda_manifest` and
+`--framework cuda` write `.cu`/header files
 and a versioned `solution.json`. AKA snapshots the complete candidate, creates a
 hash-verified OSS source archive, and asks Agate to compile and bind the launcher.
 The Agent no longer embeds CUDA in `kernel.py`. V0 remains the evaluator-owned
@@ -77,8 +78,11 @@ service explicitly; no endpoint or Diamond setting is changed.
 
 The installed `atrex-gpu-gateway` Skill documents the local file-list convenience and
 Agate build/ABI/dependency contract. See [native CUDA input](docs/native-cuda.md).
-The `candidate` module selects an independent `single_file`, `source_tree`, or
-`cuda_manifest` file system through `file_system`; the choice stays fixed for the task.
+The `candidate` module defaults to `source_tree`: a fixed `kernel.py` adapter
+imports the editable `impl/model.py`, and `impl/` can contain multiple source files.
+An import manifest is optional. Set `file_system` explicitly for the independent
+`single_file` or `cuda_manifest` alternatives; the choice stays fixed for the task.
+SOL/SSH tasks must explicitly select `single_file`.
 File layouts and source imports are configured there, outside the optimization workflow.
 
 ## News

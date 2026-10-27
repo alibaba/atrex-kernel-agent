@@ -1,7 +1,28 @@
-# AKA workspace: native CUDA candidates
+# AKA workspace file systems
 
-For `framework=cuda`, native Atrex-Bench campaigns on Agate use `.cu` files and
-`solution.json`. Keep V0's PyTorch reference as the baseline only. Do not embed
+Use the file system pinned in `.atrex_file_system.json`. New tasks default to
+`source_tree`; framework selection does not switch the file system.
+
+## Source directory (default)
+
+Keep the fixed `kernel.py` adapter unchanged. Without an import configuration it
+imports `Model` from editable `impl/model.py`. Edit/add/delete implementation files
+under `impl/`; an imported package instead uses the `editable_roots` in
+`.atrex_source.json`. All source files travel together in a source archive.
+
+CUDA implementations may use separate `.cu`, `.cpp` and header files with a
+Python loader in the editable directory. Compile through the supported Torch
+extension API on Agate; use paths relative to the loader's `__file__`.
+Do not import `pathlib` or `os`, which Agate source validation rejects.
+The source-directory adapter supplies the Python `Model` entry point; an Agate
+native-CUDA manifest is not used in this mode. Do not replace the pinned adapter.
+`kernel-read` exports the entire source directory for `--baseline-path`.
+Use the managed Evaluate/Profile tools and submit the usual episode report.
+
+## Explicit CUDA manifest
+
+With `file_system=cuda_manifest` and `framework=cuda`, native Atrex-Bench campaigns
+on Agate use `.cu` files and `solution.json`. Keep V0's PyTorch reference as the baseline only. Do not embed
 CUDA in kernel.py, generate Python bindings, run nvcc on the host, or change the
 reference/input/evaluator. SOL and SSH do not support this manifest route.
 

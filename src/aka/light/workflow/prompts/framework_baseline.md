@@ -1,6 +1,6 @@
 # Framework baseline
 
-Produce the first self-contained `{{FRAMEWORK}}` implementation of this operator. Use `kernel.py` for Python DSLs; for CUDA write separate `.cu` sources and `solution.json` as specified in the atrex-gpu-gateway Skill.
+Produce the first self-contained `{{FRAMEWORK}}` implementation of this operator. Follow the selected file-system contract in `WORKSPACE.md` and the atrex-gpu-gateway Skill for source organization.
 V0 is the PyTorch reference wrapper; the Supervisor will register the accepted implementation
 as v{{N}} before optimization Episodes begin. If recovering an interrupted session, preserve
 and inspect the candidate already on disk instead of starting over.
@@ -41,12 +41,11 @@ override the operator contract.
 ## Step C — Implement and smoke-test
 
 Implement the whole operator yourself in `{{FRAMEWORK}}`, preserving the declared inputs,
-outputs and behavior. Python DSLs expose the expected `Model`/`run` interface; CUDA uses the
-Agate manifest's native launcher contract. Use dependencies only for allocation, compiler/header/ABI/launch plumbing, or other
+outputs and behavior. Preserve the entry-point contract of the selected file system. Use dependencies only for allocation, compiler/header/ABI/launch plumbing, or other
 non-compute support: no PyTorch compute fallback, prebuilt operators, alternate-DSL compute,
 hidden dispatch, or external implementation loading. For Triton, use plain Triton; Gluon is a
-later, explicitly requested conversion. For CUDA, use separate native sources and a manifest;
-read the atrex-gpu-gateway Skill for the file format, build configuration and supported transports.
+later, explicitly requested conversion. Read the atrex-gpu-gateway Skill for the selected
+file format, build configuration and supported transports.
 
 After the implementation edit, run this smoke command:
 

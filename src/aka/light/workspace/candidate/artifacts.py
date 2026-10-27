@@ -232,7 +232,8 @@ def restore_capture(workspace: Path, captured: Path) -> list[str]:
 
 
 def seed_baseline_metadata(workspace: Path, framework: str, name: str, *, native_eval: bool) -> None:
-    task_selection(None, framework=framework).seed_metadata(workspace, framework, name, native_eval=native_eval)
+    system, _ = resolve(workspace)
+    system.seed_metadata(workspace, framework, name, native_eval=native_eval)
 
 
 def measurement_paths(workspace: Path, baseline_path: str | None) -> tuple[set[str], dict[str, str]]:

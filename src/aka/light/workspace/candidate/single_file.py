@@ -40,7 +40,7 @@ class SingleFile:
         """Seed only Python DSL metadata; compiled manifests are authored from their Skill."""
         path = workspace / 'solution.json'
         language = framework.strip().lower()
-        if path.is_file() or not native_eval:
+        if path.is_file() or not native_eval or language == 'cuda':
             return
         dependencies = {'triton': ['torch','triton'], 'gluon': ['torch','triton','gluon'],
                         'cutedsl': ['torch','nvidia-cutlass-dsl'], 'flydsl': ['torch','flydsl']}.get(language, ['torch'])

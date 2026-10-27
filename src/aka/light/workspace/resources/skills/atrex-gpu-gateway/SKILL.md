@@ -11,7 +11,7 @@ description: 使用 agate CLI 向 atrex-gpu-gateway 提交 GPU 算子评测、�
 
 ## AKA 中使用
 
-在 AKA 管理的工作区中，CUDA 候选使用独立 `.cu` 文件和 `solution.json`。
+在 AKA 管理的工作区中，按已选定的文件管理模式组织候选，框架类型不改变文件格式。
 先读 [AKA 文件组织与调用](reference/aka-workspace.md)，再按需读
 [manifest 字段、CUDA ABI 和仓库依赖](reference/eval-manifest.md)。
 作业通过工作区的 `tools/sandbox.py` 提交；Supervisor 负责环境、鉴权、上传和记录。

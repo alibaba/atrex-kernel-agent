@@ -251,13 +251,15 @@ def import_tree(manifest_path, repository=None, *, directory=None):
         raise ValueError("Native Eval archives require package_root='.', matching Runtime; no Dev fallback")
     return pack(files, policy)
 
-def initial_snapshot(options, *, state_root):
+def initial_snapshot(options, *, state_root, seed=None):
     """Seal once before V0; failed bootstrap/restarts never reread mutable inputs."""
     import fcntl
     from aka.light.agent.home import open_private_directory
     from aka.legacy.task.persistence import durable_write_json
-    validate_import_options(options)
-    configuration = {key: os.path.abspath(Path(value).expanduser()) for key, value in options.items()}
+    if options is not None:
+        validate_import_options(options)
+    configuration = ({key: os.path.abspath(Path(value).expanduser()) for key, value in options.items()}
+                     if options is not None else {"source": "provider"})
     root = state_root
     path = root / "snapshot.json"
     with open_private_directory(root) as parent:
@@ -270,8 +272,9 @@ def initial_snapshot(options, *, state_root):
             try:
                 raw = read_regular_bytes(path, limit=MAX_SNAPSHOT + MAX_FILE + 1)
             except FileNotFoundError:
-                source = import_tree(configuration["manifest"], configuration.get("repository"),
-                                     directory=configuration.get("directory"))
+                source = (seed() if options is None else
+                          import_tree(configuration["manifest"], configuration.get("repository"),
+                                      directory=configuration.get("directory")))
                 value = json.loads(source[len(MAGIC):])
                 durable_write_json(path, {"schema_version": 1, "configuration": configuration,
                     "snapshot_digest": hashlib.sha256(source).hexdigest(), **value})
@@ -293,10 +296,24 @@ class SourceTree:
     def seed_metadata(self, workspace, framework, name, *, native_eval):pass
     def prepare_source(self, request, source_provider, *, options, state_root, native_eval):
         if request.initial.kind == 'sol' or not native_eval:
-            raise ValueError('Source trees require native Atrex-Bench Eval, not SOL/SSH')
+            raise ValueError('Source trees require native Atrex-Bench Eval; select single_file explicitly for SOL/SSH')
         from aka.contracts.content import SourceContent, WorkspaceFile
         from .artifacts import Artifact
-        artifact = Artifact(initial_snapshot(options, state_root=state_root))
+        def seed():
+            content = source_provider.prepare(request)
+            if len(content.files) != 1 or content.files[0].path != 'kernel.py':
+                raise ValueError('Default source-tree initialization requires one kernel.py; use source_tree import configuration for a package')
+            entry = content.files[0]
+            files = {'impl/model.py': entry.source.read_bytes() if entry.source is not None else entry.text.encode(),
+                     'impl/__init__.py': b'', 'kernel.py': b'from impl.model import Model\n'}
+            policy = {'schema_version': 1, 'source_revision': None,
+                      'seed_digest': 'sha256:' + hashlib.sha256(json.dumps(
+                          {k: v.decode() for k, v in sorted(files.items())}, sort_keys=True).encode()).hexdigest(),
+                      'package_root': '.', 'editable_roots': ['impl'],
+                      'immutable_files': {'kernel.py': hashlib.sha256(files['kernel.py']).hexdigest()},
+                      'runtime_requirements': []}
+            return pack(files, policy)
+        artifact = Artifact(initial_snapshot(options, state_root=state_root, seed=seed))
         return SourceContent(tuple(WorkspaceFile(name, text=data.decode())
                                    for name, data in artifact.materialized_files.items()))
     name = 'source_tree'

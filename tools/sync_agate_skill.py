@@ -23,7 +23,14 @@ def main():
         parser.error("Skill file list changed; review and update SKILL_MANIFEST before syncing")
     changed = []
     for name in manifest.files:
+        if name == "reference/aka-workspace.md":
+            continue  # AKA owns file-system selection and workspace integration.
         data = (source / name).read_bytes()
+        if name == "SKILL.md":
+            data = data.decode().replace(
+                "在 AKA 管理的工作区中，CUDA 候选使用独立 `.cu` 文件和 `solution.json`。",
+                "在 AKA 管理的工作区中，按已选定的文件管理模式组织候选，框架类型不改变文件格式。",
+            ).encode()
         destination = target / name
         if not destination.is_file() or destination.read_bytes() != data:
             changed.append(name)

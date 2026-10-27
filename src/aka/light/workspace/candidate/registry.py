@@ -17,12 +17,14 @@ def for_policy(policy):
     return select('single_file' if policy is None else 'cuda_manifest' if policy.get('kind')=='agate_cuda' else 'source_tree')
 
 def task_selection(name, *, framework, source_tree=False):
-    selected=name or ('source_tree' if source_tree else 'cuda_manifest' if framework.lower()=='cuda' else 'single_file')
+    selected=name or 'source_tree'
     system=select(selected)
-    if source_tree != (selected=='source_tree'):
-        raise ValueError('source_tree file system requires source_tree configuration, and other file systems cannot use it')
-    if (framework.lower()=='cuda') != (selected=='cuda_manifest') and not source_tree:
-        raise ValueError('framework=cuda requires the cuda_manifest file system')
+    if source_tree and selected != 'source_tree':
+        raise ValueError('source_tree configuration requires the source_tree file system')
+    if selected == 'cuda_manifest' and framework.lower() != 'cuda':
+        raise ValueError('cuda_manifest requires framework=cuda')
+    if selected == 'single_file' and framework.lower() == 'cuda':
+        raise ValueError('framework=cuda requires source_tree or cuda_manifest')
     return system
 
 def resolve(workspace, *, revision=None):

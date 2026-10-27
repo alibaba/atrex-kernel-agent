@@ -491,6 +491,50 @@ def test_selected_file_system_owns_bootstrap_source():
                                  state_root=Path('/unused'), native_eval=False)
 
 
+@pytest.mark.parametrize('framework', ['cuda', 'triton', 'cutedsl'])
+def test_default_source_tree_bootstrap_is_frozen(tmp_path, framework):
+    from aka.contracts.content import SourceContent, WorkspaceFile
+    from aka.light.workspace.provider import ManagedCandidateWorkspace
+    from aka.light.workspace.plugin import Defaults
+    prepared = []
+    def prepare(request):
+        prepared.append(request)
+        return SourceContent((WorkspaceFile('kernel.py', text='class Model: pass\n'),))
+    provider = ManagedCandidateWorkspace(**Defaults)
+    system = provider.select_file_system(framework=framework)
+    assert system.name == 'source_tree'
+    assert ManagedCandidateWorkspace().select_file_system(framework=framework).name == 'source_tree'
+    request = SimpleNamespace(initial=SimpleNamespace(kind='kernel'))
+    options = dict(options=None, state_root=tmp_path/'state', native_eval=True)
+    content = system.prepare_source(request, SimpleNamespace(prepare=prepare), **options)
+    work = tmp_path/'work'
+    provider.initialize_at(work, content)
+    artifact = sources.read(work)
+    sources.seed_baseline_metadata(work, framework, 'default', native_eval=True)
+    assert not (work/'solution.json').exists()
+    assert artifact.files['kernel.py'] == b'from impl.model import Model\n'
+    assert artifact.files['impl/model.py'] == b'class Model: pass\n'
+    def forbidden(request):
+        raise AssertionError('resume must use frozen source')
+    again = system.prepare_source(request, SimpleNamespace(prepare=forbidden), **options)
+    assert again == content and len(prepared) == 1
+    (work/'impl/extra.py').write_text('VALUE = 1\n')
+    assert sources.read(work).digest != artifact.digest
+    artifact.install(work, bind=True)
+    assert sources.read(work).digest == artifact.digest
+    assert not (work/'impl/extra.py').exists()
+    with pytest.raises(ValueError, match='single_file explicitly'):
+        system.prepare_source(request, None, **dict(options, native_eval=False))
+
+
+def test_explicit_file_system_selection_overrides_default():
+    from aka.light.workspace.candidate import task_selection
+    assert task_selection('single_file', framework='triton').name == 'single_file'
+    assert task_selection('cuda_manifest', framework='cuda').name == 'cuda_manifest'
+    with pytest.raises(ValueError, match='requires'):
+        task_selection('single_file', framework='triton', source_tree=True)
+
+
 def test_pinned_single_file_cannot_switch_during_execution(tmp_path):
     from aka.light.workspace.candidate.common import SELECTION
     authority = tmp_path/'authority'; authority.mkdir()
