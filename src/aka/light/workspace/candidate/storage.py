@@ -272,15 +272,15 @@ def install(workspace, source, *, replace=True):
     except (ValueError, UnicodeError):
         # A broken draft must not prevent restoring a previously sealed candidate.
         previous_native = None
+    if replace and previous_native is not None and policy in (None, native.POLICY):
+        for name in set(previous_native["source"]["files"]) - files.keys():
+            from aka.light.agent.home import open_private_directory
+            with open_private_directory((workspace / name).parent) as parent:
+                try:
+                    os.unlink(Path(name).name, dir_fd=parent)
+                except FileNotFoundError:
+                    pass
     if policy == native.POLICY:
-        if replace:
-            for name in set(previous_native["source"]["files"] if previous_native else []) - files.keys():
-                from aka.light.agent.home import open_private_directory
-                with open_private_directory((workspace / name).parent) as parent:
-                    try:
-                        os.unlink(Path(name).name, dir_fd=parent)
-                    except FileNotFoundError:
-                        pass
         # The reference wrapper is a V0 artifact, never part of a CUDA candidate.
         (workspace / "kernel.py").unlink(missing_ok=True)
         for name, data in files.items():

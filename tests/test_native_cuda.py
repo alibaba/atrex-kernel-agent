@@ -66,6 +66,9 @@ def test_snapshot_restores_all_files_and_native_to_python(workspace):
     assert not (workspace / "kernel.py").exists()
     sources.install(workspace, b'class Model: pass\n')
     assert sources.snapshot(workspace) == b'class Model: pass\n'
+    assert not (workspace / 'kernel.cu').exists()
+    assert not (workspace / 'include/offset.h').exists()
+    assert not (workspace / 'solution.json').exists()
     sources.install(workspace, sealed)
     assert sources.snapshot(workspace) == sealed
 
