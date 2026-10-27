@@ -101,13 +101,15 @@ class LegacyExperiment:
         if isinstance(request, CommandSpec):
             import hashlib
             import json
+            from .command_identity import handoff_identity
             return {"workspace": str(request.workspace.resolve()), "argv": list(request.command),
                     "operation": request.operation, "timeout": request.timeout, "hardware": request.hardware, "num_gpus": request.num_gpus,
                     "languages": list(request.languages), "requirements": list(request.requirements),
                     "artifacts": list(request.artifacts), "environment_keys": sorted(request.environment),
                     "environment_digest": hashlib.sha256(json.dumps(dict(request.environment),
                         sort_keys=True).encode()).hexdigest(), "cancellation": request.cancel_event is not None, "submission_sha256":
-                    hashlib.sha256(request.submission).hexdigest() if request.submission is not None else None}
+                    hashlib.sha256(request.submission).hexdigest() if request.submission is not None else None,
+                    **handoff_identity(request)}
         data = asdict(request)
         data.pop("experiment_ref", None)
         for name in ("workspace", "canonical_workspace"):
@@ -139,8 +141,10 @@ class LegacyExperiment:
                         artifact_path = Path(relative)
                         if artifact_path.is_absolute() or ".." in artifact_path.parts:
                             raise ValueError("experiment artifacts must be workspace-relative files")
-                        path = request.workspace / artifact_path
-                        if not path.resolve().is_relative_to(request.workspace.resolve()):
+                        from aka.contracts.filesystem_access import require_path_access
+                        path = require_path_access(request.filesystem_access,
+                            request.workspace.absolute() / artifact_path)
+                        if request.filesystem_access is None and not path.resolve().is_relative_to(request.workspace.resolve()):
                             raise ValueError("experiment artifact escapes its workspace")
                         if path.is_file():
                             records.publish(ref, path, "command")
@@ -262,6 +266,10 @@ class LegacyExperiment:
         from .measurement_files import record_result_lines
         evaluator = self.command_evaluator
         prepared = evaluator.prepare(command)
+        capabilities = getattr(self.executor, "capabilities", None)
+        if capabilities is not None:
+            for step in prepared.steps:
+                capabilities.require(step)
         commands = (*prepared.steps, *prepared.fallback_steps)
         cached = {}
         if records is not None:
@@ -271,6 +279,8 @@ class LegacyExperiment:
             for step in prepared.steps:
                 if step.submission is not None:
                     records.publish_content(ref, step.submission, "evaluation_input")
+                for item in step.input_files:
+                    records.publish_content(ref, item.content, "execution_input")
         cancel = Event()
         def attempt(index):
             if index in cached:
@@ -445,14 +455,19 @@ class LegacyExperiment:
 
     def _write_inputs(self, request, prepared, records, ref):
         """Preflight all inputs, then publish bytes before any backend submission."""
-        workspace = request.workspace.resolve()
+        from aka.contracts.filesystem_access import require_path_access
+        access = getattr(request, "filesystem_access", None)
+        workspace = request.workspace.absolute() if access is not None else request.workspace.resolve()
         targets = {}
         for item in prepared.inputs:
             relative = Path(item.path)
             if relative.is_absolute() or ".." in relative.parts or relative == Path("."):
                 raise ValueError("preparation inputs must be workspace-relative files")
-            path = workspace / relative
-            if (not path.resolve().is_relative_to(workspace) or path.is_symlink()
+            path = require_path_access(access, workspace / relative, write=True)
+            if access is not None:
+                from .scoped_publication import validate_target
+                validate_target(path)
+            if (access is None and not path.resolve().is_relative_to(workspace) or path.is_symlink()
                     or (path.exists() and not path.is_file())):
                 raise ValueError("preparation input escapes workspace or is not a regular file")
             if path in targets:
@@ -466,7 +481,11 @@ class LegacyExperiment:
         manifest = []
         for path, item in targets.items():
             try:
-                _atomic(path, item.content, mode=item.mode)
+                if access is not None:
+                    from .scoped_publication import publish
+                    publish(path, item.content, mode=item.mode)
+                else:
+                    _atomic(path, item.content, mode=item.mode)
             except (OSError, ValueError) as error:
                 raise ExperimentRecordError("storage_unavailable", ref) from error
             if records is not None:

@@ -155,6 +155,25 @@ def gateway_identity(request, reference_files, kind="run"):
         input_digest, parameters, requirements, policy)
 
 
+def portable_profile_identity(command, reference):
+    """Identify the unchanged wrapper method without inventing typed controls."""
+    from .command_inputs import PROFILE_ENVIRONMENT_KEYS
+    content = _content_inputs(command.workspace, reference)
+    explicit = [{"path": item.path, "mode": item.mode, "sha256": _bytes(item.content)}
+                for item in command.input_files]
+    input_digest = _digest({"content": content, "explicit_inputs": explicit})
+    candidate_path = command.workspace / "kernel.py"
+    revision = "sha256:" + (_bytes(candidate_path.read_bytes()) if candidate_path.is_file() else input_digest)
+    shape = command.environment.get("PROFILE_SHAPE_ID")
+    points = (MeasurementPoint("candidate", revision, 0, shape),)
+    controls = {key: _bytes(value.encode()) for key, value in command.environment.items()
+                if key in PROFILE_ENVIRONMENT_KEYS}
+    parameters = {"hardware": command.hardware, "num_gpus": command.num_gpus,
+                  "command": list(command.command), "profile_environment": controls}
+    return MeasurementIdentity("legacy-profile/1", points, input_digest, parameters,
+        tuple(command.requirements), "explicit-requirements" if command.requirements else "unknown")
+
+
 def assess_payload(identity, result, payload=None):
     """Interpret one physical receipt without altering the incumbent/candidate score."""
     from .abba import _result_latency, _result_performance_score

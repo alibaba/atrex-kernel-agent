@@ -2,7 +2,7 @@
 from dataclasses import replace
 import json
 from pathlib import Path
-from aka.contracts.execution import CommandSpec, ExecutionFile
+from aka.contracts.execution import CommandSpec, ExecutionFile, UnsupportedExecution
 from aka.contracts.evaluation import PreparedEvaluation, StepEvaluation, MeasurementArtifact
 from aka.legacy.execution.gateway import sandbox as transport
 from aka.legacy.execution.legacy.runtime import current_transport_arguments
@@ -10,6 +10,8 @@ from .gateway_request import prepare_request, _candidate_languages
 from .gateway_policy import _typed_workspace_limitation
 from .gateway_measurement import GatewayMeasurement, prepare_dev_output, with_measurement_conditions
 from .metadata import distributed_evaluation_world_size
+from .command_inputs import (validate_command, workload_environment, apply_profile_options,
+    nondefault_profile, validate_prepared_profile, PROFILE_ENVIRONMENT_KEYS)
 
 
 class GatewayCommandEvaluator:
@@ -17,28 +19,71 @@ class GatewayCommandEvaluator:
         self.measurement_reader = measurement_reader
 
     def prepare(self, command):
+        validate_command(command)
         if command.operation == "preflight" or command.submission is not None:
             identities = ()
+            measurement = None
+            kind = command.operation
+            private = transport._is_generalized_workspace(command.workspace)
             if command.submission is not None:
                 prepared = json.loads(command.submission)
-                if prepared.get("kind") in {"run", "profile"}:
+                if not isinstance(prepared, dict) or prepared.get("schema_version") != 1:
+                    raise ValueError("unsupported prepared gateway request")
+                kind = prepared.get("kind")
+                if kind not in {"run", "profile", "check", "disassemble"} or command.operation not in {"auto", kind}:
+                    raise ValueError("prepared request differs from the command operation")
+                request = prepared.get("request")
+                if not isinstance(request, dict):
+                    raise ValueError("prepared request must be an object")
+                references = prepared.get("reference_files", {})
+                if not isinstance(references, dict) or any(not isinstance(name, str)
+                        or name in {"", ".", ".."} or Path(name).name != name or not isinstance(content, str)
+                        for name, content in references.items()):
+                    raise ValueError("prepared reference files require safe filenames and text")
+                captured_environment = request.get("env_vars", {})
+                if (not isinstance(captured_environment, dict) or any(not isinstance(key, str)
+                        or not isinstance(value, str) for key, value in captured_environment.items())):
+                    raise ValueError("prepared workload environment must be an object")
+                from .gateway_request import _parse_env_items
+                _parse_env_items(f"{key}={value}" for key, value in captured_environment.items())
+                if any(captured_environment.get(key) != value for key, value in workload_environment(command).items()):
+                    raise ValueError("workload environment differs from the frozen prepared request")
+                if kind in {"run", "profile"}:
+                    if (not isinstance(request.get("candidate"), str) or not isinstance(request.get("reference"), dict)
+                            or not isinstance(request["reference"].get("shapes"), dict) or not request["reference"]["shapes"]):
+                        raise ValueError("prepared measurement requires candidate source and shapes")
                     from .measurement import gateway_identity
-                    identities = (gateway_identity(prepared["request"], prepared.get("reference_files", {}), prepared["kind"]),)
-            return PreparedEvaluation((command,), 1, {"command": command, "measurement": None,
-                "kind": command.operation, "private": False, "evaluator": False},
+                    identities = (gateway_identity(request, references, kind),)
+                if kind == "profile":
+                    if private:
+                        raise UnsupportedExecution("generalized profiles require the portable profile runner")
+                    validate_prepared_profile(request, command.profile_options)
+                    if PROFILE_ENVIRONMENT_KEYS.intersection(workload_environment(command)):
+                        raise UnsupportedExecution("PROFILE_* controls require the portable profile runner")
+                    measurement = GatewayMeasurement(request, workspace=command.workspace,
+                        hardware=command.hardware, private=private, batch_size=1, profiling=True)
+                    if not measurement.shape_ids:
+                        raise ValueError("profile measurement requires at least one shape")
+            step = replace(command, profile_options=None) if command.profile_options is not None else command
+            return PreparedEvaluation((step,), 1, {"command": command, "measurement": measurement,
+                "kind": kind, "private": private, "evaluator": False},
                 measurement_identities=identities)
         baseline = (self.measurement_reader.baseline(command.workspace)
                     if self.measurement_reader is not None else None)
         environment = command.environment
+        compatibility_arguments = current_transport_arguments() if command.filesystem_access is None else ()
         argv = ["--hardware", command.hardware, "--workspace", str(command.workspace),
                 "--timeout", str(command.timeout), "--kind", command.operation,
-                *current_transport_arguments(), "--", *command.command]
+                *compatibility_arguments, "--", *command.command]
         parser = transport.build_parser()
         parser.set_defaults(hardware=command.hardware, timeout=command.timeout,
             ssh=environment.get("ATREX_SANDBOX_SSH", ""), url=environment.get("ATREX_SANDBOX_URL", ""),
             gateway_profile=environment.get("ATREX_SANDBOX_PROFILE") or None,
             shape_batch_size=int(environment.get("ATREX_EVAL_SHAPE_BATCH_SIZE", transport.DEFAULT_EVAL_SHAPE_BATCH_SIZE)))
         args = parser.parse_args(argv)
+        apply_profile_options(args, command.profile_options)
+        explicit_environment = workload_environment(command, args.env)
+        args.env = [f"{key}={value}" for key, value in explicit_environment.items()]
         if args.shape_batch_size < 1:
             raise ValueError("shape batch size must be positive")
         kind = transport._requested_gateway_kind(args.kind, list(command.command))
@@ -58,20 +103,30 @@ class GatewayCommandEvaluator:
             from .private_inputs import private_reference_dir
             reference = private_reference_dir(command.workspace, environment) or reference
         metadata = transport._json_object(reference / "metadata.json")
-        num_gpus = distributed_evaluation_world_size(metadata)
+        metadata_gpus = distributed_evaluation_world_size(metadata)
+        if command.num_gpus != 1 and metadata_gpus != 1 and command.num_gpus != metadata_gpus:
+            raise ValueError("command GPU count differs from the Task metadata")
+        num_gpus = max(command.num_gpus, metadata_gpus)
         context["num_gpus"] = num_gpus
         command = replace(command, num_gpus=num_gpus)
         context["command"] = command
         ssh = args.ssh
+        profile_controls = kind == "profile" and PROFILE_ENVIRONMENT_KEYS.intersection(explicit_environment)
         limitation = ("SSH uses the portable runner" if ssh else
-            "custom dev options" if args.input or args.keep_pod or args.include_raw_profile else
+            "PROFILE_* controls require the portable profile runner" if profile_controls else
+            "custom dev options" if args.input or command.input_files or args.keep_pod else
             _typed_workspace_limitation(command.workspace, list(command.command), kind, reference_dir=reference))
         if kind == "dev" or limitation:
+            if kind == "profile" and nondefault_profile(command.profile_options):
+                raise UnsupportedExecution("requested typed Profile options cannot use the portable route: " + str(limitation))
             if kind == "profile" and num_gpus > 1:
                 raise ValueError("distributed profile requires the typed route")
             if ssh and evaluator and num_gpus > 1:
                 raise ValueError("distributed evaluator is unsupported by SSH")
-            return PreparedEvaluation((replace(command, operation="dev"),), 1, context)
+            from .measurement import portable_profile_identity
+            identities = (portable_profile_identity(command, reference),) if kind == "profile" else ()
+            return PreparedEvaluation((replace(command, operation="dev", profile_options=None),), 1, context,
+                                      measurement_identities=identities)
         if kind == "profile" and args.profile_level == "deep" and not args.kernel_regex:
             raise ValueError("--profile-level deep requires --kernel-regex")
         requirements_path = environment.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "").strip()
@@ -79,17 +134,25 @@ class GatewayCommandEvaluator:
         candidate = (command.workspace / "kernel.py").read_text(encoding="utf-8")
         requirements = transport._runtime_requirements(requirements_path,
             candidate_languages=_candidate_languages(solution, candidate_sources=(candidate,))) if requirements_path else []
+        if command.requirements:
+            if requirements and tuple(requirements) != command.requirements:
+                raise ValueError("command requirements differ from the frozen Task requirements")
+            requirements = list(command.requirements)
         try:
             request = prepare_request(command.workspace, command.hardware, command.timeout, args.env,
                 list(command.command), kind, reference_dir=reference, requirements=requirements,
                 profiler=args.profiler, profile_level=args.profile_level, counters=args.profile_counter,
                 kernel_regex=args.kernel_regex, top_kernels=args.top_kernels)
+            if num_gpus > 1:
+                request["spec"]["num_gpus"] = num_gpus
         except (OSError, UnicodeDecodeError, ValueError) as error:
             # A malformed performance baseline deliberately propagates; it must not submit GPU work.
             from aka.legacy.task.problem.inputs import PerformanceBaselineError
             if isinstance(error, PerformanceBaselineError):
                 raise
-            return PreparedEvaluation((replace(command, operation="dev"),), 1, context)
+            if nondefault_profile(command.profile_options):
+                raise
+            return PreparedEvaluation((replace(command, operation="dev", profile_options=None),), 1, context)
         measurement = GatewayMeasurement(request, workspace=command.workspace, hardware=command.hardware,
             private=private, batch_size=args.shape_batch_size, profiling=kind == "profile", baseline=baseline)
         if not measurement.batches:
@@ -104,9 +167,10 @@ class GatewayCommandEvaluator:
             submission = json.dumps({"schema_version": 1, "kind": kind,
                 "request": measurement.request_for(index), "reference_files": reference_files},
                 ensure_ascii=False, allow_nan=False).encode("utf-8")
-            steps.append(replace(command, operation=kind, submission=submission, artifacts=()))
+            steps.append(replace(command, operation=kind, submission=submission, artifacts=(), profile_options=None))
         return PreparedEvaluation(tuple(steps), min(4, len(steps)), context,
-            fallback_steps=(replace(command, operation="dev", submission=None),),
+            fallback_steps=() if nondefault_profile(command.profile_options) else
+                (replace(command, operation="dev", submission=None, profile_options=None),),
             measurement_identities=tuple(identities))
 
     def fallback(self, prepared, results):
@@ -189,6 +253,16 @@ class GatewayCommandEvaluator:
                         (json.dumps(jobs[0], indent=2, ensure_ascii=False) + "\n").encode()))
                     for output in results[0].files:
                         files.append(replace(output, path=str(path / output.path)))
+            limit = command.output_options.max_file_bytes if command.output_options is not None else None
+            if limit is not None:
+                skipped = [item.path for item in files if len(item.content) > limit]
+                files = [item for item in files if len(item.content) <= limit]
+            else:
+                skipped = []
+        stderr = [item.stderr.rstrip() for item in results if item.stderr]
+        if context["kind"] == "profile" and skipped:
+            stderr.append("[sandbox] outputs skipped: " + ", ".join(skipped))
         return replace(results[-1], transport_returncode=code, exit_code=None, stdout=stdout,
-            stderr="\n".join(item.stderr.rstrip() for item in results if item.stderr), files=tuple(files),
+            stderr="\n".join(stderr),
+            files=tuple(files), file_receipts=(),
             attempts=tuple(attempt for item in results for attempt in item.attempts))

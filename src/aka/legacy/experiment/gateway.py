@@ -4,7 +4,7 @@ import json
 import os
 from pathlib import Path
 import sys
-from aka.contracts.execution import CommandSpec
+from aka.contracts.execution import CommandSpec, ProfileOptions, OutputOptions, UnsupportedExecution
 from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
 from aka.legacy.execution.gateway import sandbox as transport
 from aka.legacy.execution.legacy.runtime import transport_arguments, ExecutionHooks, SandboxRequest
@@ -29,8 +29,39 @@ def run_sandbox(executor, request, *, hooks):
                        ("ATREX_SANDBOX_PROFILE", request.profile)):
         if any((request.ssh, request.url, request.profile)):
             environment[key] = value
+    from aka.legacy.evaluation.command_inputs import legacy_command_environment
+    from aka.legacy.execution.legacy.runtime import current_transport_arguments
+    # The bound request owns the original host launch environment. Only explicit
+    # workload variables and adapter configuration belong to a public command.
+    arguments = transport.build_parser().parse_args(list(current_transport_arguments()))
+    environment = legacy_command_environment(environment, arguments.env)
+    kind = "preflight" if request.preflight else transport._requested_gateway_kind(request.gateway_kind, list(request.command))
+    profile = None
+    if (arguments.profile_level != "sol" or arguments.profiler is not None or arguments.profile_counter
+            or arguments.kernel_regex is not None or arguments.top_kernels is not None):
+        if kind != "profile":
+            raise UnsupportedExecution("profile options require a profile command")
+        profile = ProfileOptions(arguments.profile_level, arguments.profiler, tuple(arguments.profile_counter),
+                                 arguments.kernel_regex, arguments.top_kernels)
+    output = None
+    byte_limit = getattr(arguments, "max_output_file_bytes", None)
+    if (arguments.inline_output is not None or arguments.include_raw_profile is not None
+            or byte_limit is not None or arguments.max_output_file_mb != 512):
+        output = OutputOptions(arguments.inline_output, arguments.include_raw_profile,
+            byte_limit if byte_limit is not None else
+                arguments.max_output_file_mb * 1024 * 1024 if arguments.max_output_file_mb != 512 else None)
+    inputs = ()
+    if arguments.input:
+        from aka.legacy.execution.command_transport import freeze_cli_inputs
+        inputs, skipped = freeze_cli_inputs(request.workspace, arguments.input,
+                                           arguments.max_input_file_mb * 1024 * 1024)
+        if skipped:
+            print("[sandbox] inputs skipped: " + ", ".join(skipped), file=sys.stderr)
     command = CommandSpec(request.workspace, request.command, request.timeout, environment, request.hardware,
-        request.sync, "preflight" if request.preflight else request.gateway_kind, request.cancel_event)
+        request.sync, kind if profile is not None else "preflight" if request.preflight else request.gateway_kind,
+        request.cancel_event, submission=request.submission, num_gpus=request.num_gpus,
+        on_observation=request.on_observation, filesystem_access=getattr(request, "filesystem_access", None),
+        profile_options=profile, input_files=inputs, output_options=output)
     records = FileExperimentRecords(request.workspace.resolve().parent / ".aka-experiments", str(request.workspace.resolve()))
     result = LegacyExperiment(executor, records=records, command_evaluator=GatewayCommandEvaluator(
         measurement_reader=WorkflowMeasurementReader())).run_command(command)

@@ -295,6 +295,7 @@ class FileExperimentRecords:
             return self._save(replace(updated, record_version=old.record_version + 1, updated_at=_now()))
 
     def prepared(self, ref, commands, inputs=(), identities=(), *, resume=False):
+        from .command_identity import handoff_identity
         if identities and len(identities) > len(commands):
             raise ValueError("measurement identities do not match steps")
         steps = tuple(ExperimentStep(f"step-{index}", index, tuple(command.command), command.operation,
@@ -305,7 +306,8 @@ class FileExperimentRecords:
         plan = [{**step.as_dict(), "environment_digest": _digest(dict(command.environment)),
                  "artifacts": list(command.artifacts), "num_gpus": command.num_gpus,
                  "languages": list(command.languages), "requirements": list(command.requirements), "submission_sha256":
-                 hashlib.sha256(command.submission).hexdigest() if command.submission is not None else None} for step, command in zip(steps, commands)]
+                 hashlib.sha256(command.submission).hexdigest() if command.submission is not None else None,
+                 **handoff_identity(command)} for step, command in zip(steps, commands)]
         identity = {"steps": plan, "inputs": [
             {"path": item.path, "sha256": hashlib.sha256(item.content).hexdigest(),
              "mode": item.mode, "content_type": item.content_type} for item in inputs
@@ -317,7 +319,8 @@ class FileExperimentRecords:
                          "operation": command.operation, "timeout": command.timeout,
                          "hardware": command.hardware, "num_gpus": command.num_gpus,
                          "languages": list(command.languages), "requirements": list(command.requirements),
-                         "environment_digest": _digest(dict(command.environment))}
+                         "environment_digest": _digest(dict(command.environment)),
+                         **handoff_identity(command)}
                         if step.measurement_identity else plan[index]
                         for index, (step, command) in enumerate(zip(steps, commands))]
         digest = _digest(identity)
