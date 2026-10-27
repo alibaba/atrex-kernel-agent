@@ -5,14 +5,55 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Callable, Protocol, runtime_checkable
+from typing import Callable, Protocol, runtime_checkable, Literal
 from types import MappingProxyType
 from .execution_environment import EnvironmentSnapshot, EnvironmentSupport
 from .execution_recovery import ExecutionCause, JobReference
+from .filesystem import FilesystemAccess
 
 
 class Cancellation(Protocol):
     def is_set(self) -> bool: ...
+
+
+@dataclass(frozen=True)
+class ProfileOptions:
+    """Explicit measurement inputs; unspecified values keep producer defaults."""
+    level: Literal["survey", "sol", "deep"] | None = None
+    profiler: Literal["ncu", "nsys", "rocprofv3", "acu"] | None = None
+    counters: tuple[str, ...] = ()
+    kernel_regex: str | None = None
+    top_kernels: int | None = None
+
+    def __post_init__(self):
+        if self.level not in (None, "survey", "sol", "deep"):
+            raise ValueError("unsupported profile level")
+        if self.profiler not in (None, "ncu", "nsys", "rocprofv3", "acu"):
+            raise ValueError("unsupported profiler")
+        if isinstance(self.counters, str):
+            raise TypeError("profile counters require a sequence of names")
+        object.__setattr__(self, "counters", tuple(self.counters))
+        if any(not isinstance(c, str) or not c for c in self.counters):
+            raise ValueError("profile counters must be nonempty strings")
+        if self.kernel_regex is not None and not isinstance(self.kernel_regex, str):
+            raise TypeError("profile kernel regex must be a string")
+        if self.top_kernels is not None and (type(self.top_kernels) is not int or self.top_kernels < 1):
+            raise ValueError("profile top kernels must be positive")
+
+
+@dataclass(frozen=True)
+class OutputOptions:
+    """Explicit collection policy without introducing transport defaults."""
+    inline: bool | None = None
+    include_raw_profile: bool | None = None
+    max_file_bytes: int | None = None
+
+    def __post_init__(self):
+        if any(value is not None and type(value) is not bool
+               for value in (self.inline, self.include_raw_profile)):
+            raise TypeError("output switches must be boolean or unspecified")
+        if self.max_file_bytes is not None and (type(self.max_file_bytes) is not int or self.max_file_bytes < 1):
+            raise ValueError("output file limit must be positive")
 
 
 @dataclass(frozen=True)
@@ -30,12 +71,28 @@ class CommandSpec:
     languages: tuple[str, ...] = ()
     requirements: tuple[str, ...] = ()
     on_observation: Callable[[JobResult], None] | None = field(default=None, repr=False, compare=False)
+    filesystem_access: FilesystemAccess | None = None
+    profile_options: ProfileOptions | None = None
+    input_files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
+    output_options: OutputOptions | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "command", tuple(self.command))
         object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
         object.__setattr__(self, "languages", tuple(self.languages))
         object.__setattr__(self, "requirements", tuple(self.requirements))
+        if self.filesystem_access is not None and not isinstance(self.filesystem_access, FilesystemAccess):
+            raise TypeError("execution scope requires FilesystemAccess")
+        if self.profile_options is not None and not isinstance(self.profile_options, ProfileOptions):
+            raise TypeError("profile inputs require ProfileOptions")
+        if self.output_options is not None and not isinstance(self.output_options, OutputOptions):
+            raise TypeError("output policy requires OutputOptions")
+        object.__setattr__(self, "input_files", tuple(self.input_files))
+        if any(not isinstance(item, ExecutionFile) for item in self.input_files):
+            raise TypeError("execution inputs require immutable ExecutionFile values")
+        paths = [Path(item.path).as_posix() for item in self.input_files]
+        if len(paths) != len(set(paths)):
+            raise ValueError("execution input paths must be unique")
 
 
 @dataclass(frozen=True)
@@ -43,8 +100,19 @@ class BackendCapabilities:
     operations: frozenset[str] = frozenset(("run",))
     cancellation: bool = False
     prepared_requests: bool = False
+    filesystem_isolation: bool = False
+    input_files: bool = False
+    output_options: bool = False
 
     def require(self, command: CommandSpec) -> None:
+        if command.filesystem_access is not None and not self.filesystem_isolation:
+            raise UnsupportedExecution("executor cannot enforce the requested file and environment scope")
+        if command.input_files and not self.input_files:
+            raise UnsupportedExecution("executor does not support explicit input files")
+        if command.output_options is not None and not self.output_options:
+            raise UnsupportedExecution("executor does not support explicit output collection")
+        if command.profile_options is not None and command.operation != "profile":
+            raise UnsupportedExecution("profile options require a profile operation")
         if type(command.timeout) is not int or command.timeout <= 0:
             raise UnsupportedExecution("execution timeout must be a positive integer")
         if command.submission is not None and not self.prepared_requests:
@@ -158,9 +226,12 @@ class ExecutionContext:
     hardware: str = ""
     timeout: int = 600
     formal: bool = False
+    filesystem_access: FilesystemAccess | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
+        if self.filesystem_access is not None and not isinstance(self.filesystem_access, FilesystemAccess):
+            raise TypeError("execution binding scope requires FilesystemAccess")
 
 
 @runtime_checkable
