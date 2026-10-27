@@ -5,7 +5,8 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from pathlib import Path
 import re
-from typing import Any, Literal, Protocol
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, Protocol
 from .filesystem import FilesystemAccess
 
 
@@ -137,6 +138,34 @@ class ResourcesSnapshot:
     directory: Path
     identity: str
     content_directory: Path | None = None
+
+
+@dataclass(frozen=True)
+class ResourceDirectoryFact:
+    path: str
+    mode: int
+
+
+@dataclass(frozen=True)
+class ResourceRootFacts:
+    root: Path
+    kind: Literal["file", "directory"]
+    mode: int
+    files: tuple[AgentResourceFile, ...]
+    directories: tuple[ResourceDirectoryFact, ...]
+
+
+@dataclass(frozen=True)
+class ResourcesSnapshotFacts:
+    """Verified retained content; no registry, runtime or filesystem grant."""
+
+    identity: str
+    selection_lock: Mapping[str, Any] = field(repr=False)
+    roots: tuple[ResourceRootFacts, ...]
+    absent_optional_roots: tuple[Path, ...]
+
+    def __post_init__(self):
+        object.__setattr__(self, "selection_lock", MappingProxyType(deepcopy(dict(self.selection_lock))))
 
 
 class ResourcesRegistry(AgentResourceRegistry, Protocol):

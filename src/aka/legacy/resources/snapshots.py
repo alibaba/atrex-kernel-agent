@@ -6,7 +6,8 @@ preparing a view. Existing prepared views are never changed retroactively.
 """
 from pathlib import Path
 from aka.contracts.agent_resources import (
-    AgentSkill, ResourcesRegistry, ResourcesSnapshot, WorkspaceResourceContribution,
+    AgentSkill, ResourcesRegistry, ResourcesSnapshot, ResourcesSnapshotFacts,
+    WorkspaceResourceContribution,
 )
 
 
@@ -27,6 +28,12 @@ def _source_roots(registry):
 def _snapshot_paths(snapshot):
     return (Path(snapshot.directory).absolute(), *((Path(snapshot.content_directory).absolute(),)
              if snapshot.content_directory is not None else ()))
+
+
+def inspect_snapshot(snapshot: ResourcesSnapshot) -> ResourcesSnapshotFacts:
+    """Inspect verified retained facts without original roots or runtime setup."""
+    from . import snapshot_facts
+    return snapshot_facts.inspect_snapshot(snapshot)
 
 
 def export_snapshot(registry, destination, *, content_directory=None) -> "ResourcesSnapshot":
