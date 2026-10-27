@@ -17,7 +17,6 @@ from aka.legacy.workflow.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TR
 from aka.legacy.task.hardware import hardware_vendor
 
 from aka.contracts.workspace import CandidateHandle
-from aka.legacy.task.git import git_text
 from .revision_state import WorkspaceState
 from .git_episode import record_episode_outcome
 from .records import promotion_files
@@ -1367,13 +1366,12 @@ class LongHorizonCampaign:
             and attempt.get("episode_branch") == branch
             for attempt in state.attempts
         )
-        registered = {
-            Path(line.split(" ", 1)[1]).resolve()
-            for line in git_text(
-                self.workspace, "worktree", "list", "--porcelain"
-            ).splitlines()
-            if line.startswith("worktree ")
-        }
+        binding = None
+        if worktree_path is not None and worktree_path != self.workspace.resolve():
+            binding = self.base_campaign.candidate_workspace.inspect_candidate(
+                self.workspace,
+                CandidateHandle(episode, base_commit, branch, worktree_path),
+            )
         resumable_worktree = bool(
             self.base_campaign.candidate_workspace.current_revision(self.workspace) == base_commit
             and phase
@@ -1389,18 +1387,12 @@ class LongHorizonCampaign:
             and worktree_path is not None
             and worktree_path != self.workspace.resolve()
             and worktree_path.is_dir()
-            and worktree_path in registered
+            and binding is not None
+            and binding.registered
             and branch
-            and git_text(
-                worktree_path,
-                "symbolic-ref",
-                "--quiet",
-                "--short",
-                "HEAD",
-                check=False,
-            )
-            == branch
-            and self._workspace_state.for_workspace(worktree_path).is_ancestor(base_commit)
+            and binding.branch == branch
+            and self._workspace_state.for_workspace(worktree_path).is_ancestor(
+                base_commit, revision=binding.revision)
         )
         if resumable_worktree:
             assert worktree_path is not None
@@ -1511,7 +1503,8 @@ class LongHorizonCampaign:
                 worktree_path is not None
                 and worktree_path != self.workspace.resolve()
                 and worktree_path.is_dir()
-                and worktree_path in registered
+                and binding is not None
+                and binding.registered
                 and branch
             ):
                 worktree = CandidateHandle(
@@ -1613,7 +1606,7 @@ class LongHorizonCampaign:
             except OSError:
                 pass
         if worktree_path is not None and worktree_path != self.workspace.resolve():
-            if worktree_path in registered:
+            if binding is not None and binding.registered:
                 self.base_campaign.candidate_workspace.remove(
                     CandidateHandle(
                         episode,

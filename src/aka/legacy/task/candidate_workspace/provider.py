@@ -74,6 +74,10 @@ class GitCandidateWorkspace(GitSnapshots):
     def materialize(self, handle, workspace):
         _legacy(handle).materialize(workspace)
 
+    def inspect_candidate(self, workspace, handle):
+        from .binding import inspect_candidate
+        return inspect_candidate(workspace, handle)
+
     def validate_candidate(self, handle, candidate_commit):
         return _legacy(handle).validate_candidate(candidate_commit)
 

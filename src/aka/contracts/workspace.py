@@ -98,6 +98,13 @@ class CandidateHandle:
 
 
 @dataclass(frozen=True)
+class CandidateBindingFacts:
+    registered: bool
+    branch: str | None
+    revision: str | None
+
+
+@dataclass(frozen=True)
 class CandidateWorkspaceSnapshot:
     """Opaque stopped Task workspace/Git checkpoint; only original paths restore."""
     directory: Path
@@ -179,6 +186,9 @@ class CandidateWorkspace(Protocol):
         ...
     def plan(self, workspace: Path, episode: int, base_commit: str, root: Path | None = None) -> CandidateHandle: ...
     def materialize(self, handle: CandidateHandle, workspace: Path) -> None: ...
+    def inspect_candidate(self, workspace: Path, handle: CandidateHandle) -> CandidateBindingFacts:
+        """Read actual registration, branch and revision; damaged bindings raise."""
+        ...
     def validate_candidate(self, handle: CandidateHandle, candidate_commit: str) -> tuple[str, list[str]]: ...
     def archive(self, handle: CandidateHandle, destination: Path, candidate_commit: str = "HEAD") -> Path: ...
     def remove(self, handle: CandidateHandle, workspace: Path) -> None: ...
