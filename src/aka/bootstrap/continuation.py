@@ -15,6 +15,7 @@ from aka.core.keys import ServiceKey
 from aka.core.lock import package_dir, resource_identity
 from .profile import Selection, load_token_definitions, registered_tokens, startup_token
 from .recorded_launch import LaunchResourceRequirement, RecordedLaunchFacts, inspect_recorded_launch
+from .resource_content import compare_recorded_resource_content
 
 SELECTION_ENV = "AKA_LAUNCH_SELECTION"
 DIGEST_ENV = "AKA_LAUNCH_DIGEST"
