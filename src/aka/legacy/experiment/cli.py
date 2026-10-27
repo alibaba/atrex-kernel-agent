@@ -9,6 +9,9 @@ from aka.legacy.execution.legacy.runtime import ExecutionHooks, SandboxRequest
 
 
 def main(argv: list[str] | None = None) -> int:
+    if os.environ.get("AKA_EXPERIMENT_COMMAND_ENDPOINT"):
+        from .command_client import main as command_main
+        return command_main(argv)
     from aka.legacy.execution.selection import selected_execution
     arguments = list(sys.argv[1:] if argv is None else argv)
     options = arguments[:arguments.index("--")] if "--" in arguments else arguments
@@ -73,17 +76,23 @@ def main(argv: list[str] | None = None) -> int:
             if value is not None:
                 extra.extend((flag, str(value)))
         for flag, enabled in (
-            ("--dry-run", arguments.dry_run), ("--inline-output", arguments.inline_output),
-            ("--include-raw-profile", arguments.include_raw_profile),
+            ("--dry-run", arguments.dry_run),
             ("--keep-pod", arguments.keep_pod), ("--check-health", arguments.check_health),
         ):
             if enabled:
                 extra.append(flag)
+        for flag, enabled in (("--inline-output", arguments.inline_output),
+                              ("--include-raw-profile", arguments.include_raw_profile)):
+            if enabled is not None:
+                extra.append(flag if enabled else "--no-" + flag[2:])
+        if arguments.max_output_file_bytes is not None:
+            extra.extend(("--max-output-file-bytes", str(arguments.max_output_file_bytes)))
         if not getattr(executor, "sandbox_cli_options", False):
             if any(value.split("=", 1)[0] in {
                 "--input", "--env", "-e", "--profiler", "--profile-level", "--profile-counter",
                 "--kernel-regex", "--top-kernels", "--shape-batch-size", "--max-input-file-mb",
-                "--max-output-file-mb", "--dry-run", "--inline-output", "--include-raw-profile",
+                "--max-output-file-mb", "--max-output-file-bytes", "--dry-run", "--inline-output", "--include-raw-profile",
+                "--no-inline-output", "--no-include-raw-profile",
                 "--keep-pod", "--ssh-runtime-bind", "--ssh-gpu", "--runtime-health-command", "--check-health",
             } for value in options):
                 raise UnsupportedExecution("selected executor does not support sandbox transport options")

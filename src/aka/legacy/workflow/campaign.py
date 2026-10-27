@@ -2181,18 +2181,39 @@ class Campaign:
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude", **options):
         from .agent_access import for_workspace
+        from contextlib import nullcontext
+        from dataclasses import replace
+        from aka.contracts.filesystem import FilesystemMount
 
-        if self.agent.capabilities.filesystem_isolation:
-            if "access" not in options:
-                options["access"] = for_workspace(self, workspace, resources=options.get("agent_plugins", True))
+        plugins = options.get("agent_plugins", True)
+        access = options.get("access") or for_workspace(self, workspace, resources=plugins)
+        # Agent grants its workspace implicitly. Execution receives the complete
+        # effective view explicitly, including all original masks/restrictions.
+        command_access = access
+        root = Path(workspace).resolve(strict=True)
+        if not any(m.source == root and m.target == root for m in access.mounts):
+            command_access = replace(access, mounts=(FilesystemMount(root, root, True), *access.mounts))
+        registration = self.services.command_session(workspace, command_access) if plugins else nullcontext(({}, None))
         runtime = (
             self.agent_runtime
             if agent_cli == self.agent_cli
             else self.agent.runtime(agent_cli)
         )
-        return self.execution.run_session(
-            workspace, prompt, timeout, agent_cli=agent_cli, runtime=runtime, **options
-        )
+        with registration as (command_environment, operation_access):
+            environment = dict(options.get("environment") or {})
+            for name in ("AKA_EXPERIMENT_COMMAND_ENDPOINT", "AKA_EXPERIMENT_COMMAND_TOKEN"):
+                environment.pop(name, None)
+            environment.update(command_environment)
+            options["environment"] = environment
+            if operation_access is not None:
+                access = replace(access, mounts=(*access.mounts, *operation_access.mounts),
+                    hidden_paths=(*access.hidden_paths, *operation_access.hidden_paths),
+                    read_only_paths=(*access.read_only_paths, *operation_access.read_only_paths))
+            if self.agent.capabilities.filesystem_isolation or "access" in options:
+                options["access"] = access
+            return self.execution.run_session(
+                workspace, prompt, timeout, agent_cli=agent_cli, runtime=runtime, **options
+            )
 
     def prepare(self, *, recovery_ready=None) -> None:
         if latest_version(self.workspace) < 0:

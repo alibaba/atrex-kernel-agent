@@ -90,6 +90,9 @@ class WorkflowServices:
             raise TypeError("provider does not implement CanonicalMeasurementReader")
         self.canonical_measurement_reader = canonical_measurement_reader
         self._closed = False
+        from threading import Lock
+        self._command_lock = Lock()
+        self._command_host = None
         if workflow_observer is not None:
             try:
                 workflow_observer.campaign_started(campaign.request)
@@ -189,9 +192,40 @@ class WorkflowServices:
             yield experiment
 
     def close(self):
+        with self._command_lock:
+            if self._closed:
+                return
+            self._closed = True
+            host = self._command_host
+        if host is not None:
+            host.close()
+
+    @contextmanager
+    def agent_experiment(self, access):
+        """Borrow the selected services with the current Agent's exact scope."""
         if self._closed:
-            return
-        self._closed = True
+            raise RuntimeError("Workflow services have been closed")
+        bound = SandboxExecutor(self.executor, ExecutionContext(
+            {}, self.settings.hardware, self.settings.timeout, False, access))
+        with self.experiment_factory.open(workspace=self.campaign.workspace,
+                purpose="development", executor=bound, evaluator=self.create_evaluator()) as experiment:
+            if any(not callable(getattr(experiment, method, None)) for method in ("run", "run_command")):
+                raise TypeError("factory did not return an Experiment")
+            yield experiment
+
+    @contextmanager
+    def command_session(self, workspace, access):
+        """Register command authorization for one Agent session and revoke it on return."""
+        with self._command_lock:
+            if self._closed:
+                raise RuntimeError("Workflow services have been closed")
+            if self._command_host is None:
+                from aka.legacy.experiment.command_host import ExperimentCommandHost
+                self._command_host = ExperimentCommandHost(self.agent_experiment,
+                    self.executor.capabilities, hardware=self.settings.hardware)
+            host = self._command_host
+        with host.session(workspace, access) as registration:
+            yield registration
 
     def sandbox_command(self, command):
         import shlex
