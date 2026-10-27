@@ -23,6 +23,47 @@ class RevisionContent:
         object.__setattr__(self, "files", MappingProxyType(files))
 
 
+def _content_identities(values):
+    identities = dict(values)
+    if any(not isinstance(path, str) or (identity is not None and not isinstance(identity, str))
+           for path, identity in identities.items()):
+        raise TypeError("content identities require string paths and opaque strings or None")
+    return MappingProxyType(identities)
+
+
+@dataclass(frozen=True)
+class RevisionFacts:
+    revision: str
+    parents: tuple[str, ...]
+    message: str
+    committed_at: int
+    content_identities: Mapping[str, str | None]
+
+    def __post_init__(self):
+        if not isinstance(self.revision, str) or not self.revision:
+            raise ValueError("revision identity must be a nonempty opaque string")
+        parents = tuple(self.parents)
+        if any(not isinstance(parent, str) or not parent for parent in parents):
+            raise ValueError("parent identities must be nonempty opaque strings")
+        if not isinstance(self.message, str) or type(self.committed_at) is not int:
+            raise TypeError("revision facts require a message and integer commit time")
+        object.__setattr__(self, "parents", parents)
+        object.__setattr__(self, "content_identities", _content_identities(self.content_identities))
+
+
+@dataclass(frozen=True)
+class WorkingFacts:
+    changed_paths: tuple[str, ...]
+    content_identities: Mapping[str, str | None]
+
+    def __post_init__(self):
+        paths = tuple(self.changed_paths)
+        if any(not isinstance(path, str) for path in paths):
+            raise TypeError("working changed paths must be strings")
+        object.__setattr__(self, "changed_paths", paths)
+        object.__setattr__(self, "content_identities", _content_identities(self.content_identities))
+
+
 @dataclass(frozen=True)
 class SourceSnapshot:
     paths: tuple[str, ...]
@@ -77,6 +118,22 @@ class CandidateWorkspace(Protocol):
         ...
     def read_working(self, workspace: Path, paths: tuple[str, ...]) -> RevisionContent:
         """Read selected working bytes without following links or interpreting content."""
+        ...
+    def revision_history(self, workspace: Path, *, revision: str | None = None,
+                         paths: tuple[str, ...] = (),
+                         changed_path: str | None = None) -> tuple[RevisionFacts, ...]:
+        """Return reachable history in stable newest-first order, with explicit path identities."""
+        ...
+    def working_facts(self, workspace: Path, *, paths: tuple[str, ...] = ()) -> WorkingFacts:
+        """Read index/worktree changes and explicit working content identities without mutation."""
+        ...
+    def restore_revision(self, workspace: Path, *, expected_revision: str,
+                         revision: str, retain_working_files: bool) -> str:
+        """Restore an explicit revision with an incumbent check and transactional rollback.
+
+        Retaining working files restores only revision/index; otherwise the
+        implementation restores tracked files using its original untracked rules.
+        """
         ...
     def record(self, workspace: Path, *, expected_revision: str,
                files: tuple[WorkspaceFile, ...], message: str) -> str:

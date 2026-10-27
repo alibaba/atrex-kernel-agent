@@ -17,6 +17,19 @@ class GitCandidateWorkspace(GitSnapshots):
         from .records import read_working
         return read_working(workspace, paths)
 
+    def revision_history(self, workspace, *, revision=None, paths=(), changed_path=None):
+        from .history import revision_history
+        return revision_history(workspace, revision=revision, paths=paths, changed_path=changed_path)
+
+    def working_facts(self, workspace, *, paths=()):
+        from .history import working_facts
+        return working_facts(workspace, paths=paths)
+
+    def restore_revision(self, workspace, *, expected_revision, revision, retain_working_files):
+        from .restore import restore_revision
+        return restore_revision(workspace, expected_revision=expected_revision,
+                                revision=revision, retain_working_files=retain_working_files)
+
     def record(self, workspace, *, expected_revision, files, message):
         from .records import record
         return record(workspace, expected_revision=expected_revision,
