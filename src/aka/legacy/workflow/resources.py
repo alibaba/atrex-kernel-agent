@@ -37,9 +37,11 @@ def contribute(ctx, config):
         ctx.contribute('workspace_resources', resource.name, resource)
 
 
-def initial_files(registry, *, sol=False):
+def initial_files(registry, *, sol=False, policy=None):
     installation = registry.resource_result()
-    result = [WorkspaceFile('CLAUDE.md', source=installation.resource('workflow-instructions').source)]
+    instructions = installation.resource('workflow-instructions').source
+    result = [WorkspaceFile('CLAUDE.md', source=instructions) if policy is None
+              else WorkspaceFile('CLAUDE.md', text=policy(instructions.read_text(encoding='utf-8')))]
     try:
         driver = installation.resource('execution-profile-driver')
     except KeyError:
@@ -48,3 +50,22 @@ def initial_files(registry, *, sol=False):
     else:
         result.append(WorkspaceFile('profile_driver.py', source=driver.source))
     return tuple(result)
+
+
+def campaign_initial_files(campaign, *, sol=False):
+    from .policy import workspace_policy_content
+    return initial_files(campaign.plugin_registry, sol=sol, policy=lambda current:
+        workspace_policy_content(current, campaign.optimization_mode, campaign.framework,
+                                 source_checks_enabled=campaign.source_checks_enabled))
+
+
+def profile_driver_files(registry):
+    driver = registry.resource_result().resource('execution-profile-driver')
+    return (WorkspaceFile('profile_driver.py', source=driver.source),)
+
+
+def campaign_context_directories(campaign):
+    """Declare the Legacy Task runtime projection, without inferring file ownership."""
+    if campaign.candidate_workspace.current_revision(campaign.workspace):
+        return ()
+    return ("atrex-bench",) if campaign.problem.evaluation.runtime_root is not None else ()

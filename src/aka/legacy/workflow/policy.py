@@ -99,6 +99,18 @@ def workspace_policy_block(
     return f"{POLICY_BEGIN}\n\n{directive}\n\n{POLICY_END}\n"
 
 
+def workspace_policy_content(current: str, mode: str, framework: str,
+                             *, source_checks_enabled: bool = True) -> str:
+    generated = workspace_policy_block(
+        mode, framework, source_checks_enabled=source_checks_enabled
+    )
+    if POLICY_BEGIN in current and POLICY_END in current:
+        before, remainder = current.split(POLICY_BEGIN, 1)
+        _, after = remainder.split(POLICY_END, 1)
+        return before.rstrip() + "\n\n" + generated + after.lstrip("\n")
+    return current.rstrip() + ("\n\n" if current.strip() else "") + generated
+
+
 def install_workspace_policy(
     workspace: Path,
     mode: str,
@@ -170,16 +182,11 @@ def install_workspace_policy(
 
     claude_path = workspace / "CLAUDE.md"
     current = claude_path.read_text(encoding="utf-8") if claude_path.exists() else ""
-    generated = workspace_policy_block(
-        mode, framework, source_checks_enabled=source_checks_enabled
+    selected = workspace_policy_content(
+        current, mode, framework, source_checks_enabled=source_checks_enabled
     )
-    if POLICY_BEGIN in current and POLICY_END in current:
-        before, remainder = current.split(POLICY_BEGIN, 1)
-        _, after = remainder.split(POLICY_END, 1)
-        current = before.rstrip() + "\n\n" + generated + after.lstrip("\n")
-    else:
-        current = current.rstrip() + ("\n\n" if current.strip() else "") + generated
-    claude_path.write_text(current, encoding="utf-8")
+    if not claude_path.exists() or selected != current:
+        claude_path.write_text(selected, encoding="utf-8")
 
     gitignore = workspace / ".gitignore"
     ignored = gitignore.read_text(encoding="utf-8") if gitignore.exists() else ""

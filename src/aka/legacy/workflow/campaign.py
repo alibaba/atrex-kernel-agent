@@ -187,7 +187,7 @@ class Campaign:
         """Schedule the original authoring session when public input preparation requires it."""
         inputs = self._problem_inputs()
         public = inputs.prepare_public()
-        self.candidate_workspace.install_files(self.workspace, public.files)
+        self.candidate_workspace.install_files(self.workspace, public.files, immutable=True)
         if public.ready:
             self._generated_agent_problem_digest = inputs.generated_digest
             return
@@ -237,7 +237,7 @@ class Campaign:
                         + (f"; agent output: {detail}" if detail else "")
                     ) from exc
                 self.candidate_workspace.install_files(
-                    self.workspace, (inputs.generated_file(generated),)
+                    self.workspace, (inputs.generated_file(generated),), immutable=True
                 )
                 inputs.record_generated()
                 self._generated_agent_problem_digest = inputs.generated_digest
@@ -366,12 +366,13 @@ class Campaign:
         return ""
 
     def _generalized_contract_commit_problem(self) -> str:
-        """Require the public problem to be part of the immutable V0 history."""
+        """Require the public problem to match its V0-bound input identity."""
         if self.private_reference_dir is None:
             return ""
         head = self.candidate_workspace.current_revision(self.workspace)
-        if head and not self._workspace_state.content_identity(head, AGENT_PROBLEM_FILENAME):
-            return "agent_problem.json is not tracked by the V0 baseline commit"
+        if head and AGENT_PROBLEM_FILENAME in self.candidate_workspace.baseline_changes(
+                self.workspace, head, required_paths=(AGENT_PROBLEM_FILENAME,)):
+            return "agent_problem.json does not match the V0 baseline identity"
         return ""
 
     def _assert_generalized_inputs_are_private(self) -> None:
@@ -688,11 +689,12 @@ class Campaign:
             self.evaluation.setup_baseline_sol(op_dir)
             return
         from aka.contracts.workspace import SourceRequest
-        from .resources import initial_files
+        from .resources import campaign_initial_files, campaign_context_directories
 
         content = self.source_provider.prepare(SourceRequest(initial=problem.initial_source))
         code = self.candidate_workspace.initialize_kernel(
-            self.workspace, content, runtime_files=initial_files(self.plugin_registry))
+            self.workspace, content, runtime_files=campaign_initial_files(self),
+            context_directories=campaign_context_directories(self))
         if code:
             raise RuntimeError(f'Task workspace initialization failed with code {code}')
         # Production native tasks always expose a generalized public contract. Exact shapes and
@@ -700,10 +702,10 @@ class Campaign:
         # sandbox boundary. A missing public contract is authored before the baseline session.
         inputs = self._problem_inputs()
         generalized = inputs.private_reference_dir is not None
-        self.candidate_workspace.install_files(self.workspace, inputs.operator_files())
+        self.candidate_workspace.install_files(self.workspace, inputs.operator_files(), immutable=True)
         self._ensure_agent_problem()
-        # Generalized tasks use the native mechanical V0 source transaction,
-        # which includes agent_problem.json explicitly instead of pre-staging it.
+        # Generalized tasks freeze the public contract before the native V0
+        # source transaction, keeping external context separate from source.
         self._link_runtime()
         self.evaluation.install_native_evaluator()
         self.evaluation.install_profile_driver()

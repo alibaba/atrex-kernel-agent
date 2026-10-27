@@ -38,10 +38,19 @@ class WorkflowBaseline:
         return self.preparation(True).evaluator_directive()
 
     def install_native_evaluator(self):
-        return self.preparation().install_native_evaluator()
+        harness = self.campaign.problem.evaluation.harness
+        if harness is None:
+            if self.campaign.atrex_bench_root:
+                raise ValueError("Task has no native evaluator harness")
+            return
+        self.campaign.candidate_workspace.install_files(
+            self.campaign.workspace, (harness,), immutable=True)
 
     def install_profile_driver(self):
-        return self.preparation().install_profile_driver()
+        from .resources import profile_driver_files
+        self.campaign.candidate_workspace.install_files(
+            self.campaign.workspace, profile_driver_files(self.campaign.plugin_registry),
+            immutable=True)
 
     def native_v0_readme(self, *, generalized):
         return self.preparation().native_v0_readme(generalized=generalized)
@@ -281,28 +290,24 @@ class WorkflowBaseline:
                 "native V0 requires workspace kernel.py and reference.py"
             )
         readme = self.native_v0_readme(generalized=generalized)
+        self.campaign.candidate_workspace.install_files(
+            self.campaign.workspace, (WorkspaceFile(path="README.md", text=readme),),
+            immutable=True)
         source_paths = [
             ".gitignore",
-            "CLAUDE.md",
-            "README.md",
             "kernel.py",
-            "test_kernel.py",
-            "profile_driver.py",
-            "agent_problem.json",
-            *(item.path for item in self.campaign._loaded_problem().agent.files),
         ]
         source_paths = list(
             dict.fromkeys(
                 path
                 for path in source_paths
-                if path == "README.md" or (self.campaign.workspace / path).is_file()
+                if (self.campaign.workspace / path).is_file()
             )
         )
         self.campaign.candidate_workspace.record(
             self.campaign.workspace,
             expected_revision=expected,
-            files=tuple(WorkspaceFile(path=name, text=readme) if name == "README.md"
-                        else WorkspaceFile(path=name, source=self.campaign.workspace / name)
+            files=tuple(WorkspaceFile(path=name, source=self.campaign.workspace / name)
                         for name in source_paths),
             message="V0: baseline kernel",
         )
@@ -331,7 +336,7 @@ class WorkflowBaseline:
 
     def setup_baseline_sol(self, op_dir: Path) -> None:
         from aka.contracts.workspace import SourceRequest
-        from .resources import initial_files
+        from .resources import campaign_initial_files, campaign_context_directories
 
         problem = self.campaign._loaded_problem()
         content = self.campaign.source_provider.prepare(SourceRequest(
@@ -341,14 +346,16 @@ class WorkflowBaseline:
         source_commit = self.campaign.candidate_workspace.prepare_sol(
             self.campaign.workspace, content, problem_files=problem.agent.files,
             harness=problem.evaluation.harness,
-            runtime_files=initial_files(self.campaign.plugin_registry, sol=True),
+            runtime_files=(*campaign_initial_files(self.campaign, sol=True),
+                           *self.campaign.problem_provider.runtime_files(problem)),
+            context_directories=campaign_context_directories(self.campaign),
         )
         self.campaign._link_runtime()
         result = self.campaign._run_v0_evaluator_with_correctness_prefetch()
         self.finalize_v0_measurement(
             result,
             source_commit,
-            extra_paths=("CLAUDE.md", ".gitignore"),
+            extra_paths=(".gitignore",),
         )
 
     def restore_immutable_baseline_paths(self, baseline_commit: str) -> list[str]:

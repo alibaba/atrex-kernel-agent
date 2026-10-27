@@ -114,6 +114,11 @@ def record(workspace: Path, *, expected_revision: str,
     if current_revision(workspace) != expected_revision:
         raise RuntimeError("workspace revision advanced; refusing record")
     files = tuple(files)
+    from .context import context_record_file, uses_context
+    if uses_context(workspace):
+        anchor = context_record_file(workspace, tuple(item.path for item in files))
+        if anchor is not None:
+            files = (*files, anchor)
     # Validate sources before loading bytes (directories/FIFOs must not be read).
     for item in files:
         if item.source is not None:

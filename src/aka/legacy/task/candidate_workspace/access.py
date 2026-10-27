@@ -42,4 +42,18 @@ def filesystem_access(workspace, *, include_git=False):
     workspace = Path(workspace).resolve(strict=True)
     protected = tuple(workspace / name for name in IMMUTABLE_BASELINE_PATHS
                       if (workspace / name).exists())
+    from .context import MANIFEST, context_store, load_context, uses_context
+    if uses_context(workspace):
+        value = load_context(workspace)
+        store = context_store(workspace)
+        # Linked candidates do not grant their canonical private store at all.
+        # Restrictions remain workspace-relative, as the Agent protocol requires.
+        protected = tuple(path for path in protected if path.relative_to(workspace).as_posix() not in value["source_paths"]) + (
+                     workspace / MANIFEST, *((store,) if store.is_relative_to(workspace) else ()),
+                     *(workspace / name for name in value.get("namespaces", {})),
+                     *(workspace / name for name in value["context"]),
+                     *((workspace / "memory/v0.json",) if (workspace / "memory/v0.json").exists() else ()))
+        protected = tuple(dict.fromkeys(protected))
+        protected = tuple(path for path in protected
+                          if not any(other != path and path.is_relative_to(other) for other in protected))
     return FilesystemAccess(_git_mounts(workspace) if include_git else (), (), protected)

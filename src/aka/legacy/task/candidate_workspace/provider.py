@@ -55,9 +55,9 @@ class GitCandidateWorkspace(GitSnapshots):
         from .checkpoint import restore_checkpoint
         return restore_checkpoint(snapshot)
 
-    def baseline_changes(self, workspace, baseline_commit):
+    def baseline_changes(self, workspace, baseline_commit, *, required_paths=()):
         from .baseline import baseline_changes
-        return baseline_changes(workspace, baseline_commit)
+        return baseline_changes(workspace, baseline_commit, required_paths=required_paths)
 
     def restore_baseline(self, workspace, baseline_commit):
         from .baseline import restore_baseline
@@ -91,11 +91,14 @@ class GitCandidateWorkspace(GitSnapshots):
         return promote_candidate(workspace, **options)
 
 
-    def initialize_kernel(self, workspace, content, *, runtime_files):
+    def initialize_kernel(self, workspace, content, *, runtime_files, context_directories=()):
         from .initial import initialize_kernel
-        return initialize_kernel(workspace, content, runtime_files=runtime_files)
+        return initialize_kernel(workspace, content, runtime_files=runtime_files,
+                                 context_directories=context_directories)
 
-    def prepare_sol(self, workspace, content, *, problem_files, harness, runtime_files):
+    def prepare_sol(self, workspace, content, *, problem_files, harness, runtime_files,
+                    context_directories=()):
         from .initial import prepare_sol
         return prepare_sol(workspace, content, problem_files=problem_files,
-                           harness=harness, runtime_files=runtime_files)
+                           harness=harness, runtime_files=runtime_files,
+                           context_directories=context_directories)

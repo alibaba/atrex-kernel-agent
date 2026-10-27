@@ -170,16 +170,19 @@ class CandidateWorkspace(Protocol):
         """Copy selected files; immutable preflights all targets and rejects changed bytes/modes."""
         ...
     def initialize_kernel(self, workspace: Path, content: SourceContent, *,
-                          runtime_files: tuple[WorkspaceFile, ...]) -> int:
+                          runtime_files: tuple[WorkspaceFile, ...],
+                          context_directories: tuple[str, ...] = ()) -> int:
         """Initialize explicit source and constraints; validate unchanged V0 on retry."""
         ...
     def prepare_sol(self, workspace: Path, content: SourceContent, *,
                     problem_files: tuple[WorkspaceFile, ...], harness: WorkspaceFile,
-                    runtime_files: tuple[WorkspaceFile, ...]) -> str:
+                    runtime_files: tuple[WorkspaceFile, ...],
+                    context_directories: tuple[str, ...] = ()) -> str:
         """Install and commit V0, or validate unchanged V0 on measurement retry."""
         ...
-    def baseline_changes(self, workspace: Path, baseline_commit: str) -> list[str]:
-        """Inspect immutable baseline content without modifying the workspace."""
+    def baseline_changes(self, workspace: Path, baseline_commit: str, *,
+                         required_paths: tuple[str, ...] = ()) -> list[str]:
+        """Inspect immutable content; required paths must have baseline identities."""
         ...
     def restore_baseline(self, workspace: Path, baseline_commit: str) -> list[str]:
         """Restore baseline content on request; return only successfully restored paths."""

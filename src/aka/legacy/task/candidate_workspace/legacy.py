@@ -55,6 +55,9 @@ class EpisodeWorktree:
             text=True,
         )
         ensure_excluded(self.path)
+        from .context import restore_context_projection, uses_context
+        if uses_context(self.path):
+            restore_context_projection(self.path, self.base_commit)
 
     @classmethod
     def create(
@@ -95,6 +98,11 @@ class EpisodeWorktree:
         )
         if ancestor.returncode:
             return "candidate_commit is not descended from incumbent", []
+        from .context import context_changes, uses_context
+        if uses_context(self.path):
+            changed_context = context_changes(self.path, self.base_commit)
+            if changed_context:
+                return "candidate modified frozen workspace context: " + ", ".join(changed_context), []
         dirty = working_changes(self.path)
         violation = protected_violation(dirty)
         if violation:
@@ -175,6 +183,11 @@ def promote_candidate(
 ) -> str:
     if git_head(incumbent_workspace) != base_commit:
         raise RuntimeError("incumbent advanced during episode; refusing promotion")
+    from .context import context_changes, uses_context
+    if uses_context(incumbent_workspace):
+        changed_context = context_changes(incumbent_workspace, base_commit)
+        if changed_context:
+            raise RuntimeError("incumbent frozen workspace context changed: " + ", ".join(changed_context))
     candidate_paths = changed_paths(incumbent_workspace, base_commit, candidate_commit)
     if "kernel.py" not in candidate_paths or not set(candidate_paths).issubset(CANDIDATE_PATHS):
         raise RuntimeError("promotion requires kernel.py with only an optional solution.json update")
@@ -187,7 +200,12 @@ def promote_candidate(
         record_files = promotion_record_files(episode=episode, evidence=evidence,
             memory_version=memory_version, memory_record=memory_record)
     files = tuple(record_files)
-    selected = selected_file_bytes(incumbent_workspace, files, reserved=CANDIDATE_PATHS)
+    reserved = CANDIDATE_PATHS
+    if uses_context(incumbent_workspace):
+        from .context import MANIFEST, load_context
+        value = load_context(incumbent_workspace)
+        reserved = (*CANDIDATE_PATHS, MANIFEST, *value["context"], *value.get("namespaces", {}))
+    selected = selected_file_bytes(incumbent_workspace, files, reserved=reserved)
     dirty = working_changes(incumbent_workspace)
     if set(candidate_paths).intersection(dirty):
         raise RuntimeError("incumbent candidate source has uncommitted changes")

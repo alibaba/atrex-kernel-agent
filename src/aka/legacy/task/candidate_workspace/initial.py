@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
+from aka.contracts.content import WorkspaceFile
 from .content import install_files, selected_file_bytes
+from .context import begin_context, context_changes, install_context, register_context_directories, uses_context
 
 GITIGNORE = '__pycache__/\n*.pyc\ntraces.jsonl\n.finalize_traces.jsonl\nsubmission.json\n*.ncu-rep\nprofiles/*/att/*.att\nprofiles/*/att/*.out\nprofiles/*/att/*.pftrace\nprofiles/*/att/*.otf2\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n/reference-projects\n/gpu-wiki\n'
 SOL_CONFIG = json.dumps(
@@ -25,7 +27,7 @@ def _validate_initial_files(workspace, source_commit, selected):
             raise ValueError(f"V0 selected input or source changed: {name}")
 
 
-def initialize_kernel(workspace, content, *, runtime_files):
+def _legacy_initialize_kernel(workspace, content, *, runtime_files):
     if len(content.files) != 1 or content.files[0].path != "kernel.py" or content.files[0].source is None:
         raise ValueError("kernel initialization requires one kernel.py copy contribution")
     root = Path(workspace)
@@ -55,7 +57,7 @@ def initialize_kernel(workspace, content, *, runtime_files):
     return 0
 
 
-def prepare_sol(ws, content, *, problem_files, harness, runtime_files):
+def _legacy_prepare_sol(ws, content, *, problem_files, harness, runtime_files):
     if harness is None:
         raise ValueError("SOL preparation requires the frozen Task harness")
     ws = Path(ws)
@@ -107,3 +109,105 @@ def commit_sol(ws, contribution_paths):
     subprocess.run(["git", "commit", "-m", "V0: baseline (SOL reference wrapper)"], cwd=str(ws), check=True,
                    stdout=subprocess.DEVNULL)
     return subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ws, text=True).strip()
+
+
+def _source_history(workspace):
+    if not (workspace / ".git").exists():
+        return []
+    result = subprocess.run(["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
+                            cwd=workspace, capture_output=True, text=True)
+    return result.stdout.split() if not result.returncode else []
+
+
+def _initialize_git(workspace):
+    for name in ("memory", "plans", "profiles"):
+        (workspace / name).mkdir(parents=True, exist_ok=True)
+    if not (workspace / ".git").exists():
+        subprocess.run(["git", "init"], cwd=workspace, check=True, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "gpu-kernel-optimizer@local"], cwd=workspace, check=True)
+        subprocess.run(["git", "config", "user.name", "GPU Kernel Optimizer"], cwd=workspace, check=True)
+
+
+def _retry_context(workspace, source_commit, source_files, groups):
+    selected = selected_file_bytes(workspace, source_files)
+    _validate_initial_files(workspace, source_commit, selected)
+    if subprocess.run(["git", "diff", "--quiet", "--", *selected], cwd=workspace).returncode:
+        raise ValueError("refusing to reseed changed V0 source modes or bytes")
+    changed = context_changes(workspace, "HEAD")
+    if changed:
+        raise ValueError("refusing to reseed changed V0 context: " + ", ".join(changed))
+    for role, files in groups:
+        install_context(workspace, files, role=role)
+
+
+def initialize_kernel(workspace, content, *, runtime_files, context_directories=()):
+    workspace = Path(workspace)
+    runtime_files = tuple(runtime_files)
+    history = _source_history(workspace)
+    if history and not uses_context(workspace):
+        if context_directories:
+            raise ValueError("existing tracked workspaces cannot acquire new context directory namespaces")
+        return _legacy_initialize_kernel(workspace, content, runtime_files=runtime_files)
+    if len(content.files) != 1 or content.files[0].path != "kernel.py" or content.files[0].source is None:
+        raise ValueError("kernel initialization requires one kernel.py copy contribution")
+    readme = (WorkspaceFile("README.md", text=content.readme),) if content.readme is not None else ()
+    selected = selected_file_bytes(workspace, (*content.files, *runtime_files, *readme),
+                                   reserved=(".atrex_context.json", ".gitignore", "memory", "plans", "profiles"))
+    if "CLAUDE.md" not in selected:
+        raise ValueError("kernel initialization requires explicit CLAUDE.md constraints")
+    if history:
+        register_context_directories(workspace, context_directories)
+        _retry_context(workspace, history[0], content.files, (("runtime", runtime_files), ("readme", readme)))
+        return 0
+    if (workspace / "kernel.py").exists() and (workspace / "kernel.py").read_bytes() != selected["kernel.py"]:
+        raise ValueError("refusing to initialize a changed existing kernel")
+    _initialize_git(workspace)
+    if not uses_context(workspace):
+        begin_context(workspace, (item.path for item in content.files), context_directories=context_directories)
+    else:
+        register_context_directories(workspace, context_directories)
+    install_files(workspace, content.files)
+    install_context(workspace, runtime_files, role="runtime")
+    install_context(workspace, readme, role="readme")
+    (workspace / ".gitignore").write_text(
+        "__pycache__/\n*.pyc\n*.ncu-rep\nprofiles/*/att/*.att\nprofiles/*/att/*.out\n"
+        "profiles/*/att/*.pftrace\nprofiles/*/att/*.otf2\n", encoding="utf-8")
+    return 0
+
+
+def prepare_sol(ws, content, *, problem_files, harness, runtime_files, context_directories=()):
+    ws = Path(ws)
+    history = _source_history(ws)
+    if history and not uses_context(ws):
+        if context_directories:
+            raise ValueError("existing tracked workspaces cannot acquire new context directory namespaces")
+        return _legacy_prepare_sol(ws, content, problem_files=problem_files, harness=harness,
+                                   runtime_files=runtime_files)
+    if harness is None:
+        raise ValueError("SOL preparation requires the frozen Task harness")
+    problem_files, runtime_files = tuple(problem_files), tuple(runtime_files)
+    readme = (WorkspaceFile("README.md", text=content.readme),) if content.readme is not None else ()
+    config = (WorkspaceFile("config.json", text=SOL_CONFIG),)
+    selected = selected_file_bytes(ws, (*content.files, *problem_files, harness, *runtime_files, *readme, *config),
+                                   reserved=(".atrex_context.json", ".gitignore", "memory", "plans", "profiles"))
+    if "profile_driver.py" not in selected:
+        raise ValueError("SOL preparation requires an explicit profile_driver.py")
+    groups = (("problem", problem_files), ("harness", (harness,)), ("runtime", runtime_files),
+              ("readme", readme), ("configuration", config))
+    if history:
+        register_context_directories(ws, context_directories)
+        _retry_context(ws, history[0], content.files, groups)
+        return history[0]
+    _initialize_git(ws)
+    if not uses_context(ws):
+        begin_context(ws, (item.path for item in content.files), context_directories=context_directories)
+    else:
+        register_context_directories(ws, context_directories)
+    install_files(ws, content.files)
+    for role, files in groups:
+        install_context(ws, files, role=role)
+    (ws / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
+    from .records import record
+    files = tuple(WorkspaceFile(item.path, source=ws / item.path) for item in content.files)
+    files += (WorkspaceFile(".gitignore", source=ws / ".gitignore"),)
+    return record(ws, expected_revision="", files=files, message="V0: baseline (SOL reference wrapper)")

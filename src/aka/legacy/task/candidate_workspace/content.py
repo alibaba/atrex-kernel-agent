@@ -34,12 +34,27 @@ def selected_file_bytes(workspace, files, *, reserved=()):
                 raise ValueError(f"workspace contribution parent is not a directory: {item.path}")
         if target.exists() and not target.is_file():
             raise ValueError(f"workspace contribution is not a file: {item.path}")
+        if item.source is not None:
+            mode = item.source.lstat().st_mode
+            if not stat.S_ISREG(mode) or mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX):
+                raise ValueError(f"workspace source must be a regular file with ordinary modes: {item.path}")
         selected[item.path] = (item.source.read_bytes() if item.source is not None
                                else item.text.encode("utf-8"))
     return selected
 
 
 def install_files(workspace, files, *, immutable=False):
+    from .context import MANIFEST, install_context, load_context, uses_context
+    files = tuple(files)
+    if uses_context(workspace):
+        if immutable:
+            return install_context(workspace, files)
+        value = load_context(workspace)
+        selected_file_bytes(workspace, files, reserved=(MANIFEST, *value["context"], *value.get("namespaces", {})))
+    return _install_files(workspace, files, immutable=immutable)
+
+
+def _install_files(workspace, files, *, immutable=False):
     files = tuple(files)
     if immutable:
         selected = selected_file_bytes(workspace, files)

@@ -33,6 +33,7 @@ PROTECTED_PATHS = frozenset(
         "CLAUDE.md",
         "README.md",
         ".gitignore",
+        ".atrex_context.json",
     }
 )
 
