@@ -30,6 +30,14 @@ failure; the existing infrastructure retry recovered it and both shapes passed. 
 native requests stop without a Dev fallback.
 
 
+Final-package preproduction validation (2026-10-27): `ev_9403730bedb7`
+compiled and evaluated the retained native RMSNorm candidate on three shapes,
+with six correctness cases per shape. `ev_8d1db9813e60` compiled and linked
+`src/entry.cu`, `src/elementwise.cu`, and `support/config.cpp`, including two headers
+from `include/`; both shapes passed all six correctness cases and performance
+measurement. These are interface checks, separate from Agent optimization rounds.
+Neither candidate includes Python source.
+
 ## Independent candidate file systems
 
 A task selects one file system through the `candidate` module configuration.
