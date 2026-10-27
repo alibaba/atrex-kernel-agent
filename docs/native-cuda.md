@@ -113,3 +113,42 @@ Regression coverage includes each implementation, explicit selection, prevention
 of format fallback, full snapshot recovery, obsolete file deletion, header and
 manifest identity, frozen measurements, Git sealing, baseline provenance, complete
 terminal evidence and source-distribution builds. Validation runs in Aone Sandbox.
+
+## Agent optimization evidence
+
+The RMSNorm campaign uses bf16 inputs on L20N preproduction, with shapes
+`(3, 128)`, `(256, 2048)` and `(510, 8192)`. V1 is the accepted framework
+baseline; V2 onward count as optimization rounds. Every measured optimization
+candidate contains `kernel.cu` and `solution.json`, with no candidate `kernel.py`.
+Python reference and input-generation files remain evaluator inputs.
+
+| Round | Actual edit | Standard correctness | Paired ABBA | Decision |
+| --- | --- | --- | --- | --- |
+| 1 / V2 | Replace shared-memory row staging with register-cached `uint4` vectors | PASS, six cases per shape | 0.9163×; 7.9265 → 8.6507 µs geometric mean | Reject; restore exact V1 source |
+| 2 / V3 | Register cache plus a single-barrier block reduction | PASS, six cases per shape | 1.0354×; 8.8745 → 8.5707 µs geometric mean | Accept as `5a1f46b7` |
+| 3 / V4 | Prefetch weights before reduction, retaining vectors in registers for small K | PASS, six cases per shape | 1.0227×; 7.6302 → 7.4607 µs geometric mean | Agent handoff timed out; frozen-source comparison completed separately; retain V3 |
+
+ABBA compares each candidate and its incumbent within the same allocation;
+standalone timings are not used to infer cross-round gains. V2 restored CUDA
+SHA256 `d92225a8c0f00bdcaa2f749e7288d509cb6ebb4ab7bb1b6f2e5dfd432f6320f2`.
+Records: V2 `gateway-a0d34f06132f4f6f84daa282c343ff48`; V3
+`gateway-5f1237e95776411c8e8e4389bc757af5`. The V1 and V3 optional numerical
+planners each reached their 600-second limit and were skipped under the existing
+policy; these supplemental checks are not reported as passes.
+
+V2 ran on the earlier file-system facade build; V3/V4 run on the independent
+selected-file-system build. Final-package interface checks above separately
+validate the completed refactor. An earlier episode that timed out without a
+source edit is preserved as failed evidence and does not count as a round.
+
+V4 exhausted its 1800-second active episode budget before reporting; its full
+Evaluate record `gateway-6d69293c5e9249909d2fbdf7f685f6af` had already passed.
+A separate Sandbox run using the final package compared that exact frozen
+candidate against accepted V3, without editing or promoting it. Candidate digest:
+`908d5630b3ed032b61957522e7735746d177ed40f28a8d3d3793c9783f730337`.
+The campaign retained V3 digest
+`1f0a5396a7d287ac16a46ea6755e37fcc1ea86045cbfac0a716ced67b91f32da`.
+Thus three actual Agent-authored edits have correctness and performance evidence,
+but the third autonomous handoff did not complete. The independent comparison
+is supplementary evidence, not an override of the campaign acceptance gate.
+Supplementary GPU jobs: `ev_9c6a67eb9362`, `ev_83048a3d8cec`, `ev_32532da4633d`.
