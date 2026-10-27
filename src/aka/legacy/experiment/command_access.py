@@ -72,7 +72,8 @@ def snapshot_inputs(workspace, access, selections, *, max_file_bytes=None):
             if stat.S_ISDIR(before.st_mode):
                 children = sorted(os.listdir(descriptor))
                 for name in children:
-                    if name in INPUT_SKIP_DIRS:
+                    if name in INPUT_SKIP_DIRS and stat.S_ISDIR(
+                            os.stat(name, dir_fd=descriptor, follow_symlinks=False).st_mode):
                         continue
                     visit(relative / name)
                 if _identity(before) != _identity(os.fstat(descriptor)):
