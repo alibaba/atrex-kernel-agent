@@ -52,12 +52,26 @@ def read_input(access, path, *, max_file_bytes=None):
                 return None
         if _identity(before) != _identity(os.fstat(descriptor)):
             raise PermissionError("command input changed during its snapshot")
-        # Recheck the current path too: the pinned inode cannot authorize a
-        # replaced directory, leaf, or a newly introduced symbolic link.
+        frozen = bytes(chunks)
+        # The current path must still identify the original inode and expose
+        # the same bytes on a second complete read. Timestamps alone can miss
+        # same-length writes within a filesystem's timestamp resolution. This
+        # proves two observable passes agree, not an atomic concurrent snapshot.
         with pinned(source) as current:
             if _identity(before) != _identity(os.fstat(current)):
                 raise PermissionError("command input was replaced during its snapshot")
-        return bytes(chunks), stat.S_IMODE(before.st_mode)
+            offset = 0
+            while True:
+                data = os.read(current, 64 * 1024)
+                if not data:
+                    break
+                if data != frozen[offset:offset + len(data)]:
+                    raise PermissionError("command input bytes changed during its snapshot")
+                offset += len(data)
+            if (offset != len(frozen) or _identity(before) != _identity(os.fstat(current))
+                    or _identity(before) != _identity(os.fstat(descriptor))):
+                raise PermissionError("command input changed during its snapshot")
+        return frozen, stat.S_IMODE(before.st_mode)
 
 
 def snapshot_inputs(workspace, access, selections, *, max_file_bytes=None):
