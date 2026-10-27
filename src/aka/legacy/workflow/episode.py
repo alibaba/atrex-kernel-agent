@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
 import tempfile
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
@@ -18,7 +17,8 @@ from aka.legacy.workflow.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TR
 from aka.legacy.task.hardware import hardware_vendor
 
 from aka.contracts.workspace import CandidateHandle
-from aka.legacy.task.git import git_text, working_changes
+from aka.legacy.task.git import git_text
+from .revision_state import WorkspaceState
 from .git_episode import record_episode_outcome
 from .records import promotion_files
 from .journal import initialize as initialize_journal
@@ -264,6 +264,10 @@ class LongHorizonCampaign:
         if self.fast_trials < 1:
             raise ValueError("fast_trials must be positive")
 
+    @property
+    def _workspace_state(self):
+        return WorkspaceState(self.workspace, self.base_campaign.candidate_workspace)
+
     def _conversion_budget(self, limit):
         if self.conversion_budget_action == "fail":
             raise RuntimeError(f"mandatory Triton->Gluon conversion did not succeed before {limit}")
@@ -347,37 +351,25 @@ class LongHorizonCampaign:
         require_gluon: bool,
     ) -> None:
         """Prewarm the production-review cache from an immutable candidate commit."""
-        resolved = git_text(
-            worktree.path,
-            "rev-parse",
-            "--verify",
-            f"{candidate_commit}^{{commit}}",
-            check=False,
-        )
-        if not resolved:
+        state = self._workspace_state.for_workspace(worktree.path)
+        try:
+            fact = state.fact(candidate_commit)
+        except (ValueError, RuntimeError):
             return
-        ancestor = subprocess.run(
-            ["git", "merge-base", "--is-ancestor", worktree.base_commit, resolved],
-            cwd=str(worktree.path),
-            capture_output=True,
-            check=False,
-        )
-        if ancestor.returncode != 0:
+        if fact is None or not state.is_ancestor(worktree.base_commit, revision=fact.revision):
             return
+        resolved = fact.revision
+        content = self.base_campaign.candidate_workspace.read_revision(worktree.path,
+            resolved, ["kernel.py", "solution.json"])
         with tempfile.TemporaryDirectory(prefix="atrex-fast-policy-snapshot-") as value:
             snapshot = Path(value)
             for relative in ("kernel.py", "solution.json"):
-                blob = subprocess.run(
-                    ["git", "show", f"{resolved}:{relative}"],
-                    cwd=str(worktree.path),
-                    capture_output=True,
-                    check=False,
-                )
-                if blob.returncode != 0:
+                blob = content.files[relative]
+                if blob is None:
                     if relative == "kernel.py":
                         return
                     continue
-                (snapshot / relative).write_bytes(blob.stdout)
+                (snapshot / relative).write_bytes(blob)
             print(
                 "[long-horizon] fast candidate "
                 f"{resolved[:12]}: starting policy review alongside evaluator",
@@ -511,19 +503,14 @@ class LongHorizonCampaign:
             },
         )
 
-    def _require_canonical_memory(self, version: int) -> None:
+    def _require_canonical_memory(self, version: int, *, revision=None) -> None:
         """Fail closed unless this episode's memory is valid and committed at HEAD."""
         memory = self.environment.read_memory(self.workspace, version)
         if not isinstance(memory, dict) or memory.get("version") != f"v{version}":
             raise RuntimeError(
                 f"episode did not write valid canonical memory/v{version}.json"
             )
-        committed_text = git_text(
-            self.workspace,
-            "show",
-            f"HEAD:memory/v{version}.json",
-            check=False,
-        )
+        committed_text = self._workspace_state.committed_file(f"memory/v{version}.json", revision=revision)
         try:
             committed_memory = json.loads(committed_text)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -586,10 +573,8 @@ class LongHorizonCampaign:
         try:
             journal = load_journal(journal_path)
             finalized_at = self.evaluation.iso_timestamp(str(journal["finalized_at"]))
-            committed_at = float(
-                git_text(worktree.path, "show", "-s", "--format=%ct", candidate)
-            )
-        except (KeyError, ValueError, OSError, json.JSONDecodeError) as exc:
+            committed_at = float(self._workspace_state.for_workspace(worktree.path).fact(candidate).committed_at)
+        except (KeyError, ValueError, RuntimeError, OSError, json.JSONDecodeError) as exc:
             return f"cannot validate terminal journal ordering: {exc}"
         if finalized_at <= committed_at:
             return (
@@ -1415,27 +1400,14 @@ class LongHorizonCampaign:
                 check=False,
             )
             == branch
-            and subprocess.run(
-                ["git", "merge-base", "--is-ancestor", base_commit, "HEAD"],
-                cwd=str(worktree_path),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            ).returncode
-            == 0
+            and self._workspace_state.for_workspace(worktree_path).is_ancestor(base_commit)
         )
         if resumable_worktree:
             assert worktree_path is not None
-            if phase == "promoting" and working_changes(self.workspace):
+            if phase == "promoting" and self._workspace_state.working_changes():
                 # The candidate remains authoritative in the episode worktree. Roll back
                 # only an incomplete supervisor squash before retrying promotion.
-                subprocess.run(
-                    ["git", "reset", "--hard", base_commit],
-                    cwd=str(self.workspace),
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+                self._workspace_state.restore(base_commit, retain_working_files=False, expected_revision=base_commit)
             worktree = CandidateHandle(
                 episode,
                 base_commit,
@@ -1458,26 +1430,23 @@ class LongHorizonCampaign:
             store.save_active(active)
             print(
                 f"[long-horizon] resuming interrupted episode={episode} in existing "
-                f"worktree {worktree.path} with {len(working_changes(worktree.path))} "
+                f"worktree {worktree.path} with {len(self._workspace_state.for_workspace(worktree.path).working_changes())} "
                 "visible intermediate path(s)",
                 flush=True,
             )
             return worktree, active
         if self.base_campaign.candidate_workspace.current_revision(self.workspace) != base_commit:
-            message = git_text(self.workspace, "log", "-1", "--format=%s", check=False)
-            parent = git_text(self.workspace, "rev-parse", "HEAD^", check=False)
-            evidence = git_text(
-                self.workspace,
-                "show",
-                f"HEAD:memory/long_horizon_e{episode:04d}.json",
-                check=False,
-            )
+            fact = self._workspace_state.fact()
+            message = fact.message.splitlines()[0] if fact.message else ""
+            parent = fact.parents[0] if fact.parents else ""
+            evidence = self._workspace_state.committed_file(
+                f"memory/long_horizon_e{episode:04d}.json", revision=fact.revision)
             promoted = (
                 phase in {"promoting", "promoted"}
                 and parent == base_commit
                 and message
                 == f"episode {episode}: promote verified long-horizon candidate"
-                and bool(evidence)
+                and bool(evidence and evidence.strip())
             )
             outcome_recorded = (
                 phase in {"recording", "recorded"}
@@ -1487,19 +1456,15 @@ class LongHorizonCampaign:
                 and message
                 == f"v{memory_version}: long-horizon episode {episode} {terminal_status}"
                 and bool(
-                    git_text(
-                        self.workspace,
-                        "show",
-                        f"HEAD:memory/v{memory_version}.json",
-                        check=False,
-                    )
+                    self._workspace_state.committed_file(
+                        f"memory/v{memory_version}.json", revision=fact.revision)
                 )
             )
             if not (promoted or outcome_recorded):
                 # The episode never reached a terminal handoff and its base is now
                 # stale, so it is superseded rather than rejected on its merits.
                 terminal_status = "interrupted"
-            self._require_canonical_memory(memory_version)
+            self._require_canonical_memory(memory_version, revision=fact.revision)
             if not already_recorded:
                 state.episodes = max(state.episodes, episode)
                 recovered_attempt: dict[str, Any] = {
@@ -1516,10 +1481,10 @@ class LongHorizonCampaign:
                 if promoted:
                     state.accepted += 1
                     state.consecutive_without_promotion = 0
-                    recovered_attempt["promotion_commit"] = self.base_campaign.candidate_workspace.current_revision(self.workspace)
+                    recovered_attempt["promotion_commit"] = fact.revision
                 else:
                     state.consecutive_without_promotion += 1
-                    recovered_attempt["outcome_commit"] = self.base_campaign.candidate_workspace.current_revision(self.workspace)
+                    recovered_attempt["outcome_commit"] = fact.revision
                     if terminal_status == "pivot":
                         state.pivoted += 1
                     elif terminal_status == "blocked":
@@ -1540,14 +1505,8 @@ class LongHorizonCampaign:
             # A crash during squash promotion can leave the incumbent index/worktree dirty
             # while HEAD still points at the immutable base. The active marker proves these
             # are supervisor-owned partial changes, so roll them back before continuing.
-            if phase == "promoting" and working_changes(self.workspace):
-                subprocess.run(
-                    ["git", "reset", "--hard", base_commit],
-                    cwd=str(self.workspace),
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+            if phase == "promoting" and self._workspace_state.working_changes():
+                self._workspace_state.restore(base_commit, retain_working_files=False, expected_revision=base_commit)
             if (
                 worktree_path is not None
                 and worktree_path != self.workspace.resolve()
@@ -1769,7 +1728,7 @@ class LongHorizonCampaign:
                 )
                 store.save_active(active)
                 self.environment.link_episode_runtime(self.base_campaign, worktree.path)
-                unexpected = working_changes(worktree.path)
+                unexpected = self._workspace_state.for_workspace(worktree.path).working_changes()
                 if unexpected:
                     raise RuntimeError(
                         "runtime linking dirtied the episode boundary: "

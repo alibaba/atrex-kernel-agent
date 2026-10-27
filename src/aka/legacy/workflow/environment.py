@@ -16,7 +16,7 @@ from aka.legacy.workflow.policy import install_workspace_policy
 from aka.legacy.execution.sandbox import sandbox_command
 from .runtime_directives import _agent_runtime_directive, _plan_generator_directive
 from aka.legacy.resources.workspace import install_workspace_resources
-from aka.legacy.task.candidate_workspace.state import head_kernel_is_initial_baseline, read_stall, reconstruct_stall, write_stall
+from .revision_state import WorkspaceState
 
 
 def committed_kernel_is_gluon(candidate_workspace, workspace: Path) -> bool:
@@ -48,7 +48,7 @@ def prepare_campaign(campaign: Campaign) -> None:
         violations = campaign._production_kernel_violations(
             require_gluon=committed_kernel_is_gluon(campaign.candidate_workspace, campaign.workspace)
         )
-        if violations and not head_kernel_is_initial_baseline(campaign.workspace):
+        if violations and not WorkspaceState(campaign.workspace, campaign.candidate_workspace).kernel_is_initial_baseline():
             raise RuntimeError(
                 "cannot resume a non-compliant production HEAD: "
                 + "; ".join(violations)
@@ -162,13 +162,12 @@ def candidate_is_gluon(workspace: Path, *, candidate_workspace) -> bool:
     return committed_kernel_is_gluon(candidate_workspace, workspace)
 
 
-def restored_stall(workspace: Path) -> int:
-    value = read_stall(workspace)
-    return int(value if value is not None else reconstruct_stall(workspace))
+def restored_stall(workspace: Path, *, candidate_workspace) -> int:
+    return WorkspaceState(workspace, candidate_workspace).restored_stall()
 
 
-def save_stall(workspace: Path, value: int) -> None:
-    write_stall(workspace, value)
+def save_stall(workspace: Path, value: int, *, candidate_workspace) -> None:
+    WorkspaceState(workspace, candidate_workspace).save_stall(value)
 
 
 # Re-exported for the rest of long_horizon, which reaches orchestrator only through this adapter.
@@ -181,8 +180,6 @@ STALL_STATE_FILE = _constants_STALL_STATE_FILE
 class CampaignEnvironment:
     """Bind Workflow-owned environment operations to one campaign."""
     CONVERT_PERF_TOL = CONVERT_PERF_TOL
-    restored_stall = staticmethod(restored_stall)
-    save_stall = staticmethod(save_stall)
     read_memory = staticmethod(read_memory)
     latest_version = staticmethod(latest_version)
     speedup_vs_reference = staticmethod(speedup_vs_reference)
@@ -193,6 +190,12 @@ class CampaignEnvironment:
 
     def candidate_is_gluon(self, workspace):
         return candidate_is_gluon(workspace, candidate_workspace=self.campaign.candidate_workspace)
+
+    def restored_stall(self, workspace):
+        return restored_stall(workspace, candidate_workspace=self.campaign.candidate_workspace)
+
+    def save_stall(self, workspace, value):
+        return save_stall(workspace, value, candidate_workspace=self.campaign.candidate_workspace)
 
     def prepare_campaign(self, campaign):
         return prepare_campaign(self.campaign)

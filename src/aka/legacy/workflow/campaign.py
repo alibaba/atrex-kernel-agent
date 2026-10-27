@@ -69,7 +69,7 @@ from .records import _record_local_test_result
 from aka.legacy.resources.prompts import render_prompt
 from .runtime_directives import _agent_runtime_directive, _baseline_driver_directive
 from .records import latest_version, read_memory
-from aka.legacy.task.candidate_workspace.state import git_kernel_blob, git_path_blob, git_worktree_blob, head_kernel_is_initial_baseline, resolve_framework_baseline_commit, v0_baseline_commit, write_stall
+from .revision_state import WorkspaceState
 
 _LONG_REVIEWER_SESSION_ENV = {
     "codex": "ATREX_CODEX_REVIEW_SESSION_FILE",
@@ -370,7 +370,7 @@ class Campaign:
         if self.private_reference_dir is None:
             return ""
         head = self.candidate_workspace.current_revision(self.workspace)
-        if head and not git_path_blob(self.workspace, head, AGENT_PROBLEM_FILENAME):
+        if head and not self._workspace_state.content_identity(head, AGENT_PROBLEM_FILENAME):
             return "agent_problem.json is not tracked by the V0 baseline commit"
         return ""
 
@@ -630,19 +630,15 @@ class Campaign:
         reference = self.private_reference_dir
         if reference is not None:
             return evaluator_num_gpus(reference) < 2
-        baseline = v0_baseline_commit(self.workspace) if self.workspace.is_dir() else ""
+        baseline = self._workspace_state.initial_kernel_revision() if self.workspace.is_dir() else ""
         if baseline:
             # Resume from the immutable V0, including the absence of metadata.
             # Reading HEAD or the live file would let a candidate disable its gate.
-            if not git_path_blob(self.workspace, baseline, "metadata.json"):
+            content = self._workspace_state.committed_file("metadata.json", revision=baseline)
+            if content is None:
                 return True
-            result = subprocess.run(
-                ["git", "show", f"{baseline}:metadata.json"],
-                cwd=str(self.workspace), capture_output=True, encoding="utf-8",
-                check=True,
-            )
             try:
-                metadata = json.loads(result.stdout)
+                metadata = json.loads(content)
             except json.JSONDecodeError as exc:
                 raise ValueError("invalid JSON in V0 metadata.json") from exc
             if not isinstance(metadata, dict):
@@ -650,6 +646,10 @@ class Campaign:
             return distributed_evaluation_world_size(metadata) < 2
         # Before V0 exists, the Task-owned evaluation snapshot is authoritative.
         return evaluator_num_gpus(self.problem.evaluation.directory) < 2
+
+    @property
+    def _workspace_state(self):
+        return WorkspaceState(self.workspace, self.candidate_workspace)
 
     def _link_runtime(self) -> None:
         from aka.legacy.workflow.store import CampaignStore
@@ -702,14 +702,8 @@ class Campaign:
         generalized = inputs.private_reference_dir is not None
         self.candidate_workspace.install_files(self.workspace, inputs.operator_files())
         self._ensure_agent_problem()
-        if generalized:
-            # Seed the immutable public contract into the eventual V0 commit even when the
-            # baseline agent stages only its own implementation files.
-            subprocess.run(
-                ["git", "add", AGENT_PROBLEM_FILENAME],
-                cwd=str(self.workspace),
-                check=True,
-            )
+        # Generalized tasks use the native mechanical V0 source transaction,
+        # which includes agent_problem.json explicitly instead of pre-staging it.
         self._link_runtime()
         self.evaluation.install_native_evaluator()
         self.evaluation.install_profile_driver()
@@ -882,7 +876,7 @@ class Campaign:
 
         n = FRAMEWORK_BASELINE_VERSION
         baseline_commit = self._v0_baseline_commit()
-        v0_blob = git_path_blob(self.workspace, baseline_commit, "kernel.py")
+        v0_blob = self._workspace_state.content_identity(baseline_commit, "kernel.py")
         pre_head = self.candidate_workspace.current_revision(self.workspace)
         self.evaluation.ensure_framework_baseline_solution_manifest()
 
@@ -959,14 +953,9 @@ class Campaign:
         if problem:
             # Undo any session-authored commits while retaining every worktree file.  A hard reset
             # here used to erase the exact candidate and debugging experience needed by a restart.
-            if pre_head and self.candidate_workspace.current_revision(self.workspace) != pre_head:
-                subprocess.run(
-                    ["git", "reset", "--mixed", pre_head],
-                    cwd=str(self.workspace),
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
+            current = self.candidate_workspace.current_revision(self.workspace)
+            if pre_head and current != pre_head:
+                self._workspace_state.restore(pre_head, retain_working_files=True, expected_revision=current)
             self._warn_restored_baseline_paths(baseline_commit)
             self._capture_framework_baseline_rejection(problem)
             self._record_framework_baseline_failure(problem)
@@ -1126,16 +1115,12 @@ class Campaign:
                 "framework baseline requires a committed V0 baseline first"
             )
 
-        pinned_commit, pinned_version = resolve_framework_baseline_commit(
-            self.workspace
-        )
+        pinned_commit, pinned_version = self._workspace_state.framework_baseline_revision()
         if pinned_commit:
             return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
 
-        progressed = not head_kernel_is_initial_baseline(self.workspace)
-        dirty_candidate = git_worktree_blob(
-            self.workspace, "kernel.py"
-        ) != git_path_blob(self.workspace, "HEAD", "kernel.py")
+        progressed = not self._workspace_state.kernel_is_initial_baseline()
+        dirty_candidate = self._workspace_state.working_identity("kernel.py") != self._workspace_state.committed_identity("kernel.py")
         restart_journal = framework_baseline_progress_path(self.workspace).is_file()
         # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
         # interrupted V1 worktree and needs validation/recovery first.
@@ -1163,14 +1148,12 @@ class Campaign:
             ):
                 return "skip", "; ".join(structural)
             baseline_commit = self._v0_baseline_commit()
-            reference_blob = git_path_blob(
-                self.workspace, baseline_commit, "reference.py"
-            )
+            reference_blob = self._workspace_state.content_identity(baseline_commit, "reference.py")
             known_reference_wrapper = (
                 bool(
                     reference_blob
                     and reference_blob
-                    == git_path_blob(self.workspace, baseline_commit, "kernel.py")
+                    == self._workspace_state.content_identity(baseline_commit, "kernel.py")
                 )
                 or self._loaded_problem().initial_source.kind == "sol"
             )
@@ -1197,7 +1180,7 @@ class Campaign:
         )
 
     def _v0_baseline_commit(self) -> str:
-        commit = v0_baseline_commit(self.workspace)
+        commit = self._workspace_state.initial_kernel_revision()
         if not commit:
             raise RuntimeError("framework baseline requires a committed V0 kernel.py")
         return commit
@@ -1989,7 +1972,7 @@ class Campaign:
 
     def _restore_framework_baseline_candidate(self, v0_blob: str) -> None:
         """Restore an ignored snapshot only when the worktree fell back to the V0 wrapper."""
-        if git_worktree_blob(self.workspace, "kernel.py") != v0_blob:
+        if self._workspace_state.working_identity("kernel.py") != v0_blob:
             return
         try:
             progress = load_framework_baseline_progress(self.workspace)
@@ -2000,7 +1983,7 @@ class Campaign:
         if not isinstance(snapshot, dict):
             return
         restored = restore_latest_framework_baseline_candidate(self.workspace)
-        if restored and git_worktree_blob(self.workspace, "kernel.py") != v0_blob:
+        if restored and self._workspace_state.working_identity("kernel.py") != v0_blob:
             print(
                 "[orchestrator] restored interrupted V1 candidate from local checkpoint: "
                 + ", ".join(restored),
@@ -2052,15 +2035,10 @@ class Campaign:
             file=sys.stderr,
             flush=True,
         )
-        if pre_head and self.candidate_workspace.current_revision(self.workspace) != pre_head:
+        current = self.candidate_workspace.current_revision(self.workspace)
+        if pre_head and current != pre_head:
             # Undo the session's commits, keep its files: the recovery session needs to read them.
-            subprocess.run(
-                ["git", "reset", "--mixed", pre_head],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            self._workspace_state.restore(pre_head, retain_working_files=True, expected_revision=current)
         try:
             self._run_framework_baseline_agent(
                 n=FRAMEWORK_BASELINE_VERSION,
@@ -2143,16 +2121,8 @@ class Campaign:
             files=tuple(WorkspaceFile(path=name, source=self.workspace / name) for name in staged),
             message=f"v{n}: framework baseline ({self.framework}) replacing the V0 PyTorch wrapper",
         )
-        kernel_commit = subprocess.run(
-            ["git", "rev-list", "-1", "HEAD", "--", "kernel.py"],
-            cwd=str(self.workspace),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        if git_kernel_blob(self.workspace) != git_worktree_blob(
-            self.workspace, "kernel.py"
-        ):
+        kernel_commit = self._workspace_state.latest_kernel_revision()
+        if self._workspace_state.committed_identity("kernel.py") != self._workspace_state.working_identity("kernel.py"):
             raise RuntimeError(
                 "framework baseline kernel.py differs between the worktree and the commit"
             )
@@ -2191,7 +2161,7 @@ class Campaign:
             "platform": self.platform,
             "arch": self.arch,
             "commit": commit,
-            "kernel_blob": git_path_blob(self.workspace, commit, "kernel.py"),
+            "kernel_blob": self._workspace_state.content_identity(commit, "kernel.py"),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
         records = [WorkspaceFile(path=FRAMEWORK_BASELINE_FILE,
@@ -2204,7 +2174,7 @@ class Campaign:
             files=tuple(records), message=f"v{version}: pin framework baseline {commit[:8]}",
         )
         # The metadata commit must not read as a stalled optimization round on the next resume.
-        write_stall(self.workspace, 0)
+        self._workspace_state.save_stall(0)
 
     def numerical_feedback(self, workspace, *, standard_correctness_passed=False):
         return self.services.numerical_feedback(workspace, standard_correctness_passed=standard_correctness_passed)

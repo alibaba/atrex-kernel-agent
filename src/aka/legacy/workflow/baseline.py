@@ -16,7 +16,7 @@ from aka.contracts.experiment import ExperimentExecutionError
 from aka.contracts.acceptance import FrameworkCandidateRequest
 from .records import _record_local_test_result
 from .records import read_memory
-from aka.legacy.task.candidate_workspace.state import git_path_blob, git_worktree_blob, v0_baseline_commit
+from .revision_state import WorkspaceState
 
 
 class WorkflowBaseline:
@@ -29,6 +29,10 @@ class WorkflowBaseline:
         self.acceptance = acceptance
         self.command = command
         self._last_framework_verification = None
+
+    @property
+    def _workspace_state(self):
+        return WorkspaceState(self.campaign.workspace, self.campaign.candidate_workspace)
 
     def evaluator_directive(self):
         return self.preparation(True).evaluator_directive()
@@ -184,12 +188,11 @@ class WorkflowBaseline:
         self, v0_blob, baseline_commit, *, include_policy_review=True
     ):
         from aka.contracts.acceptance import FrameworkCandidateFacts
-        from aka.legacy.task.git import git_worktree_blob
         from aka.legacy.task.source.inspection import kernel_is_gluon
         from aka.legacy.acceptance.source_policy import production_structure_violations
 
         campaign = self.campaign
-        blob = git_worktree_blob(campaign.workspace, "kernel.py")
+        blob = self._workspace_state.working_identity("kernel.py")
         # Preserve the original ordering: unchanged candidates do not invoke review.
         violations = ()
         gluon = False
@@ -265,9 +268,7 @@ class WorkflowBaseline:
         recorded = read_memory(self.campaign.workspace, 0) or {}
         if recorded.get("git_commit_hash") != source_commit:
             raise RuntimeError("memory/v0.json does not point to the V0 source commit")
-        if git_path_blob(
-            self.campaign.workspace, source_commit, "kernel.py"
-        ) != git_worktree_blob(self.campaign.workspace, "kernel.py"):
+        if self._workspace_state.content_identity(source_commit, "kernel.py") != self._workspace_state.working_identity("kernel.py"):
             raise RuntimeError("V0 kernel.py differs from its recorded source commit")
 
     def setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
@@ -287,6 +288,7 @@ class WorkflowBaseline:
             "kernel.py",
             "test_kernel.py",
             "profile_driver.py",
+            "agent_problem.json",
             *(item.path for item in self.campaign._loaded_problem().agent.files),
         ]
         source_paths = list(
@@ -304,12 +306,10 @@ class WorkflowBaseline:
                         for name in source_paths),
             message="V0: baseline kernel",
         )
-        source_commit = v0_baseline_commit(self.campaign.workspace)
+        source_commit = self._workspace_state.initial_kernel_revision()
         if not source_commit:
             raise RuntimeError("native V0 has no committed kernel.py")
-        if git_path_blob(
-            self.campaign.workspace, source_commit, "kernel.py"
-        ) != git_worktree_blob(self.campaign.workspace, "kernel.py"):
+        if self._workspace_state.content_identity(source_commit, "kernel.py") != self._workspace_state.working_identity("kernel.py"):
             raise RuntimeError(
                 "native V0 source history does not match the selected initial implementation"
             )
@@ -320,13 +320,7 @@ class WorkflowBaseline:
         contract_problem = self.campaign._generalized_contract_commit_problem()
         if contract_problem:
             raise RuntimeError(f"invalid native V0 source commit: {contract_problem}")
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=str(self.campaign.workspace),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
+        status = "\n".join(self._workspace_state.working_changes())
         if status:
             print(
                 "[orchestrator] WARNING: native V0 is continuing with a dirty "
