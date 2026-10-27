@@ -17,10 +17,13 @@ class GatewayExecutor(GatewayRecoveryMixin):
         recovery_policy(self.configuration)
         if "requirements_file" in self.configuration:
             raise ValueError("worker requirements belong to Task, not gateway provider configuration")
-    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile", "check", "disassemble")), True, True)
+    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile", "check", "disassemble")), True, True,
+                                       input_files=True, output_options=True)
     resource_identity = ResourceIdentity("gateway")
 
     def bind(self, context):
+        from aka.legacy.execution.filesystem_scope import require_scope_backend
+        require_scope_backend(context, self.capabilities)
         executor = type(self)(self.configuration)
         executor.environment = dict(context.environment)
         executor._bound_context = True
@@ -45,6 +48,12 @@ class GatewayExecutor(GatewayRecoveryMixin):
         return self._environment_backend().check(query)
 
     def run(self, command):
+        from aka.legacy.execution.command_transport import prepared_input_workspace
+        self.capabilities.require(command)
+        with prepared_input_workspace(command) as physical:
+            return self._run(physical)
+
+    def _run(self, command):
         self.capabilities.require(command)
         unsupported = ("ATREX_SANDBOX_SSH", "ATREX_SANDBOX_SSH_INIT", "ATREX_SANDBOX_HEALTH_COMMAND",
                        "ATREX_SANDBOX_SSH_GPU")
@@ -53,9 +62,10 @@ class GatewayExecutor(GatewayRecoveryMixin):
             raise UnsupportedExecution("gateway profile does not support SSH or health configuration")
         if not getattr(self, "_bound_context", False):
             from aka.contracts.execution import ExecutionContext
-            bound = self.bind(ExecutionContext(command.environment, command.hardware, command.timeout))
+            bound = self.bind(ExecutionContext(command.environment, command.hardware, command.timeout,
+                filesystem_access=command.filesystem_access))
             try:
-                return bound.run(command)
+                return bound._run(command)
             finally:
                 if hasattr(bound, "_selected_job_transport"):
                     self._selected_job_transport = bound._selected_job_transport
@@ -72,7 +82,8 @@ class GatewayExecutor(GatewayRecoveryMixin):
         if not command.artifacts:
             argv += ["--no-sync"]
         from aka.legacy.execution.legacy.runtime import current_transport_arguments
-        argv += ["--num-gpus", str(command.num_gpus), *current_transport_arguments()]
+        from aka.legacy.execution.command_transport import sandbox_options
+        argv += ["--num-gpus", str(command.num_gpus), *current_transport_arguments(), *sandbox_options(command)]
         argv += ["--", *command.command]
         environment = dict(command.environment)
         transport = self._job_transport()

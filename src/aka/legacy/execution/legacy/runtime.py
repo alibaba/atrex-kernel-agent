@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
-from aka.contracts.execution import Cancellation, JobResult
+from aka.contracts.execution import Cancellation, JobResult, ExecutionFile, OutputOptions, ProfileOptions
 
 
 @dataclass(frozen=True)
@@ -32,6 +32,9 @@ class SandboxRequest:
     submission: bytes | None = None
     num_gpus: int = 1
     on_observation: Callable[[JobResult], None] | None = None
+    input_files: tuple[ExecutionFile, ...] = ()
+    output_options: OutputOptions | None = None
+    profile_options: ProfileOptions | None = None
 
 
 @dataclass(frozen=True)

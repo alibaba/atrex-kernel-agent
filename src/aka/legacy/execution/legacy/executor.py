@@ -20,6 +20,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
     sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
         operations=frozenset(("auto", "run", "profile", "dev", "preflight", "check", "disassemble")), cancellation=True, prepared_requests=True,
+        input_files=True, output_options=True,
     )
     resource_identity = ResourceIdentity("legacy")
 
@@ -30,6 +31,8 @@ class LegacyExecutor(GatewayRecoveryMixin):
         recovery_policy(self.configuration)
 
     def bind(self, context):
+        from aka.legacy.execution.filesystem_scope import require_scope_backend
+        require_scope_backend(context, self.capabilities)
         from .runtime import default_binding
         request, hooks = default_binding(context)
         return self.bind_sandbox(request, hooks)
@@ -57,10 +60,17 @@ class LegacyExecutor(GatewayRecoveryMixin):
         return self._environment_backend().check(query)
 
     def run(self, command: CommandSpec) -> JobResult:
+        from aka.legacy.execution.command_transport import prepared_input_workspace
+        self.capabilities.require(command)
+        with prepared_input_workspace(command) as physical:
+            return self._run(physical)
+
+    def _run(self, command: CommandSpec) -> JobResult:
         self.capabilities.require(command)
         if self.request is None:
             from aka.contracts.execution import ExecutionContext
-            return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout)).run(command)
+            return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout,
+                filesystem_access=command.filesystem_access))._run(command)
         from aka.legacy.execution.environment_query import command_query, require_supported
         support = self._environment_backend().check(command_query(command), discover=False)
         require_supported(support)
@@ -74,7 +84,8 @@ class LegacyExecutor(GatewayRecoveryMixin):
             sync=command.artifacts,
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
             preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus,
-            on_observation=observed if command.on_observation is not None else None)
+            on_observation=observed if command.on_observation is not None else None,
+            input_files=command.input_files, output_options=command.output_options, profile_options=command.profile_options)
         if not request.ssh:
             transport = self._job_transport()
             environment = dict(request.environment)
@@ -142,7 +153,11 @@ class LegacyExecutor(GatewayRecoveryMixin):
                 cmd += ["--sync", path]
         else:
             cmd.append("--no-sync")
-        cmd += ["--num-gpus", str(request.num_gpus), *current_transport_arguments()]
+        from aka.legacy.execution.command_transport import sandbox_options
+        public = CommandSpec(workspace, tuple(command), input_files=request.input_files,
+                             output_options=request.output_options, profile_options=request.profile_options,
+                             operation=gateway_kind)
+        cmd += ["--num-gpus", str(request.num_gpus), *current_transport_arguments(), *sandbox_options(public)]
         if preflight:
             cmd.append("--preflight")
         else:

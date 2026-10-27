@@ -1265,13 +1265,14 @@ from pathlib import Path, PurePosixPath
 
 BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 END = "__ATREX_SANDBOX_OUTPUT_END__"
-RAW = {".ncu-rep", ".att", ".pftrace", ".otf2"}
+RAW_DEFAULT = {".ncu-rep", ".att", ".pftrace", ".otf2"}
 
 root = Path(sys.argv[1]).resolve()
 cfg = json.loads(Path(sys.argv[2]).read_text(encoding="utf-8"))
 max_bytes = int(cfg["max_file_bytes"])
 transport = cfg.get("transport", "inline")
-include_raw = bool(cfg["include_raw_profile"]) or transport == "oss"
+include_raw = (bool(cfg["include_raw_profile"]) if cfg["include_raw_profile"] is not None else transport == "oss")
+RAW = set(cfg.get("raw_profile_suffixes", RAW_DEFAULT | {".nsys-rep"})) if cfg["include_raw_profile"] is False else RAW_DEFAULT
 skipped = []
 seen = set()
 
@@ -1284,7 +1285,8 @@ def add_file(tf, path):
     if rel in seen or path.is_symlink() or not path.is_file():
         return
     size = path.stat().st_size
-    if (not include_raw and path.suffix in RAW) or size > max_bytes:
+    raw = path.suffix.lower() in RAW or (cfg["include_raw_profile"] is False and any(p.lower() == "att" for p in path.parts))
+    if (not include_raw and raw) or size > max_bytes:
         skipped.append(f"{rel} ({size} bytes)")
         return
     tf.add(path, arcname=rel, recursive=False)
@@ -1629,7 +1631,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--inline-output",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "Return synchronized files through the legacy stdout archive instead of "
             "agate OSS (default: use OSS with standard agate gateway profiles; "
@@ -1638,7 +1641,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--include-raw-profile",
-        action="store_true",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help=(
             "Include raw .ncu-rep/ATT artifacts with legacy inline output "
             "(OSS output includes them by default)."
@@ -1697,6 +1701,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=512,
         help="Skip individual returned artifacts larger than this (default: 512 MiB).",
     )
+    parser.add_argument("--max-output-file-bytes", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("-e", "--env", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument(
         "--keep-pod",
@@ -2996,7 +3001,7 @@ def _main(argv: list[str] | None = None) -> int:
     effective_budget(args.timeout + (0 if args.ssh else queue_wait_grace), scope="wait")
     if args.ssh:
         effective_budget(args.timeout, scope="command")
-    if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
+    if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0 or (args.max_output_file_bytes is not None and args.max_output_file_bytes <= 0):
         raise SystemExit("sandbox: file size limits must be positive")
     args.health_command = combined_health_command(
         args.health_command, args.runtime_health_command
@@ -3209,10 +3214,12 @@ def _main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    from aka.legacy.execution.command_transport import RAW_PROFILE_SUFFIXES
     output_cfg = {
         "paths": sync_paths,
-        "max_file_bytes": args.max_output_file_mb * 1024 * 1024,
+        "max_file_bytes": args.max_output_file_bytes if args.max_output_file_bytes is not None else args.max_output_file_mb * 1024 * 1024,
         "include_raw_profile": args.include_raw_profile,
+        "raw_profile_suffixes": RAW_PROFILE_SUFFIXES,
         "transport": output_transport,
     }
     with tempfile.TemporaryDirectory(prefix="atrex-sandbox-") as temp_dir:
