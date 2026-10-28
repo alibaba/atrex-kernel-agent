@@ -194,8 +194,15 @@ runtime data. The source file systems exclude `.aka-agent-observations/`,
 Git source identity and restoration cleanup. These records remain available after
 candidate rollback; undeclared source files still fail the source contract.
 
-Pre-CR run 83933378 exposed the missing boundary after V1 on all three hardware
-cases. In Aone Sandbox, five targeted reproductions fail on `cd8112c` and all 59
-offline regressions pass with the fix, including the real Agent observation writer,
-unchanged-V0 rejection, historical Git identity and preservation during rollback.
-Validation harnesses remain outside the PR.
+Supplemental validation files (`numerical_probe.py`, `numerical_inputs.py` and
+`probe-request.json`) are evaluator inputs, not candidate source. Freezing and
+restoring a candidate preserves those files, and command input selection still
+includes them in the remote execution payload.
+
+Pre-CR runs 83933378 and 83956603 exposed these missing boundaries during Agent
+observation collection and supplemental numerical validation. Targeted regressions
+reproduce both failures on their preceding commits. All 61 offline regressions
+pass in Aone Sandbox, including the real Agent observation writer, unchanged-V0
+rejection, historical Git identity, rollback preservation and actual supplemental
+probe staging. Supplemental pass and failure receipts retain their respective
+acceptance decisions. Validation harnesses remain outside the PR.

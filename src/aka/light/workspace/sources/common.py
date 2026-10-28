@@ -20,7 +20,7 @@ WORKSPACE_ONLY = {"tools", "skills", "scratch", "memory", "input", "profiles", "
     "README.md", "CLAUDE.md", "WORKSPACE.md", "agent_problem.json", "reference.py", "input.py",
     "shapes.json", "metadata.json", "roofline.json", "valid.py", "definition.json", "workload.jsonl",
     "solution.json", "config.json", "test_kernel.py", "profile_driver.py", "evaluations.jsonl",
-    "numerical_probe.py", "probe-request.json", "policy_review_request.json",
+    "numerical_probe.py", "numerical_inputs.py", "probe-request.json", "policy_review_request.json",
     ".gitignore", ".claude", ".codex", ".qoder", ".agents", ".pi", ".orchestrator_mode.json",
     ".aka-agent-observations", ".aka-agent-sessions", ".aka-agent-session-errors", ".humanize",
     ".gpu_wiki_profile", ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins",
