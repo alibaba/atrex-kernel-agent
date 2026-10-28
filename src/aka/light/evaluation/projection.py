@@ -725,7 +725,7 @@ def _positive_number(value: object) -> float | None:
 
 def evaluation(result: dict) -> dict:
     keys = {"all_pass", "latency_us_geomean", "latency_us_arith_mean",
-            "performance_score", "performance_objective", "max_abs_err", "max_rel_err",
+            "performance_score", "performance_objective", "max_abs_err", "max_rel_err", "rel_err",
             "shape_ids_are_opaque", "hidden_case_details", "mode", "n_shapes",
             "correctness_passed", "correctness_total", "speedup_vs_ref_geomean",
             "speedup_vs_ref_mean", "kernel_sha256", "utilization_pct", "sol_utilization_pct"}
@@ -752,6 +752,10 @@ def evaluation(result: dict) -> dict:
         {key: bounded_text(item) for key, item in row.items() if key in {"stage", "shape_id", "message"}}
         for row in (result.get("actionable_diagnostics") or [])[:8] if isinstance(row, dict)
     ]
+    if isinstance(result.get("case_status"), dict):
+        value["case_status"] = {str(key)[:128]: status
+            for key, status in list(result["case_status"].items())[:MAX_AGENT_EVALUATION_SHAPES]
+            if status in ("passed", "failed", "not_run", "incomplete")}
     if result.get("error") is not None:
         value["error"] = bounded_error(result["error"])
     if any(key in result for key in ("diagnostics", "performance_by_shape")):

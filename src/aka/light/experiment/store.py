@@ -285,6 +285,14 @@ class MeasurementStore:
                 record = self.read(record_id)
                 if record.get("task_digest") != task_digest or record.get("cacheable") is not True:
                     return None
+                if record["operation"] in {"evaluate", "same_allocation_abba"}:
+                    from aka.light.evaluation.public_result import canonical_result
+                    outcome = canonical_result(record["response"], record["request"])
+                    if outcome["status"] != "completed" or outcome["result"].get("outcome") in {"unknown", "unavailable"}:
+                        # Older Dev-backed evaluators cached allocation success
+                        # even when no evaluation receipt existed. Keep the old
+                        # record intact, but do not use it as a permanent verdict.
+                        return None
                 from aka.light.evaluation.evaluation_failures import embedded_device_failure
                 negative = False
                 for line in record["response"].get("stdout", "").splitlines():

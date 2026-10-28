@@ -277,6 +277,12 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                         state.get("identity"))
                     for state in states)
                 cacheable = cacheable and not response.get("truncated")
+                if operation == "evaluate":
+                    # A completed Dev allocation is not necessarily a completed
+                    # evaluation. Missing/unavailable verdicts must stay resumable.
+                    cacheable = (cacheable and response.get("exit_code") in {0, 1}
+                                 and sample is not None
+                                 and isinstance(sample.get("all_pass", sample.get("correct")), bool))
                 if operation == "same_allocation_abba":
                     terminal_abba_timeout = _completed_abba_timeout(
                         sample,

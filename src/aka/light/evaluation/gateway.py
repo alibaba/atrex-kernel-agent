@@ -88,7 +88,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from threading import Lock
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -2974,9 +2974,24 @@ def run_direct_job(
     max_device_retries: int = 2,
     device_retry_delay: float | None = None,
     identity_extra: dict[str, Any] | None = None,
+    result_adapter: Callable[[dict], dict] | None = None,
+    retry_classifier: Callable[[dict], str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     eval_request = kind == "eval"
+
+    def completed(job):
+        # A trusted harness may interpret a successful Dev process as a failed
+        # evaluation. Adapt before checkpointing so recovery and caching see
+        # the same outcome. Ordinary jobs retain their native envelope.
+        if result_adapter is not None:
+            job = result_adapter(job)
+        return subprocess.CompletedProcess(
+            args=["direct-gateway", kind, job["job_id"]],
+            returncode=0 if (job.get("status") == "succeeded"
+                             and (result_adapter is None or not job.get("error"))) else 1,
+            stdout=json.dumps(job), stderr="",
+        )
 
     def submit(wire_key):
         from aka.light.evaluation.source_transport import uploaded_request, upload_bytes, SourceUploadError
@@ -3052,12 +3067,7 @@ def run_direct_job(
                     raise EvidenceUnavailable(
                         "Saved Gateway Job could not be read by the recovery probe"
                     ) from error
-                return subprocess.CompletedProcess(
-                    args=["direct-gateway", kind, job_id],
-                    returncode=0 if job.get("status") == "succeeded" else 1,
-                    stdout=json.dumps(job),
-                    stderr="",
-                )
+                return completed(job)
             finally:
                 _forget_agate_job(job_id)
         deadline = time.monotonic() + remaining
@@ -3065,11 +3075,7 @@ def run_direct_job(
         try:
             while True:
                 if job.get("status") in ("succeeded", "failed", "cancelled", "canceled"):
-                    return subprocess.CompletedProcess(
-                        args=["direct-gateway", kind, job_id],
-                        returncode=0 if job.get("status") == "succeeded" else 1,
-                        stdout=json.dumps(job), stderr="",
-                    )
+                    return completed(job)
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise EvidenceUnavailable("Gateway collection deadline reached; the accepted Job is saved for reconciliation")
@@ -3106,7 +3112,7 @@ def run_direct_job(
         identity["execution_context"] = identity_extra
     return execute_job(identity, submit, poll,
                        wait_budget=timeout + queue_wait_grace,
-                       retry_classifier=eval_retry_kind if eval_request else None,
+                       retry_classifier=retry_classifier or (eval_retry_kind if eval_request else None),
                        max_infra_retries=max_infra_retries,
                        idempotent_submission=True,
                        max_device_retries=max_device_retries if eval_request else None,
