@@ -6,7 +6,7 @@ def _agent_runtime_directive(agent_cli: str) -> str:
     else:
         directory = '.qoder/skills' if agent_cli=='qodercli' else '.claude/skills'
     return (f'- `{directory}/` contains the selected module Skills. '
-            'Use `python -m aka.legacy.resources.cli list` to discover the exact installed '
+            'Use `python -m aka.resources.cli list` to discover the exact installed '
             'Skills and tools, including any explicitly selected profiling capabilities.')
 
 

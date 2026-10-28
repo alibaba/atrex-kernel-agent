@@ -171,7 +171,7 @@ option before `--`, which routes the job through the dev interface.
 Search in this order and stop when one actionable direction is supported:
 
 1. **Enabled knowledge tools.** Read `.atrex_plugins/instructions.md` and inspect
-   `python3 -m aka.legacy.resources.cli list`. Follow the session's phase-specific plugin instructions.
+   `python3 -m aka.resources.cli list`. Follow the session's phase-specific plugin instructions.
    Profile first, then describe measured symptoms, exact product/runtime architecture, operator,
    framework, shapes/dtypes, failed attempts and the fact needed for the next decision. On PPU,
    use the decisive evidence selected by `ppu-acu-joint-profile`, even when no new profile was needed.

@@ -148,6 +148,6 @@ library primitives — are unaffected.
 - Episode evidence loop (profile/research/plan/implement/validate/record): `.agents/skills/gpu-kernel-episode-loop/SKILL.md`
 - Baseline setup session: the injected setup prompt
 - Triton→Gluon conversion: latched directive inside the episode prompt
-- Profiling capabilities (Stage 1): consult `python -m aka.legacy.resources.cli list` and the selected `profiling/profile_guide.md`; report missing required capabilities.
+- Profiling capabilities (Stage 1): consult `python -m aka.resources.cli list` and the selected `profiling/profile_guide.md`; report missing required capabilities.
 - Plan generation (Stage 2): installed `.agents/skills/gen-plan/SKILL.md` with independent Codex
   and Qoder review synthesis

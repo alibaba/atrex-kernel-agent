@@ -51,7 +51,7 @@ def record_context(campaign):
 def _services(payload):
     from aka.bootstrap.recovery_metadata import restored_services
     with restored_services(payload, ('problem', 'candidate', 'agent')) as services:
-        from aka.legacy.resources.plugins import PluginRegistry
+        from aka.resources.plugins import PluginRegistry
         yield (*services, PluginRegistry())
 
 

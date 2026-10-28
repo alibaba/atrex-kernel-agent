@@ -46,7 +46,7 @@ You will receive:
 
 ### Phase 2: Learn Framework APIs from enabled knowledge tools
 
-1. Read `.atrex_plugins/instructions.md` and inspect `python3 -m aka.legacy.resources.cli list` for enabled
+1. Read `.atrex_plugins/instructions.md` and inspect `python3 -m aka.resources.cli list` for enabled
    tool names and input schemas. Follow the session's phase-specific plugin instructions.
 2. Query available knowledge tools with the exact product, authoritative runtime architecture,
    framework, operator, shapes, dtypes and missing implementation facts. If no suitable plugin is

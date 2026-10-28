@@ -18,7 +18,7 @@ profiles). Sandbox input filtering is owned by `python -m aka.legacy.execution.c
 payload is forbidden.
 
 Environment (resolve all paths against your cwd = the workspace):
-- Selected module Skills and declared reference/plugin resources are installed in this workspace. Inspect `python -m aka.legacy.resources.cli list` and `.atrex_plugins/instructions.md` for the available content; use each declared path
+- Selected module Skills and declared reference/plugin resources are installed in this workspace. Inspect `python -m aka.resources.cli list` and `.atrex_plugins/instructions.md` for the available content; use each declared path
   (e.g. `python -m aka.legacy.workflow.memory_manager summary --workspace .`, `reference/v_iteration.schema.json`).
 {{AGENT_RUNTIME}}
 

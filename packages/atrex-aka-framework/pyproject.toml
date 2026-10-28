@@ -33,7 +33,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*"]
+include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*", "aka.resources", "aka.resources.*"]
 
 [tool.setuptools.package-data]
 "aka.agent" = ["*", "**/*"]
@@ -41,3 +41,5 @@ include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", 
 "aka.core" = ["profiles/*.json"]
 
 "aka.task" = ["*", "**/*"]
+
+"aka.resources" = ["*", "**/*"]

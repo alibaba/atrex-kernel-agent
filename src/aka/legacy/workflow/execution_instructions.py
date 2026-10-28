@@ -1,5 +1,5 @@
 """Workflow-owned episode instructions for the selected execution endpoint."""
-from aka.legacy.resources.prompts import render_prompt
+from aka.resources.prompts import render_prompt
 from .resources import PROMPTS_DIR
 SANDBOX_FULL_WORKFLOW_PROMPT = PROMPTS_DIR / "sandbox_full_workflow.md"
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"

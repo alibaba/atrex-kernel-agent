@@ -9,7 +9,7 @@ import os
 import sys
 from pathlib import Path
 
-from aka.legacy.resources.plugins import PluginError, PluginRegistry, decode_json, read_json
+from aka.resources.plugins import PluginError, PluginRegistry, decode_json, read_json
 
 
 def main(argv: list[str] | None = None) -> int:

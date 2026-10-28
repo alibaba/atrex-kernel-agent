@@ -10,7 +10,7 @@ inject = ("agent", "problem", "source", "candidate", "executor", "execution_cont
 identity_packages = (
     "aka.legacy.workflow",
     "aka.task",
-    "aka.legacy.resources",
+    "aka.resources",
     "aka.contracts.workflow",
     "aka.contracts.experiment",
     "aka.contracts.evaluation",

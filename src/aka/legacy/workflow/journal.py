@@ -57,7 +57,7 @@ PPU_ARTIFACT_SECTIONS = {
     "ppu-joint-profile/v4": ("inputs", "outputs"),
 }
 def _ppu_profile_validator():
-    from aka.legacy.resources.plugins import PluginRegistry
+    from aka.resources.plugins import PluginRegistry
     try:
         return PluginRegistry().resource_result().resource('execution-ppu-profile-validator').source
     except KeyError:

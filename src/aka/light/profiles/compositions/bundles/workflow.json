@@ -11,7 +11,7 @@
     },
     {
       "id": "resources",
-      "name": "aka.legacy.resources.plugin",
+      "name": "aka.resources.plugin",
       "required": true,
       "config": {
         "plugins": [

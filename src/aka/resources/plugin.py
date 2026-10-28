@@ -2,7 +2,7 @@
 from pathlib import Path
 
 name = "resources"
-identity_packages = ("aka.legacy.resources", "aka.contracts.agent_resources", "aka.contracts.filesystem")
+identity_packages = ("aka.resources", "aka.contracts.agent_resources", "aka.contracts.filesystem")
 Config = {"type": "object", "properties": {
     "plugin_dir": {"type": "string"},
     "plugins": {"type": "array", "items": {"type": "string", "minLength": 1}},

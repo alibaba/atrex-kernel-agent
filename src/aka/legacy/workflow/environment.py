@@ -15,7 +15,7 @@ from aka.task.source.inspection import source_uses_gluon
 from aka.legacy.workflow.policy import install_workspace_policy
 from aka.execution.sandbox import sandbox_command
 from .runtime_directives import _agent_runtime_directive, _plan_generator_directive
-from aka.legacy.resources.workspace import install_workspace_resources
+from aka.resources.workspace import install_workspace_resources
 from .revision_state import WorkspaceState
 
 

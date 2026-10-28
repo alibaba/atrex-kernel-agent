@@ -30,8 +30,8 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
         self.bind_workspace_resources(resources)
 
     def instructions(self, phase: str, **values: str) -> str:
-        return ("Use `python -m aka.legacy.resources.cli list` to discover enabled tools and Skills. "
-                "Invoke `python -m aka.legacy.resources.cli call <plugin.tool> --input <request.json>`.\n\n"
+        return ("Use `python -m aka.resources.cli list` to discover enabled tools and Skills. "
+                "Invoke `python -m aka.resources.cli call <plugin.tool> --input <request.json>`.\n\n"
                 + super().instructions(phase, **values))
 
     def environment(self, workspace: Path, campaign_name: str = "") -> dict[str, str]:

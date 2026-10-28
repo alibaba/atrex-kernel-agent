@@ -22,7 +22,7 @@ final squash promotion. You own only this episode branch and its structured evid
 - Journal: `{{JOURNAL_PATH}}`
 - Handoff: `{{HANDOFF_PATH}}`
 - Additional constraints: {{NOTES}}
-- Only selected module Skills and declared reference/plugin resources are installed in this worktree. Inspect `python -m aka.legacy.resources.cli list` and `.atrex_plugins/instructions.md` before using optional capabilities.
+- Only selected module Skills and declared reference/plugin resources are installed in this worktree. Inspect `python -m aka.resources.cli list` and `.atrex_plugins/instructions.md` before using optional capabilities.
 {{AGENT_RUNTIME}}
 
 {{RESUME_DIRECTIVE}}

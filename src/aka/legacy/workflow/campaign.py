@@ -62,11 +62,11 @@ from .plan_reviewers import (
 )
 from .review_trace import ReviewTrace
 from aka.legacy.evaluation.metadata import distributed_evaluation_world_size, evaluator_num_gpus
-from aka.legacy.resources.plugins import PluginRegistry
+from aka.resources.plugins import PluginRegistry
 from aka.legacy.workflow.agent_session import SessionResult
 from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
 from .records import _record_local_test_result
-from aka.legacy.resources.prompts import render_prompt
+from aka.resources.prompts import render_prompt
 from .runtime_directives import _agent_runtime_directive, _baseline_driver_directive
 from .records import latest_version, read_memory
 from .revision_state import WorkspaceState

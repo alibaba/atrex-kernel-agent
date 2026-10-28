@@ -48,7 +48,7 @@ Use its Task Context fields with the injected setup prompt when writing the work
 ## Knowledge and Tools
 
 - Consult enabled knowledge tools using `.atrex_plugins/instructions.md` and
-  `python -m aka.legacy.resources.cli list`. Follow the injected phase instructions. State the exact product,
+  `python -m aka.resources.cli list`. Follow the injected phase instructions. State the exact product,
   authoritative runtime architecture, operator, framework, measurements and unresolved question.
   Preserve returned source identifiers. With no suitable tool, use available reference sources.
 - Search explicitly installed `reference-projects/<project>/` resources only when the enabled knowledge tools are insufficient. No reference projects are selected by default.
