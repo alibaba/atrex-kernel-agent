@@ -16,6 +16,7 @@ aka = "aka.cli:main"
 run = "aka.bootstrap.cli:main"
 
 [project.entry-points."aka.tokens"]
+agent = "aka.agent.plugin:AGENT"
 executor = "aka.execution.assembly:EXECUTOR"
 execution_context = "aka.execution.plugin:EXECUTION_CONTEXT"
 measurement_parallelism = "aka.execution.plugin:MEASUREMENT_PARALLELISM"
@@ -26,8 +27,9 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*"]
+include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*"]
 
 [tool.setuptools.package-data]
+"aka.agent" = ["*", "**/*"]
 "aka.execution" = ["*", "**/*"]
 "aka.core" = ["profiles/*.json"]

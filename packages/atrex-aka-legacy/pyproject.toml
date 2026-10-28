@@ -15,7 +15,6 @@ workflow = "aka.bootstrap.workflow_cli:main"
 execution = "aka.legacy.execution.cli:main"
 
 [project.entry-points."aka.tokens"]
-agent = "aka.agent.plugin:AGENT"
 workflow = "aka.legacy.workflow.plugin:WORKFLOW"
 problem = "aka.legacy.task.problem.plugin:PROBLEM"
 source = "aka.legacy.task.source.plugin:SOURCE"
@@ -31,7 +30,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka.legacy", "aka.legacy.*", "aka.agent", "aka.agent.*"]
+include = ["aka.legacy", "aka.legacy.*"]
 
 [tool.setuptools.package-data]
 "*" = ["*", "**/*"]
