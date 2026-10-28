@@ -6,8 +6,8 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
-from aka.legacy.task.git import (_git, git_text, git_head, working_changes, changed_paths, ignored_evidence_files, protected_violation, _manifest_deleted)
-from aka.legacy.task.io import atomic_write_json
+from aka.task.git import (_git, git_text, git_head, working_changes, changed_paths, ignored_evidence_files, protected_violation, _manifest_deleted)
+from aka.task.io import atomic_write_json
 from aka.contracts.content import WorkspaceFile
 from .content import selected_file_bytes
 from .policy import CANDIDATE_PATHS, TIMELINE_PROBE_MARKERS
@@ -196,7 +196,7 @@ def promote_candidate(
     if any(value is not None for value in (evidence, memory_version, memory_record)):
         if record_files or any(value is None for value in (evidence, memory_version, memory_record)):
             raise ValueError("promotion requires either opaque files or complete compatibility records")
-        from aka.legacy.compat.workspace_records import promotion_record_files
+        from ._compat_records import promotion_record_files
         record_files = promotion_record_files(episode=episode, evidence=evidence,
             memory_version=memory_version, memory_record=memory_record)
     files = tuple(record_files)

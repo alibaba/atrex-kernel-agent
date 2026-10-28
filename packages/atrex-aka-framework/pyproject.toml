@@ -21,15 +21,23 @@ executor = "aka.execution.assembly:EXECUTOR"
 execution_context = "aka.execution.plugin:EXECUTION_CONTEXT"
 measurement_parallelism = "aka.execution.plugin:MEASUREMENT_PARALLELISM"
 
+problem = "aka.task.problem.plugin:PROBLEM"
+
+source = "aka.task.source.plugin:SOURCE"
+
+candidate = "aka.task.candidate_workspace.plugin:CANDIDATE"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*"]
+include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*"]
 
 [tool.setuptools.package-data]
 "aka.agent" = ["*", "**/*"]
 "aka.execution" = ["*", "**/*"]
 "aka.core" = ["profiles/*.json"]
+
+"aka.task" = ["*", "**/*"]

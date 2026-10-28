@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 from .metadata import distributed_evaluation_world_size as _distributed_evaluation_world_size
-from aka.legacy.task.problem.inputs import validate_performance_baseline
+from aka.task.problem.inputs import validate_performance_baseline
 FP4_MAX_REL_L2 = 0.2
 
 def _option_value(parts: list[str], name: str, default: Any = None) -> Any:

@@ -16,9 +16,6 @@ execution = "aka.legacy.execution.cli:main"
 
 [project.entry-points."aka.tokens"]
 workflow = "aka.legacy.workflow.plugin:WORKFLOW"
-problem = "aka.legacy.task.problem.plugin:PROBLEM"
-source = "aka.legacy.task.source.plugin:SOURCE"
-candidate = "aka.legacy.task.candidate_workspace.plugin:CANDIDATE"
 evaluator_factory = "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY"
 evaluation_defaults = "aka.legacy.evaluation.plugin:EVALUATION_DEFAULTS"
 experiment_factory = "aka.legacy.experiment.plugin:EXPERIMENT_FACTORY"

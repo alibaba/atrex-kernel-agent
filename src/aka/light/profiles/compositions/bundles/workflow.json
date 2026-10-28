@@ -21,7 +21,7 @@
     },
     {
       "id": "problem",
-      "name": "aka.legacy.task.problem.plugin",
+      "name": "aka.task.problem.plugin",
       "required": true,
       "config": {
         "worker_requirements": "${env:ATREX_SANDBOX_REQUIREMENTS_FILE}"
@@ -29,12 +29,12 @@
     },
     {
       "id": "source",
-      "name": "aka.legacy.task.source.plugin",
+      "name": "aka.task.source.plugin",
       "required": true
     },
     {
       "id": "candidate",
-      "name": "aka.legacy.task.candidate_workspace.plugin",
+      "name": "aka.task.candidate_workspace.plugin",
       "required": true
     },
     {

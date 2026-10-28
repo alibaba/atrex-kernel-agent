@@ -19,8 +19,8 @@ import time
 import traceback
 from concurrent.futures import CancelledError
 
-from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
-from aka.legacy.task.problem.resources import native_harness_script
+from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
+from aka.task.problem.resources import native_harness_script
 from aka.light.evaluation.policy import CANDIDATE_TIMEOUT
 from aka.light.supervisor.workspace import read_input, publish
 from aka.light.supervisor.projection import bounded_text, credential_values, redact_diagnostics

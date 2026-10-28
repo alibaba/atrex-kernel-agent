@@ -13,8 +13,8 @@ from typing import Optional
 from datetime import datetime, timezone
 from aka.contracts.content import WorkspaceFile
 from aka.contracts.workflow_records import CanonicalMeasurement
-from aka.legacy.task.io import atomic_write_json
-from aka.legacy.task.candidate_workspace.state import resolve_framework_baseline_commit
+from aka.task.io import atomic_write_json
+from aka.task.candidate_workspace.state import resolve_framework_baseline_commit
 
 
 def latest_version(workspace: Path) -> int:

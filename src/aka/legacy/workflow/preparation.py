@@ -5,8 +5,8 @@ from pathlib import Path
 import re
 import sys
 
-from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
-from aka.legacy.task.hardware import framework_workspace_suffix, supported_frameworks
+from aka.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
+from aka.task.hardware import framework_workspace_suffix, supported_frameworks
 
 
 def recorded_workspace_arch(workspace: Path) -> str:

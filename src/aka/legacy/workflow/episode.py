@@ -14,7 +14,7 @@ from threading import Event
 from typing import Any
 
 from aka.legacy.workflow.constants import DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, SUPPLEMENTAL_PENDING_PREFIX
-from aka.legacy.task.hardware import hardware_vendor
+from aka.task.hardware import hardware_vendor
 
 from aka.contracts.workspace import CandidateHandle
 from .revision_state import WorkspaceState

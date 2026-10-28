@@ -147,7 +147,7 @@ class GatewayCommandEvaluator:
                 request["spec"]["num_gpus"] = num_gpus
         except (OSError, UnicodeDecodeError, ValueError) as error:
             # A malformed performance baseline deliberately propagates; it must not submit GPU work.
-            from aka.legacy.task.problem.inputs import PerformanceBaselineError
+            from aka.task.problem.inputs import PerformanceBaselineError
             if isinstance(error, PerformanceBaselineError):
                 raise
             if nondefault_profile(command.profile_options):

@@ -5,8 +5,8 @@ from pathlib import Path
 from typing import Callable
 import ast
 import json
-from aka.legacy.task.source.inspection import source_uses_gluon
-from aka.legacy.task.source.inspection import framework_key
+from aka.task.source.inspection import source_uses_gluon
+from aka.task.source.inspection import framework_key
 import subprocess
 
 

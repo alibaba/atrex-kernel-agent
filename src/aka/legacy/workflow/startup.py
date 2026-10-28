@@ -94,7 +94,7 @@ class WorkflowStartup:
         if not launch.request.settings.framework:
             from .dispatch import dispatch_framework_campaigns
             from dataclasses import replace
-            from aka.legacy.task.hardware import framework_workspace_suffix
+            from aka.task.hardware import framework_workspace_suffix
             def run_framework(framework):
                 # Each selected DSL keeps its own trusted preflight, without
                 # reloading Task or rebuilding the selected modules.

@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
-from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
+from aka.task.candidate_workspace.excludes import VERIFY_DIR
 from aka.core._filesystem import durable_write_json
 
 

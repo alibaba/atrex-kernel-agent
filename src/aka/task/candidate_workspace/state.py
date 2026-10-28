@@ -11,9 +11,9 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
-from aka.legacy.task.candidate_workspace.excludes import STALL_STATE_FILE
-from aka.legacy.task.git import git_path_blob, git_worktree_blob
+from aka.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
+from aka.task.candidate_workspace.excludes import STALL_STATE_FILE
+from aka.task.git import git_path_blob, git_worktree_blob
 
 
 # ── git is the SINGLE source of truth for a "committed win" ───────────────────

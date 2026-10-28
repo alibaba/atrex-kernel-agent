@@ -97,7 +97,7 @@ class BaselinePreparation:
             if self.inputs.native:
                 raise ValueError("Task has no native evaluator harness")
             return
-        from aka.legacy.task.candidate_workspace.content import install_files
+        from aka.task.candidate_workspace.content import install_files
         install_files(self.inputs.workspace, (self.resources.native_harness,))
 
     def install_profile_driver(self) -> None:

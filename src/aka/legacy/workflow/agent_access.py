@@ -11,7 +11,7 @@ def for_workspace(campaign, workspace, *, resources=True, read_only=()):
     # always use their injected CandidateWorkspace.
     candidate = getattr(campaign, "candidate_workspace", None)
     if candidate is None:
-        from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
+        from aka.task.candidate_workspace.provider import GitCandidateWorkspace
         candidate = GitCandidateWorkspace()
     view = candidate.filesystem_access(workspace, include_git=True)
     mounts = list(view.mounts)

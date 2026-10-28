@@ -114,7 +114,7 @@ def main(argv=None):
         args.health_command if args.ssh else "", tuple([] if args.no_sync else args.sync or transport.DEFAULT_SYNC_PATHS),
         gateway_kind=args.kind, preflight=args.preflight or args.check_health)
     hooks = ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace)
-    from aka.legacy.task.problem.inputs import PerformanceBaselineError
+    from aka.task.problem.inputs import PerformanceBaselineError
     try:
         with execution_scope() as executor, transport_arguments(tuple(extra)):
             result = run_sandbox(executor, request, hooks=hooks)

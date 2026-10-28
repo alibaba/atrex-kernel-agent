@@ -6,7 +6,7 @@ from typing import Any
 
 from aka.core._filesystem import durable_write_json
 
-from aka.legacy.task.candidate_workspace.excludes import (
+from aka.task.candidate_workspace.excludes import (
     RUNTIME_DIR,
     VERIFY_DIR,
     LIVE_MEMORY_FILE,
@@ -27,7 +27,7 @@ class CampaignStore:
     @staticmethod
     def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
 
-        from aka.legacy.task.candidate_workspace.excludes import ensure_excluded
+        from aka.task.candidate_workspace.excludes import ensure_excluded
 
         ensure_excluded(workspace, wiki_trace_only=wiki_trace_only)
 

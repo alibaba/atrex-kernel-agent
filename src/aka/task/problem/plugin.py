@@ -22,7 +22,7 @@ interpolate = ("worker_requirements",)
 
 
 def apply(ctx, config):
-    from aka.legacy.task.problem.resources import contribute_resources
+    from aka.task.problem.resources import contribute_resources
     contribute_resources(ctx)
     from .legacy import LegacyProblemProvider
     requirements = config["worker_requirements"].strip()

@@ -14,7 +14,7 @@ from aka.contracts.workflow_export import (
     EXPORT_VERSION, CampaignRef, CandidateFact, EpisodeFact, ExportArtifact,
     ProgressFact, ResultFact, SessionFact, WorkflowExportSnapshot, snapshot_from_document, WORKFLOW_EXPORT,
 )
-from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
+from aka.task.candidate_workspace.excludes import VERIFY_DIR
 
 name = 'export'
 provide = ('workflow_export',)

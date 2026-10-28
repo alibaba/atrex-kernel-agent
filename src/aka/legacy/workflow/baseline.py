@@ -197,7 +197,7 @@ class WorkflowBaseline:
         self, v0_blob, baseline_commit, *, include_policy_review=True
     ):
         from aka.contracts.acceptance import FrameworkCandidateFacts
-        from aka.legacy.task.source.inspection import kernel_is_gluon
+        from aka.task.source.inspection import kernel_is_gluon
         from aka.legacy.acceptance.source_policy import production_structure_violations
 
         campaign = self.campaign

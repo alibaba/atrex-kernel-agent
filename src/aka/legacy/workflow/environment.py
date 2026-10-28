@@ -3,15 +3,15 @@ from __future__ import annotations
 from pathlib import Path
 
 from aka.legacy.workflow.constants import CONVERT_PERF_TOL as _constants_CONVERT_PERF_TOL
-from aka.legacy.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS as _constants_IMMUTABLE_BASELINE_PATHS
-from aka.legacy.task.candidate_workspace.excludes import STALL_STATE_FILE as _constants_STALL_STATE_FILE
+from aka.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS as _constants_IMMUTABLE_BASELINE_PATHS
+from aka.task.candidate_workspace.excludes import STALL_STATE_FILE as _constants_STALL_STATE_FILE
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from aka.legacy.workflow.campaign import Campaign
 from aka.legacy.workflow.constants import DEFAULT_CONVERT_AFTER
 from aka.legacy.workflow.hardware import hardware_directive, should_convert_to_gluon
-from aka.legacy.task.source.inspection import source_uses_gluon
+from aka.task.source.inspection import source_uses_gluon
 from aka.legacy.workflow.policy import install_workspace_policy
 from aka.execution.sandbox import sandbox_command
 from .runtime_directives import _agent_runtime_directive, _plan_generator_directive

@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aka.legacy.task.problem.inputs import validate_performance_baseline
+from aka.task.problem.inputs import validate_performance_baseline
 from aka.contracts.workflow_records import measurement_document
 
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"

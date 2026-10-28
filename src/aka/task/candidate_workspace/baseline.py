@@ -4,7 +4,7 @@ import hashlib
 import subprocess
 from typing import Iterator
 
-from aka.legacy.task.git import git_path_blob, git_worktree_blob
+from aka.task.git import git_path_blob, git_worktree_blob
 from .policy import IMMUTABLE_BASELINE_PATHS
 from .context import MANIFEST, context_changes, restore_context_projection, uses_context
 

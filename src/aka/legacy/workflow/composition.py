@@ -9,9 +9,9 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      canonical_measurement_reader=None, workflow_observer=None):
     from contextlib import ExitStack
     from .agent_host import create_agent
-    from aka.legacy.task.problem.legacy import LegacyProblemProvider
-    from aka.legacy.task.source.legacy import LegacySourceProvider
-    from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
+    from aka.task.problem.legacy import LegacyProblemProvider
+    from aka.task.source.legacy import LegacySourceProvider
+    from aka.task.candidate_workspace.provider import GitCandidateWorkspace
     from aka.contracts.execution import validate_executor
 
     owned = ExitStack()

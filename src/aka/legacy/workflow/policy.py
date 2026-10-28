@@ -1,7 +1,7 @@
 """Workflow policy implementation and callable interface."""
 from __future__ import annotations
 
-from aka.legacy.task.source.inspection import framework_key
+from aka.task.source.inspection import framework_key
 import json
 from pathlib import Path
 

@@ -1,7 +1,7 @@
 """Read committed candidate content without staging experiment files."""
 from pathlib import Path, PurePosixPath
 from aka.contracts.workspace import RevisionContent
-from aka.legacy.task.git import _git
+from aka.task.git import _git
 
 
 class GitSnapshots:

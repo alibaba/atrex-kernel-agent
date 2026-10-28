@@ -2,9 +2,9 @@
   "extends": "aka.legacy.workflow:profiles/workflow.json",
   "api_version": 2,
   "token_definitions": {
-    "problem": "aka.legacy.task.problem.plugin:PROBLEM",
-    "source": "aka.legacy.task.source.plugin:SOURCE",
-    "candidate": "aka.legacy.task.candidate_workspace.plugin:CANDIDATE",
+    "problem": "aka.task.problem.plugin:PROBLEM",
+    "source": "aka.task.source.plugin:SOURCE",
+    "candidate": "aka.task.candidate_workspace.plugin:CANDIDATE",
     "agent": "aka.agent.plugin:AGENT",
     "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
     "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",

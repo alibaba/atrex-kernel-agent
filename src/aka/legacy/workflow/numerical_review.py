@@ -17,7 +17,7 @@ import uuid
 
 from aka.legacy.evaluation.drivers.remote_numerical import MAX_REL_L2, validation_schedule
 from aka.legacy.workflow.store import VERIFY_DIR
-from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
+from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.core._filesystem import durable_write_json
 from aka.agent.availability import check_review_service

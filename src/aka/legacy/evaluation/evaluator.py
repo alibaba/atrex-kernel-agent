@@ -28,7 +28,7 @@ from aka.contracts.evaluation import (
 from aka.contracts.execution import CommandSpec, JobResult
 from aka.contracts.workspace import CandidateWorkspace
 from aka.contracts.problem import EvaluationInput
-from aka.legacy.task.candidate_workspace.excludes import VERIFY_DIR
+from aka.task.candidate_workspace.excludes import VERIFY_DIR
 from .abba import (
     _merge_batch_payloads,
     _payload_from_stdout,
@@ -101,7 +101,7 @@ class LegacyEvaluator:
     def _prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         config = self.configuration
         if self.evaluation_input is not None:
-            from aka.legacy.task.problem.resources import validate_resources
+            from aka.task.problem.resources import validate_resources
             validate_resources(self.evaluation_input)
             item = self.evaluation_input.harness
             if item is not None:

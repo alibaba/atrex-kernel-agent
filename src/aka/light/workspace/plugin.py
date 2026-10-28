@@ -1,4 +1,4 @@
-from aka.legacy.task.candidate_workspace.plugin import CANDIDATE
+from aka.task.candidate_workspace.plugin import CANDIDATE
 
 name = "workspace"
 provide = ("candidate",)

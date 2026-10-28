@@ -26,7 +26,7 @@ from aka.agent.runtime import auth_hint
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, DEPENDENCY_REVIEW_SCHEMA_VERSION, DEPENDENCY_REVIEW_TIMEOUT_S, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
 from .resources import DEPENDENCY_REVIEW_PROMPT, PROMPTS_DIR
 from aka.execution.defaults import DEFAULT_SANDBOX_TIMEOUT
-from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
+from aka.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
 from aka.execution.recovery import EnvironmentUnavailable, environment_state_file
 from .framework_baseline_progress import (
     capture_unexpected_exit as capture_framework_baseline_exit,
@@ -50,9 +50,9 @@ from .framework_baseline_progress import (
     save_supervisor_recovery as save_framework_baseline_recovery,
 )
 from aka.legacy.workflow.hardware import hardware_directive
-from aka.legacy.task.hardware import hardware_vendor
-from aka.legacy.task.source.inspection import kernel_is_gluon
-from aka.legacy.task.problem import AGENT_PROBLEM_FILENAME
+from aka.task.hardware import hardware_vendor
+from aka.task.source.inspection import kernel_is_gluon
+from aka.task.problem import AGENT_PROBLEM_FILENAME
 from aka.legacy.workflow.policy import install_workspace_policy, optimization_mode_directive
 from aka.legacy.acceptance.source_policy import production_kernel_violations, production_structure_violations
 from .plan_reviewers import (
