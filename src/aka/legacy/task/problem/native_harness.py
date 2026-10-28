@@ -539,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         raise SystemExit("unknown --shape-id values: " + ", ".join(unknown))
     env = os.environ.copy()
-    pythonpath = str(runtime_src)
+    pythonpath = os.pathsep.join((str(runtime_src), str(workspace)))
     if env.get("PYTHONPATH"):
         pythonpath += os.pathsep + env["PYTHONPATH"]
     env["PYTHONPATH"] = pythonpath

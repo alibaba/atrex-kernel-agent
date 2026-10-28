@@ -201,8 +201,22 @@ includes them in the remote execution payload.
 
 Pre-CR runs 83933378 and 83956603 exposed these missing boundaries during Agent
 observation collection and supplemental numerical validation. Targeted regressions
-reproduce both failures on their preceding commits. All 61 offline regressions
+reproduce both failures on their preceding commits. All 63 offline regressions
 pass in Aone Sandbox, including the real Agent observation writer, unchanged-V0
 rejection, historical Git identity, rollback preservation and actual supplemental
 probe staging. Supplemental pass and failure receipts retain their respective
 acceptance decisions. Validation harnesses remain outside the PR.
+
+The selected file-system marker is included in managed sessions' read-only
+assets. The native evaluator also passes the workspace directory to its child
+process through `PYTHONPATH`, so fixed adapters can import candidate packages
+such as `impl.model`. Existing `PYTHONPATH` entries remain available.
+
+Run 83968987 exposed both integration gaps after passing V1 standard correctness.
+L20N and MI308X stopped before their next managed session; PPU supplemental
+validation could not import `impl`. PPU's platform status was green despite a
+failed optimizer manifest, so it is not passing evidence. The internal CI fix
+adds an explicit final check of the recorded optimizer exit code.
+Two targeted regressions fail on the preceding commit and pass with these fixes;
+the 63-test Sandbox run includes actual managed mount construction and a real
+nested evaluator subprocess importing the candidate package.

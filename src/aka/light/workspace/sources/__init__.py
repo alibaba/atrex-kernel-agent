@@ -18,3 +18,4 @@ from .artifacts import (
 )
 
 from .registry import select, task_selection
+from .common import SELECTION
