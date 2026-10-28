@@ -683,7 +683,7 @@ def _reconcile_active_run(state_dir: Path) -> tuple[bool, int | None]:
 
 def _health_command(metadata: dict[str, Any]) -> list[str]:
     command = [
-        sys.executable, "-m", "aka.legacy.execution.cli",
+        sys.executable, "-m", "aka.execution.health_cli",
         "--hardware",
         metadata["sandbox_hardware"],
         "--ssh",
