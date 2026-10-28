@@ -18,7 +18,7 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
     try:
         if executor is None:
             import os
-            from aka.legacy.execution.assembly import compose_execution
+            from aka.execution.assembly import compose_execution
             selected = compose_execution()
             owned.callback(selected.dispose)
             executor = selected.executor

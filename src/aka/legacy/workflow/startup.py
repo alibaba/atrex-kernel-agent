@@ -4,7 +4,7 @@ import signal
 import sys
 
 from aka.legacy.workflow.process_environment import invocation_environment, use_launch_environment
-from aka.legacy.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked
+from aka.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked
 from .recovery_runtime import launch_recovery_monitor, signal_restart_ready
 from aka.legacy.workflow.trace_retention import write_trace_retention_manifest
 from .invocation import decode_launch
@@ -99,8 +99,8 @@ class WorkflowStartup:
                 # Each selected DSL keeps its own trusted preflight, without
                 # reloading Task or rebuilding the selected modules.
                 if self.execution_environment.get("ATREX_SANDBOX_SSH"):
-                    from aka.legacy.execution.health import runtime_health_command
-                    from aka.legacy.execution.sandbox import check_ssh_environment
+                    from aka.execution.health import runtime_health_command
+                    from aka.execution.sandbox import check_ssh_environment
                     os.environ["ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND"] = runtime_health_command(
                         sol=problem.initial_source.kind == "sol", framework=framework)
                     check_ssh_environment(launch.workspace_base,

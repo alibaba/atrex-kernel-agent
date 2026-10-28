@@ -37,9 +37,9 @@ def prepare_request(launch, problem, *, frozen=False):
     # This list is a Workflow preference. Only the selected Executor decides
     # support, equally for explicit selection and automatic dispatch.
     from aka.contracts.execution_environment import EnvironmentQuery
-    from aka.legacy.execution.selection import execution_scope
-    from aka.legacy.execution.binding import sandbox_executor
-    from aka.legacy.execution.environment_query import require_supported, select_requirements
+    from aka.execution.selection import execution_scope
+    from aka.execution.binding import sandbox_executor
+    from aka.execution.environment_query import require_supported, select_requirements
     worker = problem.evaluation.worker_requirements if problem.evaluation is not None else None
     requirements = worker.source.read_text(encoding="utf-8") if worker is not None and worker.source is not None else worker.text if worker is not None else ""
     with execution_scope() as executor:

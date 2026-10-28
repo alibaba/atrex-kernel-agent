@@ -6,7 +6,7 @@ from pathlib import Path
 import tempfile
 from . import sandbox as transport
 from .returned_files import emit
-from aka.legacy.execution.outcomes import emit_fact, emit_diagnostic
+from aka.execution.outcomes import emit_fact, emit_diagnostic
 from .requests import operation_request, effective_budget, hard_limit
 
 
@@ -86,13 +86,13 @@ def submit_prepared(args, workspace, grace, prepared):
                 if not isinstance(item, dict):
                     continue
                 name = transport._safe_relative(str(item.get("name") or ""))
-                from aka.legacy.execution.command_transport import raw_profile_path
+                from aka.execution.command_transport import raw_profile_path
                 if getattr(args, "include_raw_profile", None) is False and raw_profile_path(name):
                     continue
                 with tempfile.TemporaryDirectory(prefix="aka-profile-download-") as temp:
                     target = Path(temp) / name
                     transport._download_oss_artifact(item, target)
-                    from aka.legacy.execution.command_transport import output_limit
+                    from aka.execution.command_transport import output_limit
                     if target.stat().st_size > output_limit(args):
                         emit_diagnostic({"failure_class": "output", "reason": "output-file-size-limit"})
                         continue

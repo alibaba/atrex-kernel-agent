@@ -8,9 +8,9 @@
     "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
     "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
     "evaluation_defaults": "aka.legacy.evaluation.plugin:EVALUATION_DEFAULTS",
-    "executor": "aka.legacy.execution.assembly:EXECUTOR",
-    "execution_context": "aka.legacy.execution.plugin:EXECUTION_CONTEXT",
-    "measurement_parallelism": "aka.legacy.execution.plugin:MEASUREMENT_PARALLELISM",
+    "executor": "aka.execution.assembly:EXECUTOR",
+    "execution_context": "aka.execution.plugin:EXECUTION_CONTEXT",
+    "measurement_parallelism": "aka.execution.plugin:MEASUREMENT_PARALLELISM",
     "experiment_factory": "aka.legacy.experiment.plugin:EXPERIMENT_FACTORY",
     "canonical_measurement_reader": "aka.legacy.workflow.canonical_reader_plugin:CANONICAL_MEASUREMENT_READER",
     "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER"

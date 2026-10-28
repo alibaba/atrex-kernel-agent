@@ -85,7 +85,7 @@ class ManagedCampaign(Campaign):
         except LightEnvironmentUnavailable as exc:
             # WorkflowStartup owns the shared recovery monitor. Translate at
             # this module boundary without reviving the retired Application.
-            from aka.legacy.execution.recovery import EnvironmentUnavailable
+            from aka.execution.recovery import EnvironmentUnavailable
 
             raise EnvironmentUnavailable(str(exc)) from exc
 

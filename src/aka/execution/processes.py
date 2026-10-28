@@ -572,7 +572,7 @@ def spawn_owned_session(
     start_read, start_write = os.pipe()
     os.set_inheritable(start_read, True)
     wrapper = [
-        sys.executable, "-m", "aka.legacy.execution.processes",
+        sys.executable, "-m", "aka.execution.processes",
         "--owned-session",
         str(start_read),
         "1" if finalize_handoff else "0",
@@ -946,7 +946,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     guardian_read, guardian_write = os.pipe()
     os.set_inheritable(guardian_read, True)
     guardian_command = [
-        sys.executable, "-m", "aka.legacy.execution.processes",
+        sys.executable, "-m", "aka.execution.processes",
         "--cleanup-guardian",
         str(guardian_read),
         str(os.getpid()),
@@ -1004,7 +1004,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     primary_read, primary_write = os.pipe()
     os.set_inheritable(primary_read, True)
     primary_command = [
-        sys.executable, "-m", "aka.legacy.execution.processes",
+        sys.executable, "-m", "aka.execution.processes",
         "--owned-command",
         str(primary_read),
         "--",

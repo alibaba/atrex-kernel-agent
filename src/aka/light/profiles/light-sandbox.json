@@ -10,14 +10,14 @@
     "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
     "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER",
     "tool_runtime": "aka.light.runtime.plugin:TOOL_RUNTIME",
-    "executor": "aka.legacy.execution.assembly:EXECUTOR",
+    "executor": "aka.execution.assembly:EXECUTOR",
     "light_evaluation": "aka.light.evaluation.plugin:EVALUATION",
     "light_experiments": "aka.light.experiment.plugin:EXPERIMENTS",
     "light_acceptance": "aka.light.acceptance.plugin:ACCEPTANCE",
     "light_journal": "aka.light.workflow.journal_plugin:JOURNAL",
     "evaluation_defaults": "aka.legacy.evaluation.plugin:EVALUATION_DEFAULTS",
-    "execution_context": "aka.legacy.execution.plugin:EXECUTION_CONTEXT",
-    "measurement_parallelism": "aka.legacy.execution.plugin:MEASUREMENT_PARALLELISM"
+    "execution_context": "aka.execution.plugin:EXECUTION_CONTEXT",
+    "measurement_parallelism": "aka.execution.plugin:MEASUREMENT_PARALLELISM"
   },
   "composition": "light-sandbox",
   "environment_values": {

@@ -27,7 +27,7 @@ def freeze_cli_inputs(workspace, input_paths, max_file_bytes):
     Returned files contain only relative names, frozen bytes and Unix modes.
     """
     from aka.contracts.execution import ExecutionFile
-    from aka.legacy.execution.gateway.sandbox import _expand_workspace_input, _make_input_bundle
+    from aka.execution.gateway.sandbox import _expand_workspace_input, _make_input_bundle
     selected = set()
     workspace = Path(workspace).resolve(strict=True)
     for value in input_paths:
@@ -72,8 +72,8 @@ _PROTECTED_DIRS = frozenset((".git", "memory", ".aka-runtime", ".aka-verify", ".
 def validate_input_files(command):
     """An explicit input cannot replace existing or protected Task content."""
     workspace = command.workspace.resolve(strict=True)
-    from aka.legacy.execution.gateway.sandbox import INPUT_SKIP_PATHS, INPUT_SKIP_SUFFIXES, build_parser
-    from aka.legacy.execution.legacy.runtime import current_transport_arguments
+    from aka.execution.gateway.sandbox import INPUT_SKIP_PATHS, INPUT_SKIP_SUFFIXES, build_parser
+    from aka.execution.legacy.runtime import current_transport_arguments
     input_limit = build_parser().parse_args(list(current_transport_arguments())).max_input_file_mb * 1024 * 1024
     if input_limit <= 0:
         raise UnsupportedExecution("input file size limit must be positive")

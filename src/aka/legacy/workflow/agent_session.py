@@ -7,7 +7,7 @@ from aka import agent as _agent_runtime
 import uuid
 from pathlib import Path
 from typing import Optional
-from aka.legacy.execution.recovery import (
+from aka.execution.recovery import (
     environment_state_file,
     raise_if_environment_blocked,
 )
@@ -51,7 +51,7 @@ def run_session(
         owner = create_agent()
         runtime = owner.runtime(agent_cli)
     from aka.contracts.agent import AgentRunRequest
-    from aka.legacy.execution.environment import session_environment
+    from aka.execution.environment import session_environment
 
     environment = session_environment(
         state_file=str(environment_state_file() or ""),

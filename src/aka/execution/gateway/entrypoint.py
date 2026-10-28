@@ -3,15 +3,15 @@
 import subprocess
 import sys
 
-from aka.legacy.execution.gateway.recovery import run_with_recovery, _kind
+from aka.execution.gateway.recovery import run_with_recovery, _kind
 
 
 def run_transport(argv, *, launcher=None):
     import os
     from aka.contracts.execution import ResourceIdentity
-    from aka.legacy.execution.outcomes import FactChannel, emit_fact, captured_result, FACTS_FD
-    from aka.legacy.execution.gateway.recovery import TransportCapture
-    launcher = launcher or (sys.executable, "-m", "aka.legacy.execution.gateway.sandbox")
+    from aka.execution.outcomes import FactChannel, emit_fact, captured_result, FACTS_FD
+    from aka.execution.gateway.recovery import TransportCapture
+    launcher = launcher or (sys.executable, "-m", "aka.execution.gateway.sandbox")
     descriptors = (int(argv[argv.index("--prepared-request-fd") + 1]),) if "--prepared-request-fd" in argv else ()
     from .returned_files import FILES_FD
     if os.environ.get(FILES_FD):

@@ -81,10 +81,10 @@ from threading import Lock
 from typing import Any, Iterable
 
 from aka.core._filesystem import durable_write_json  # noqa: E402
-from aka.legacy.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
-from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
+from aka.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
+from aka.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
 
-from aka.legacy.execution.outcomes import emit_fact, emit_diagnostic, backend_attempt
+from aka.execution.outcomes import emit_fact, emit_diagnostic, backend_attempt
 
 
 DEFAULT_SYNC_PATHS = ("profiles",)
@@ -1042,7 +1042,7 @@ def _runtime_requirements(
         raise ValueError(f"cannot read runtime requirements file {path}: {exc}") from exc
     if len(contents.encode("utf-8")) > 128 * 1024:
         raise ValueError("runtime requirements file exceeds 128 KiB")
-    from aka.legacy.execution.environment_query import select_requirements
+    from aka.execution.environment_query import select_requirements
     return list(select_requirements(contents, candidate_languages))
 
 
@@ -2429,7 +2429,7 @@ def _run_direct_job(
     """Submit and wait for any public gateway job kind through HTTP."""
     import uuid
     from .jobs import GatewayJobs
-    from aka.legacy.execution.outcomes import observe_attempt
+    from aka.execution.outcomes import observe_attempt
     attempt_id = uuid.uuid4().hex
     endpoint, profile = _submission_route(url)
     identity = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
@@ -2636,7 +2636,7 @@ def _submission_route(url="", profile=None):
 
 
 def _observe_cancel_cleanup(result, job_id, operation="cancel", attempt_id=None):
-    from aka.legacy.execution.outcomes import observe_attempt
+    from aka.execution.outcomes import observe_attempt
     if result.stdout:
         observe_attempt(subprocess.CompletedProcess((), result.transport_returncode, result.stdout, ""),
                         operation=operation, attempt_id=attempt_id)
@@ -3214,7 +3214,7 @@ def _main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    from aka.legacy.execution.command_transport import RAW_PROFILE_SUFFIXES
+    from aka.execution.command_transport import RAW_PROFILE_SUFFIXES
     output_cfg = {
         "paths": sync_paths,
         "max_file_bytes": args.max_output_file_bytes if args.max_output_file_bytes is not None else args.max_output_file_mb * 1024 * 1024,
@@ -3619,7 +3619,7 @@ def main(argv: list[str] | None = None) -> int:
 
 def _run_agate_once(*args, **kwargs):
     from .protocol import protocol_failure
-    from aka.legacy.execution.outcomes import observe_attempt
+    from aka.execution.outcomes import observe_attempt
     agate = kwargs.get("agate", ())
     operation = agate[1] if len(agate) > 1 else "unknown"
     with backend_attempt(operation):

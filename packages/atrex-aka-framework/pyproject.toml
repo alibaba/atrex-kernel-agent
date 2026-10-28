@@ -7,7 +7,7 @@ name = "atrex-aka-framework"
 version = "0.2.0"
 description = "AKA plugin framework, contracts and profile-selected startup"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["packaging>=23"]
 
 [project.scripts]
 aka = "aka.cli:main"
@@ -15,13 +15,19 @@ aka = "aka.cli:main"
 [project.entry-points."aka.commands"]
 run = "aka.bootstrap.cli:main"
 
+[project.entry-points."aka.tokens"]
+executor = "aka.execution.assembly:EXECUTOR"
+execution_context = "aka.execution.plugin:EXECUTION_CONTEXT"
+measurement_parallelism = "aka.execution.plugin:MEASUREMENT_PARALLELISM"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*"]
+include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*"]
 
 [tool.setuptools.package-data]
+"aka.execution" = ["*", "**/*"]
 "aka.core" = ["profiles/*.json"]

@@ -1,6 +1,6 @@
 """Validate an explicit private measurement input association."""
 from pathlib import Path
-from aka.legacy.execution.gateway.sandbox import (
+from aka.execution.gateway.sandbox import (
     _is_generalized_workspace, _json_object, PRIVATE_REFERENCE_ENV, AGENT_PROBLEM_FILENAME,
 )
 def private_reference_dir(workspace: Path, environment) -> Path | None:

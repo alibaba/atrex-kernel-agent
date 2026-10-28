@@ -4,8 +4,8 @@ from pathlib import Path
 import sys
 from dataclasses import replace
 from aka.contracts.execution import BackendCapabilities, JobResult, ResourceIdentity
-from aka.legacy.execution.configuration import queue_wait_grace
-from aka.legacy.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
+from aka.execution.configuration import queue_wait_grace
+from aka.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
 
 
 class GatewayExecutor(GatewayRecoveryMixin):
@@ -22,7 +22,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
     resource_identity = ResourceIdentity("gateway")
 
     def bind(self, context):
-        from aka.legacy.execution.filesystem_scope import require_scope_backend
+        from aka.execution.filesystem_scope import require_scope_backend
         require_scope_backend(context, self.capabilities)
         executor = type(self)(self.configuration)
         executor.environment = dict(context.environment)
@@ -30,7 +30,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
         return executor
 
     def _environment_backend(self, environment=None):
-        from aka.legacy.execution.environment_query import BackendEnvironment
+        from aka.execution.environment_query import BackendEnvironment
         env = {**self.environment, **(environment or {})}
         url = self.configuration.get("url") or env.get("ATREX_SANDBOX_URL", "")
         profile = self.configuration.get("profile") or env.get("ATREX_SANDBOX_PROFILE", "")
@@ -48,7 +48,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
         return self._environment_backend().check(query)
 
     def run(self, command):
-        from aka.legacy.execution.command_transport import prepared_input_workspace
+        from aka.execution.command_transport import prepared_input_workspace
         self.capabilities.require(command)
         with prepared_input_workspace(command) as physical:
             return self._run(physical)
@@ -69,20 +69,20 @@ class GatewayExecutor(GatewayRecoveryMixin):
             finally:
                 if hasattr(bound, "_selected_job_transport"):
                     self._selected_job_transport = bound._selected_job_transport
-        from aka.legacy.execution.environment_query import command_query, require_supported
+        from aka.execution.environment_query import command_query, require_supported
         support = self._environment_backend(command.environment).check(command_query(command), discover=False)
         require_supported(support)
         if type(command.timeout) is not int or command.timeout <= 0:
             raise ValueError("execution timeout must be a positive integer")
-        argv = [sys.executable, "-m", "aka.legacy.execution.gateway.entrypoint",
+        argv = [sys.executable, "-m", "aka.execution.gateway.entrypoint",
                 "--workspace", str(command.workspace), "--hardware", command.hardware,
                 "--kind", command.operation, "--timeout", str(command.timeout)]
         for artifact in command.artifacts:
             argv += ["--sync", artifact]
         if not command.artifacts:
             argv += ["--no-sync"]
-        from aka.legacy.execution.legacy.runtime import current_transport_arguments
-        from aka.legacy.execution.command_transport import sandbox_options
+        from aka.execution.legacy.runtime import current_transport_arguments
+        from aka.execution.command_transport import sandbox_options
         argv += ["--num-gpus", str(command.num_gpus), *current_transport_arguments(), *sandbox_options(command)]
         argv += ["--", *command.command]
         environment = dict(command.environment)
@@ -99,7 +99,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
                 environment.pop(key, None)
         # Source checkout launches inherit the loaded source root; installed launches
         # use normal module resolution. Do not require callers to mirror package paths.
-        package_root = str(Path(__file__).resolve().parents[4])
+        package_root = str(Path(__file__).resolve().parents[3])
         environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(
             [package_root, *environment.get("PYTHONPATH", "").split(os.pathsep)]))
         mapping = {"url":"ATREX_SANDBOX_URL", "profile":"ATREX_SANDBOX_PROFILE",
@@ -114,7 +114,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
                 environment[env] = json.dumps(value) if isinstance(value, list) else str(value)
 
         grace = queue_wait_grace(environment)
-        from aka.legacy.execution.outcomes import run_owned
+        from aka.execution.outcomes import run_owned
         def decorate(result):
             return replace(result, environment_snapshot=support.environment,
                 environment_identity=support.environment.identity, environment_support=support,

@@ -41,7 +41,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error(f"tool resource directory does not exist: {root}")
     execution_selection = None
     if options.execution_profile is not None or options.execution_patch:
-        from aka.legacy.execution.selection import selected_execution, read_execution_patches
+        from aka.execution.selection import selected_execution, read_execution_patches
         execution_selection = dict(selected_execution())
         if options.execution_profile is not None:
             execution_selection["profile"] = options.execution_profile

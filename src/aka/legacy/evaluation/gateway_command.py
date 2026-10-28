@@ -4,8 +4,8 @@ import json
 from pathlib import Path
 from aka.contracts.execution import CommandSpec, ExecutionFile, UnsupportedExecution
 from aka.contracts.evaluation import PreparedEvaluation, StepEvaluation, MeasurementArtifact
-from aka.legacy.execution.gateway import sandbox as transport
-from aka.legacy.execution.legacy.runtime import current_transport_arguments
+from aka.execution.gateway import sandbox as transport
+from aka.execution.legacy.runtime import current_transport_arguments
 from .gateway_request import prepare_request, _candidate_languages
 from .gateway_policy import _typed_workspace_limitation
 from .gateway_measurement import GatewayMeasurement, prepare_dev_output, with_measurement_conditions

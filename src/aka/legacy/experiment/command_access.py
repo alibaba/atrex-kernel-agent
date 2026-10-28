@@ -75,7 +75,7 @@ def read_input(access, path, *, max_file_bytes=None):
 
 
 def snapshot_inputs(workspace, access, selections, *, max_file_bytes=None):
-    from aka.legacy.execution.gateway.sandbox import INPUT_SKIP_DIRS, INPUT_SKIP_PATHS, INPUT_SKIP_SUFFIXES
+    from aka.execution.gateway.sandbox import INPUT_SKIP_DIRS, INPUT_SKIP_PATHS, INPUT_SKIP_SUFFIXES
     files, skipped = {}, []
 
     def visit(relative):

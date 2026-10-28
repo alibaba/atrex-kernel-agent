@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 
-from aka.legacy.execution.assembly import compose_execution
+from aka.execution.assembly import compose_execution
 from aka.contracts.execution import (
     CommandSpec, JobResult, Executor, UnsupportedExecution,
 )

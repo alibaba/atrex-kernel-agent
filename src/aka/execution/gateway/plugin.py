@@ -1,11 +1,11 @@
 """Select the shared gateway implementation with provider-owned configuration."""
 from aka.core.keys import ServiceKey
 from .executor import GatewayExecutor
-from aka.legacy.execution.resources import PROFILING_CONFIG, contribute, validate_profiling
+from aka.execution.resources import PROFILING_CONFIG, contribute, validate_profiling
 EXECUTOR = ServiceKey("executor", "Executor", module="aka.contracts.execution", protocol_version=2)
 name = "gateway"
 provide = ("executor",)
-identity_packages = ("aka.legacy.execution", "aka.contracts.execution")
+identity_packages = ("aka.execution", "aka.contracts.execution")
 Config = {"type":"object", "properties":{
     "url":{"type":"string"}, "profile":{"type":"string"},
     "warmup_iters":{"type":"string"},
@@ -18,7 +18,7 @@ Defaults = {"warmup_iters":"5", "retry_delays":[], "dev_dependencies":[], "profi
             "idempotent_replay":False, "recovery_retry_delays":[], "recovery_retry_budget_s":0}
 def validate_config(config):
     validate_profiling(config["profiling"])
-    from aka.legacy.execution.job_recovery import recovery_policy
+    from aka.execution.job_recovery import recovery_policy
     recovery_policy(config)
     if config.get("idempotent_replay") and not config.get("url"):
         raise ValueError("stable-key replay requires a verified explicit gateway URL")

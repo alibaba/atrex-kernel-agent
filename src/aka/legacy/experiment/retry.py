@@ -5,7 +5,7 @@ import fcntl
 import time
 from concurrent.futures import CancelledError
 from threading import Event
-from aka.legacy.execution.transport import InfrastructureUnavailable
+from aka.execution.transport import InfrastructureUnavailable
 import hashlib
 import json
 import math

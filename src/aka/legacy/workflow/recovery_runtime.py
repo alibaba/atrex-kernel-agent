@@ -19,10 +19,10 @@ from pathlib import Path
 from typing import Sequence
 
 from aka.core._filesystem import durable_write_json, durable_write_text, ensure_private_directory
-from aka.legacy.execution.processes import ACTIVE_MARKER, HANDOFF_ID_ENV
-from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND  # noqa: F401
+from aka.execution.processes import ACTIVE_MARKER, HANDOFF_ID_ENV
+from aka.execution.health import DEFAULT_SSH_HEALTH_COMMAND  # noqa: F401
 
-from aka.legacy.execution.recovery import (
+from aka.execution.recovery import (
     ENVIRONMENT_STATE_ENV, RECOVERY_OWNER_ENV, EnvironmentUnavailable, RecoveryContext,
     environment_state_file, environment_is_blocked,
 )
@@ -272,7 +272,7 @@ def launch_recovery_monitor(context: RecoveryContext) -> int | None:
         return None
 
     log_path = context.directory / "monitor.log"
-    from aka.legacy.execution import selection as execution
+    from aka.execution import selection as execution
     environment = execution.execution_environment(os.environ)
     with log_path.open("a", encoding="utf-8") as log:
         process = subprocess.Popen(

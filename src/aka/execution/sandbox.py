@@ -7,9 +7,9 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
-from aka.legacy.execution.recovery import raise_if_environment_blocked
-from aka.legacy.execution.processes import spawn_owned_session
-from aka.legacy.execution.configuration import queue_wait_grace
+from aka.execution.recovery import raise_if_environment_blocked
+from aka.execution.processes import spawn_owned_session
+from aka.execution.configuration import queue_wait_grace
 import re
 import tempfile
 
@@ -51,14 +51,14 @@ def sandbox_command(
     cancel_event=None,
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through the installed Execution CLI and capture its user-visible output."""
-    from aka.legacy.execution import selection as execution
-    from aka.legacy.execution.legacy import runtime
+    from aka.execution import selection as execution
+    from aka.execution.legacy import runtime
     environment = os.environ.copy()
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     request = runtime.SandboxRequest(
-        workspace=workspace, launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
+        workspace=workspace, launcher=(sys.executable, "-m", "aka.execution.gateway.sandbox"),
         hardware=hardware, profile=profile, url=url, timeout=timeout,
         command=tuple(command), environment=execution.execution_environment(environment),
         ssh=ssh, ssh_init=ssh_init, health_command=health_command, sync=sync,

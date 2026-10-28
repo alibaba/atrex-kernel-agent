@@ -53,7 +53,7 @@ The target requires OpenSSH/SCP, Bubblewrap, explicitly bound runtimes, and one
 assigned NVIDIA GPU. Original distributed evaluation / profiling limits apply.
 
 **Local HTTP:** Use the selected service URL and a hardware alias it accepts
-(local is the default alias). `python -m aka.legacy.execution.runtime_tools.local_gateway` serves this path and
+(local is the default alias). `python -m aka.execution.runtime_tools.local_gateway` serves this path and
 currently rejects multi-GPU requests. Starting or changing a service is not an
 automatic consequence of reading the Skill.
 

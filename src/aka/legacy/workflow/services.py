@@ -11,7 +11,7 @@ from aka.legacy.evaluation.baseline import (
 from aka.legacy.evaluation import records
 from aka.legacy.acceptance import LegacyAcceptancePolicy
 from aka.contracts.execution import ExecutionContext, validate_executor
-from aka.legacy.execution.binding import SandboxExecutor
+from aka.execution.binding import SandboxExecutor
 
 
 class BorrowedExperiment:
@@ -115,7 +115,7 @@ class WorkflowServices:
         return self._evaluation_input
 
     def task_environment(self):
-        from aka.legacy.execution.binding import task_environment
+        from aka.execution.binding import task_environment
         return task_environment(self.evaluation_input().worker_requirements)
 
     def _measurement_environment(self):

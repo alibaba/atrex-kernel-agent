@@ -6,7 +6,7 @@ provide = ("workflow",)
 inject = ("agent", "problem", "source", "candidate", "tool_runtime",
           "evaluator_factory", "workflow_observer")
 identity_packages = ("aka.light", "aka.contracts", "aka.legacy.workflow",
-                     "aka.legacy.execution")
+                     "aka.execution")
 Config = {"type": "object", "properties": {
     "startup": {"type": "boolean"},
     "numerical_validation": {"type": "boolean"},

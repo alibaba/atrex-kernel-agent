@@ -6,21 +6,21 @@ from pathlib import Path
 import sys
 from aka.contracts.execution import CommandSpec, ProfileOptions, OutputOptions, UnsupportedExecution
 from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
-from aka.legacy.execution.gateway import sandbox as transport
-from aka.legacy.execution.legacy.runtime import transport_arguments, ExecutionHooks, SandboxRequest
-from aka.legacy.execution.processes import spawn_owned_session
-from aka.legacy.execution.configuration import queue_wait_grace
-from aka.legacy.execution.recovery import raise_if_environment_blocked
+from aka.execution.gateway import sandbox as transport
+from aka.execution.legacy.runtime import transport_arguments, ExecutionHooks, SandboxRequest
+from aka.execution.processes import spawn_owned_session
+from aka.execution.configuration import queue_wait_grace
+from aka.execution.recovery import raise_if_environment_blocked
 from aka.legacy.workflow.records import WorkflowMeasurementReader
 from .runner import LegacyExperiment
 from .file_records import FileExperimentRecords
 
 
 def run_sandbox(executor, request, *, hooks):
-    from aka.legacy.execution.selection import _completed_process
+    from aka.execution.selection import _completed_process
     binder = getattr(executor, "bind_sandbox", None)
     if binder is not None:
-        executor = binder(replace(request, launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox")), hooks)
+        executor = binder(replace(request, launcher=(sys.executable, "-m", "aka.execution.gateway.sandbox")), hooks)
     elif any((request.profile, request.url, request.ssh, request.ssh_init, request.health_command, request.wall_timeout is not None)):
         from aka.contracts.execution import UnsupportedExecution
         raise UnsupportedExecution("selected executor owns endpoint configuration")
@@ -30,7 +30,7 @@ def run_sandbox(executor, request, *, hooks):
         if any((request.ssh, request.url, request.profile)):
             environment[key] = value
     from aka.legacy.evaluation.command_inputs import legacy_command_environment
-    from aka.legacy.execution.legacy.runtime import current_transport_arguments
+    from aka.execution.legacy.runtime import current_transport_arguments
     # The bound request owns the original host launch environment. Only explicit
     # workload variables and adapter configuration belong to a public command.
     arguments = transport.build_parser().parse_args(list(current_transport_arguments()))
@@ -52,7 +52,7 @@ def run_sandbox(executor, request, *, hooks):
                 arguments.max_output_file_mb * 1024 * 1024 if arguments.max_output_file_mb != 512 else None)
     inputs = ()
     if arguments.input:
-        from aka.legacy.execution.command_transport import freeze_cli_inputs
+        from aka.execution.command_transport import freeze_cli_inputs
         inputs, skipped = freeze_cli_inputs(request.workspace, arguments.input,
                                            arguments.max_input_file_mb * 1024 * 1024)
         if skipped:
@@ -70,7 +70,7 @@ def run_sandbox(executor, request, *, hooks):
 
 
 def main(argv=None):
-    from aka.legacy.execution.selection import execution_scope, execution_environment
+    from aka.execution.selection import execution_scope, execution_environment
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = transport.build_parser()
     args = parser.parse_args(arguments)
@@ -108,7 +108,7 @@ def main(argv=None):
         else:
             extra.append(options[index]); index += 1
     environment = execution_environment(os.environ)
-    request = SandboxRequest(Path(args.workspace).resolve(), (sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
+    request = SandboxRequest(Path(args.workspace).resolve(), (sys.executable, "-m", "aka.execution.gateway.sandbox"),
         args.hardware, args.gateway_profile or "", args.url or "", args.timeout,
         tuple(transport._command_parts(args.command)), environment, args.ssh or "", args.ssh_init,
         args.health_command if args.ssh else "", tuple([] if args.no_sync else args.sync or transport.DEFAULT_SYNC_PATHS),

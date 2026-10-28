@@ -192,7 +192,7 @@ def _execute(command, *, endpoint, token, input_paths, max_input_file_bytes,
 
 
 def main(argv=None):
-    from aka.legacy.execution.gateway.sandbox import build_parser, _command_parts, _requested_gateway_kind
+    from aka.execution.gateway.sandbox import build_parser, _command_parts, _requested_gateway_kind
     parser = build_parser()
     arguments = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(arguments)

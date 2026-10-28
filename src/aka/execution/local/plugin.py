@@ -3,7 +3,7 @@ from .executor import LocalCommandExecutor
 
 name = "local"
 provide = ("executor",)
-identity_packages = ("aka.legacy.execution.local", "aka.legacy.execution.filesystem_scope", "aka.contracts.execution", "aka.contracts.filesystem", "aka.contracts.filesystem_access")
+identity_packages = ("aka.execution.local", "aka.execution.filesystem_scope", "aka.contracts.execution", "aka.contracts.filesystem", "aka.contracts.filesystem_access")
 Config = {"type": "object", "properties": {"bwrap": {"type": "string"}}, "additionalProperties": False}
 Defaults = {"bwrap": "bwrap"}
 

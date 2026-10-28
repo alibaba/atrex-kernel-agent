@@ -13,7 +13,7 @@ from aka.legacy.workflow.constants import DEFAULT_CONVERT_AFTER
 from aka.legacy.workflow.hardware import hardware_directive, should_convert_to_gluon
 from aka.legacy.task.source.inspection import source_uses_gluon
 from aka.legacy.workflow.policy import install_workspace_policy
-from aka.legacy.execution.sandbox import sandbox_command
+from aka.execution.sandbox import sandbox_command
 from .runtime_directives import _agent_runtime_directive, _plan_generator_directive
 from aka.legacy.resources.workspace import install_workspace_resources
 from .revision_state import WorkspaceState

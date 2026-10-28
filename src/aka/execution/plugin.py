@@ -8,7 +8,7 @@ MEASUREMENT_PARALLELISM = ServiceKey("measurement_parallelism", "int", module="b
 
 name = "execution"
 provide = ("executor", "execution_context", "measurement_parallelism")
-identity_packages = ("aka.legacy.execution",)
+identity_packages = ("aka.execution",)
 Config = {"type": "object", "properties": {
     "profile": {"type": "string"},
     "profiles_dir": {"type": "string"},

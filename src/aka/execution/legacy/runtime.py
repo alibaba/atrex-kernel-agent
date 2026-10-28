@@ -64,12 +64,12 @@ def transport_arguments(arguments: tuple[str, ...]):
 def default_binding(context):
     """Resolve Legacy-owned configuration once; returned instances need no invocation scope."""
     import sys
-    from aka.legacy.execution.configuration import legacy_settings, queue_wait_grace
-    from aka.legacy.execution.processes import spawn_owned_session
-    from aka.legacy.execution.recovery import raise_if_environment_blocked
+    from aka.execution.configuration import legacy_settings, queue_wait_grace
+    from aka.execution.processes import spawn_owned_session
+    from aka.execution.recovery import raise_if_environment_blocked
     settings = legacy_settings(context.environment)
     request = SandboxRequest(
-        workspace=Path("."), launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
+        workspace=Path("."), launcher=(sys.executable, "-m", "aka.execution.gateway.sandbox"),
         hardware=context.hardware, timeout=context.timeout, command=(),
         environment=context.environment, profile=settings.profile, url=settings.url,
         ssh=settings.ssh, ssh_init=settings.ssh_init, health_command=settings.health_command,

@@ -78,8 +78,8 @@ class LightWorkflow:
 
     @staticmethod
     def _evaluation_settings(request):
-        from aka.legacy.execution.configuration import legacy_settings
-        from aka.legacy.execution.selection import selected_execution
+        from aka.execution.configuration import legacy_settings
+        from aka.execution.selection import selected_execution
 
         connection = (legacy_settings()
                       if selected_execution().get("profile", "legacy") == "legacy"

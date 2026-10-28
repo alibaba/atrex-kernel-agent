@@ -6,7 +6,7 @@ import json
 
 from aka.contracts.execution import ExecutionBudget, UnsupportedExecution
 from aka.contracts.execution_environment import environment_document
-from aka.legacy.execution.outcomes import emit_fact
+from aka.execution.outcomes import emit_fact
 
 LIMITS_ENV = "AKA_EXECUTION_ENVIRONMENT_LIMITS"
 

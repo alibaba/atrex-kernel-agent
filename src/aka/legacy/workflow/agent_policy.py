@@ -229,7 +229,7 @@ def dependency_process_violation(argv: list[str], environment=None) -> str | Non
             mode, entry = _python_entrypoint(tokens)
             if (mode == "script" and Path(entry).name == "local_gateway.py") or (
                 mode == "module"
-                and entry == "aka.legacy.execution.runtime_tools.local_gateway"
+                and entry == "aka.execution.runtime_tools.local_gateway"
             ):
                 return "serve" in lowered[1:]
             if mode == "code":

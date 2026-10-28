@@ -5,7 +5,7 @@ import os
 import sys
 
 from aka.contracts.execution import BackendCapabilities, ResourceIdentity
-from aka.legacy.execution.legacy.executor import LegacyExecutor
+from aka.execution.legacy.executor import LegacyExecutor
 
 
 class ReliableExecutor(LegacyExecutor):

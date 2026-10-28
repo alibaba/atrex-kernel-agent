@@ -25,7 +25,7 @@ class CampaignExecution:
 
     def environment(self):
         s = self.connection
-        from aka.legacy.execution.environment import session_environment
+        from aka.execution.environment import session_environment
         return session_environment(hardware=self.settings.hardware, timeout=self.settings.timeout,
                                    profile=s.profile, url=s.url, ssh=s.ssh, ssh_init=s.ssh_init,
                                    health_command=s.health_command, extra=self._environment)

@@ -1,7 +1,7 @@
 """Legacy source-contract and measurement route policy."""
 import ast
 from pathlib import Path
-from aka.legacy.execution.gateway.sandbox import (
+from aka.execution.gateway.sandbox import (
     _evaluator_input_path, _is_test_kernel_command, _test_kernel_script_index,
     _is_generalized_workspace, _json_object, _option_value,
 )

@@ -5,14 +5,14 @@ import os
 from pathlib import Path
 import sys
 
-from aka.legacy.execution.legacy.runtime import ExecutionHooks, SandboxRequest
+from aka.execution.legacy.runtime import ExecutionHooks, SandboxRequest
 
 
 def main(argv: list[str] | None = None) -> int:
     if os.environ.get("AKA_EXPERIMENT_COMMAND_ENDPOINT"):
         from .command_client import main as command_main
         return command_main(argv)
-    from aka.legacy.execution.selection import selected_execution
+    from aka.execution.selection import selected_execution
     arguments = list(sys.argv[1:] if argv is None else argv)
     options = arguments[:arguments.index("--")] if "--" in arguments else arguments
     if selected_execution() == {"profile": "legacy"} and not any(
@@ -21,7 +21,7 @@ def main(argv: list[str] | None = None) -> int:
         return transport_main(arguments)
     # Keep the transport parser authoritative for its input/profiling flags.
     # Module selection must not silently narrow the installed CLI surface.
-    from aka.legacy.execution.gateway.sandbox import build_parser
+    from aka.execution.gateway.sandbox import build_parser
     parser = build_parser()
     parser.set_defaults(health_command=os.environ.get("ATREX_SANDBOX_HEALTH_COMMAND", ""))
     parser.add_argument("--profile", default=None)
@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--hardware or ATREX_SANDBOX_GPU is required")
     if arguments.no_sync and arguments.sync:
         parser.error("--no-sync and --sync are mutually exclusive")
-    from aka.legacy.execution.selection import selected_execution, read_execution_patches
+    from aka.execution.selection import selected_execution, read_execution_patches
     selection = dict(selected_execution())
     if arguments.profile is not None:
         selection["profile"] = arguments.profile
@@ -46,10 +46,10 @@ def main(argv: list[str] | None = None) -> int:
         command = command[1:]
     if not command and not (arguments.preflight or arguments.check_health):
         parser.error("provide a command after -- or use --preflight")
-    from aka.legacy.execution.recovery import raise_if_environment_blocked
-    from aka.legacy.execution.processes import spawn_owned_session
-    from aka.legacy.execution.configuration import queue_wait_grace
-    from aka.legacy.execution.selection import execution_environment, execution_scope
+    from aka.execution.recovery import raise_if_environment_blocked
+    from aka.execution.processes import spawn_owned_session
+    from aka.execution.configuration import queue_wait_grace
+    from aka.execution.selection import execution_environment, execution_scope
     from aka.legacy.experiment.gateway import run_sandbox
     hooks = ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace)
     with execution_scope(selection=selection) as executor:
@@ -107,7 +107,7 @@ def main(argv: list[str] | None = None) -> int:
                 environment["ATREX_SANDBOX_URL"] = url
                 gateway_profile = url = ""
         request = SandboxRequest(
-            workspace=Path(arguments.workspace).resolve(), launcher=(sys.executable, "-m", "aka.legacy.execution.gateway.sandbox"),
+            workspace=Path(arguments.workspace).resolve(), launcher=(sys.executable, "-m", "aka.execution.gateway.sandbox"),
             hardware=arguments.hardware, profile=gateway_profile, url=url,
             timeout=arguments.timeout, command=command, environment=environment,
             ssh=arguments.ssh or "", ssh_init=arguments.ssh_init,
@@ -116,7 +116,7 @@ def main(argv: list[str] | None = None) -> int:
             sync=tuple([] if arguments.no_sync else arguments.sync or ("profiles",)), wall_timeout=arguments.wall_timeout, gateway_kind=arguments.kind,
             preflight=arguments.preflight,
         )
-        from aka.legacy.execution.legacy.runtime import transport_arguments
+        from aka.execution.legacy.runtime import transport_arguments
         with transport_arguments(tuple(extra)):
             result = run_sandbox(executor, request, hooks=hooks)
     sys.stdout.write(result.stdout or "")

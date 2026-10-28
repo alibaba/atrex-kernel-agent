@@ -42,7 +42,7 @@ def prepare_environment(values, explicit_environment=()):
 
 def default_guard():
     # The compatibility constructor explicitly selects the default Execution contribution.
-    from aka.legacy.execution.resources import contribute
+    from aka.execution.resources import contribute
     from aka.agent.resources import selected_runtime_file
 
     class Selection:
@@ -59,7 +59,7 @@ def default_guard():
 
 
 def create_agent(options=AgentOptions(), *, shell_guard=None, **kwargs):
-    from aka.legacy.execution.processes import spawn_owned_session
+    from aka.execution.processes import spawn_owned_session
 
     return Agent(
         options,

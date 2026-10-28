@@ -3,12 +3,12 @@ from .executor import LegacyExecutor
 from pathlib import Path
 
 from aka.contracts.agent_resources import AgentSkill
-from aka.legacy.execution.resources import PROFILING_CONFIG, contribute, validate_profiling
+from aka.execution.resources import PROFILING_CONFIG, contribute, validate_profiling
 
 name = "legacy"
 provide = ("executor",)
 identity_files = ("plugin.py", "executor.py", "runtime.py")
-identity_packages = ("aka.legacy.execution", "aka.contracts.execution")
+identity_packages = ("aka.execution", "aka.contracts.execution")
 Config = {"type": "object", "properties": {"gateway_skill_path": {"type": "string"}, "profiling": PROFILING_CONFIG,
           "idempotent_replay":{"type":"boolean"},
           "url":{"type":"string"}, "profile":{"type":"string"},
@@ -21,7 +21,7 @@ Defaults = {"gateway_skill_path": "", "profiling": [], "idempotent_replay":False
 
 def validate_config(config):
     validate_profiling(config["profiling"])
-    from aka.legacy.execution.job_recovery import recovery_policy
+    from aka.execution.job_recovery import recovery_policy
     recovery_policy(config)
     if config.get("url") and config.get("profile"):
         raise ValueError("gateway url and profile are mutually exclusive")

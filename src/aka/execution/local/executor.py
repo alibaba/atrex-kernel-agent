@@ -7,7 +7,7 @@ import time
 
 from aka.contracts.execution import (BackendCapabilities, ExecutionAttempt, ExecutionBudget,
     ExecutionDiagnostic, ExecutionFacts, JobResult, ResourceIdentity, UnsupportedExecution)
-from aka.legacy.execution.filesystem_scope import bound_command, require_scope_backend
+from aka.execution.filesystem_scope import bound_command, require_scope_backend
 from . import filesystem
 
 

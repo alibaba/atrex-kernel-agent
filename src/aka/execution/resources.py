@@ -4,7 +4,7 @@ from pathlib import Path
 
 from aka.contracts.agent_resources import AgentSkill, WorkspaceResourceContribution
 
-ROOT = Path(str(files("aka.legacy.execution")))
+ROOT = Path(str(files("aka.execution")))
 PROFILING_CAPABILITIES = ("nvidia", "amd", "ppu", "timeline", "ppu-acu")
 PROFILING_CONFIG = {"type": "array", "items": {"type": "string", "enum": list(PROFILING_CAPABILITIES)}}
 

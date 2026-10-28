@@ -12,7 +12,7 @@ from pathlib import Path
 
 from aka.contracts.execution import BackendCapabilities, CommandSpec, JobResult, ResourceIdentity
 from .runtime import ExecutionHooks, SandboxRequest, current_transport_arguments
-from aka.legacy.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
+from aka.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
 
 
 class LegacyExecutor(GatewayRecoveryMixin):
@@ -31,7 +31,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
         recovery_policy(self.configuration)
 
     def bind(self, context):
-        from aka.legacy.execution.filesystem_scope import require_scope_backend
+        from aka.execution.filesystem_scope import require_scope_backend
         require_scope_backend(context, self.capabilities)
         from .runtime import default_binding
         request, hooks = default_binding(context)
@@ -45,8 +45,8 @@ class LegacyExecutor(GatewayRecoveryMixin):
         return type(self)(request, hooks, configuration=self.configuration)
 
     def _environment_backend(self):
-        from aka.legacy.execution.environment_query import BackendEnvironment
-        from aka.legacy.execution.configuration import legacy_settings
+        from aka.execution.environment_query import BackendEnvironment
+        from aka.execution.configuration import legacy_settings
         request = self.request
         environment = request.environment if request else os.environ.copy()
         settings = request or legacy_settings(environment)
@@ -60,7 +60,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
         return self._environment_backend().check(query)
 
     def run(self, command: CommandSpec) -> JobResult:
-        from aka.legacy.execution.command_transport import prepared_input_workspace
+        from aka.execution.command_transport import prepared_input_workspace
         self.capabilities.require(command)
         with prepared_input_workspace(command) as physical:
             return self._run(physical)
@@ -71,10 +71,10 @@ class LegacyExecutor(GatewayRecoveryMixin):
             from aka.contracts.execution import ExecutionContext
             return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout,
                 filesystem_access=command.filesystem_access))._run(command)
-        from aka.legacy.execution.environment_query import command_query, require_supported
+        from aka.execution.environment_query import command_query, require_supported
         support = self._environment_backend().check(command_query(command), discover=False)
         require_supported(support)
-        from aka.legacy.execution.gateway.requests import bound_limits
+        from aka.execution.gateway.requests import bound_limits
         def observed(result):
             if command.on_observation is not None:
                 command.on_observation(replace(result, environment_snapshot=support.environment,
@@ -153,7 +153,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
                 cmd += ["--sync", path]
         else:
             cmd.append("--no-sync")
-        from aka.legacy.execution.command_transport import sandbox_options
+        from aka.execution.command_transport import sandbox_options
         public = CommandSpec(workspace, tuple(command), input_files=request.input_files,
                              output_options=request.output_options, profile_options=request.profile_options,
                              operation=gateway_kind)
@@ -163,7 +163,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
         else:
             cmd += ["--", *command]
         environment = dict(request.environment)
-        package_root = str(Path(__file__).resolve().parents[4])
+        package_root = str(Path(__file__).resolve().parents[3])
         environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(
             [package_root, *environment.get("PYTHONPATH", "").split(os.pathsep)]))
         if wall_timeout is not None:
@@ -172,8 +172,8 @@ class LegacyExecutor(GatewayRecoveryMixin):
             uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
             grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
             effective_timeout = timeout + grace + 240
-        from aka.legacy.execution.outcomes import run_owned
-        from aka.legacy.execution.gateway.requests import effective_budget
+        from aka.execution.outcomes import run_owned
+        from aka.execution.gateway.requests import effective_budget
         try:
             result = run_owned(cmd, environment=environment, workspace=workspace,
                 timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,

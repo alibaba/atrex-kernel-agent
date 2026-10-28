@@ -3,7 +3,7 @@
   "entries": [
     {
       "id": "execution",
-      "name": "aka.legacy.execution.plugin",
+      "name": "aka.execution.plugin",
       "required": true,
       "config": {
         "profile": "legacy"

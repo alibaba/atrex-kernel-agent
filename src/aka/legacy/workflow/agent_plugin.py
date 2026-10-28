@@ -14,7 +14,7 @@ provide = ("agent",)
 identity_packages = (
     "aka.agent",
     "aka.legacy.workflow",
-    "aka.legacy.execution",
+    "aka.execution",
     "aka.contracts.agent",
 )
 

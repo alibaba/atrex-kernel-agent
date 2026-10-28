@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any, TextIO
 
 from aka.core._filesystem import durable_replace, durable_rmdir, durable_unlink, durable_write_json, durable_write_text, ensure_private_directory
-from aka.legacy.execution.processes import ACTIVE_MARKER, HANDOFF_ID_ENV, HANDOFF_LOCK_FD_ENV, RESTART_COMPLETE, RESTART_EXIT, RESTART_PRIMARY_PID, STOP_MARKER, clear_process_registry, matching_processes, process_identity_matches, spawn_owned_session, terminate_processes
+from aka.execution.processes import ACTIVE_MARKER, HANDOFF_ID_ENV, HANDOFF_LOCK_FD_ENV, RESTART_COMPLETE, RESTART_EXIT, RESTART_PRIMARY_PID, STOP_MARKER, clear_process_registry, matching_processes, process_identity_matches, spawn_owned_session, terminate_processes
 
 RESTART_HANDOFF_TIMEOUT = 10_800
 RESTART_CLEANUP_TIMEOUT = 30

@@ -18,7 +18,7 @@ identity_packages = (
     "aka.legacy.evaluation",
     "aka.legacy.acceptance",
     "aka.legacy.experiment",
-    "aka.legacy.execution",
+    "aka.execution",
     "aka.contracts.startup",
 )
 Config = {"type": "object", "properties": {

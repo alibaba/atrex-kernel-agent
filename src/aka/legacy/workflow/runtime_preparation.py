@@ -1,14 +1,14 @@
 """Prepare Workflow launch recovery and request the selected execution environment."""
 import json
-from aka.legacy.execution.configuration import legacy_settings, selected_ssh
+from aka.execution.configuration import legacy_settings, selected_ssh
 
 def prepare_runtime(launch, problem):
     import os
     from .recovery_runtime import configure_recovery
-    from aka.legacy.execution.recovery import raise_if_environment_blocked
-    from aka.legacy.execution.health import runtime_health_command
-    from aka.legacy.execution.sandbox import check_ssh_environment
-    from aka.legacy.execution.selection import selected_execution
+    from aka.execution.recovery import raise_if_environment_blocked
+    from aka.execution.health import runtime_health_command
+    from aka.execution.sandbox import check_ssh_environment
+    from aka.execution.selection import selected_execution
     from aka.contracts.workflow_launch import encode_launch
     from types import SimpleNamespace
     settings = legacy_settings() if selected_execution().get("profile", "legacy") == "legacy" else SimpleNamespace(
@@ -16,7 +16,7 @@ def prepare_runtime(launch, problem):
     hardware = launch.request.runtime.hardware or launch.request.settings.platform
     if selected_ssh():
         # Retired checkout-script recovery commands cannot identify an installed run.
-        from aka.legacy.execution.recovery import environment_state_file
+        from aka.execution.recovery import environment_state_file
         state = environment_state_file()
         if state is not None and state.with_name("restart.json").is_file():
             record = json.loads(state.with_name("restart.json").read_text())
@@ -35,8 +35,8 @@ def prepare_runtime(launch, problem):
         raise_if_environment_blocked()
         check_ssh_environment(launch.workspace_base, hardware, settings.ssh, settings.ssh_init, settings.health_command)
     from aka.contracts.execution_environment import EnvironmentQuery
-    from aka.legacy.execution.selection import execution_scope
-    from aka.legacy.execution.binding import sandbox_executor
+    from aka.execution.selection import execution_scope
+    from aka.execution.binding import sandbox_executor
     with execution_scope() as executor:
         bound = sandbox_executor(executor, hardware=hardware, timeout=launch.request.runtime.timeout)
         snapshot = bound.query_environment(EnvironmentQuery(hardware))

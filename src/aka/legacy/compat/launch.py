@@ -50,7 +50,7 @@ def run_workflow(repo_root, argv, *, profile=None, patch_files=()):
     else:
         # Retained CLI Execution options become an explicit composition patch
         # before Bootstrap freezes the selected module and configuration.
-        from aka.legacy.execution.selection import SELECTION_ENV
+        from aka.execution.selection import SELECTION_ENV
         configured = os.environ.get(SELECTION_ENV)
         patches = [{"id": "execution", "config": json.loads(configured)}] if configured else []
         selection = resolve_profile(
