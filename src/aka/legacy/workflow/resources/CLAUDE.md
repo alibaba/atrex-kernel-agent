@@ -75,7 +75,7 @@ gate and commits mechanically. Do not duplicate that full gate inside the V1 Age
 episodes whose active prompt assigns multi-seed validation to the Agent, run through the mandatory sandbox:
 
 ```bash
-python -m aka.legacy.execution.cli --kind run --no-sync -- \
+python -m aka.experiment.command_client --kind run --no-sync -- \
   python test_kernel.py --version v<N> --multi-seed 5 --no-memory
 ```
 

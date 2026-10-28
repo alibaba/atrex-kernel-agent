@@ -51,7 +51,7 @@ the supervisor creates it after terminal validation.
 
 - Never run `python test_kernel.py`, `python kernel.py`, or import GPU/JIT kernel packages directly
   on the host. Route every compile, correctness, benchmark, and profiling command through
-  `python -m aka.legacy.execution.cli ... --`.
+  `python -m aka.experiment.command_client ... --`.
 - Never start, stop, restart, signal, replace, or mutate the shared gateway service, its screen
   session, state directory, database, log, or jobs. Report infrastructure failure instead.
 - Never install or build dependencies with pip, uv, conda, setup.py, ninja, cmake, or package-manager

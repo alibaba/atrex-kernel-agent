@@ -52,7 +52,7 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
 - Do not run multi-seed validation and do not run or simulate incumbent/candidate ABBA.
 - Never run GPU/JIT code on the host. Static source inspection is allowed; the official evaluator
   command below is the only GPU execution route and must run once per trial. Do not route
-  import/API probes or additional benchmarks through `python -m aka.legacy.execution.cli`.
+  import/API probes or additional benchmarks through `python -m aka.experiment.command_client`.
 - Never install or build dependencies. Never start, stop, restart, signal, replace, or mutate the
   shared sandbox executor or its jobs. Treat infrastructure failure as `blocked`.
 

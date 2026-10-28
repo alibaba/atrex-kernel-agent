@@ -230,7 +230,7 @@ class WorkflowServices:
     def sandbox_command(self, command):
         import shlex
         import sys
-        argv = [sys.executable, "-m", "aka.legacy.compat.experiment_cli", "--kind", "run"]
+        argv = [sys.executable, "-m", "aka.experiment.command_client", "--kind", "run"]
         if self.settings.hardware:
             argv += ["--hardware", self.settings.hardware]
         return shlex.join([*argv, "--no-sync", "--", *command])

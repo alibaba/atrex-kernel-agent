@@ -20,7 +20,7 @@ Hard rules for this session:
 - The whole point of a clean session is a fresh context: you inherit state from disk, not from a prior conversation.
 - **The host GPU boundary is non-negotiable.** Never run `python test_kernel.py`, `python kernel.py`, or
   `python -c "import kernel"` directly in the workspace, even as a quick smoke/import check. Always route
-  the command through `python -m aka.legacy.execution.cli ... --`; the orchestrator terminates the whole session on a
+  the command through `python -m aka.experiment.command_client ... --`; the orchestrator terminates the whole session on a
   direct kernel import or execution. Never import or execute `flashinfer`, `flash_attn`/`flash-attn`, or
   `xformers` or `vllm` on the host either: a preinstalled package can start `ninja`, `ptxas`, or `nvcc` on first use.
   Inspect their source statically, or route the import/API probe through the sandbox.
@@ -73,7 +73,7 @@ uses available tooling; do not install or locally compile a third-party library.
 Do not import or execute JIT-capable GPU package code directly on the host. Even a preinstalled package such
 as `flashinfer`, `flash_attn`/`flash-attn`, `xformers`, or `vllm` can invoke `ninja`, `ptxas`, or `nvcc` on first use.
 Static source inspection is allowed. Route any import/API probe/benchmark that may initialize GPU code
-through `python -m aka.legacy.execution.cli`.
+through `python -m aka.experiment.command_client`.
 
 ## Definition of done (the supervisor independently re-checks all of it)
 

@@ -14,7 +14,7 @@ attempt to repair the gateway from this coding session.
 The workspace already exists at your cwd (`{{WORKSPACE}}`) — the orchestrator already created
 its directory structure and Git repository and installed `kernel.py`. Do not reinitialize it.
 Never delete or move Git-tracked workspace state (`memory/`, `roofline.json`, helpers, historical plans or
-profiles). Sandbox input filtering is owned by `python -m aka.legacy.execution.cli`; deleting campaign history to reduce a
+profiles). Sandbox input filtering is owned by `python -m aka.experiment.command_client`; deleting campaign history to reduce a
 payload is forbidden.
 
 Environment (resolve all paths against your cwd = the workspace):
@@ -34,7 +34,7 @@ uses available tooling; do not install or locally compile a third-party library.
 Do not import or execute JIT-capable GPU package code directly on the host. Even a preinstalled package such
 as `flashinfer`, `flash_attn`/`flash-attn`, `xformers`, or `vllm` can invoke `ninja`, `ptxas`, or `nvcc` on first use.
 Static source inspection is allowed. Route any import/API probe/benchmark that may initialize GPU code
-through `python -m aka.legacy.execution.cli`.
+through `python -m aka.experiment.command_client`.
 
 Do the following, in order, but only through baseline:
 
@@ -49,7 +49,7 @@ Do the following, in order, but only through baseline:
    route declared above, run exactly one base-seed full-workload measurement for baseline performance, write `baseline_report.md`, write
    `memory/v0.json` (via `aka.legacy.workflow.memory_manager`), and `git commit` ("V0: baseline kernel").
    If a subagent is used, include the mandatory sandbox block above verbatim in its task. It must run
-   `python test_kernel.py --version v0 --no-memory` exactly once through `python -m aka.legacy.execution.cli --kind run`.
+   `python test_kernel.py --version v0 --no-memory` exactly once through `python -m aka.experiment.command_client --kind run`.
    Do not run `--multi-seed` for V0. Parse the emitted
    `[test_kernel] RESULT_JSON=...`, and write `memory/v0.json` locally. Reject local-GPU measurement and remotely
    written memory. The test must cover the evaluator's complete workload—hidden cases for a generalized
