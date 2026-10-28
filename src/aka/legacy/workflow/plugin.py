@@ -15,7 +15,7 @@ identity_packages = (
     "aka.contracts.experiment",
     "aka.contracts.evaluation",
     "aka.contracts.acceptance",
-    "aka.legacy.evaluation",
+    "aka.evaluation",
     "aka.legacy.acceptance",
     "aka.legacy.experiment",
     "aka.execution",

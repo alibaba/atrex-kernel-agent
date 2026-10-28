@@ -3,7 +3,7 @@ from pathlib import Path
 import subprocess
 
 from aka.task.candidate_workspace.provider import GitCandidateWorkspace
-from aka.legacy.evaluation.resources import profile_driver_script
+from aka.evaluation.resources import profile_driver_script
 from aka.contracts.workspace import CandidateHandle
 from aka.light.supervisor.workspace import publish
 

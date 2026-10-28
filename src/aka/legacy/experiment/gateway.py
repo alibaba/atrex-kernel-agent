@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import sys
 from aka.contracts.execution import CommandSpec, ProfileOptions, OutputOptions, UnsupportedExecution
-from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
+from aka.evaluation.gateway_command import GatewayCommandEvaluator
 from aka.execution.gateway import sandbox as transport
 from aka.execution.legacy.runtime import transport_arguments, ExecutionHooks, SandboxRequest
 from aka.execution.processes import spawn_owned_session
@@ -29,7 +29,7 @@ def run_sandbox(executor, request, *, hooks):
                        ("ATREX_SANDBOX_PROFILE", request.profile)):
         if any((request.ssh, request.url, request.profile)):
             environment[key] = value
-    from aka.legacy.evaluation.command_inputs import legacy_command_environment
+    from aka.evaluation.command_inputs import legacy_command_environment
     from aka.execution.legacy.runtime import current_transport_arguments
     # The bound request owns the original host launch environment. Only explicit
     # workload variables and adapter configuration belong to a public command.

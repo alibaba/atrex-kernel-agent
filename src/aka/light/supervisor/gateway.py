@@ -119,7 +119,7 @@ from aka.light.supervisor.gateway_jobs import (  # noqa: E402
     retry_kind, retry_delay, request_is_infrastructure, submission_rejection,
 )
 
-from aka.legacy.evaluation.shapes import (
+from aka.evaluation.shapes import (
     request_shape_ids as _request_shape_ids,
     batch_shape_ids as batch_shape_ids,
     shape_batch_request as _shape_batch_request,
@@ -638,7 +638,7 @@ def _make_input_bundle(
 
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
         if "tools/ncu_profile.py" in selected_inputs:
-            from aka.legacy.evaluation.resources import ncu_profile_script
+            from aka.evaluation.resources import ncu_profile_script
             add_file(tf, ncu_profile_script(), "tools/ncu_profile.py")
         # Evaluator-only inputs are added before the public workspace tree so a candidate-created
         # file with the same name cannot shadow the orchestrator-owned private test set.
@@ -4993,7 +4993,7 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
         # Old hidden-Shape requests ran a different driver/return contract via
         # Dev. Do not mistake their cached records for the new Typed measurement.
         options["profile_contract"] = "remote_structured_v2"
-        from aka.legacy.evaluation.resources import ncu_profile_script
+        from aka.evaluation.resources import ncu_profile_script
         options["profile_parser"] = hashlib.sha256(ncu_profile_script().read_bytes()).hexdigest()
     options["baseline_path"] = baseline_path
     if source_snapshots:

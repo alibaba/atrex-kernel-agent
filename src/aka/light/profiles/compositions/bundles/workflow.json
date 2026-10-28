@@ -44,7 +44,7 @@
     },
     {
       "id": "evaluation",
-      "name": "aka.legacy.evaluation.plugin",
+      "name": "aka.evaluation.plugin",
       "required": true
     },
     {

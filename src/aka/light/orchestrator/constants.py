@@ -6,7 +6,7 @@ Repository paths, policy defaults, and workspace state filenames used by campaig
 from __future__ import annotations
 
 from pathlib import Path
-from aka.legacy.evaluation.resources import profile_driver_script
+from aka.evaluation.resources import profile_driver_script
 from aka.task.problem.resources import native_harness_script
 
 from . import agent_runtime as _agent_runtime

@@ -5,7 +5,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from aka.legacy.evaluation.abba import (
+from aka.evaluation.abba import (
     verification_schedule, _geomean, _merge_batch_results,
     _result_latency, _result_performance_score,
 )
@@ -24,7 +24,7 @@ def score_verification_payload(
 ) -> VerificationResult:
     """Light retention policy: strict GeoMean latency reduction, as in Runtime.
 
-    Main's score-based policy remains unchanged in aka.legacy.evaluation.abba.
+    Main's score-based policy remains unchanged in aka.evaluation.abba.
     Scores are optional diagnostic values and cannot enable or veto promotion.
     """
     if not math.isfinite(min_improvement_pct) or min_improvement_pct < 0:

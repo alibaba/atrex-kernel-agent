@@ -13,7 +13,7 @@ def _script(name: str, checkout_path: str, installed_path: str) -> Path:
     installed = Path(__file__).parents[1] / installed_path
     if installed.is_file():
         return installed
-    source = Path(__file__).resolve().parents[4] / checkout_path
+    source = Path(__file__).resolve().parents[3] / checkout_path
     if source.is_file():
         return source
     raise FileNotFoundError(f"Missing packaged evaluation script: {name}")

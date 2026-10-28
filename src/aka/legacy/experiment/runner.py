@@ -39,7 +39,7 @@ class LegacyExperiment:
         self.records = records
         self.purpose = purpose
         if command_evaluator is None:
-            from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
+            from aka.evaluation.gateway_command import GatewayCommandEvaluator
             command_evaluator = GatewayCommandEvaluator()
         self.command_evaluator = command_evaluator
         if purpose not in {"development", "formal"}:
@@ -152,7 +152,7 @@ class LegacyExperiment:
                             pass
                         else:
                             records.artifact_missing(ref)
-                    from aka.legacy.evaluation.evaluator import result_from_stdout
+                    from aka.evaluation.evaluator import result_from_stdout
                     evaluation = None
                     try:
                         payload = result_from_stdout(result.stdout)

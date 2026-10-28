@@ -28,7 +28,7 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
         if measurement_parallelism is None:
             measurement_parallelism = 1 if (execution_environment or {}).get("ATREX_SANDBOX_SSH") else 4
         if evaluator_factory is None:
-            from aka.legacy.evaluation.plugin import LegacyEvaluatorFactory
+            from aka.evaluation.plugin import LegacyEvaluatorFactory
             evaluator_factory = LegacyEvaluatorFactory()
         if canonical_measurement_reader is None:
             from .records import WorkflowMeasurementReader

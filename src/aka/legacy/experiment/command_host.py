@@ -13,7 +13,7 @@ from threading import Event, Lock, Thread
 from aka.contracts.execution import CommandSpec, ExecutionFile, JobResult, OutputOptions, ProfileOptions
 from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
 from aka.contracts.filesystem_access import require_path_access
-from aka.legacy.evaluation.command_inputs import transport_environment_key, workload_environment
+from aka.evaluation.command_inputs import transport_environment_key, workload_environment
 from .command_access import access_data, client_access, pinned, read_input
 from .command_protocol import ENDPOINT_ENV, TOKEN_ENV, receive_json, receive, send, send_json
 from .scoped_publication import validate_target

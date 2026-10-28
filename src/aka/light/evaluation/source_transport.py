@@ -177,7 +177,7 @@ def diagnostic_request(request, workspace, kind, *, timeout=600):
                   "runtime_requirements": policy["runtime_requirements"], "requirements": request.get("requirements", []),
                   "shapes": reference["shapes"], "parameters": parameters, "lock_clocks": True,
                   "timeout_s": max(1, timeout - 30)}
-    from aka.legacy.evaluation.resources import ncu_profile_script
+    from aka.evaluation.resources import ncu_profile_script
     payload = {"spec": request["spec"], "command": "python3 __atrex_diagnostic.py request.json",
         "files": {**{"candidate/" + k: v.decode() for k, v in files.items()},
             "input.py": reference["input_py"], "request.json": json.dumps(diagnostic),

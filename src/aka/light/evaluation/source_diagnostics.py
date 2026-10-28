@@ -255,7 +255,7 @@ def _encode_result(result: dict[str, Any]) -> str:
 def _kernels(text: str) -> list[dict[str, Any]]:
     # Shared stdlib parser is shipped alongside this remote driver.
     if __package__:
-        from aka.legacy.evaluation.ncu_profile import kernels
+        from aka.evaluation.ncu_profile import kernels
     else:
         from ncu_profile import kernels
     return kernels(text)
@@ -385,7 +385,7 @@ def _collect(
             )[:top]
     if operation == "disassemble" or parameters.get("source"):
         if __package__:
-            from aka.legacy.evaluation.ncu_profile import has_sass
+            from aka.evaluation.ncu_profile import has_sass
         else:
             from ncu_profile import has_sass
         fmt = parameters.get("fmt", "auto")

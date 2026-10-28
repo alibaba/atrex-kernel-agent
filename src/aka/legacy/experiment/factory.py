@@ -26,7 +26,7 @@ class LegacyExperimentFactory:
         if any(not callable(getattr(evaluator, method, None))
                for method in ("prepare", "observe_step", "interpret")):
             raise TypeError("provider does not implement Evaluator")
-        from aka.legacy.evaluation.gateway_command import GatewayCommandEvaluator
+        from aka.evaluation.gateway_command import GatewayCommandEvaluator
         from .retry import retry_infrastructure
 
         workspace = Path(workspace).resolve()

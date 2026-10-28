@@ -8,7 +8,7 @@ EVALUATOR_FACTORY = ServiceKey("evaluator_factory", "EvaluatorFactory",
 EVALUATION_DEFAULTS = ServiceKey("evaluation_defaults", "EvaluationConfiguration", module="aka.contracts.evaluation")
 name = "evaluation"
 provide = ("evaluator_factory", "evaluation_defaults")
-identity_packages = ("aka.legacy.evaluation", "aka.contracts.evaluation")
+identity_packages = ("aka.evaluation", "aka.contracts.evaluation")
 Config = {"type": "object", "properties": {"shape_batch_size":{"type":"integer","minimum":1}}, "additionalProperties": False}
 Defaults = {"shape_batch_size":4}
 

@@ -2,13 +2,13 @@
 
 from contextlib import contextmanager
 
-from aka.legacy.evaluation import EvaluationConfiguration
-from aka.legacy.evaluation.baseline import (
+from aka.evaluation import EvaluationConfiguration
+from aka.evaluation.baseline import (
     BaselineInputs,
     BaselineResources,
     BaselinePreparation,
 )
-from aka.legacy.evaluation import records
+from aka.evaluation import records
 from aka.legacy.acceptance import LegacyAcceptancePolicy
 from aka.contracts.execution import ExecutionContext, validate_executor
 from aka.execution.binding import SandboxExecutor

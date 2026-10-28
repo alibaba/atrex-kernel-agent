@@ -27,13 +27,17 @@ source = "aka.task.source.plugin:SOURCE"
 
 candidate = "aka.task.candidate_workspace.plugin:CANDIDATE"
 
+evaluator_factory = "aka.evaluation.plugin:EVALUATOR_FACTORY"
+
+evaluation_defaults = "aka.evaluation.plugin:EVALUATION_DEFAULTS"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*", "aka.resources", "aka.resources.*"]
+include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*", "aka.resources", "aka.resources.*", "aka.evaluation", "aka.evaluation.*"]
 
 [tool.setuptools.package-data]
 "aka.agent" = ["*", "**/*"]
@@ -43,3 +47,5 @@ include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", 
 "aka.task" = ["*", "**/*"]
 
 "aka.resources" = ["*", "**/*"]
+
+"aka.evaluation" = ["*", "**/*"]

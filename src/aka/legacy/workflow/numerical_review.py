@@ -15,7 +15,7 @@ import subprocess
 import tempfile
 import uuid
 
-from aka.legacy.evaluation.drivers.remote_numerical import MAX_REL_L2, validation_schedule
+from aka.evaluation.drivers.remote_numerical import MAX_REL_L2, validation_schedule
 from aka.legacy.workflow.store import VERIFY_DIR
 from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
@@ -25,8 +25,8 @@ from aka.legacy.experiment.retry import retry_infrastructure
 from aka.contracts.execution import ExecutionPending
 from aka.legacy.workflow.review_trace import ReviewTrace
 
-import aka.legacy.evaluation.drivers.remote_numerical as remote_numerical
-from aka.legacy.evaluation.numerical import interpret_numerical_output, validate_numerical_review
+import aka.evaluation.drivers.remote_numerical as remote_numerical
+from aka.evaluation.numerical import interpret_numerical_output, validate_numerical_review
 DRIVER = Path(remote_numerical.__file__)
 PROMPT = PROMPTS_DIR / "numerical_review.md"
 
@@ -527,7 +527,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
         if _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"}) != validation_digest:
             raise ValueError("candidate or contract changed during supplemental validation")
     except NumericalPlanningTimeout as exc:
-        from aka.legacy.evaluation.results import _latest_complete_episode_performance
+        from aka.evaluation.results import _latest_complete_episode_performance
 
         try:
             # Episode receipts bind the full standard workload result to the current

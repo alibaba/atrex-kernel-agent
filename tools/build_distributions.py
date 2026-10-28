@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = {
-    'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/core', 'aka/contracts', 'aka/bootstrap', 'aka/execution', 'aka/agent', 'aka/task', 'aka/resources'),
+    'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/core', 'aka/contracts', 'aka/bootstrap', 'aka/execution', 'aka/agent', 'aka/task', 'aka/resources', 'aka/evaluation'),
     'atrex-aka-legacy': ('aka/legacy',),
     'atrex-aka-light': ('aka/light',),
     'atrex-aka-dashboard': ('aka/dashboard',),
@@ -43,7 +43,7 @@ def owned(distribution: str) -> tuple[Path, ...]:
             if p.is_file() and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
             and p.suffix not in {'.pyc', '.pyo'})
     if distribution == 'atrex-aka-framework':
-        for module in ('execution', 'agent', 'task', 'resources'):
+        for module in ('execution', 'agent', 'task', 'resources', 'evaluation'):
             runtime = ROOT / 'src' / 'aka' / module
             files.extend(p for p in runtime.rglob('*') if p.is_file()
                 and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)

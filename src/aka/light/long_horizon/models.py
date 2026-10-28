@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aka.legacy.evaluation.models import VerificationRun, VerificationResult as SharedVerificationResult
+from aka.evaluation.models import VerificationRun, VerificationResult as SharedVerificationResult
 
 from dataclasses import asdict, dataclass, field
 from typing import Any

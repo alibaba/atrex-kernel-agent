@@ -7,7 +7,7 @@
     "candidate": "aka.task.candidate_workspace.plugin:CANDIDATE",
     "agent": "aka.agent.plugin:AGENT",
     "workflow": "aka.legacy.workflow.plugin:WORKFLOW",
-    "evaluator_factory": "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY",
+    "evaluator_factory": "aka.evaluation.plugin:EVALUATOR_FACTORY",
     "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER",
     "tool_runtime": "aka.light.runtime.plugin:TOOL_RUNTIME",
     "executor": "aka.execution.assembly:EXECUTOR",
@@ -15,7 +15,7 @@
     "light_experiments": "aka.light.experiment.plugin:EXPERIMENTS",
     "light_acceptance": "aka.light.acceptance.plugin:ACCEPTANCE",
     "light_journal": "aka.light.workflow.journal_plugin:JOURNAL",
-    "evaluation_defaults": "aka.legacy.evaluation.plugin:EVALUATION_DEFAULTS",
+    "evaluation_defaults": "aka.evaluation.plugin:EVALUATION_DEFAULTS",
     "execution_context": "aka.execution.plugin:EXECUTION_CONTEXT",
     "measurement_parallelism": "aka.execution.plugin:MEASUREMENT_PARALLELISM"
   },
