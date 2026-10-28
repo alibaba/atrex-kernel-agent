@@ -1,0 +1,46 @@
+{
+  "SKILL.md": {
+    "english_sha256": "b48f051a13a412ffb11692e3c91bccd9be0373034d9cab2420cafb52542fec46",
+    "upstream_sha256": "036ec94da6838aec1618a6d22c550c458488f7ef393e7446bc5cc48f4800abce"
+  },
+  "reference/capacity-control.md": {
+    "english_sha256": "eec01a9881e38b844f29f4c10a069851391f4ea76a443a51ea93bf2e2d06d997",
+    "upstream_sha256": "c070a6c1ebf085a9242566566f87aff8ea1b12e7a81b3e88be9947c535f3446e"
+  },
+  "reference/collectives.md": {
+    "english_sha256": "8c297fa24053d83d01f16964b7eaecf084d6419f0151c25ad783f31f401b84d5",
+    "upstream_sha256": "940801b87f8b581b59216bd115ac2f09bae0d39d08928f7a7fa5e481ce5b2afa"
+  },
+  "reference/compile.md": {
+    "english_sha256": "78a2df851aa64dfb3dd94d9a1231e0698550660603731f37001bee2c74857286",
+    "upstream_sha256": "1bc40d6b5f971d3b58c0f23b9f5fc8d5b82a6a561cef988e6380da69f891ae6d"
+  },
+  "reference/custom-sol-problem.md": {
+    "english_sha256": "335484f33a00101178f8f24ba491a98623407a0f1e69e82433402fd44eedcdbc",
+    "upstream_sha256": "151e10287f94f678914002a0794944ab93b596f7bdcfb37764e7efaab365073a"
+  },
+  "reference/eval-manifest.md": {
+    "english_sha256": "34f34ce8f9cce36ecd623bf5897ee181852b0d7bb657805102b39f85fdd892b2",
+    "upstream_sha256": "280c880abed7faf58cfe53752ac3a3d5d3892e0e55ac8df00efeb6161cf9bdb3"
+  },
+  "reference/evaluation.md": {
+    "english_sha256": "283d8ecc0e6f1d4baa1fec3fa3ee458c11460054a5419c275360fbaacc3c2939",
+    "upstream_sha256": "1f1b0109121807e0b87cef6d087b88de9617c2e8e7570dbc7950d1e03c1c62a5"
+  },
+  "reference/jobs-and-troubleshooting.md": {
+    "english_sha256": "8b4f71e70a20aa2dddbac3bd987104393b49b6bf8e788f2b92b4d99059ae8339",
+    "upstream_sha256": "8d7d5a5858e1785ec5eabf228966361b2b9d704df4460b684d8f7e8558f9d0c5"
+  },
+  "reference/operations.md": {
+    "english_sha256": "3f8dfbcb6723412c9821709406737b560f132652dd0cdf62794898ea209505c0",
+    "upstream_sha256": "49df613542c266c4300e00270b54c73ff1743f0141b1113aab60e4283bbe0330"
+  },
+  "reference/reference-dir.md": {
+    "english_sha256": "c2660c555b7ecbfa3109b31a4057938135f9f18544871e96fa8c91b6d1d41167",
+    "upstream_sha256": "e0f30f31d1c73ab4d02d678dfb43a883b3989b9ce7a66bfcbc869b97585de386"
+  },
+  "reference/solution-json.md": {
+    "english_sha256": "d6de15777b0fa4a5969447308e85b6efc3dc88ec35874f86c2ea4b7e81c5c11a",
+    "upstream_sha256": "c740c6cdb1b883cc81591a36145d18f20887db5f4894969ad9b24cabb56bcd52"
+  }
+}

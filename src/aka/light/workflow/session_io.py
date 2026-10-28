@@ -198,15 +198,8 @@ def run_session(
 
 def _production_review_candidate_paths(workspace: Path) -> list[Path]:
     """Return the complete, bounded source set shown to the production reviewer."""
-    from aka.light.workspace.sources import policy_at, collect, POLICY
-    policy = policy_at(workspace)
-    if policy is not None:
-        return [workspace / name for name in sorted(collect(workspace, policy))] + [workspace / POLICY]
-    paths = [
-        workspace / "kernel.py",
-        workspace / "solution.json",
-    ]
-    return [path for path in paths if path.is_file()]
+    from aka.light.workspace.sources import review_paths
+    return review_paths(workspace)
 
 
 def _production_review_digest(

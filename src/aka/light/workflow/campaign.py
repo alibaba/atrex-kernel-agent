@@ -37,6 +37,9 @@ class ManagedCampaign(Campaign):
         campaign.agent = workflow.agent
         campaign.source_provider = workflow.source
         campaign.candidate_workspace = workflow.candidate
+        campaign.source_import_options = workflow.candidate.source_options(workflow.options.source_tree)
+        campaign.candidate_file_system = workflow.candidate.select_file_system(
+            framework=settings.framework, source_tree=campaign.source_import_options is not None)
         campaign.module_options = workflow.options
         campaign.tool_runtime = workflow.tool_runtime
         return campaign
@@ -96,22 +99,20 @@ class ManagedCampaign(Campaign):
             result.session_id, result.terminal_usage, result.events, result.capabilities,
             result.observation_errors)
 
+    def ensure_framework_baseline(self):
+        super().ensure_framework_baseline()
+        self.candidate_workspace.activate_file_system(self.workspace, self.candidate_file_system)
+
     def setup_baseline(self):
         initial = self.problem.initial_source
-        if self.module_options.source_tree:
-            if initial.kind == "sol" or not self.atrex_bench_root or self.sandbox_ssh:
-                raise ValueError("Source trees require native Atrex-Bench Eval, not SOL/SSH")
-            from aka.contracts.content import SourceContent, WorkspaceFile
-            from aka.light.workspace.sources import initial_snapshot, unpack, POLICY
-            import json
-            source = initial_snapshot(self.workspace, self.module_options.source_tree)
-            policy, files = unpack(source)
-            content = SourceContent(tuple(WorkspaceFile(name, text=data.decode()) for name, data in files.items()) +
-                                    (WorkspaceFile(POLICY, text=json.dumps(policy)),))
-        else:
-            content = self.source_provider.prepare(SourceRequest(
-                initial=initial, name=self.campaign_name, framework=self.framework,
-                platform=self.platform))
+        from aka.light.runtime.paths import supervisor_campaign_root
+        content = self.candidate_workspace.prepare_source(
+            self.candidate_file_system,
+            SourceRequest(initial=initial, name=self.campaign_name, framework=self.framework,
+                          platform=self.platform), self.source_provider,
+            options=self.source_import_options,
+            state_root=supervisor_campaign_root(self.workspace) / 'initial-source',
+            native_eval=bool(self.atrex_bench_root) and not self.sandbox_ssh)
         self._selected_initial_kernel = next(
             (entry.source.read_bytes() if entry.source is not None else entry.text.encode()
              for entry in content.files if entry.path == "kernel.py"), None)

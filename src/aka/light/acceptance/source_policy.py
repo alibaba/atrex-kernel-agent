@@ -146,27 +146,29 @@ def production_structure_violations(
     require_gluon: bool = False,
 ) -> list[str]:
     """Delegate single-file checks; retain the controller-pinned tree boundary."""
-    from aka.light.workspace.sources import policy_at, collect
+    from aka.light.workspace.sources import read
 
-    policy = policy_at(workspace)
-    if policy is None:
+    try:
+        artifact = read(workspace)
+    except (OSError, ValueError) as exc:
+        return [f"Invalid candidate source declaration: {exc}"]
+    selected = framework_key(framework)
+    if artifact.layout.framework is not None:
+        if selected != artifact.layout.framework or require_gluon:
+            return ["Candidate source format does not implement the selected framework"]
+        return []
+    if not artifact.layout.archived:
         return legacy_policy.production_structure_violations(
             workspace, framework, require_gluon=require_gluon,
         )
-    if framework_key(framework) not in legacy_policy.SUPPORTED_PRODUCTION_FRAMEWORKS:
+    if selected not in legacy_policy.SUPPORTED_PRODUCTION_FRAMEWORKS:
         return [f"unsupported production framework: {framework}"]
-    kernel_path = workspace / "kernel.py"
-    if not kernel_path.is_file():
-        return ["kernel.py is missing"]
-    source = kernel_path.read_text(encoding="utf-8", errors="replace")
+    entrypoint = artifact.layout.python_entrypoint
+    source = artifact.files[entrypoint].decode(errors="replace")
     try:
-        ast.parse(source, filename=str(kernel_path))
+        ast.parse(source, filename=entrypoint)
     except SyntaxError as exc:
-        return [f"kernel.py is not valid Python: {exc.msg} (line {exc.lineno})"]
-    try:
-        collect(workspace, policy)
-    except (OSError, ValueError) as exc:
-        return [f"Invalid candidate source tree: {exc}"]
+        return [f"Candidate entry point is not valid Python: {exc.msg} (line {exc.lineno})"]
     if require_gluon and not source_uses_gluon(source):
         return ["switching back from the accepted Gluon phase to Triton is forbidden"]
     return []

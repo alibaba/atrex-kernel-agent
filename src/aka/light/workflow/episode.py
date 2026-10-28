@@ -210,11 +210,8 @@ def _latest_complete_episode_performance(
     path = episode_workspace / EPISODE_EVALUATIONS_PATH
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-        kernel_path = episode_workspace / "kernel.py"
-        from aka.light.workspace.sources import snapshot as source_snapshot
-        kernel_bytes = source_snapshot(episode_workspace)
-        kernel_sha256 = hashlib.sha256(kernel_bytes).hexdigest()
-        kernel_mtime = kernel_path.stat().st_mtime
+        from aka.light.workspace.sources import read
+        artifact = read(episode_workspace)
     except (OSError, ValueError):
         return None
     for line in reversed(lines):
@@ -225,20 +222,8 @@ def _latest_complete_episode_performance(
         result = payload.get("result") if isinstance(payload, dict) else None
         if not isinstance(result, dict) or result.get("all_pass") is not True:
             continue
-        schema_version = payload.get("schema_version")
-        recorded_kernel_sha256 = payload.get("kernel_sha256")
-        if isinstance(schema_version, int) and schema_version >= 2:
-            if recorded_kernel_sha256 != kernel_sha256:
-                continue
-        else:
-            # Schema v1 predates code fingerprints.  It is safe only when the
-            # current kernel has not been modified since this measurement.
-            try:
-                measured_at = _iso_timestamp(str(payload["timestamp"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-            if measured_at < kernel_mtime:
-                continue
+        if not artifact.matches_measurement(episode_workspace, payload):
+            continue
         by_shape = result.get("latency_us_by_shape")
         if not isinstance(by_shape, dict) or not by_shape:
             continue

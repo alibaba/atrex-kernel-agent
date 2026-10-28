@@ -74,20 +74,11 @@ def query(store, args, workspace: Path) -> dict:
         if len(path.parts) < 2 or path.parts[0] != "scratch":
             raise ValueError("--output-path must name a file (or tree directory) inside scratch/")
         source = _read_record(store.read_kernel, args.kernel_id, field="kernel_id", pattern=KERNEL_RECORD_ID_RE)
-        from aka.light.workspace.sources import unpack, install
-        policy, files = unpack(source)
-        if policy is None:
-            publish(workspace, str(path), source)
-        else:
-            if (workspace / path).exists():
-                from aka.light.workspace.sources import snapshot
-                if snapshot(workspace / path) != source:
-                    raise ValueError("Tree output directory contains different source; choose a new scratch/ directory")
-            else:
-                install(workspace / path, source)
+        from aka.light.workspace.sources import Artifact
+        exported = Artifact(source).export(workspace / path)
         result = {"ok": True, "kernel_id": args.kernel_id, "file": str(path), "bytes": len(source)}
-        if policy is not None:
-            result.update(source_kind="tree", directory=str(path), file_count=len(files))
+        if exported:
+            result.update(exported, directory=str(path))
     return {"exit_code": 0, "stdout": json.dumps(result) + "\n", "stderr": ""}
 
 
@@ -195,13 +186,9 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
         # Let the HTTP boundary attach the effective CLI contract and redaction.
         raise AgentRequestError(str(error)) from error
     operation = request["operation"]
-    from aka.light.workspace.sources import from_inputs, POLICY
-    kernels = {"candidate": store.kernel(from_inputs(inputs))} if "kernel.py" in inputs else {}
-    baseline_path = request["options"]["baseline_path"]
-    if baseline_path:
-        kernels["baseline"] = store.kernel(
-            from_inputs(inputs, prefix=baseline_path + "/")
-            if baseline_path + "/" + POLICY in inputs else inputs[baseline_path])
+    from aka.light.workspace.sources import measurement_artifacts
+    kernels = {side: store.kernel(artifact.snapshot)
+               for side, artifact in measurement_artifacts(request, inputs).items()}
     if reuse_correctness and reuse_completed and "candidate" in kernels:
         response = reuse_correctness_result(store, request, kernels["candidate"]["kernel_id"])
         if response is not None:

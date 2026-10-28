@@ -474,7 +474,7 @@ def _mutable_journal(path: Path) -> dict[str, Any]:
                 "Do not submit update-direction or record-experiment. Continue optimizing and "
                 "use saved Gateway Records. Submit episode-report with status and summary; for "
                 "candidate_ready include gateway_record_ids citing a passing full Evaluate for "
-                "the exact kernel.py. See skills/runtime-records/references/journal.md."
+                "the exact candidate snapshot. See skills/runtime-records/references/journal.md."
             ),
         )
     if journal.get("state") != "in_progress":
@@ -1298,7 +1298,7 @@ class SupervisorJournalService:
             ):
                 raise ValueError(
                     "candidate_ready requires the full candidate_commit from git rev-parse HEAD; "
-                    "commit kernel.py before reporting"
+                    "commit the candidate before reporting"
                 )
             from aka.light.workspace.git import EpisodeWorktree
 

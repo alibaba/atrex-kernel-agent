@@ -20,7 +20,7 @@ from pathlib import Path
 from aka.light.agent.home import open_private_directory
 from aka.legacy.task.persistence import durable_write_json, durable_write_text
 from aka.light.agent.session_tail import read_regular_bytes
-from aka.light.workspace.sources import MAX_SNAPSHOT, unpack
+from aka.light.workspace.sources import MAX_SNAPSHOT, Artifact
 
 RECORD_ID = re.compile(r"gateway-[0-9a-f]{32}")
 KERNEL_ID = re.compile(r"kernel-[0-9a-f]{32}")
@@ -263,16 +263,8 @@ class MeasurementStore:
             raise ValueError("Gateway record result integrity check failed")
         for side, identity in record["kernels"].items():
             source = self.read_kernel(identity["kernel_id"])
-            filename = "kernel.py" if side == "candidate" else record["request"]["options"]["baseline_path"]
-            policy, files = unpack(source)
-            expected = record["request"]["options"].get("source_snapshots", {}).get(side) if policy else record["request"]["inputs"][filename]
-            if (source_identity(source) != identity or hashlib.sha256(source).hexdigest() != expected):
-                raise ValueError("Gateway record refers to a different Kernel")
-            if policy:
-                prefix = "" if side == "candidate" else filename + "/"
-                if any(record["request"]["inputs"].get(prefix + name) != hashlib.sha256(data).hexdigest()
-                       for name, data in files.items()):
-                    raise ValueError("Gateway record omits or changes tree source evidence")
+            if source_identity(source) != identity or not Artifact(source).verify_measurement_inputs(record["request"], side):
+                raise ValueError("Gateway record omits or changes candidate source evidence")
         return record
 
     def _cached(self, record_id: str, task_digest: str) -> dict | None:

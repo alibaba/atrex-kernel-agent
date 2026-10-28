@@ -55,7 +55,7 @@ def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
         job_submitted=False, violations=violations,
         next_action=(
             "Remove or replace the listed forbidden imports, attribute accesses or string literals "
-            "in kernel.py, then retry the same operation with the repaired source. "
+            "in the candidate, then retry the same operation with the repaired source. "
             "Do not bypass source validation through Dev."
         ),
     )

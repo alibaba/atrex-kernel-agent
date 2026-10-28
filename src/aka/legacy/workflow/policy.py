@@ -92,7 +92,7 @@ def optimization_mode_directive(
         "Passing the same probes closes the suggestion. "
         "Incomplete probes remain validation blockers; never edit trusted inputs, probes or tolerances.\n"
         "- Keep `solution.json` consistent with the implementation. "
-        f"{candidate_submission_instruction}, inspect `kernel.py` "
+        f"{candidate_submission_instruction}, inspect the complete candidate sources "
         "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
         "evidence-backed production-policy verdict, even if it is faster and correct.\n"
     )

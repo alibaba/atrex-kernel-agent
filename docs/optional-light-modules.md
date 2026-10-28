@@ -477,14 +477,17 @@ end-to-end run was performed for pooled search.
 
 ### Single-file and contracted source-tree Kernels
 
-Single-file tasks still use `kernel.py`, with unchanged source IDs and tool commands.
-For a multi-file task, select the Workflow's optional source contract. Either
-snapshot a plain local directory (no Git required):
+The `candidate` module defaults to `source_tree`. Without import configuration,
+it freezes the initial implementation under editable `impl/model.py` and creates
+a fixed `kernel.py` adapter. Select `file_system=single_file` explicitly for the
+single-file layout or SOL/SSH. To import a package, configure the candidate module
+to snapshot a plain local directory (no Git required):
 
 ```json
 {
   "api_version": 1,
-  "patches": [{"id": "workflow", "config": {
+  "patches": [{"id": "candidate", "config": {
+    "file_system": "source_tree",
     "source_tree": {
       "manifest": "/absolute/path/to/task/source_manifest.json",
       "directory": "/absolute/path/to/source-directory"

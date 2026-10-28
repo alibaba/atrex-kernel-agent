@@ -66,6 +66,25 @@ resume bind the same frozen file; an explicit empty file remains empty. When rep
 request through the CLI, its parsed contents must match the request, so missing or changed pins fail
 instead of silently selecting a different runtime.
 
+## Native CUDA candidates
+
+Light native Atrex-Bench campaigns with explicit `file_system=cuda_manifest` and
+`--framework cuda` write `.cu`/header files
+and a versioned `solution.json`. AKA snapshots the complete candidate, creates a
+hash-verified OSS source archive, and asks Agate to compile and bind the launcher.
+The Agent no longer embeds CUDA in `kernel.py`. V0 remains the evaluator-owned
+Python reference. Use `--sandbox-profile pre` to select the pre-release Agate
+service explicitly; no endpoint or Diamond setting is changed.
+
+The installed `atrex-gpu-gateway` Skill documents the local file-list convenience and
+Agate build/ABI/dependency contract. See [native CUDA input](docs/native-cuda.md).
+The `candidate` module defaults to `source_tree`: a fixed `kernel.py` adapter
+imports the editable `impl/model.py`, and `impl/` can contain multiple source files.
+An import manifest is optional. Set `file_system` explicitly for the independent
+`single_file` or `cuda_manifest` alternatives; the choice stays fixed for the task.
+SOL/SSH tasks must explicitly select `single_file`.
+File layouts and source imports are configured there, outside the optimization workflow.
+
 ## News
 
 - [2026-09] [From leaderboards to real-world workloads: accelerating Qwen3.8-Max's core inference operators](https://mp.weixin.qq.com/s/q1wrpgu3R8S8dEqR-PhQgw) (WeChat): **AKA** delivers lower average latency than expert implementations for all **three key operator families** across **60 real-world shapes**, with up to **1.55× speedup** over production/official baselines.

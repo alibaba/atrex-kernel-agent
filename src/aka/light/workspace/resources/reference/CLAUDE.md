@@ -28,11 +28,12 @@ and finish procedure. Do not assume another DSL, library, or validation procedur
 
 ## Workspace and evidence
 
-- The execution boundary defines writable paths. Keep the executable candidate in `kernel.py`
-  for a single-file task. For a tree task, `WORKSPACE.md` declares editable directories;
-  the adapter and other fixed files must stay unchanged. The entire tree is one candidate;
-  update `solution.json` only where the phase permits. Do not edit public contracts or canonical
-  memory, or use Git for rollback.
+- Follow the selected file-system contract in `WORKSPACE.md` for writable paths,
+  fixed files and source organization. Read the atrex-gpu-gateway Skill for
+  directory/manifest usage and measurement. Framework choice does not change
+  the selected file system.
+  The complete source set is one measured candidate. Do not edit public contracts or
+  canonical memory, or use Git for rollback.
 - Cover the entire public input domain. Opaque Shape IDs identify results, not input parameters;
   do not reconstruct hidden cases or search outside the workspace for private inputs.
 - In managed Episodes, read `WORKSPACE.md`. Use `skills/<name>/SKILL.md` for reusable

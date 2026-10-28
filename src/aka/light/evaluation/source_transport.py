@@ -5,7 +5,6 @@ uploaded wire request before POST so an uncertain submission reuses that same
 reservation and idempotency key on recovery.
 """
 from __future__ import annotations
-import gzip
 import hashlib
 import http.client
 import io
@@ -14,11 +13,10 @@ import os
 from pathlib import Path
 import shlex
 import subprocess
-import tarfile
 import urllib.parse
 import zipfile
 
-from aka.light.workspace.sources import snapshot, unpack, relative
+from aka.light.workspace.sources import archive_bytes
 
 ARCHIVES = "__atrex_eval_archives"
 DIAGNOSTIC = "__atrex_source_diagnostic"
@@ -34,39 +32,19 @@ class SourceUploadError(RuntimeError):
 
 
 def attach(request, workspace, *, side="candidate", source=None):
-    policy, files = unpack(source if source is not None else snapshot(workspace))
-    if policy is None:
-        return request
-    if policy["package_root"] != ".":
-        raise ValueError("Native Eval archives require package_root='.'; no Dev fallback")
-    archive = f"archives/{side}.tar.gz"
-    request.setdefault(ARCHIVES, {})[archive] = {k: v.decode() for k, v in files.items()}
-    descriptor = {"archive": archive, "entry_point": "kernel.py"}
+    from aka.light.workspace.sources import Artifact, read
+    artifact = Artifact(source) if source is not None else read(workspace)
+    packaged = artifact.execution_source(f"archives/{side}.tar.gz")
+    if packaged.archives:
+        request.setdefault(ARCHIVES, {}).update(packaged.archives)
     if side == "candidate":
-        request["candidate"] = descriptor
+        request["candidate"] = packaged.candidate
     else:
-        request["abba"]["baseline"] = descriptor
-    requirements = list(request.get("requirements", []))
-    for item in policy["runtime_requirements"]:
-        spec = item["distribution"] + item.get("version", "")
-        if spec not in requirements:
-            requirements.append(spec)
+        request["abba"]["baseline"] = packaged.candidate
+    requirements = list(dict.fromkeys([*request.get("requirements", []), *packaged.requirements]))
     if requirements:
         request["requirements"] = requirements
     return request
-
-
-def archive_bytes(files):
-    output = io.BytesIO()
-    with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as gz:
-        with tarfile.open(fileobj=gz, mode="w", format=tarfile.PAX_FORMAT) as tar:
-            for name, text in sorted(files.items()):
-                relative(name)
-                data = text.encode()
-                member = tarfile.TarInfo(name)
-                member.size, member.mode = len(data), 0o644
-                tar.addfile(member, io.BytesIO(data))
-    return output.getvalue()
 
 
 def _dev_archive(request):
@@ -117,7 +95,7 @@ def uploaded_request(request, wire_key, *, json_call, upload, kind="eval"):
     if large_dev:
         packed, wire = _dev_archive(request)
     else:
-        if kind != "eval" or request.get("oss_files"):
+        if kind not in {"eval", "profile"} or request.get("oss_files"):
             raise ValueError("Native Eval archives cannot mix existing upload references or Dev tasks")
         packed = {name: archive_bytes(files) for name, files in sorted(request[ARCHIVES].items())}
         wire = {k: v for k, v in request.items() if k != ARCHIVES}
@@ -164,17 +142,19 @@ def upload_bytes(url, data):
 
 
 def diagnostic_request(request, workspace, kind, *, timeout=600):
-    policy, files = unpack(snapshot(workspace))
-    if policy is None:
-        return request
+    from aka.light.workspace.sources import read
+    artifact = read(workspace)
+    route = artifact.layout.diagnostic_route(kind)
+    if route in {"single", "typed"}:
+        return attach(request, workspace, source=artifact.snapshot)
+    files = artifact.files
     if request.get("profiler", "ncu") != "ncu" or request.get("fmt") == "isa":
         raise ValueError("Source-tree diagnostics currently support NVIDIA NCU and auto/sass/ptx")
     reference = request.get("reference", request.get("diagnostic_reference"))
     parameters = {key: request[key] for key in ("profiler", "level", "counters", "kernel_regex", "kernel_name",
                   "source", "launch_skip", "launch_count", "top_kernels", "arch", "sanitize", "fmt") if key in request}
     timeout = min(10800, timeout + 30)
-    diagnostic = {"operation": kind, "entrypoint": "kernel.py", "package_root": policy["package_root"],
-                  "runtime_requirements": policy["runtime_requirements"], "requirements": request.get("requirements", []),
+    diagnostic = {"operation": kind, **artifact.diagnostic_source(), "requirements": request.get("requirements", []),
                   "shapes": reference["shapes"], "parameters": parameters, "lock_clocks": True,
                   "timeout_s": max(1, timeout - 30)}
     from aka.legacy.evaluation.resources import ncu_profile_script
@@ -194,7 +174,7 @@ def run(gateway, args, request, kind, queue_wait_grace, *, identity_extra=None):
     if not url:
         raise ValueError("Whole-tree transport requires a resolvable Agate URL and Supervisor HTTP credentials")
     diagnostic = request.get(DIAGNOSTIC)
-    process = gateway.run_direct_job(url=url, kind="dev" if diagnostic else "eval", payload=diagnostic or request,
+    process = gateway.run_direct_job(url=url, kind="dev" if diagnostic else "profile" if kind == "profile" else "eval", payload=diagnostic or request,
         timeout=args.timeout, queue_wait_grace=queue_wait_grace, max_device_retries=10,
         device_retry_delay=60, identity_extra=identity_extra)
     if diagnostic and process.returncode == 0:

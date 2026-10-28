@@ -77,7 +77,9 @@ def _sha256(path: Path) -> str:
 
 
 def _capture_paths(workspace: Path) -> Iterable[Path]:
-    for relative in ("kernel.py", "solution.json", "memory/v1.json", ".atrex_versions/v1.json"):
+    from aka.light.workspace.sources import capture_paths
+    yield from capture_paths(workspace)
+    for relative in ("memory/v1.json", ".atrex_versions/v1.json"):
         yield workspace / relative
     yield from sorted((workspace / "plans").glob("v1_*.md"))
     for pattern in ("debug*.py", "probe*.py", "smoke*.py"):
@@ -262,32 +264,26 @@ def save_supervisor_recovery(
 
 
 def restore_latest_candidate(workspace: Path) -> list[str]:
-    """Restore only kernel.py/solution.json from the newest crash snapshot."""
+    """Restore the complete candidate from the newest crash snapshot."""
     workspace = workspace.resolve()
     value = load_progress(workspace)
     snapshot = value.get("latest_snapshot")
     if not isinstance(snapshot, dict) or not isinstance(snapshot.get("files"), list):
         return []
-    restored: list[str] = []
-    for relative_snapshot in snapshot["files"]:
-        if not isinstance(relative_snapshot, str):
-            continue
-        source = (workspace / relative_snapshot).resolve()
-        try:
-            source.relative_to(workspace)
-        except ValueError:
-            continue
-        if not source.is_file():
-            continue
-        destination_name = source.name
-        if destination_name not in {"kernel.py", "solution.json"}:
-            continue
-        destination = workspace / destination_name
-        _atomic_write_bytes(destination, source.read_bytes())
-        restored.append(destination_name)
-    return restored
+    from aka.light.workspace.sources import restore_capture
+    root = (workspace / snapshot.get("root", "")).resolve()
+    if not root.is_relative_to(workspace):
+        return []
+    try:
+        return restore_capture(workspace, root)
+    except FileNotFoundError:
+        return []
+
 
 
 def candidate_sha256(workspace: Path) -> str:
-    path = workspace / "kernel.py"
-    return _sha256(path) if path.is_file() else ""
+    from aka.light.workspace.sources import snapshot
+    try:
+        return hashlib.sha256(snapshot(workspace)).hexdigest()
+    except FileNotFoundError:
+        return ""
