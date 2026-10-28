@@ -1,93 +1,99 @@
-# 作业、附件与排障
+# Jobs, attachments and troubleshooting
 
-## 作业身份与等待
+## Job identity and waiting
 
-`eval` 默认提交后等终态；`--no-wait` 只返回 `job_id`，之后用 `agate get JOB_ID --wait`。
-原始 `agate submit payload.json` 默认不阻塞，加 `--wait` 才等待。
-`execution_phase` 区分网关排队、后端提交／排队、执行与收集，`phase_elapsed_ms` 是当前阶段耗时。
-取消受理不代表远端已停止，继续用原 `job_id` 查终态。
+`eval` submits and waits for a terminal state by default. `--no-wait` returns only `job_id`; later run `agate get JOB_ID --wait`.
+Raw `agate submit payload.json` does not wait by default; add `--wait`.
+`execution_phase` distinguishes gateway queueing, backend submission/queueing, execution and collection;
+`phase_elapsed_ms` measures the current phase. Cancellation acceptance does not confirm remote termination; keep querying the original `job_id`.
 
-| 超时参数 | 范围 |
+| Timeout option | Scope |
 |---|---|
-| `--job-timeout` | worker 作业预算，以对应命令与服务端配置为准 |
-| `--wait-timeout` | CLI 等终态的预算 |
-| `--http-timeout` | 单次 HTTP 请求预算 |
+| `--job-timeout` | Worker job budget, subject to command and server configuration |
+| `--wait-timeout` | CLI budget for waiting on terminal state |
+| `--http-timeout` | Individual HTTP request budget |
 
-不同子命令支持的参数不同，先查其 `--help`；旧 `--timeout` 同时设置三者，已弃用。
-默认网关排队上限为两小时，原有更短预算仍生效，重启和重试不会重置起点。
-`timeout/gateway_queue_timeout` 表示在网关排队到期，`exclusive_lane_queue_timeout` 表示独占 profile 尚未提交后端。
+Supported options vary by subcommand; inspect `--help`. Deprecated `--timeout` sets all three.
+Gateway queueing is capped at two hours by default; shorter existing budgets still apply, and restarts/retries do not reset the start time.
+`timeout/gateway_queue_timeout` means gateway queue expiry; `exclusive_lane_queue_timeout` means an exclusive profile job has not reached the backend.
 
-运行中超时会返回 `failed` 和 `finished_at`。`cleanup_pending=true` 表示远端执行仍待停止确认，
-有界清理期间暂保留预约；缺失回执立即归档，其他超时清理最多 60 秒。
-`execution_quarantined=true` 且 `cleanup_pending=false` 表示未知执行已归档，原身份仍保留，
-不自动访问原远端。404 不能证明未执行；不要因超时、取消或断连换身份重复提交。
-远端终态已确认的结果仍按收集预算完成，原资源池停用不丢弃已收集路径。
+Execution timeout returns `failed` and `finished_at`. `cleanup_pending=true` means remote termination still needs confirmation;
+reservations remain during bounded cleanup. Missing receipts are archived immediately; other timeout cleanup lasts at most 60 seconds.
+`execution_quarantined=true` with `cleanup_pending=false` means unknown execution is archived with its original identity,
+and the original remote is no longer accessed automatically. A 404 does not prove non-execution.
+Do not change identity and resubmit because of timeout, cancellation or disconnection.
+Confirmed remote terminal results still finish within the collection budget; disabling the original pool does not discard an already-collected path.
 
-## 限流、重试与权限
+## Rate limits, retries and permissions
 
-HTTP 429 的 `gateway_overloaded`／`gpu_queue_full`／`tenant_gpu_queue_full` 不创建作业。
-客户端遵守 `Retry-After`，指数退避加随机抖动；30 秒只限制额外随机退避，不截短服务端等待要求。
-预算不足时返回原错误，调用方在业务截止时间内沿用原请求和稳定幂等键稍后重试。
-同一次逻辑提交自动生成一次调用级幂等键；跨进程去重仍需显式传入稳定键。
-批量调用按同一 AK 的未完成 GPU 单位控制窗口，多进程共享 AK 时合计控制，不只限制 HTTP 并发。
+HTTP 429 `gateway_overloaded`, `gpu_queue_full` and `tenant_gpu_queue_full` create no job.
+The client honors `Retry-After` and uses exponential backoff with jitter. The 30-second cap applies only to extra randomized backoff,
+not the server's requested wait. With insufficient budget, return the original error; callers may retry the same request/key within their business deadline.
+One call-level idempotency key is generated per logical submission. Cross-process deduplication requires an explicitly supplied stable key.
+Throttle batches by unfinished GPU units for the same AK; coordinate the aggregate across processes sharing an AK, not merely HTTP concurrency.
 
-`503 coordinator_busy` 可能来自历史需求补齐，不创建作业，也不触发 SDK 的自动 429 重试。
-`503 cluster_configuration_changed` 等待配置同步后用同一键重试。
-`403 cluster_ak_denied` 需管理员授权或选择其他环境，不能当过载重试；管理员身份与工号不替代 AK 权限。
-权限变化不取消已有作业，原请求的查询、取消与幂等重放仍沿用原权限；跨租户查询为 404。
+`503 coordinator_busy` may arise while backfilling historical demand; it creates no job and does not trigger the SDK's automatic 429 retry.
+For `503 cluster_configuration_changed`, wait for configuration synchronization and retry with the same key.
+`403 cluster_ak_denied` requires administrator authorization or another environment; do not retry it as overload.
+Administrator identity/employee ID does not replace AK permissions. Permission changes do not cancel existing jobs;
+queries, cancellation and idempotent replay retain the original request's permissions. Cross-tenant queries return 404.
 
-`503 job_record_unreadable` 且 `details.scope=job` 只影响该记录，保留原身份等待修复，其他作业可查询。
-`owner_unavailable` 或连接中断同样需先确认原提交。
-`ipc_connection_limit` 表示 IPC 容量触顶；`ipc_operation_failed`／`ipc_response_invalid` 是业务或编码错误，
-保留 trace id 交运维排查，不能一律当 owner 不可达。
+`503 job_record_unreadable` with `details.scope=job` affects only that record; preserve its identity and wait for repair while other jobs remain queryable.
+For `owner_unavailable` or disconnection, also confirm the original submission first.
+`ipc_connection_limit` indicates IPC saturation. `ipc_operation_failed`/`ipc_response_invalid` indicate business/encoding errors;
+retain the trace ID for operations rather than treating every error as an unreachable owner.
 
-普通读取和统一幂等提交短暂传输失败时默认最多恢复两次，共享原 HTTP 预算和原请求体／幂等键。
-上传、取消、旧提交接口、强制探测及永久 DNS／TLS 校验错误不自动恢复。
-SDK `TransportError` 的 `status=None`，安全 details 包含原因、阶段、errno 和尝试次数；
-可用 `Client(..., transport_retries=0)` 观察原始稳定性。恢复成功也不抹去已发生的失败。
+Ordinary reads and unified idempotent submissions recover from transient transport failure at most twice by default,
+sharing the original HTTP budget, body and idempotency key.
+Uploads, cancellation, legacy submission endpoints, forced probing and permanent DNS/TLS-validation errors do not recover automatically.
+SDK `TransportError` has `status=None`; safe details include reason, phase, errno and attempt count.
+Use `Client(..., transport_retries=0)` to observe raw stability. Successful recovery does not erase earlier failures.
 
-## 依赖与环境变量
+## Dependencies and environment variables
 
 ```bash
 agate eval --gpu H20 --candidate my_kernel.py --reference-dir data/rms_norm -r requirements.txt
 agate eval --gpu H20 --candidate my_kernel.py --reference-dir data/rms_norm -e TORCH_LOGS=+dynamo
 ```
 
-`-r` 可重复，接受 pip 规格或 HTTPS wheel；拒绝 HTTP／file／git+／editable／本地路径。
-默认 `freeze_installed` 复用 base 已满足的包，只安装缺少或不满足的依赖；`no_deps` 只装列出包，
-缺少的间接依赖须自行列出。安装在每作业独立环境，支持 eval 两套 harness、profile、check 与 disassemble。
-wheel 须能从目标 GPU 地域访问；安装失败回 `deps_install_failed`，工具错误在 `details.logs_tail`。
-`-e/--env-var` 由服务端前缀白名单控制，例如 `TRITON_`／`TORCH_`，不是任意环境访问入口。
+Repeat `-r` for pip specifications or HTTPS wheels. HTTP/file/git+/editable/local-path inputs are rejected.
+Default `freeze_installed` reuses satisfied base packages and installs only missing/unsatisfied dependencies.
+`no_deps` installs only listed packages, so list missing transitive dependencies yourself.
+Installation is isolated per job and supported for both eval harnesses, profile, check and disassemble.
+Wheels must be reachable from the target GPU region. Installation failure returns `deps_install_failed`, with tool errors in `details.logs_tail`.
+`-e/--env-var` follows the server's prefix allowlist, such as `TRITON_`/`TORCH_`; it is not arbitrary environment access.
 
-## OSS 附件
+## OSS attachments
 
-`eval`、SOL、`profile`、`check` 和 `disassemble` 可重复使用 `--oss-file DEST=LOCALPATH` 与
-`--oss-output PATH`。客户端与 worker 直连 OSS，字节不过网关 JSON。
-输出只在 `artifacts[]` 给临时 URL，不自动下载；不支持目录或通配符，可先打包普通文件。
-上传前预留最终 `job_id`，上传或提交失败也打印该 ID，便于按同一前缀清理。
-附件不得覆盖经网关校验的候选、solution 或 driver 文件；冲突在排队前拒绝。
-`dev` 不支持这些附件参数，它使用 `--file`。
+`eval`, SOL, `profile`, `check` and `disassemble` accept repeatable `--oss-file DEST=LOCALPATH` and `--oss-output PATH`.
+Client and worker access OSS directly; bytes do not pass through gateway JSON.
+Outputs expose temporary URLs in `artifacts[]` without automatic download. Directories/globs are unsupported; package them into a regular file first.
+The final `job_id` is reserved before upload and printed even after upload/submission failure, enabling cleanup under the same prefix.
+Attachments cannot overwrite gateway-validated candidate, solution or driver files; conflicts are rejected before queueing.
+`dev` does not support these attachment options; it uses `--file`.
 
-`oss_unavailable` 表示获准资源没有 OSS；`400 kind_not_allowed` 表示所有匹配资源都禁止该命令，
-应更换卡型或命令，不能按 OSS 故障重试。上传准备和提交均遵循 AK、命令和放置约束。
+`oss_unavailable` means the authorized resources lack OSS.
+`400 kind_not_allowed` means every matching resource prohibits the command; choose another GPU type/command rather than retrying as an OSS failure.
+Upload preparation and submission both enforce AK, command and placement constraints.
 
-## 错误归因与证据
+## Error attribution and evidence
 
-- `code/*` 改候选，`validation/*` 改请求；`infra/*` 与 `timeout/*` 结合已执行证据和剩余预算判断。
-  特别是 dev，不要因基础设施分类就重复执行有外部副作用的命令。
-- Triton OutOfResources、ptxas 编译错误按候选归因，`details.failure_rule` 表示命中的证据。
-  `ptxas-blackwell` 等回 `code/codegen_error`，优先保留具体汇编诊断。
-- atrex-bench 环境／版本错误的 `next step:` 区分请求 pin 与镜像配置问题；客户端过旧时执行 `agate update`。
-  包索引超时可返回 `infra/deps_install_timeout`。
-- 没有独立结果或结构化终态证据，且日志不可达时回 `infra/logs_unavailable`；
-  已持久化的原生失败保留原原因，并附 `details.output_unavailable_reason=logs_unavailable`。
-  日志可读但无法识别根因才回 `infra/no_result`；诊断保留远端记录时有 `details.gc_deferred=true`。
-- profile 采集前的候选异常回 `code/code_execution_failed`；成功结果的 note 按真实换行打印到 stderr，stdout JSON 不变。
-  `eval_result_diagnostic=unsupported_verdict_layout` 只表示结构未知，不能据此判断代码失败。
-- SOL 在首条 trace 前的 nvcc／TileLang 编译错误回 `code/code_execution_failed`，
-  `failure_rule=sol_native_compile_error`；`details.execution_diagnostic` 保存有界异常摘要、退出码与字节数。
-  `scan_complete=false` 表示证据不完整，字段缺省可能是旧 worker；有效 trace 优先。
-  `details.result_payload_state` 区分空、不可解析、标记缺失与截断。
-- SOL 的明确候选段错误回 `code/code_execution_failed`，保留 `sol_native_crash` 与 `segmentation_fault`，
-  不自动重试或计集群故障；原生 abort 仍为 `infra/native_crash`、`failure_origin=unknown`。
-  仅有 137／139 退出码不能证明 OOM 或候选错误，无其他证据仍为 `no_result`。
+- Fix the candidate for `code/*` and the request for `validation/*`. Interpret `infra/*` and `timeout/*` using execution evidence and remaining budget.
+  In particular, do not rerun a dev command with external side effects merely because an error is classified as infrastructure.
+- Triton OutOfResources and ptxas compilation errors are attributed to the candidate; `details.failure_rule` identifies the evidence rule.
+  Cases such as `ptxas-blackwell` return `code/codegen_error`; retain concrete assembly diagnostics first.
+- For atrex-bench environment/version errors, `next step:` distinguishes request pins from image configuration.
+  Use `agate update` for an outdated client. Package-index timeout may return `infra/deps_install_timeout`.
+- With no independent result/structured terminal evidence and inaccessible logs, return `infra/logs_unavailable`.
+  A persisted native failure retains its original reason and adds `details.output_unavailable_reason=logs_unavailable`.
+  Readable logs with no identifiable cause produce `infra/no_result`; retained remote diagnostic records expose `details.gc_deferred=true`.
+- Candidate exceptions before profiling return `code/code_execution_failed`.
+  Successful-result notes print real newlines to stderr without changing stdout JSON.
+  `eval_result_diagnostic=unsupported_verdict_layout` means only an unknown structure, not proven code failure.
+- SOL nvcc/TileLang compilation failure before the first trace returns `code/code_execution_failed` with `failure_rule=sol_native_compile_error`.
+  `details.execution_diagnostic` retains bounded exception summaries, exit status and byte counts.
+  `scan_complete=false` means incomplete evidence; absent fields may indicate an older worker. Valid traces take precedence.
+  `details.result_payload_state` distinguishes empty, unparseable, missing-marker and truncated payloads.
+- An explicit SOL candidate segmentation fault returns `code/code_execution_failed`, preserving `sol_native_crash` and `segmentation_fault`.
+  It is not retried automatically or counted as a cluster failure. Native abort remains `infra/native_crash` with `failure_origin=unknown`.
+  Exit 137/139 alone proves neither OOM nor candidate error; without other evidence it remains `no_result`.

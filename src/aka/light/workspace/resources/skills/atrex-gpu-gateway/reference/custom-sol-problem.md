@@ -1,13 +1,12 @@
-# 自定义 SOL 题：无需仓库权限的完整示例
+# Custom SOL problems: a complete example without repository access
 
-当用户要自己出一道 SOL 题、把现有算子转换成 SOL 格式，或验证自定义题链路时读取本文件。
-下面的内容完整包含在 skill 包内，只需要本机有 `python3`、`agate` 和网关鉴权。
+Read this when creating a problem, converting an existing operator to SOL or validating the custom-problem path.
+Everything below ships with the Skill; the local machine needs only `python3`, `agate` and gateway authentication.
 
-## 一键生成示例
+## Generate the example
 
-把下面代码保存为 `create_custom_sol_smoke.py` 并执行。它会在当前目录生成
-`custom-scale2-smoke/`，其中包含上游原生的 `definition.json`、`workload.jsonl` 和
-`solution.json`：
+Save the following as `create_custom_sol_smoke.py` and run it. It creates `custom-scale2-smoke/` in the current directory,
+containing native upstream `definition.json`, `workload.jsonl` and `solution.json`:
 
 ```python
 from pathlib import Path
@@ -76,42 +75,42 @@ agate eval --backend sol \
   --gpu L20N
 ```
 
-上述命令默认使用正式环境。同一个题目目录也能交给上游本地工具：
+These commands use production by default. The same problem directory also works with the upstream local tool:
 
 ```bash
 sol-execbench custom-scale2-smoke \
   --solution custom-scale2-smoke/solution.json --json
 ```
 
-## 验收标准
+## Acceptance criteria
 
-以下条件必须同时满足：
+All of the following must hold:
 
-- 作业 `status` 是 `succeeded`。
-- `result.summary.passed == result.summary.total`。
-- `problem_source` 是 `inline`。
-- `problem_digest` 以 `sha256:` 开头；同一份题面重复提交时 digest 相同。
+- Job `status` is `succeeded`.
+- `result.summary.passed == result.summary.total`.
+- `problem_source` is `inline`.
+- `problem_digest` starts with `sha256:` and remains the same when the identical problem is resubmitted.
 
-自定义题的 `PASSED` 只说明候选解与调用方自带 reference 一致，不代表通过官方 235 题，不能把两者
-混在同一个成绩统计中。
+A custom problem passing means the candidate agrees with the caller's reference.
+It does not mean it passed the official 235 problems; do not combine these in one score statistic.
 
-## 从现有算子转换
+## Converting an existing operator
 
-转换时按下表映射：
+Map the operator information as follows:
 
-| 现有算子信息 | SOL 文件 |
+| Existing information | SOL location |
 |---|---|
-| reference 实现 | `definition.json.reference` 的顶层 `run()` |
-| shape 变量 | `definition.json.axes` |
-| 输入名、shape、dtype | `definition.json.inputs` |
-| 输出名、shape、dtype | `definition.json.outputs` |
-| 每组真实 shape 与输入生成方式 | `workload.jsonl` 的一行 |
-| 候选实现与入口函数 | `solution.json.sources[]` 与 `spec.entry_point` |
+| Reference implementation | Top-level `run()` in `definition.json.reference` |
+| Shape variables | `definition.json.axes` |
+| Input names, shapes and dtypes | `definition.json.inputs` |
+| Output names, shapes and dtypes | `definition.json.outputs` |
+| Each real shape and its input-generation method | One row in `workload.jsonl` |
+| Candidate implementation and entry function | `solution.json.sources[]` and `spec.entry_point` |
 
-`definition.inputs` 的序列化顺序、`reference.run()` 的形参顺序、候选入口函数的形参顺序必须一致。
-例如 inputs 按 `x, weight` 写，两个函数也必须接收 `(x, weight)`。题名必须匹配
-`custom-<operator>-<tag>`，全小写且 tag 至少 4 个字符。
+The serialized order of `definition.inputs`, argument order of `reference.run()` and candidate entry argument order must match.
+For example, inputs ordered `x, weight` require both functions to accept `(x, weight)`.
+Problem names must match `custom-<operator>-<tag>`, all lowercase, with a tag of at least 4 characters.
 
-需要保持特殊输入分布时，在 reference 中增加 `generate_inputs(axes_and_scalars, device)`，设置
-`custom_inputs_entrypoint`，并把对应 workload inputs 的 `type` 写成 `custom`。一个 workload 不要
-混用 `custom` 与其他输入类型。
+To retain special input distributions, add `generate_inputs(axes_and_scalars, device)` to the reference,
+set `custom_inputs_entrypoint`, and use `type=custom` for the corresponding workload inputs.
+Do not mix `custom` and other input types within one workload.

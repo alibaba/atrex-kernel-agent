@@ -1,62 +1,126 @@
-# 容量控制权与外部保底
+# Capacity ownership and external floors
 
-网关容量控制采用一个 profile 持有控制权、同 profile 多实例竞争共享租约的模型。正式和预发使用同一份 Hologres operations 事件表、租约表及相同集群配置名称；仅指向同一个 Ray 地址不足以协调。
+One profile owns capacity control; instances within that profile compete for a shared lease.
+Production and preproduction use the same Hologres operations event/lease tables and matching cluster configuration names.
+Pointing at the same Ray address alone does not coordinate them.
 
-## 集群登记与首次初始化
+## Cluster registration and initialization
 
-各网关仅使用自己的集群登记列表。共享控制键继续使用配置 `name`；运维须保证连接同一 dashboard URL 的正式、预发配置同名，独立集群使用不同名字。
+Each gateway uses its own registered cluster list. The shared control key remains the configured `name`.
+Operators must use the same name in production/preproduction for the same dashboard URL and different names for independent clusters.
 
-启用的本地登记自动初始化 profile 归属，正常设置保底无需点击接管。初始化在集群租约内读取新鲜后端约束，保存完整外部 bundle、数量与 selector；已有网关目标不会变成永久外部保底。后端不可读、session 未知或约束无法完整保留时，不取得归属、不覆盖约束。已有其他环境归属时拒绝启用，须显式转交或先删除旧环境登记。
+An enabled local registration initializes profile ownership automatically; normal floor configuration needs no manual claim.
+Initialization reads fresh backend constraints under the cluster lease and preserves complete external bundles, counts and selectors.
+Existing gateway targets do not become permanent external floors. If the backend is unreadable, its session is unknown,
+or constraints cannot be preserved completely, ownership is not acquired and constraints are not overwritten.
+Another environment's ownership blocks enabling the registration; transfer explicitly or first remove the old registration.
 
-归属统一约束 Rust 路由、上传预选、普通作业准入、换池和阶段 GPU 准入，以及 SDK 提交桥和全部容量写入口。同环境实例共用持久归属、GPU 预约和集群操作租约。归属快照每 5 秒刷新，有效期 15 秒；读取失败不延长原授权，没有有效授权的集群关闭新调度，存量作业继续轮询、取消和清理。未配置共享账本的单环境部署按本地配置运行，不提供跨环境互斥。
+Ownership constrains Rust routing, upload preselection, ordinary job admission, pool switching, staged GPU admission,
+the SDK submission bridge and every capacity-write entry point. Instances in one environment share durable ownership,
+GPU reservations and cluster-operation leases. Ownership snapshots refresh every 5 seconds and expire after 15 seconds.
+Read failures do not extend authorization. Clusters without valid authorization stop new scheduling; existing jobs continue polling, cancellation and cleanup.
+Single-environment deployments without the shared ledger use local configuration and provide no cross-environment exclusion.
 
-外部保底独立于可到期的手动保底，采用 Ray 逻辑 GPU 单位。相同 bundle 与 selector 取各来源数量的较大值；不兼容的形状保守保留，CPU 等附带资源也保留。无法无损重放的原生亲和性或 fallback 约束关闭容量写入。清除手动保底不会清除外部保底。
+External floors are separate from expiring manual floors and use Ray logical-GPU units.
+For matching bundles/selectors, retain the larger count across sources; conservatively preserve incompatible shapes and accompanying resources such as CPU.
+Native affinity or fallback constraints that cannot be replayed losslessly disable capacity writes. Clearing a manual floor does not clear the external floor.
 
-## 正式与预发转交及删除
+## Production/preproduction transfer and deletion
 
-同一 `name` 任一时刻只属于一个环境，各环境的流量需求不聚合。转交请求先登记排空状态，旧环境停止新路由和普通作业准入，已有执行及其阶段继续收尾。等待旧归属快照和有界在途准入失效后，旧环境从共享运行态提供新鲜完整报告；活动执行、清理和隔离全部为零，才在集群租约内完成归属切换。SDK 提交前复核当前归属；它已在 Rust 中持久登记，纳入排空报告，不争用容量写入租约。排空安全窗口默认至少 90 秒，覆盖旧准入快照和有界 SDK 调用；后端约束和外部保底保留。
+A given `name` belongs to only one environment at a time; demand is not aggregated across environments.
+Transfer first records a draining state. The old environment stops new routes and ordinary admission while existing executions/stages finish.
+After old ownership snapshots and bounded in-flight admission expire, the old environment provides a fresh complete report from shared runtime state.
+Only when active execution, cleanup and quarantine are all zero does ownership switch under the cluster lease.
+The SDK rechecks current ownership before submission; its Rust-persisted registration participates in drain reports without competing for the capacity-write lease.
+The drain safety window defaults to at least 90 seconds to cover old admission snapshots and bounded SDK calls.
+Backend constraints and external floors are preserved.
 
-独立命令可以请求转交，但旧环境未升级、报告不可读或执行未排空时不会强抢。目标环境必须有自己的登记，转交不会创建目标环境配置。临时借用结束后按相同流程归还。排空尚未完成时，可在页面取消转交，或执行独立命令 `cancel-transfer`；删除排空期间重新发布 `enabled=true` 会取消该次删除排空。
+Standalone commands can request transfer but cannot force takeover when the old environment is not upgraded, reports are unreadable or executions remain.
+The target must have its own registration; transfer does not create configuration there. Return temporarily borrowed capacity through the same process.
+While draining, cancel a transfer in the UI or with `cancel-transfer`. Publishing `enabled=true` during deletion drain cancels that deletion drain.
 
-`manage_clusters delete` 默认先发布停用登记，再等待存量执行和清理排空；共享协调器确认排空后释放归属。超时保持停用状态，排查后重试。`delete --force` 跳过等待，立即返回停用结果；历史绑定仍供已运行作业收尾。两种删除都不销毁 Ray、不主动取消作业，也不直接清空后端资源约束。
+`manage_clusters delete` first publishes a disabled registration, then waits for execution/cleanup to drain.
+Ownership is released after the shared coordinator confirms completion. A timeout leaves the registration disabled; investigate and retry.
+`delete --force` skips waiting and immediately returns the disabled result; historical bindings remain for running jobs to finish.
+Neither deletion mode destroys Ray, actively cancels jobs or directly clears backend resource constraints.
 
-接管／转交／暂停／恢复入口沿用 BUC 全局管理员权限和版本校验，独立命令要求共享账本凭据；正常初始化由登记自动完成，`claim` 仅保留旧管理接口与人工恢复兼容。容量暂停与集群归属独立，暂停扩缩容不改变 owner。
+Claim/transfer/pause/resume retain BUC global-administrator authorization and revision checks.
+Standalone commands require shared-ledger credentials. Registration performs normal initialization automatically;
+`claim` remains for legacy administration and manual recovery. Capacity pause is independent of cluster ownership: pausing scaling does not change the owner.
 
-## 外部应急操作
+## External emergency operations
 
-应急流程是「暂停控制成功 → 运维直接修改 Ray → 显式恢复」。暂停等待已取得集群租约的操作结束，保留后端当前约束，不依赖后端可达。暂停后重启网关仍不会写容量。
+Follow this sequence: **successfully pause control, modify Ray directly, then explicitly resume**.
+Pause waits for operations already holding the cluster lease, preserves current backend constraints and does not require backend reachability.
+Restarting the gateway while paused does not re-enable capacity writes.
 
-未先暂停而直接修改约束时，网关会在下一次实际写入或稳态复核中读取完整约束；同 session 的未知漂移使控制转为暂停，不自动修复。正常后端 session 重启且约束为空时，可以重放已登记保底。外部修改成当前目标完全相同的值无法区分写入方。
+If constraints are changed directly without pausing, the gateway reads complete constraints at its next actual write or steady-state verification.
+Unknown drift within the same session pauses control instead of repairing it automatically.
+After a normal backend session restart with empty constraints, registered floors may be replayed.
+An external write of exactly the current target is indistinguishable from the gateway's write.
 
-恢复默认保留原外部保底；仅在明确选择「将当前外部约束登记为新的外部保底」时替换它。恢复将重新读取后端约束并校验控制版本。
+Resume preserves the original external floor unless the operator explicitly chooses to register current external constraints as the new floor.
+It re-reads backend constraints and validates the control revision.
 
-Ray 的请求接口没有外部 fencing／CAS。直接写 Ray 可能与在途网关请求竞争，因此自动检测漂移不能替代先暂停的流程。新旧网关共享同一账本和集群名时，由下述兼容租约协调滚动升级；不经过该租约的外部脚本仍须按暂停流程操作。
+Ray's request API has no external fencing/CAS. Direct writes can race with in-flight gateway requests;
+automatic drift detection does not replace pausing first. Old/new gateways sharing the ledger and cluster name coordinate rolling upgrades
+through the compatibility lease below. External scripts that bypass this lease must still follow the pause procedure.
 
-当前服务端将 Ray SDK 限定为 `>=2.56.1,<2.57`，锁定依赖和实机集群版本为 `2.56.1`。原生约束读取在目标 Ray 集群内执行，依赖目标版本的 GCS 生成协议；升级目标 Ray 时也须运行真实 SDK 的 selector 往返验证。符号缺失、协议读取失败或无法完整重放的约束均关闭容量写入，不以空约束替代失败。
+The server currently requires Ray SDK `>=2.56.1,<2.57`; the locked dependency and verified cluster version are `2.56.1`.
+Native constraints are read inside the target cluster using that Ray version's generated GCS protocol.
+When upgrading target Ray, also run the real-SDK selector round-trip check.
+Missing symbols, protocol-read failures or constraints that cannot be fully replayed disable writes; failures are never treated as empty constraints.
 
-在已暂停控制且原始约束为空的测试集群运行：
+On a test cluster with control paused and initially empty constraints, run:
 
 ```bash
 python scripts/verify_ray_capacity_selectors.py --config-file operator.json --cluster gpu-pool
 ```
 
-该诊断作业不占 GPU，用已在线节点的 0.125 CPU 需求核对单值／多值 IN 与 NOT_IN 的原生 protobuf operator 和 values，并在结束前清空临时约束。原始约束非空时拒绝测试；session 变化或恢复失败须人工核对。它不创建真实 GPU 工作负载，不代替扩容与准入验收。
+This diagnostic uses no GPU. It requests 0.125 CPU on already-online nodes to verify native protobuf operators/values for
+single/multiple-value IN and NOT_IN selectors, then clears temporary constraints before exit.
+It rejects initially nonempty constraints. Session changes or restoration failure require manual verification.
+It creates no real GPU workload and does not replace scale-up/admission acceptance tests.
 
-## 新旧版本滚动升级与回滚
+## Rolling upgrades and rollback
 
-兼容范围是使用同一份 operations 事件表、租约表且以同一 `name` 取得容量租约的旧网关。新版本先等待旧操作释放租约，再占用旧版使用的集群名租约；各新版实例使用独立操作租约串行写入。旧网关业务作业不因此停止，但后续容量操作拿不到旧入口。正式与预发仍按持久归属各管自己的集群，兼容租约不替代登记唯一性和排空转交。
+Compatibility covers old gateways using the same operations event table, lease table and `name` for capacity leases.
+The new version waits for old operations to release their lease, then acquires the cluster-name lease used by the old version;
+new instances serialize writes through a separate operation lease. Old business jobs continue, but later old capacity operations cannot acquire the old entry lease.
+Production/preproduction still control their own clusters through durable ownership; compatibility leases do not replace unique registration and drain-before-transfer.
 
-首次交接、进程崩溃或写入结果未知时，保持旧入口保护，至少等待九十秒并读取完整 Ray 作业列表，确认 `agate-scale-` 控制作业全部结束后才允许新容量写入。后端不可读或控制作业未结束时继续等待，不以超时当作成功。旧账本中的写入仍为 pending 时，空作业列表不能单独证明安全。仅当完整回执历史证明后续失败均在调用后端前被归属校验拒绝，并有当前 Ray session 的成功回执、原生约束与原目标完全一致时，自动补记核对回执后交接；不改原保底及到期时间。超时、空错误或其他结果不明的失败继续保留保护，等待明确完成证据。新版控制作业另带执行期限，排队或初始化过久后拒绝写入。独立暂停、转交命令只更新账本，未核实的远端写入保留保护，后台继续核对；暂停成功仍需在运维页确认交接完成，再直接修改 Ray。
+During initial handoff, after a process crash or when a write outcome is unknown, keep the old entry protected.
+Wait at least 90 seconds and read the complete Ray job list; allow new writes only once all `agate-scale-` control jobs finish.
+If the backend is unreadable or jobs remain, continue waiting; a timeout is not success.
+If the old ledger still marks a write pending, an empty job list alone does not establish safety.
+Automatic handoff is allowed only when complete receipt history proves later failures were rejected by ownership checks before backend calls,
+there is a successful receipt for the current Ray session, and native constraints exactly match the original target.
+Record a verification receipt before handoff without changing the original floor or expiry.
+Timeouts, empty errors and other ambiguous failures retain protection until explicit completion evidence exists.
+New control jobs also have execution deadlines and reject writes after excessive queueing/initialization.
+Standalone pause/transfer commands only update the ledger; uncertain remote writes stay protected while background reconciliation continues.
+Even after pause succeeds, confirm handoff completion in the operations UI before modifying Ray directly.
 
-正常空闲时，兼容租约有效期默认九十秒，持有该集群的新版实例每五秒续租；任一新版实例存活即可延续保护。最后一个新版退出后，租约安全到期，旧版可自动恢复容量控制，无须人工删锁。回滚不清空原生约束，也不修改历史手动保底及到期时间。
+When idle, the compatibility lease defaults to 90 seconds and is renewed every 5 seconds by new instances owning the cluster.
+Any surviving new instance can maintain protection. After the last exits, the lease safely expires and the old version can resume control without manual lock deletion.
+Rollback neither clears native constraints nor changes historical manual floors or their expiries.
 
-以下情况不会自动解除保护：远端写入结果未知、控制暂停或排空、独立外部保底、包含多卡 bundle、CPU 等附带资源或 selector 的约束。旧版无法保持这些语义，直接恢复会丢失状态；运维页显示等待核对或回滚不兼容，应先恢复新版完成核对、收尾或显式调整控制状态。恢复后重新判断是否可以自动到期，不提供强制清锁快捷入口。
+Protection does not expire automatically for unknown remote-write outcomes, paused/draining control, independent external floors,
+or constraints containing multi-GPU bundles, accompanying resources such as CPU, or selectors.
+Older versions cannot preserve these semantics. The UI reports pending verification or incompatible rollback.
+Restore the new version to reconcile, finish cleanup or explicitly adjust control state, then reassess automatic expiry.
+There is no force-unlock shortcut.
 
-运维快照的 `capacity_control.compatibility` 提供 `phase`、`reason` 和 `lease_until`。`ready` 表示保护已生效且允许安全自动回退；`preparing`／`uncertain` 表示交接或核对未完成；`rollback_blocked` 表示当前状态不兼容旧版。该字段只描述容量控制，不能据此认定业务准入已就绪。
+The operations snapshot exposes `capacity_control.compatibility.phase`, `reason` and `lease_until`.
+`ready` means protection is active and safe automatic fallback is permitted;
+`preparing`/`uncertain` means handoff/reconciliation is incomplete; `rollback_blocked` means the current state is incompatible with the old version.
+This field describes capacity control only, not business-admission readiness.
 
-## 独立管理命令
+## Standalone administration
 
-在装有服务端包的运维环境运行以下命令。配置文件须明确包含当前 profile 和共用 Hologres 控制表配置及凭据；文件不得提交仓库。命令不调用网关 HTTP。
+Run these commands in an operations environment with the server package installed.
+The configuration file must specify the current profile plus shared Hologres control-table configuration/credentials; never commit it.
+These commands do not call gateway HTTP endpoints.
 
 ```bash
 python -m app.manage_capacity status --config-file operator.json --cluster gpu-pool
@@ -65,30 +129,41 @@ python -m app.manage_capacity transfer --config-file operator.json --cluster gpu
 python -m app.manage_capacity resume --config-file operator.json --cluster gpu-pool --revision CONTROL_REVISION --actor EMP_ID
 ```
 
-从 `status` 的响应取得 `revision`。正常登记自动初始化归属；控制变更须携带当前版本。转交命令返回排空状态后，通过 `status` 查看完成进度；转交不会自动恢复容量暂停状态。
-`status`、`pause`、`transfer` 不连接运行态 PostgreSQL、不解析资源目录、不联系后端。`claim`、`resume` 才解析目标集群并读取后端。命令只探测既有控制表，不自动建表。
+Read `revision` from `status`. Normal registration initializes ownership automatically; control changes require the current revision.
+After `transfer` returns a draining state, poll `status` for completion. Transfer does not automatically resume paused capacity control.
+`status`, `pause` and `transfer` do not connect to runtime PostgreSQL, resolve the resource catalog or contact the backend.
+Only `claim` and `resume` resolve the target cluster and read the backend. Commands probe existing control tables without creating them.
 
-应急修改后的当前约束需要成为新保底时，显式使用：
+To adopt current constraints as the new floor after an emergency modification, explicitly run:
 
 ```bash
 python -m app.manage_capacity resume --config-file operator.json --cluster gpu-pool --revision CONTROL_REVISION --adopt-external-floor --actor EMP_ID
 ```
 
-管理员页面使用新增的 `PUT /dashboard/api/ops/ray/{cluster_name}/capacity-control`，请求包含 `action`、`revision`，转交附带 `target_profile`，恢复可带 `adopt_external_floor`。该接口沿用 BUC 全局管理员鉴权及同源意图头，不是 AK 机器接口。
+The administrator UI uses the added `PUT /dashboard/api/ops/ray/{cluster_name}/capacity-control` endpoint.
+Requests include `action` and `revision`; transfers add `target_profile`, and resume may include `adopt_external_floor`.
+It retains BUC global-administrator authentication and the same-origin intent header; it is not an AK machine API.
 
-## 0.14.17 升级预检与历史目标迁移
+## 0.14.17 preflight and historical-target migration
 
-迁移期间冻结涉及的资源目录修改；新版本自动隔离旧版本的容量写入，无须人工停写旧网关。正式与预发不能同时启用同名集群；新实例在运行态就绪后接流，不等待所有集群登记成功，`healthz` 仅表示进程存活。单池异常只阻断该池，运维页展示登记状态。账本读取短暂失败时保留尚未过期的原授权，不延长有效期；未获授权或授权过期的集群停止新增调度，容量写入仍须实时确认归属并取得共享租约。
+Freeze affected resource-catalog edits during migration. The new version automatically isolates old capacity writers; manually stopping old gateway writes is unnecessary.
+Production/preproduction cannot simultaneously enable the same cluster name.
+New instances receive traffic after runtime readiness without waiting for every cluster registration. `healthz` indicates process liveness only.
+A single-pool failure blocks only that pool; the operations UI shows registration status.
+Temporary ledger-read failures retain unexpired authorization without extending it. Unauthorized/expired clusters stop new scheduling;
+capacity writes still require live ownership verification and a shared lease.
 
-检查双方完整配置，`--peer-config-file` 可重复指定，必须包含所有使用该共享账本的其他环境。命令解析各自当前 PostgreSQL 目录；只读预检不改登记或后端约束，存在阻断项时退出码为一。
+Check complete configurations on both sides. Repeat `--peer-config-file` for every other environment sharing the ledger.
+The command resolves each environment's current PostgreSQL catalog. Read-only preflight changes no registration or backend constraint and exits 1 for blockers.
 
 ```bash
 python -m app.manage_capacity preflight --config-file operator.json --peer-config-file peer.json
 ```
 
-先处理重复登记：从旧环境停止新准入并排空后显式转交，停用旧环境登记。已经存在新协议 owner 的集群不能通过迁移命令抢占。
+Resolve duplicate registrations first: stop new admission in the old environment, drain it, explicitly transfer, and disable its registration.
+Migration cannot take over a cluster already owned under the new protocol.
 
-只有历史目标而没有新登记时，使用预检返回的 `revision` 和 `catalog_digest`：
+For a historical target with no new registration, use the preflight `revision` and `catalog_digest`:
 
 ```bash
 python -m app.manage_capacity migrate-legacy --config-file operator.json --peer-config-file peer.json \
@@ -96,26 +171,50 @@ python -m app.manage_capacity migrate-legacy --config-file operator.json --peer-
   --actor EMP_ID
 ```
 
-命令先通过兼容租约隔离旧写入，等待远端控制作业结束；交接尚未完成时返回 `capacity_handoff_pending`，稍后重试。`--confirm-legacy-writers-stopped` 仍接受但已废弃，不再要求人工确认。命令在共享操作租约内复核两边登记与版本、读取完整原生约束，仅在约束与已知历史目标一致时写入归属；不调用容量写接口，不改原手动保底及到期时间，也不把它变成永久外部保底。约束漂移、版本变化、重复登记或后端不可读都会拒绝迁移。迁移后重新运行预检，再验证实际提交、运行和收尾。
+The command isolates old writers through the compatibility lease and waits for remote control jobs to finish.
+Incomplete handoff returns `capacity_handoff_pending`; retry later. `--confirm-legacy-writers-stopped` is accepted but deprecated and no longer requires manual confirmation.
+Under the shared operation lease, it rechecks both registrations/revisions and reads complete native constraints.
+Ownership is written only when constraints match the known historical target. It invokes no capacity-write API,
+changes neither the manual floor nor expiry, and does not convert that floor into a permanent external floor.
+Constraint drift, revision changes, duplicate registration or unreadable backend reject migration.
+Rerun preflight after migration, then validate real submission, execution and cleanup.
 
-登记刷新、关键控制操作与观测各有独立连接预算，运维快照顶层的 `control_pools` 提供占用、等待及借连接超时计数；原集群条目中的同名字段保留兼容；登记授权仍每五秒刷新、十五秒过期，不因本地繁忙延长授权。
+Registration refresh, critical control operations and observations have independent connection budgets.
+Top-level `control_pools` in the operations snapshot reports usage, waits and connection-acquisition timeout counts;
+cluster-level fields of the same name remain for compatibility. Authorization still refreshes every 5 seconds and expires after 15 seconds;
+local contention does not extend it.
 
+### Wave-by-wave rollout and cluster failure isolation
 
-### 逐波发布与集群故障隔离
+On first deployment or owner recovery, VIP readiness depends only on gateway runtime readiness, not successful registration of every cluster.
+Unregistered, conflicting, draining or expired clusters stop new routing/admission while authorized clusters serve normally.
+Even with no usable clusters, the gateway can serve queries and operations and returns its existing unavailable response for submissions without a backend.
+Registration-summary `ready` means every enabled cluster may accept new jobs; it is an operations summary, not a VIP readiness condition.
+Startup dependency initialization or Rust runtime recovery failures still prevent instance readiness.
 
-首次上线或 owner 重新就绪时，VIP 就绪仅依赖网关运行态，不以全部集群登记成功为前提。未登记、归属冲突、排空或授权过期的集群继续停止新路由和准入；已有有效授权的集群正常服务。即使暂时没有可用集群，网关也可上线提供查询和运维能力，对没有可用后端的提交返回原有不可用响应。登记摘要 `ready` 仍表示所有启用集群均已获准接收新作业，是运维汇总，不是 VIP 上线条件。启动依赖初始化或 Rust 运行态恢复失败仍会阻止实例就绪。
+1. Before each wave, rerun `preflight` against current production/preproduction catalogs, check duplicate registration and each cluster's compatibility handoff.
+   It checks registration/historical targets, not backend health, and does not replace initialization acceptance.
+   A pending migration, ownership conflict or backend failure may be isolated while rollout continues; do not enable that cluster's scheduling/writes because the rest is ready.
+2. Unready clusters automatically stop new routes/admission and may be repaired separately after rollout.
+   To explicitly drain or stop initialization attempts, record the current catalog revision and cluster configuration and change only its `enabled` to `false`.
+   For database catalogs, use the following commands with the revision from this `show`; for inline catalogs, disable the cluster in its original configuration.
+   Existing execution and cleanup continue. Draining may release ownership but does not destroy the backend or cancel jobs.
 
-1. 每波开始前，对当前正式和预发目录重新执行上面的 `preflight`，确认没有重复登记，查看各集群兼容交接状态。该命令只检查登记与历史目标，不探测后端，不能代替初始化验收；单个集群的待迁移、归属冲突或后端异常可隔离后继续发布，不能据此放开该集群的调度或容量写入。
-2. 未就绪集群自动停止新路由和准入，可在发布后单独运维。需要显式排空或避免继续尝试初始化时，记录当前目录版本和该集群配置，仅将其 `enabled` 改为 `false`。数据库目录可用下列命令，版本号须替换为本次 `show` 的结果；inline 来源在原配置中停用该集群。保留存量执行与清理；排空后可能释放归属，不销毁后端或取消作业。
-
-   ```bash
+```bash
    AGATE_CONFIG_FILE=/secure/gateway.json python -m app.manage_clusters show
    AGATE_CONFIG_FILE=/secure/gateway.json python -m app.manage_clusters update \
      --name example-pool --set 'enabled=false' --expected-version CURRENT_VERSION \
      --author OPERATOR --reason "temporarily disable unavailable cluster before rollout"
    ```
 
-3. 先发布一波，确认 Rust 运行态及 VIP 就绪，并在本次保留服务的集群上验证实际作业可完成，再推进下一波。只有 `/healthz` 成功不足以判断请求可用；登记摘要 `ready=false` 不阻止上线，但须记录不可用集群及其业务影响。旧实例通过兼容租约自动让出容量写入，仍可处理业务作业；不手工创建上线标记。若所有实例已离线，仍可从可连接数据库的运维主机使用管理命令修复目录。
-4. 后端恢复后，重新核对双方当前目录和归属，确认其他环境没有启用或持有该集群。读取最新版本，仅将该集群恢复为 `enabled=true`，等待重新登记并提交实际作业验证。使用相同的 `update` 命令与最新 CAS 版本，不回滚整份旧目录，以免覆盖期间其他集群的修改。
+3. Roll out one wave, confirm Rust runtime/VIP readiness and real job completion on retained serving clusters, then proceed.
+   `/healthz` alone is insufficient. Registration-summary `ready=false` does not block rollout, but record unavailable clusters and business impact.
+   Old instances yield capacity writes automatically through the compatibility lease while continuing business jobs; do not create manual rollout markers.
+   If every instance is offline, management commands on a database-connected operations host can still repair the catalog.
+4. After backend recovery, recheck both current catalogs and ownership, confirming no other environment enables or owns the cluster.
+   Read the latest revision, restore only that cluster to `enabled=true`, wait for registration and submit a real verification job.
+   Use the same `update` command with the latest CAS revision. Do not roll back the entire old catalog and overwrite intervening edits to other clusters.
 
-运维页区分“登记尚未完成”和“登记初始化失败”；后者应检查登记日志，数据库连接繁忙则等待重试并检查连接池指标。连接池繁忙继续使用原 `runtime_database_pool_busy` 标识与日志前缀，已有匹配规则无需因本次升级改名。
+The UI distinguishes registration incomplete from registration initialization failed. For failure, inspect registration logs;
+for database connection contention, wait for retry and inspect connection-pool metrics.
+Pool contention retains the `runtime_database_pool_busy` identifier/log prefix; existing matching rules need no rename for this upgrade.

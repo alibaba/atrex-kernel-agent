@@ -53,7 +53,7 @@ source, manually upload files, edit generated hashes, or put credentials in JSON
 All other fields follow [Agate manifest v1](eval-manifest.md), including its ABI,
 source limits and dependency rules. Unknown fields are errors.
 
-Read [the CUDA ABI and Git dependencies](eval-manifest.md#原生-cuda-候选不提交-python)
+Read [the CUDA ABI and Git dependencies](eval-manifest.md#native-cuda-candidates-without-python)
 before implementing the launcher or configuring compiler flags/dependencies.
 The runnable source is [kernel.cu](../assets/eval-manifest/cuda-native/kernel.cu).
 For external libraries, look for a matching repository in the organization-provided

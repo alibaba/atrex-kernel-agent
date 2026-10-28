@@ -2,6 +2,8 @@
 """Refresh the reviewed Agate Skill from a local gateway checkout, or check drift."""
 from pathlib import Path
 import argparse
+import hashlib
+import json
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -21,20 +23,17 @@ def main():
               if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
     if actual != set(manifest.files):
         parser.error("Skill file list changed; review and update SKILL_MANIFEST before syncing")
+    translations = json.loads((ROOT / "tools/agate_skill_translations.json").read_text())
+    for name, digests in translations.items():
+        if hashlib.sha256((source / name).read_bytes()).hexdigest() != digests["upstream_sha256"]:
+            parser.error(f"Upstream Skill changed: {name}; review the English translation and refresh its digests")
+        if hashlib.sha256((target / name).read_bytes()).hexdigest() != digests["english_sha256"]:
+            parser.error(f"English translation changed: {name}; review it and refresh its digest")
     changed = []
     for name in manifest.files:
-        if name == "reference/aka-workspace.md":
-            continue  # AKA owns file-system selection and workspace integration.
+        if name == "reference/aka-workspace.md" or name in translations:
+            continue  # Preserve AKA integration guidance and reviewed English translations.
         data = (source / name).read_bytes()
-        if name == "SKILL.md":
-            original = "在 AKA 管理的工作区中，CUDA 候选使用独立 `.cu` 文件和 `solution.json`。"
-            text = data.decode()
-            if text.count(original) != 1:
-                parser.error("Upstream AKA guidance changed; review the Skill integration before syncing")
-            data = text.replace(
-                original,
-                "在 AKA 管理的工作区中，按已选定的文件管理模式组织候选，框架类型不改变文件格式。",
-            ).encode()
         destination = target / name
         if not destination.is_file() or destination.read_bytes() != data:
             changed.append(name)
