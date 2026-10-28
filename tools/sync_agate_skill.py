@@ -27,8 +27,12 @@ def main():
             continue  # AKA owns file-system selection and workspace integration.
         data = (source / name).read_bytes()
         if name == "SKILL.md":
-            data = data.decode().replace(
-                "在 AKA 管理的工作区中，CUDA 候选使用独立 `.cu` 文件和 `solution.json`。",
+            original = "在 AKA 管理的工作区中，CUDA 候选使用独立 `.cu` 文件和 `solution.json`。"
+            text = data.decode()
+            if text.count(original) != 1:
+                parser.error("Upstream AKA guidance changed; review the Skill integration before syncing")
+            data = text.replace(
+                original,
                 "在 AKA 管理的工作区中，按已选定的文件管理模式组织候选，框架类型不改变文件格式。",
             ).encode()
         destination = target / name

@@ -11,7 +11,7 @@ from .storage import (
     import_tree, initial_snapshot,
 )
 from .artifacts import (
-    Artifact, ExecutionSource, Layout, workspace_identity, baseline_marker, read, read_path, revision_identity, revision_changed, from_revision, layout, layout_at, required_layout,
+    Artifact, ExecutionSource, Layout, workspace_identity, baseline_marker, read, read_path, revision_identity, revision_contains_reference, revision_changed, from_revision, layout, layout_at,
     archive_bytes, review_paths, commit_paths, pinned_paths, freeze_for_execution,
     stage_frozen, declared_paths, evidence_paths, typed_limitation, capture_paths, restore_capture,
     seed_baseline_metadata, measurement_paths, measurement_artifacts, language_hints,

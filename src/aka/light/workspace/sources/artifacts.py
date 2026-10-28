@@ -14,7 +14,7 @@ import subprocess
 
 from . import storage
 from .common import Layout, ExecutionSource, archive_bytes, SELECTION
-from .registry import for_policy, resolve, select, task_selection
+from .registry import for_policy, resolve, select
 
 
 
@@ -22,11 +22,6 @@ from .registry import for_policy, resolve, select, task_selection
 
 def layout(policy) -> Layout:
     return for_policy(policy).layout
-
-
-
-def required_layout(framework: str) -> Layout:
-    return task_selection(None, framework=framework).layout
 
 
 
@@ -297,6 +292,13 @@ def revision_identity(workspace: Path, revision: str = 'HEAD') -> str:
         return 'sha256:' + artifact.digest
     from aka.legacy.task.git import git_path_blob
     return git_path_blob(workspace, revision, artifact.layout.python_entrypoint)
+
+
+def revision_contains_reference(workspace: Path, revision: str) -> bool:
+    """Recognize the frozen reference even when its source lives behind an adapter."""
+    result = subprocess.run(['git', 'show', f'{revision}:reference.py'],
+                            cwd=workspace, capture_output=True)
+    return result.returncode == 0 and bool(result.stdout) and result.stdout in from_revision(workspace, revision).files.values()
 
 
 def revision_changed(workspace: Path, revision: str) -> bool:

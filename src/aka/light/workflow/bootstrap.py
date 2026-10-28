@@ -1325,13 +1325,14 @@ class Campaign:
 
         n = FRAMEWORK_BASELINE_VERSION
         baseline_commit = self._v0_baseline_commit()
-        v0_blob = git_path_blob(self.workspace, baseline_commit, "kernel.py")
+        from aka.light.workspace.sources import revision_identity
+        v0_identity = revision_identity(self.workspace, baseline_commit)
         pre_head = git_head(self.workspace)
         self._ensure_framework_baseline_solution_manifest()
 
         if action == "run":
             self._link_runtime()
-            self._restore_framework_baseline_candidate(v0_blob)
+            self._restore_framework_baseline_candidate(v0_identity)
             self._sync_framework_baseline_live(
                 phase="framework_baseline_correctness_review"
             )
@@ -1351,23 +1352,23 @@ class Campaign:
                 )
             recovery_used = False
             problem = self._framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
+                v0_identity, baseline_commit, include_policy_review=False
             )
             if problem:
                 self._recover_framework_baseline(
-                    problem, v0_blob, baseline_commit, pre_head
+                    problem, v0_identity, baseline_commit, pre_head
                 )
                 recovery_used = True
                 self._warn_restored_baseline_paths(baseline_commit)
                 problem = self._framework_baseline_problem(
-                    v0_blob, baseline_commit, include_policy_review=False
+                    v0_identity, baseline_commit, include_policy_review=False
                 )
         else:  # adopt: our own interrupted run already committed the kernel
             recovery_used = False
             self._sync_framework_baseline_live(phase="framework_baseline")
             self._warn_restored_baseline_paths(baseline_commit)
             problem = self._framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
+                v0_identity, baseline_commit, include_policy_review=False
             )
         result: Optional[dict] = None
         if not problem:
@@ -1382,12 +1383,12 @@ class Campaign:
             if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
                 numerical_repairs += 1
             self._recover_framework_baseline(
-                problem, v0_blob, baseline_commit, pre_head
+                problem, v0_identity, baseline_commit, pre_head
             )
             recovery_used = True
             self._warn_restored_baseline_paths(baseline_commit)
             problem = self._framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
+                v0_identity, baseline_commit, include_policy_review=False
             )
             if not problem:
                 result, problem = self._framework_baseline_external_gates(n)
@@ -1515,7 +1516,9 @@ class Campaign:
         if pinned_commit:
             return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
 
-        if not layout_at(self.workspace, committed=True).replaceable_baseline:
+        from aka.light.workspace.sources import revision_contains_reference
+        known_reference_wrapper = revision_contains_reference(self.workspace, self._v0_baseline_commit())
+        if not layout_at(self.workspace, committed=True).replaceable_baseline and not known_reference_wrapper:
             return "pin", "source-tree task keeps the pinned package/adapter as its Framework baseline"
 
         progressed = not head_kernel_is_initial_baseline(self.workspace)
@@ -1545,15 +1548,7 @@ class Campaign:
                 for value in structural
             ):
                 return "skip", "; ".join(structural)
-            baseline_commit = self._v0_baseline_commit()
-            reference_blob = git_path_blob(
-                self.workspace, baseline_commit, "reference.py"
-            )
-            known_reference_wrapper = bool(
-                reference_blob
-                and reference_blob
-                == git_path_blob(self.workspace, baseline_commit, "kernel.py")
-            ) or is_sol_op(Path(self.kernel_demo).resolve().parent)
+            known_reference_wrapper = known_reference_wrapper or is_sol_op(Path(self.kernel_demo).resolve().parent)
             if known_reference_wrapper:
                 return (
                     "run",
@@ -2107,10 +2102,10 @@ class Campaign:
             )
         return result
 
-    def _restore_framework_baseline_candidate(self, v0_blob: str) -> None:
+    def _restore_framework_baseline_candidate(self, v0_identity: str) -> None:
         """Restore an ignored snapshot only when the worktree fell back to the V0 wrapper."""
         from aka.light.workspace.sources import workspace_identity
-        if workspace_identity(self.workspace) != v0_blob:
+        if workspace_identity(self.workspace) != v0_identity:
             return
         try:
             progress = load_framework_baseline_progress(self.workspace)
@@ -2121,7 +2116,7 @@ class Campaign:
         if not isinstance(snapshot, dict):
             return
         restored = restore_latest_framework_baseline_candidate(self.workspace)
-        if restored and workspace_identity(self.workspace) != v0_blob:
+        if restored and workspace_identity(self.workspace) != v0_identity:
             print(
                 "[orchestrator] restored interrupted V1 candidate from local checkpoint: "
                 + ", ".join(restored),
@@ -2257,7 +2252,7 @@ class Campaign:
 
     def _framework_baseline_problem(
         self,
-        v0_blob: str,
+        v0_identity: str,
         baseline_commit: str,
         *,
         include_policy_review: bool = True,
@@ -2269,7 +2264,7 @@ class Campaign:
         """
         from aka.light.workspace.sources import workspace_identity
         candidate_blob = workspace_identity(self.workspace)
-        if not candidate_blob or candidate_blob == v0_blob:
+        if not candidate_blob or candidate_blob == v0_identity:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
         violations = [] if not self.source_checks_enabled else (
             self._production_kernel_violations()
@@ -2427,7 +2422,7 @@ class Campaign:
             )
 
     def _recover_framework_baseline(
-        self, problem: str, v0_blob: str, baseline_commit: str, pre_head: str
+        self, problem: str, v0_identity: str, baseline_commit: str, pre_head: str
     ) -> None:
         """Run one recovery session; unexpected exits invoke the progress supervisor."""
         print(

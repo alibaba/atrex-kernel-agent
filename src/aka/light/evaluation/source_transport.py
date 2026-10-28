@@ -145,9 +145,7 @@ def diagnostic_request(request, workspace, kind, *, timeout=600):
     from aka.light.workspace.sources import read
     artifact = read(workspace)
     route = artifact.layout.diagnostic_route(kind)
-    if route == "single":
-        return attach(request, workspace, source=artifact.snapshot)
-    if route == "typed":
+    if route in {"single", "typed"}:
         return attach(request, workspace, source=artifact.snapshot)
     files = artifact.files
     if request.get("profiler", "ncu") != "ncu" or request.get("fmt") == "isa":

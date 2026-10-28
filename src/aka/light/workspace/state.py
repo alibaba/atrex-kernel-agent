@@ -124,18 +124,10 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     baseline_commit = v0_baseline_commit(workspace)
     if not baseline_commit:
         return False
-    baseline_blob = subprocess.run(
-        ["git", "rev-parse", f"{baseline_commit}:kernel.py"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    if baseline_blob.returncode != 0:
-        return False
-    return bool(
-        baseline_blob.stdout.strip()
-        and baseline_blob.stdout.strip() == git_kernel_blob(workspace)
-    )
+    from aka.light.workspace.sources import revision_identity
+    baseline_identity = revision_identity(workspace, baseline_commit)
+    return bool(baseline_identity and baseline_identity == git_kernel_blob(workspace))
+
 
 
 def read_stall(workspace: Path) -> Optional[int]:

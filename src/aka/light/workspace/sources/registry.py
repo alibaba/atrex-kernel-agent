@@ -46,13 +46,13 @@ def resolve_reader(get):
         return system, contract
     # Only legacy inputs without a selector use discovery. A claimed invalid
     # format raises immediately; it never falls through to another implementation.
-    for name in ('source_tree', 'cuda_manifest', 'single_file'):
+    for name in ('source_tree', 'cuda_manifest'):
         system = select(name)
         claimed, contract = system.inspect_policy(get)
         if claimed:
             system.validate_policy(contract)
             return system, contract
-    raise ValueError('No file system accepts this legacy workspace')
+    return select('single_file'), None
 
 def from_inputs(inputs, prefix=''):
     return resolve_reader(lambda name: inputs.get(prefix+name))

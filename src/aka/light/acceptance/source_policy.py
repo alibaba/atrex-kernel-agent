@@ -146,7 +146,7 @@ def production_structure_violations(
     require_gluon: bool = False,
 ) -> list[str]:
     """Delegate single-file checks; retain the controller-pinned tree boundary."""
-    from aka.light.workspace.sources import read, required_layout
+    from aka.light.workspace.sources import read
 
     try:
         artifact = read(workspace)
@@ -157,8 +157,6 @@ def production_structure_violations(
         if selected != artifact.layout.framework or require_gluon:
             return ["Candidate source format does not implement the selected framework"]
         return []
-    if required_layout(selected).typed_only:
-        return [f"{framework} candidates require native sources and a versioned manifest; Python-inline kernels are unsupported"]
     if not artifact.layout.archived:
         return legacy_policy.production_structure_violations(
             workspace, framework, require_gluon=require_gluon,
@@ -166,7 +164,7 @@ def production_structure_violations(
     if selected not in legacy_policy.SUPPORTED_PRODUCTION_FRAMEWORKS:
         return [f"unsupported production framework: {framework}"]
     entrypoint = artifact.layout.python_entrypoint
-    source = artifact.files[entrypoint].decode()
+    source = artifact.files[entrypoint].decode(errors="replace")
     try:
         ast.parse(source, filename=entrypoint)
     except SyntaxError as exc:

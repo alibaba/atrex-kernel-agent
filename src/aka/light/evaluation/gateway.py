@@ -5034,7 +5034,7 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
     if baseline_path and baseline_path not in files and "baseline" not in source_snapshots:
         raise ValueError("--baseline-path must name an existing regular workspace file")
     if "kernel.py" not in files and "candidate" not in source_snapshots and operation != "dev":
-        raise ValueError("Measurement requires an existing kernel.py")
+        raise ValueError("Measurement requires an existing kernel.py or a sealed candidate snapshot")
     gateway_environment = {name: environment[name] for name in (
         "AGATE_URL", "ATREX_SANDBOX_PROFILE", *PROFILE_ENVIRONMENT_KEYS,
     ) if name in environment}
