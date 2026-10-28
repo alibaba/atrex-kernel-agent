@@ -15,7 +15,7 @@ Use its Task Context fields with the injected setup prompt when writing the work
 ## Execution Boundary
 
 - Every compile, correctness, benchmark, signature collection, and profile command runs through
-  `python -m aka.legacy.execution.cli` on `--sandbox-hardware`.
+  `python -m aka.experiment.command_client` on `--sandbox-hardware`.
 - Host-side GPU/JIT execution and dependency installation are forbidden.
 - The logical platform and gateway hardware selector may use different names; runtime architecture
   probing is authoritative for vendor/framework dispatch.

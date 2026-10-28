@@ -82,11 +82,11 @@ evaluator only ever imports:
 
 ```bash
 # NVIDIA
-python -m aka.legacy.execution.cli --kind profile --sync <PROFILE_DIR> -- \
+python -m aka.experiment.command_client --kind profile --sync <PROFILE_DIR> -- \
   bash profiling/nvidia/profile_nvidia.sh profile_driver.py --output-dir <PROFILE_DIR> --source
 
 # AMD
-python -m aka.legacy.execution.cli --kind profile --sync <PROFILE_DIR> -- \
+python -m aka.experiment.command_client --kind profile --sync <PROFILE_DIR> -- \
   bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir <PROFILE_DIR>
 ```
 
@@ -97,8 +97,8 @@ invokes the candidate repeatedly. Select what it drives with environment variabl
 it — it is a protected path and a candidate that modifies it is rejected:
 
 ```bash
-PROFILE_ITERS=30 PROFILE_WORKLOAD_IDX=2 python -m aka.legacy.execution.cli ...   # SOL: one workload
-PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python -m aka.legacy.execution.cli ...       # generalized or legacy Atrex-Bench
+PROFILE_ITERS=30 PROFILE_WORKLOAD_IDX=2 python -m aka.experiment.command_client ...   # SOL: one workload
+PROFILE_ITERS=30 PROFILE_SHAPE_ID=3 python -m aka.experiment.command_client ...       # generalized or legacy Atrex-Bench
 ```
 
 When several shapes or workloads need profiling, run one sandbox command per id in waves of at most
@@ -210,9 +210,9 @@ unattributable. When the evidence localizes a symptom to specific lines, change 
 Use the immutable evaluator for development measurements:
 
 ```bash
-python -m aka.legacy.execution.cli --kind run --no-sync -- \
+python -m aka.experiment.command_client --kind run --no-sync -- \
   python test_kernel.py --version vlong --no-memory
-python -m aka.legacy.execution.cli --kind run --no-sync -- \
+python -m aka.experiment.command_client --kind run --no-sync -- \
   python test_kernel.py --version vlong --multi-seed 5 --no-memory
 ```
 

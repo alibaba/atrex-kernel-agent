@@ -91,7 +91,7 @@ for case in test_cases:
    `--multi-seed` and do not launch a separate robustness run for V0:
 
 ```bash
-python -m aka.legacy.execution.cli --kind run --no-sync -- \
+python -m aka.experiment.command_client --kind run --no-sync -- \
   python test_kernel.py --version v0 --no-memory
 ```
 
