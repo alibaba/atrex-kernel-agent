@@ -1,6 +1,6 @@
 # Evaluator outcomes across transport, cache, and version reports
 
-A successful Dev allocation can contain a failed evaluator process. Treating the allocation as a completed evaluation prevents a trusted harness from classifying that failure before checkpointing. In addition, an unavailable result can be cached permanently, bounded diagnostics lose case execution status, and a version's objective-score ratio can be confused with an unweighted latency ratio.
+A successful Dev allocation can contain a failed evaluator process. Treating the allocation as a completed evaluation prevents a trusted harness from classifying that failure before checkpointing. In addition, an unavailable result can be cached permanently, diagnostic projection loses case execution status and failure detail, and a version's objective-score ratio can be confused with an unweighted latency ratio.
 
 The intended callers are trusted evaluator adapters and the existing Supervisor. The optional callbacks extend the transport API; the remaining changes restore evaluation and reporting invariants. No new task mode, permission, benchmark implementation, tolerance, or promotion formula is introduced.
 
@@ -150,3 +150,13 @@ PY
 | Permissions and privacy | Pass | No new execution permissions; only generic synthetic evidence published |
 | Validation | Pass | Recovery/replay, native ABBA terminal cache, and consumer regressions |
 | Verdict | Approve | No blocking issue found in local review; hosting-platform checks and required reviews still apply |
+
+## Complete evaluator failure feedback
+
+A negative evaluator result must retain the information needed to repair the candidate. Previously the Agent projection kept only eight failure messages, cut diagnostic text, and discarded ordinary stdout/stderr on generalized failures. Rank-local state checks were not traversed. A producer could report an output mismatch with error metrics and tolerances while the Agent received only a generic correctness failure.
+
+The shared extractor now traverses rank results and reports output/state names, rank, check index, seed, original error, measured errors and producer tolerances. The projection preserves all failure entries and complete received text, including compiler/runner logs, numerical-probe failures and ABBA-side diagnostics. Timing/profile detail remains separately bounded. Existing upstream truncation annotations remain visible; this change cannot reconstruct bytes that an upstream executor never returned.
+
+Hidden workload dimensions remain private: input generators and shape metadata are not copied into diagnostic records, and generalized feedback redacts shape fields and dimension encodings in error text (JSON shape fields, torch.Size, numeric vectors, matrix dimensions and size-mismatch messages). Opaque case IDs, output indices, error metrics, tolerances, source locations and error text remain useful. Credentials and configured private paths are still redacted. Verdicts, retry advice, acceptance thresholds, evaluator inputs and performance scoring are unchanged.
+
+Validation for this bug fix used Python 3.14 on macOS, without GPU execution: 16 existing consumer regressions passed and three optional/environment-dependent cases were skipped; seven local regression scenarios passed for long Unicode logs, more than eight errors, rank-local state checks, hidden dimensions/credentials, recorded producer output mismatch, unavailable-result logs, runner exceptions and missing receipts. No test scripts or private evidence are published. The failure-feedback change is a bug fix to the existing diagnostic contract; no new model/tool permission or optimization behavior is introduced. Rollback is a code revert with all original job evidence retained. Running processes need a controlled restart or replacement before they use the new code.
