@@ -150,4 +150,3 @@ PY
 | Permissions and privacy | Pass | No new execution permissions; only generic synthetic evidence published |
 | Validation | Pass | Recovery/replay, native ABBA terminal cache, and consumer regressions |
 | Verdict | Approve | No blocking issue found in local review; hosting-platform checks and required reviews still apply |
-
