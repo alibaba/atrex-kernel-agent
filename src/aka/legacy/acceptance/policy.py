@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+import math
 from typing import Callable, Sequence
 from aka.contracts.acceptance import (
     AcceptanceDecision,
@@ -102,3 +103,58 @@ class LegacyAcceptancePolicy:
         if mutated:
             return "the session modified immutable ground truth: " + ", ".join(mutated)
         return ""
+
+
+class GeoMeanLatencyAcceptancePolicy(LegacyAcceptancePolicy):
+    """Promote from the evaluator's public GeoMean latency facts."""
+
+    @staticmethod
+    def _usable_latencies(verification: VerificationResult) -> bool:
+        try:
+            return all(
+                type(value) in (int, float) and math.isfinite(value) and value > 0
+                for value in (
+                    verification.candidate_latency_us, verification.incumbent_latency_us
+                )
+            )
+        except OverflowError:
+            return False
+
+    def conversion_parity_passes(self, verification: VerificationResult) -> bool:
+        return self._usable_latencies(verification) and super().conversion_parity_passes(verification)
+
+    def decide(
+        self, verification: VerificationResult, requirements: AcceptanceRequirements
+    ) -> AcceptanceDecision:
+        if requirements.mode not in {"abba", "fast"} or not verification.passed:
+            return super().decide(verification, requirements)
+        candidate = verification.candidate_latency_us
+        incumbent = verification.incumbent_latency_us
+        try:
+            usable = self._usable_latencies(verification)
+            improvement = (
+                (incumbent - candidate) / incumbent * 100.0 if usable else None
+            )
+        except (OverflowError, ZeroDivisionError):
+            improvement = None
+        if improvement is None or not math.isfinite(improvement):
+            return AcceptanceDecision(
+                False,
+                replace(
+                    verification,
+                    gate="ERROR",
+                    improvement_pct=None,
+                    error="GeoMean latency comparison requires complete positive finite latency facts",
+                ),
+            )
+        result = replace(verification, improvement_pct=improvement)
+        if improvement <= requirements.min_improvement_pct:
+            result = replace(
+                result,
+                gate="FAIL",
+                error=(
+                    f"GeoMean latency reduction {improvement:.6f}% did not exceed "
+                    f"{requirements.min_improvement_pct:.3f}%"
+                ),
+            )
+        return super().decide(result, requirements)

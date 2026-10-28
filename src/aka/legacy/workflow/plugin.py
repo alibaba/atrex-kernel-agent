@@ -2,7 +2,7 @@
 
 from dataclasses import asdict
 from aka.core.keys import ServiceKey
-from .rule_sets import LegacyRuleSet, defaults_schema, select_rule_set, validate_config
+from .rule_sets import DEFAULT_RULE_SET, LegacyRuleSet, defaults_schema, select_rule_set, validate_config
 from aka.contracts.workflow import WorkflowSettings, CampaignRuntimeSettings
 
 WORKFLOW = ServiceKey("workflow", "Workflow", module="aka.contracts.workflow")
@@ -28,7 +28,7 @@ Config = {"type": "object", "properties": {
     "startup": {"type": "boolean"},
     "reference_projects": {"type": "array", "items": {"type": "string"}},
     "conversion_budget_action": {"type": "string", "enum": ["fail", "retain_verified"]},
-    "rule_set": {"type": "string", "enum": ["legacy-v1"]},
+    "rule_set": {"type": "string", "enum": ["legacy-v1", DEFAULT_RULE_SET]},
     "settings_defaults": defaults_schema(WorkflowSettings),
     "runtime_defaults": defaults_schema(CampaignRuntimeSettings),
     "conversion_tolerance": {"type": "number", "minimum": 0},
@@ -37,7 +37,7 @@ Config = {"type": "object", "properties": {
     "goal_handoff_resumes": {"type": "integer", "minimum": 0},
 }, "additionalProperties": False}
 Defaults = {"startup": False, "conversion_budget_action": "fail", "reference_projects": []}
-Defaults.update(rule_set="legacy-v1", settings_defaults={}, runtime_defaults={}, **asdict(LegacyRuleSet()))
+Defaults.update(rule_set=DEFAULT_RULE_SET, settings_defaults={}, runtime_defaults={}, **asdict(LegacyRuleSet()))
 
 
 def apply(ctx, config):

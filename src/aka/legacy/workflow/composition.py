@@ -7,8 +7,8 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      evaluator_factory=None, executor=None, experiment_factory=None,
                      execution_environment=None, measurement_parallelism=None,
                      canonical_measurement_reader=None, workflow_observer=None, rule_set=None):
-    from .rule_sets import select_rule_set, LegacyRuleSet
-    rule_set = select_rule_set({}) if rule_set is None else rule_set
+    from .rule_sets import DEFAULT_RULE_SET, select_rule_set, LegacyRuleSet
+    rule_set = select_rule_set({"rule_set": DEFAULT_RULE_SET}) if rule_set is None else rule_set
     if not isinstance(rule_set, LegacyRuleSet):
         raise TypeError("Workflow requires its selected Legacy rule assembler")
     from contextlib import ExitStack

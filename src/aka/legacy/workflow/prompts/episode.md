@@ -43,6 +43,8 @@ the supervisor creates it after terminal validation.
 
 {{EVALUATOR}}
 
+{{PROMOTION_POLICY}}
+
 {{HARDWARE}}
 
 {{SANDBOX}}

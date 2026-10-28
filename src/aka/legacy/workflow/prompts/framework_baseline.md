@@ -61,6 +61,7 @@ Hard rules for this session:
 {{HARDWARE}}
 {{SANDBOX}}
 {{EVALUATOR}}
+{{PROMOTION_POLICY}}
 {{CORRECTNESS_GUIDANCE}}
 
 Do not run a full-workload evaluator, `--multi-seed`, or a separate benchmark in the ordinary implementation

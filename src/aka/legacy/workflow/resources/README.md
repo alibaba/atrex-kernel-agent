@@ -67,7 +67,7 @@ Use its Task Context fields with the injected setup prompt when writing the work
 - Correctness must pass before performance can influence promotion.
 - Ordinary episode promotion requires a strict same-allocation ABBA improvement and policy pass.
 - Aggregate promotion requires the base seed, five additional correctness seeds, and the configured
-  full-workload geomean improvement.
+  full-workload improvement under the Workflow's selected promotion rule.
 - Campaigns stop on canonical version budget, token budget, optional stall budget, target
   utilization, or a terminal repeated blocker.
 - Hardware ceilings and optimization claims must have auditable sources; unknown values remain

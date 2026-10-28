@@ -37,6 +37,8 @@ canonical `memory/vN.json`; the supervisor writes and commits one for every term
 
 {{EVALUATOR}}
 
+{{PROMOTION_POLICY}}
+
 {{HARDWARE}}
 
 {{SANDBOX}}
@@ -69,11 +71,7 @@ python3 -m aka.legacy.workflow.iteration_trace phase-start <planning|implementat
 python3 -m aka.legacy.workflow.iteration_trace phase-end <planning|implementation|benchmark>
 ```
 
-At episode start, record the incumbent `HEAD`, its canonical `performance_score`, latency, and
-matching kernel/manifest pair as the initial `best_commit`, `best_score`, and `best_latency`. The score is the
-optimization objective and higher is better; latency remains diagnostic evidence. Each trial starts
-from the best passing kernel found so far, not automatically from the immediately preceding trial. A
-failed or lower-scoring trial must not contaminate the next trial.
+{{FAST_BEST_INITIALIZATION}}
 
 ### 1. Plan — repeat for trials 1 through {{FAST_TRIALS}}
 
@@ -137,7 +135,7 @@ hash.
 
 Immediately after each evaluator, append one structured journal experiment for that trial. Record
 the reviewed plan, implementation, correctness, `performance_score` and latency when available,
-comparison with `best_score`, and the decision to keep or reject the trial. If this trial queried GPU Wiki,
+comparison with {{FAST_BEST_COMPARISON}}, and the decision to keep or reject the trial. If this trial queried GPU Wiki,
 copy the response's top-level `query_id` and each used record's own emitted canonical `wiki_id`
 exactly; never reconstruct them from response mapping keys or prose. Add one `wiki_usage` row for
 each returned Wiki record that was materially used or explicitly evaluated;
@@ -155,15 +153,14 @@ are omitted and reported in `wiki_usage_errors`, while the experiment still reco
   --experiment-json '{"name":"fast trial N: plan -> implement -> evaluator","hypothesis":"...","change":"...","evidence":"official base-seed evaluator result or blocker","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":"<evaluator-kernel-hash-or-empty>"},"decision":"keep_as_best | reject_and_continue | blocked","wiki_usage_status":"<declared|no_material_use|not_queried>"}'
 ```
 
-If the result passes and its `performance_score` exceeds `best_score`, update `best_commit`,
-`best_score`, and `best_latency`. Keep both `kernel.py` and its matching `solution.json` from that
+{{FAST_KEEP_CONDITION}} Keep both `kernel.py` and its matching `solution.json` from that
 commit. Otherwise keep the prior best and restore both files before
 planning the next trial. Continue
 until {{FAST_TRIALS}} evaluator results and {{FAST_TRIALS}} journal experiments exist. Only
 infrastructure failure or missing authority may end early as `blocked`; a bad candidate is evidence
 for the next trial, not an early terminal `pivot`.
 
-After trial {{FAST_TRIALS}}, select the highest-scoring passing strict improvement over the canonical
+After trial {{FAST_TRIALS}}, select {{FAST_FINAL_SELECTION}} over the canonical
 incumbent. If that best kernel is not the current `HEAD`, restore its exact previously evaluated kernel and matching manifest,
 commit `kernel.py` and any `solution.json` update as `v{{VERSION}}: select best fast candidate`, and atomically publish that
 selection commit to the same policy-review request path. Do not run an additional evaluator: the supervisor

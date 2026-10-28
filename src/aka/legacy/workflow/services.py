@@ -9,7 +9,6 @@ from aka.evaluation.baseline import (
     BaselinePreparation,
 )
 from aka.evaluation import records
-from aka.legacy.acceptance import LegacyAcceptancePolicy
 from aka.contracts.execution import ExecutionContext, validate_executor
 from aka.execution.binding import SandboxExecutor
 
@@ -70,8 +69,8 @@ class WorkflowServices:
     def __init__(self, settings, campaign, *, executor, experiment_factory,
                  evaluator_factory, execution_environment=None, measurement_parallelism=4,
                  canonical_measurement_reader, workflow_observer=None, rule_set=None):
-        from .rule_sets import select_rule_set
-        self.rule_set = select_rule_set({}) if rule_set is None else rule_set
+        from .rule_sets import DEFAULT_RULE_SET, select_rule_set
+        self.rule_set = select_rule_set({"rule_set": DEFAULT_RULE_SET}) if rule_set is None else rule_set
         self.settings = settings
         self.campaign = campaign
         self.problem_provider = campaign.problem_provider
@@ -101,8 +100,7 @@ class WorkflowServices:
             except Exception as error:
                 import sys
                 print(f"[workflow] auxiliary observer failed: {type(error).__name__}", file=sys.stderr)
-        self.acceptance = LegacyAcceptancePolicy(
-            conversion_tolerance=self.rule_set.conversion_tolerance,
+        self.acceptance = self.rule_set.create_acceptance(
             candidate_workspace=campaign.candidate_workspace,
             production_policy=campaign._production_kernel_violations,
         )

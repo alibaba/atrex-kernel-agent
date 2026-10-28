@@ -93,9 +93,11 @@ def episode_directives(
             else campaign._sandbox_directive()
         ),
         "evaluator": campaign.evaluation.evaluator_directive(),
+        "promotion_policy": campaign._promotion_directive(),
         "mode_policy": campaign._mode_directive(),
         "agent_runtime": _agent_runtime_directive(agent_cli),
         "plan_generator": _plan_generator_directive(agent_cli, version),
+        **campaign.services.rule_set.fast_selection_values(),
     }
 
 

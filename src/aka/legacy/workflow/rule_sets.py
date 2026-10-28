@@ -9,6 +9,7 @@ from .constants import CONVERT_PERF_TOL, AGENT_CLI_CHOICES
 GOAL_AFTER_EPISODES = 50
 GOAL_STALL_THRESHOLD = 3
 GOAL_HANDOFF_RESUMES = 20
+DEFAULT_RULE_SET = "geomean-latency-v1"
 
 _CHOICES = {
     "agent_cli": AGENT_CLI_CHOICES,
@@ -84,12 +85,93 @@ class LegacyRuleSet:
         from .composition import compose_workflow
         return compose_workflow(rule_set=self, **dependencies)
 
+    def create_acceptance(self, **dependencies):
+        from aka.legacy.acceptance.policy import LegacyAcceptancePolicy
+        return LegacyAcceptancePolicy(
+            conversion_tolerance=self.conversion_tolerance, **dependencies
+        )
+
+    def promotion_directive(self, min_improvement_pct):
+        return (
+            "## Promotion rule: performance score (`legacy-v1`)\n\n"
+            "Maximize `performance_score`, the arithmetic mean of per-workload speedups. "
+            "Higher is better; full-workload GeoMean latency remains diagnostic evidence. "
+            "Ordinary and Fast promotion requires complete passing correctness and a score "
+            f"improvement strictly greater than {min_improvement_pct:g}% over the incumbent. "
+            "Framework bring-up keeps its separate correctness gate; mandatory conversion "
+            "keeps the supervisor's existing latency parity rule."
+        )
+
+    def fast_selection_values(self):
+        return {
+            "FAST_BEST_INITIALIZATION": (
+                "At episode start, record the incumbent `HEAD`, its canonical `performance_score`, latency, and\n"
+                "matching kernel/manifest pair as the initial `best_commit`, `best_score`, and `best_latency`. The score is the\n"
+                "optimization objective and higher is better; latency remains diagnostic evidence. Each trial starts\n"
+                "from the best passing kernel found so far, not automatically from the immediately preceding trial. A\n"
+                "failed or lower-scoring trial must not contaminate the next trial."
+            ),
+            "FAST_BEST_COMPARISON": "`best_score`",
+            "FAST_KEEP_CONDITION": (
+                "If the result passes and its `performance_score` exceeds `best_score`, update `best_commit`,\n"
+                "`best_score`, and `best_latency`."
+            ),
+            "FAST_FINAL_SELECTION": "the highest-scoring passing strict improvement",
+        }
+
+
+@dataclass(frozen=True)
+class GeoMeanLatencyRuleSet(LegacyRuleSet):
+    def create_acceptance(self, **dependencies):
+        from aka.legacy.acceptance.policy import GeoMeanLatencyAcceptancePolicy
+        return GeoMeanLatencyAcceptancePolicy(
+            conversion_tolerance=self.conversion_tolerance, **dependencies
+        )
+
+    def promotion_directive(self, min_improvement_pct):
+        return (
+            "## Promotion rule: GeoMean latency (`geomean-latency-v1`)\n\n"
+            "Minimize the complete workload's GeoMean latency; lower is better. "
+            "Ordinary and Fast promotion requires complete passing correctness and positive finite "
+            "candidate/incumbent GeoMean latency facts with the same workload and measurement method. "
+            "Latency reduction is `(incumbent_latency - candidate_latency) / incumbent_latency * 100`; "
+            f"it must be strictly greater than {min_improvement_pct:g}% over the incumbent. "
+            "Keep the raw `performance_score` and latency facts in memory/journal evidence, but select "
+            "candidates by GeoMean latency. Missing, incomplete, nonfinite or nonpositive latency is "
+            "insufficient evidence; do not infer a candidate defect or rerun outside the authorized flow. "
+            "Framework bring-up keeps its separate correctness gate; mandatory conversion "
+            "keeps the supervisor's existing latency parity rule."
+        )
+
+    def fast_selection_values(self):
+        return {
+            "FAST_BEST_INITIALIZATION": (
+                "At episode start, record the incumbent `HEAD`, its canonical `performance_score`, full-workload\n"
+                "GeoMean latency, and matching kernel/manifest pair as the initial `best_commit`, `best_score`, and\n"
+                "`best_latency`. GeoMean latency is the optimization objective and lower is better; `best_score`\n"
+                "retains the raw score as evidence. Only complete, comparable, positive finite latency facts can\n"
+                "establish a best candidate. If the incumbent latency is unavailable, report missing evidence;\n"
+                "do not invent it or run an extra evaluator. Each trial starts from the best passing kernel found\n"
+                "so far, not automatically from the immediately preceding trial. A failed, incomplete or slower\n"
+                "trial must not contaminate the next trial."
+            ),
+            "FAST_BEST_COMPARISON": "`best_latency` using full-workload GeoMean latency",
+            "FAST_KEEP_CONDITION": (
+                "If the result passes with complete comparable positive finite full-workload GeoMean latency\n"
+                "strictly below `best_latency`, update `best_commit`, `best_score`, and `best_latency`."
+            ),
+            "FAST_FINAL_SELECTION": "the lowest-GeoMean-latency passing candidate whose latency reduction strictly exceeds the configured promotion threshold",
+        }
+
 
 def select_rule_set(config):
+    # Frozen configs predate the explicit rule identity. Core restores resolved
+    # configs without current Defaults, so omission retains the old score rule.
     identity = config.get("rule_set", "legacy-v1")
-    if identity != "legacy-v1":
+    kinds = {"legacy-v1": LegacyRuleSet, DEFAULT_RULE_SET: GeoMeanLatencyRuleSet}
+    if identity not in kinds:
         raise ValueError(f"unsupported Workflow rule_set: {identity!r}")
-    return LegacyRuleSet(**{field.name: config[field.name] for field in fields(LegacyRuleSet) if field.name in config})
+    return kinds[identity](**{field.name: config[field.name] for field in fields(LegacyRuleSet) if field.name in config})
 
 
 def validate_config(config):

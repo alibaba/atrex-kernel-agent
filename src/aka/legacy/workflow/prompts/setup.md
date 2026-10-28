@@ -26,6 +26,7 @@ Environment (resolve all paths against your cwd = the workspace):
 {{PLUGINS}}
 {{SANDBOX}}
 {{EVALUATOR}}
+{{PROMOTION_POLICY}}
 
 The campaign dependency environment is immutable. Never run `pip`, `python -m pip`, `uv pip`, `conda`,
 `setup.py`, or any other package installation/build command on the host or through the gateway. Use only

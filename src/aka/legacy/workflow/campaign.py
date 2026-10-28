@@ -679,6 +679,29 @@ class Campaign:
             source_checks_enabled=self.source_checks_enabled,
         )
 
+    def _promotion_directive(self) -> str:
+        return self.services.rule_set.promotion_directive(
+            self.services.settings.min_improvement_pct
+        )
+
+    def _setup_baseline_prompt(self) -> str:
+        return render_prompt(
+            PROMPTS_DIR / "setup.md",
+            PLUGINS=self.plugin_directive("setup"),
+            WORKSPACE=str(self.workspace),
+            PLATFORM=self.platform,
+            FRAMEWORK=self.framework,
+            KERNEL_DEMO="reference.py",
+            NOTES=self.notes,
+            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
+            BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
+            HARDWARE=hardware_directive(self.platform, self.arch),
+            SANDBOX=self._sandbox_directive(),
+            EVALUATOR=self.evaluation.evaluator_directive(),
+            PROMOTION_POLICY=self._promotion_directive(),
+            MODE_POLICY=self._mode_directive(),
+        )
+
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
         # (no baseline session) — Task installs the ground-truth files, writes
@@ -718,21 +741,7 @@ class Campaign:
         if self.atrex_bench_root:
             self.evaluation.setup_baseline_native(op_dir, generalized=generalized)
             return
-        prompt = render_prompt(
-            PROMPTS_DIR / "setup.md",
-            PLUGINS=self.plugin_directive("setup"),
-            WORKSPACE=str(self.workspace),
-            PLATFORM=self.platform,
-            FRAMEWORK=self.framework,
-            KERNEL_DEMO="reference.py",
-            NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(self.agent_cli),
-            BASELINE_DRIVER=_baseline_driver_directive(self.agent_cli),
-            HARDWARE=hardware_directive(self.platform, self.arch),
-            SANDBOX=self._sandbox_directive(),
-            EVALUATOR=self.evaluation.evaluator_directive(),
-            MODE_POLICY=self._mode_directive(),
-        )
+        prompt = self._setup_baseline_prompt()
         res = self._run_session(
             self.workspace,
             prompt,
@@ -781,6 +790,8 @@ class Campaign:
                 "`[test_kernel] RESULT_JSON=...`, write local `memory/v0.json` and `baseline_report.md`, "
                 "then Git commit `V0: baseline kernel`. Do not enter optimization iterations.\n\n"
                 + self.evaluation.evaluator_directive()
+                + "\n\n"
+                + self._promotion_directive()
                 + "\n\n"
                 + self._sandbox_directive()
             )
@@ -2011,6 +2022,7 @@ class Campaign:
             HARDWARE=hardware_directive(self.platform, self.arch),
             SANDBOX=self._framework_baseline_sandbox_directive(),
             EVALUATOR=self.evaluation.evaluator_directive(),
+            PROMOTION_POLICY=self._promotion_directive(),
             CORRECTNESS_GUIDANCE=self._framework_baseline_correctness_guidance_text(),
             SMOKE_COMMAND=smoke_command,
             SMOKE_SCOPE=smoke_scope,
