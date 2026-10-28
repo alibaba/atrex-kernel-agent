@@ -1,4 +1,0 @@
-"""Compatibility import for shared crash-durable filesystem mechanics."""
-from aka.core._filesystem import (
-    fsync_directory, ensure_private_directory, durable_write_text, durable_write_json, durable_replace, durable_unlink, durable_rmdir,
-)

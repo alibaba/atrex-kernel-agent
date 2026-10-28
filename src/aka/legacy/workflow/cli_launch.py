@@ -14,7 +14,7 @@ from aka.legacy.workflow.process_environment import (
     pending_recovery_directory, requires_default_recovery,
 )
 
-PROFILES_DIR = Path(__file__).parents[1] / "workflow" / "profiles"
+PROFILES_DIR = Path(__file__).parent / "profiles"
 OPTIONAL_PROFILES = frozenset({"observed", "sandbox", "light", "light-sandbox"})
 
 

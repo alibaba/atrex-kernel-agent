@@ -1,1 +1,1 @@
-"""Legacy entry, layout and construction adapters outside module contracts."""
+"""Retained top-level CLI entries and measurement adapters."""
