@@ -54,7 +54,7 @@
     },
     {
       "id": "experiment",
-      "name": "aka.legacy.experiment.plugin",
+      "name": "aka.experiment.plugin",
       "required": true
     },
     {

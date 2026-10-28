@@ -16,7 +16,6 @@ execution = "aka.legacy.execution.cli:main"
 
 [project.entry-points."aka.tokens"]
 workflow = "aka.legacy.workflow.plugin:WORKFLOW"
-experiment_factory = "aka.legacy.experiment.plugin:EXPERIMENT_FACTORY"
 canonical_measurement_reader = "aka.legacy.workflow.canonical_reader_plugin:CANONICAL_MEASUREMENT_READER"
 
 [tool.setuptools]

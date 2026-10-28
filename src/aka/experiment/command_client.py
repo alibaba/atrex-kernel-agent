@@ -12,7 +12,7 @@ from threading import Event, Lock, Thread
 
 from aka.contracts.execution import CommandSpec, ExecutionFile, OutputOptions, ProfileOptions
 from aka.contracts.filesystem_access import require_path_access
-from aka.evaluation.command_inputs import PROFILE_ENVIRONMENT_KEYS, workload_environment, transport_environment_key
+from aka.evaluation.command_inputs import PROFILE_ENVIRONMENT_KEYS, workload_environment, transport_environment_key, legacy_command_environment
 from .command_access import decode_access, read_input, snapshot_inputs
 from .command_protocol import ENDPOINT_ENV, TOKEN_ENV, receive, receive_json, send, send_json
 from .file_records import _job
@@ -219,8 +219,7 @@ def main(argv=None):
     output = (OutputOptions(args.inline_output, args.include_raw_profile, byte_limit)
               if args.inline_output is not None or args.include_raw_profile is not None or byte_limit is not None else None)
     environment = {key: os.environ[key] for key in PROFILE_ENVIRONMENT_KEYS if key in os.environ}
-    from aka.evaluation.gateway_request import _parse_env_items
-    environment.update(_parse_env_items(args.env))
+    environment = legacy_command_environment(environment, args.env)
     request = CommandSpec(Path(args.workspace).absolute(), command, args.timeout, environment, args.hardware,
         tuple([] if args.no_sync else args.sync or ("profiles",)), operation, num_gpus=args.num_gpus,
         profile_options=profile, output_options=output,

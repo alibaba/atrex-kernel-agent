@@ -220,7 +220,7 @@ class WorkflowServices:
             if self._closed:
                 raise RuntimeError("Workflow services have been closed")
             if self._command_host is None:
-                from aka.legacy.experiment.command_host import ExperimentCommandHost
+                from aka.experiment.command_host import ExperimentCommandHost
                 self._command_host = ExperimentCommandHost(self.agent_experiment,
                     self.executor.capabilities, hardware=self.settings.hardware)
             host = self._command_host
@@ -230,7 +230,7 @@ class WorkflowServices:
     def sandbox_command(self, command):
         import shlex
         import sys
-        argv = [sys.executable, "-m", "aka.legacy.experiment.cli", "--kind", "run"]
+        argv = [sys.executable, "-m", "aka.legacy.compat.experiment_cli", "--kind", "run"]
         if self.settings.hardware:
             argv += ["--hardware", self.settings.hardware]
         return shlex.join([*argv, "--no-sync", "--", *command])

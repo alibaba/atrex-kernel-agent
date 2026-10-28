@@ -10,14 +10,14 @@ from aka.execution.legacy.runtime import ExecutionHooks, SandboxRequest
 
 def main(argv: list[str] | None = None) -> int:
     if os.environ.get("AKA_EXPERIMENT_COMMAND_ENDPOINT"):
-        from .command_client import main as command_main
+        from aka.experiment.command_client import main as command_main
         return command_main(argv)
     from aka.execution.selection import selected_execution
     arguments = list(sys.argv[1:] if argv is None else argv)
     options = arguments[:arguments.index("--")] if "--" in arguments else arguments
     if selected_execution() == {"profile": "legacy"} and not any(
             value.split("=", 1)[0] in {"--profile", "--profiles-dir", "--patch"} for value in options):
-        from aka.legacy.experiment.gateway import main as transport_main
+        from aka.legacy.compat.experiment_gateway import main as transport_main
         return transport_main(arguments)
     # Keep the transport parser authoritative for its input/profiling flags.
     # Module selection must not silently narrow the installed CLI surface.
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
     from aka.execution.processes import spawn_owned_session
     from aka.execution.configuration import queue_wait_grace
     from aka.execution.selection import execution_environment, execution_scope
-    from aka.legacy.experiment.gateway import run_sandbox
+    from aka.legacy.compat.experiment_gateway import run_sandbox
     hooks = ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace)
     with execution_scope(selection=selection) as executor:
         environment = execution_environment(os.environ)

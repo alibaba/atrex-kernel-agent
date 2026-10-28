@@ -1,7 +1,7 @@
 """Workflow review_retry implementation and callable interface."""
 from __future__ import annotations
 
-from aka.legacy.experiment.retry import retry_infrastructure
+from aka.experiment.retry import retry_infrastructure
 import hashlib
 import json
 import time

@@ -12,8 +12,8 @@ from aka.execution.processes import spawn_owned_session
 from aka.execution.configuration import queue_wait_grace
 from aka.execution.recovery import raise_if_environment_blocked
 from aka.legacy.workflow.records import WorkflowMeasurementReader
-from .runner import LegacyExperiment
-from .file_records import FileExperimentRecords
+from aka.experiment.runner import LegacyExperiment
+from aka.experiment.file_records import FileExperimentRecords
 
 
 def run_sandbox(executor, request, *, hooks):

@@ -21,7 +21,7 @@ from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.core._filesystem import durable_write_json
 from aka.agent.availability import check_review_service
-from aka.legacy.experiment.retry import retry_infrastructure
+from aka.experiment.retry import retry_infrastructure
 from aka.contracts.execution import ExecutionPending
 from aka.legacy.workflow.review_trace import ReviewTrace
 

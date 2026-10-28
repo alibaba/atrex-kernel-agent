@@ -34,7 +34,7 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
             from .records import WorkflowMeasurementReader
             canonical_measurement_reader = WorkflowMeasurementReader()
         if experiment_factory is None:
-            from aka.legacy.experiment.factory import LegacyExperimentFactory
+            from aka.experiment.factory import LegacyExperimentFactory
             experiment_factory = LegacyExperimentFactory(measurement_reader=canonical_measurement_reader)
             owned.callback(experiment_factory.close)
         if not callable(getattr(experiment_factory, "open", None)):
