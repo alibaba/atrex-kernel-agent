@@ -185,3 +185,17 @@ extra file and passed all shapes again. Representative production jobs:
 
 These exercise AKA initialization and its real evaluation path, not additional
 Agent-authored optimization episodes.
+
+## Runtime evidence and candidate identity
+
+Agent observations, session checkpoints/errors and diagnostic reports are workspace
+runtime data. The source file systems exclude `.aka-agent-observations/`,
+`.aka-agent-sessions/`, `.aka-agent-session-errors/` and `.humanize/` from collection,
+Git source identity and restoration cleanup. These records remain available after
+candidate rollback; undeclared source files still fail the source contract.
+
+Pre-CR run 83933378 exposed the missing boundary after V1 on all three hardware
+cases. In Aone Sandbox, five targeted reproductions fail on `cd8112c` and all 59
+offline regressions pass with the fix, including the real Agent observation writer,
+unchanged-V0 rejection, historical Git identity and preservation during rollback.
+Validation harnesses remain outside the PR.

@@ -94,7 +94,6 @@ from aka.light.workflow.session_io import (
 from aka.light.workspace.assets import (_agent_runtime_directive, link_runtime)
 from aka.light.workspace.state import (
     git_head,
-    git_kernel_blob,
     git_path_blob,
     git_worktree_blob,
     head_kernel_is_initial_baseline,

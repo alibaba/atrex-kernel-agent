@@ -22,6 +22,7 @@ WORKSPACE_ONLY = {"tools", "skills", "scratch", "memory", "input", "profiles", "
     "solution.json", "config.json", "test_kernel.py", "profile_driver.py", "evaluations.jsonl",
     "numerical_probe.py", "probe-request.json", "policy_review_request.json",
     ".gitignore", ".claude", ".codex", ".qoder", ".agents", ".pi", ".orchestrator_mode.json",
+    ".aka-agent-observations", ".aka-agent-sessions", ".aka-agent-session-errors", ".humanize",
     ".gpu_wiki_profile", ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins",
     ".atrex_stall_state.json", ".orchestrator_state.json", "framework_baseline.json",
     "baseline_report.md", "trace-retention-manifest.json", ".atrex_environment", ".qodersec", ".venv", "node_modules", POLICY, SELECTION}
