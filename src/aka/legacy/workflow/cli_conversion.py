@@ -5,7 +5,6 @@ from pathlib import Path
 from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S, GATEWAY_CANDIDATE_RECOVERY_MODES
 from aka.execution.defaults import DEFAULT_SANDBOX_TIMEOUT
 from aka.execution.health import DEFAULT_SSH_HEALTH_COMMAND
-from aka.task.hardware import _workspace_slug
 from aka.legacy.workflow.policy import OPTIMIZATION_MODE_CHOICES
 from aka.agent.adapter import codex_settings_args, pi_settings_args
 from aka.legacy.workflow.invocation import WorkflowLaunch, encode_launch
@@ -304,12 +303,13 @@ def parse_arguments(argv):
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
-    if args.workspace_suffix and args.workspace_suffix != _workspace_slug(
-        args.workspace_suffix
-    ):
-        ap.error(
-            "--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix"
-        )
+    if args.workspace_suffix:
+        if not re.search(r"[a-z0-9]", args.workspace_suffix.lower()):
+            raise ValueError("workspace suffix value has no usable directory characters")
+        if not re.fullmatch(r"[a-z0-9]+(?:_[a-z0-9]+)*", args.workspace_suffix):
+            ap.error(
+                "--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix"
+            )
     if args.sandbox_timeout < 1:
         ap.error("--sandbox-timeout must be positive")
     if args.convert_after < 0:
