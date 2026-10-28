@@ -112,6 +112,19 @@ class LegacyExperiment:
                     **handoff_identity(request)}
         data = asdict(request)
         data.pop("experiment_ref", None)
+        # Absent additions must not change historical request identities.
+        data.pop("numerical_probe", None)
+        if request.numerical_probe is not None:
+            import hashlib
+            probe = request.numerical_probe
+            data["numerical_probe"] = {
+                "suite_json": probe.suite_json, "rotation": probe.rotation,
+                "candidate_identity": probe.candidate_identity,
+                "candidate_files": [
+                    {"path": item.path, "mode": item.mode, "sha256": hashlib.sha256(item.content).hexdigest()}
+                    for item in sorted(probe.candidate_files, key=lambda item: item.path)
+                ],
+            }
         for name in ("workspace", "canonical_workspace"):
             data[name] = str(data[name].resolve()) if data[name] is not None else None
         data["changed_paths"] = list(data["changed_paths"])

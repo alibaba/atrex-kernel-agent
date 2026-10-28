@@ -167,6 +167,13 @@ class EvaluationRequest:
     canonical_workspace: Path | None = None
     expected_shape_ids: frozenset[str] | None = None
     experiment_ref: ExperimentRef | None = None
+    numerical_probe: NumericalProbeRequest | None = None
+
+    def __post_init__(self):
+        if self.numerical_probe is not None and not isinstance(self.numerical_probe, NumericalProbeRequest):
+            raise TypeError("numerical probe must use the public request contract")
+        if (self.mode == "numerical") != (self.numerical_probe is not None):
+            raise ValueError("numerical mode requires its probe request exclusively")
 
 
 @dataclass(frozen=True)
@@ -185,6 +192,24 @@ class PreparationFile:
             raise TypeError("preparation content must be immutable bytes")
         if type(self.mode) is not int or not 0 <= self.mode <= 0o777:
             raise ValueError("preparation file requires ordinary permission bits")
+
+
+@dataclass(frozen=True)
+class NumericalProbeRequest:
+    """Frozen reviewer suite and candidate content; Evaluation owns probe preparation."""
+    suite_json: str
+    rotation: str
+    candidate_identity: str
+    candidate_files: tuple[PreparationFile, ...]
+
+    def __post_init__(self):
+        for value in (self.suite_json, self.rotation, self.candidate_identity):
+            if not isinstance(value, str) or not value:
+                raise ValueError("numerical probe requires nonempty text identities and suite")
+        files = tuple(self.candidate_files)
+        if not files or any(not isinstance(item, PreparationFile) for item in files):
+            raise TypeError("numerical candidate files must use PreparationFile values")
+        object.__setattr__(self, "candidate_files", files)
 
 
 @dataclass(frozen=True)
