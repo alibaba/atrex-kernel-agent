@@ -243,13 +243,10 @@ class WorkflowServices:
             self.campaign,
             workspace,
             standard_correctness_passed=standard_correctness_passed,
-            execute=self.numerical_command,
+            experiment=self.baseline_experiment,
             harness=(self.evaluation_input().harness.source
                      if self.evaluation_input().harness is not None else None),
         )
-
-    def numerical_command(self, command):
-        return self.baseline_experiment.run_command(command)
 
     def baseline(self):
         from aka.legacy.workflow.baseline import WorkflowBaseline

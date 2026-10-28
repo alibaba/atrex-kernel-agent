@@ -12,22 +12,22 @@ from pathlib import Path
 from .resources import PROMPTS_DIR
 import shutil
 import subprocess
+import stat
 import tempfile
 import uuid
 
-from aka.evaluation.drivers.remote_numerical import MAX_REL_L2, validation_schedule
 from aka.legacy.workflow.store import VERIFY_DIR
-from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
-from aka.core._filesystem import durable_write_json
+from aka.core._filesystem import durable_write_json, durable_write_text
 from aka.agent.availability import check_review_service
 from aka.experiment.retry import retry_infrastructure
 from aka.contracts.execution import ExecutionPending
+from aka.contracts.evaluation import EvaluationRequest, EvaluationUnavailable, NumericalProbeRequest, PreparationFile
+from aka.contracts.experiment import ExperimentExecutionError, ExperimentRecordError
+from aka.contracts.experiment_identity import ExperimentRef
 from aka.legacy.workflow.review_trace import ReviewTrace
 
-import aka.evaluation.drivers.remote_numerical as remote_numerical
-from aka.evaluation.numerical import interpret_numerical_output, validate_numerical_review
-DRIVER = Path(remote_numerical.__file__)
+from aka.evaluation.numerical import validate_numerical_review
 PROMPT = PROMPTS_DIR / "numerical_review.md"
 
 
@@ -38,10 +38,12 @@ class NumericalPlanningTimeout(RuntimeError):
 class NumericalProbeFailure(RuntimeError):
     """A supplemental probe failed at a supervisor-owned execution stage."""
 
-    def __init__(self, stage, cause):
+    def __init__(self, stage, cause, *, continuation_pending=False, experiment_ref=None):
         super().__init__(f"{stage}: {cause}")
         self.stage = stage
         self.cause = cause
+        self.continuation_pending = continuation_pending
+        self.experiment_ref = experiment_ref
 
 
 _PROBE_EXCEPTIONS = (
@@ -51,20 +53,32 @@ _PROBE_EXCEPTIONS = (
     KeyError,
     subprocess.SubprocessError,
     ExecutionPending,
+    ExperimentExecutionError,
+    ExperimentRecordError,
+    EvaluationUnavailable,
+    LookupError,
 )
 
 
-def _at_probe_stage(stage, operation, *args, **kwargs):
-    try:
-        return operation(*args, **kwargs)
-    except NumericalProbeFailure:
-        raise
-    except _PROBE_EXCEPTIONS as exc:
-        raise NumericalProbeFailure(stage, exc) from exc
+def _private_failure_chain(exc):
+    facts, seen = [], set()
+    while exc is not None and id(exc) not in seen:
+        seen.add(id(exc))
+        facts.append({"exception_type": type(exc).__name__, "message": str(exc)})
+        exc = exc.__cause__
+    return facts
 
 
 def _public_failure_fact(stage, exc):
     """Return a bounded diagnostic without private inputs, paths or messages."""
+    cause = exc
+    seen = set()
+    while cause is not None and id(cause) not in seen:
+        seen.add(id(cause))
+        if isinstance(cause, ExecutionPending):
+            return {"stage": stage, "exception_type": "ExecutionPending", "code": f"{stage}.execution_pending",
+                    "retryable": True, "summary": "original numerical execution requires continuation"}
+        cause = cause.__cause__
     if isinstance(exc, json.JSONDecodeError):
         exception_type, category = "JSONDecodeError", "invalid_json"
         summary, retryable = "validation JSON is invalid", False
@@ -107,22 +121,6 @@ def _public_failure_fact(stage, exc):
     }
 
 
-def _load_shapes(path):
-    return json.loads(path.read_text())
-
-
-def _uses_native_harness(path):
-    return "atrex-bench/run_eval" in path.read_text()
-
-
-def _write_probe_request(request, suite, case_id, digest, private):
-    durable_write_json(request, {
-        "suite": suite, "case_ids": [case_id], "rotation": digest,
-        "mode": "thorough", "per_case_timeout": 540,
-        "max_rel_l2": _fp4_correctness_max_rel_l2(private) or MAX_REL_L2,
-    })
-
-
 def _digest(files):
     digest = hashlib.sha256()
     for name, path in sorted(files.items()):
@@ -136,7 +134,8 @@ def _sources(campaign, workspace, *, harness=None):
     private = Path(campaign.private_reference_dir or workspace)
     if harness is None:
         raise ValueError('numerical validation requires the frozen Task harness')
-    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": harness}
+    driver = campaign.plugin_registry.resource_result().resource("evaluation-numerical-driver").source
+    files = {"instructions.md": PROMPT, "driver.py": driver, "transport.py": harness}
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "README.md"):
@@ -240,124 +239,169 @@ def _request_review(campaign, workspace, files, digest, previous=None):
     return retry_infrastructure(workspace, stage, review_once)
 
 
-def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, execute=None, harness=None):
-
-    shapes = _at_probe_stage("load_shapes", _load_shapes, shapes_path)
-    schedule = _at_probe_stage(
-        "schedule", validation_schedule, suite, shapes, digest, "thorough"
+def _candidate_snapshot(files):
+    candidates = tuple(
+        PreparationFile(name.removeprefix("candidate/"), path.read_bytes(),
+                        stat.S_IMODE(path.stat().st_mode) & 0o777)
+        for name, path in sorted(files.items()) if name.startswith("candidate/")
     )
-    driver = directory / "test_kernel.py"
-    _at_probe_stage("prepare_driver", shutil.copy2, DRIVER, driver)
-    native_harness = _at_probe_stage(
-        "prepare_harness", _uses_native_harness, workspace / "test_kernel.py",
+    rows = [{"path": item.path, "mode": item.mode,
+             "sha256": hashlib.sha256(item.content).hexdigest()} for item in candidates]
+    identity = hashlib.sha256(json.dumps(
+        rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    return candidates, identity
+
+
+def _pending_path(plan_root, workspace):
+    # A plan/candidate change must not hide a possibly admitted original Job.
+    identity = hashlib.sha256(str(workspace.resolve()).encode("utf-8")).hexdigest()
+    return plan_root / ("pending-" + identity + ".json")
+
+
+def _load_pending(path):
+    value = json.loads(path.read_text())
+    if not isinstance(value, dict) or value.get("schema") != "aka.workflow.numerical-continuation.v1":
+        raise ValueError("invalid numerical continuation record")
+    for name in ("request_id", "candidate_identity", "suite_json", "rotation"):
+        if not isinstance(value.get(name), str) or not value[name]:
+            raise ValueError("incomplete numerical continuation identity")
+    ref = value.get("experiment_ref")
+    if ref is not None and (not isinstance(ref, dict) or set(ref) != {"run_id", "experiment_id"}
+                            or any(not isinstance(item, str) or not item for item in ref.values())):
+        raise ValueError("invalid numerical continuation reference")
+    return value
+
+
+def _continuation_record(experiment, pending):
+    ref = pending.get("experiment_ref")
+    record = (experiment.get(ExperimentRef(**ref)) if ref is not None
+              else experiment.find(pending["request_id"]))
+    if record.request_id != pending["request_id"]:
+        raise ValueError("numerical continuation references a different experiment request")
+    return record
+
+
+def _numerical_artifact(experiment, record):
+    if record.lifecycle != "terminal" or record.phase != "complete":
+        raise ValueError("original numerical experiment is not fully collected")
+    if record.evaluation is None or not record.evaluation.artifact:
+        raise ValueError("numerical experiment has no interpreted artifact")
+    artifacts = [item for item in record.artifacts
+                 if item.artifact_id == record.evaluation.artifact]
+    if len(artifacts) != 1:
+        raise ValueError("numerical interpreted artifact identity is unavailable")
+    content = experiment.read_artifact(artifacts[0])
+    value = json.loads(content)
+    if (not isinstance(value, dict)
+            or set(value) != {"schema", "summary", "probes", "measurements"}
+            or value["schema"] != "aka.evaluation.numerical-probe.v1"):
+        raise ValueError("invalid numerical interpreted artifact schema")
+    summary = value["summary"]
+    if (not isinstance(summary, dict)
+            or set(summary) != {"status", "reason", "expected_probes", "observed_probes", "failed_probes"}
+            or summary["status"] not in {"passed", "advisory", "needs_repair", "needs_validation"}
+            or not isinstance(summary["reason"], str) or not summary["reason"]
+            or any(summary[name] is not None and (type(summary[name]) is not int or summary[name] < 0)
+                   for name in ("expected_probes", "observed_probes", "failed_probes"))
+            or not isinstance(value["probes"], list) or not isinstance(value["measurements"], list)):
+        raise ValueError("invalid numerical interpreted summary")
+    return content, value
+
+
+def _not_dispatched(record):
+    return record.lifecycle == "terminal" and record.phase != "complete" and all(
+        item.disposition == "not_submitted" and (item.result is None or not item.result.job_references)
+        for item in record.attempts
     )
-    if native_harness:
-        snapshot = directory / "snapshots" / "evaluator.py"
-        _at_probe_stage("prepare_harness", snapshot.parent.mkdir)
-        if harness is None:
-            raise NumericalProbeFailure(
-                "prepare_harness",
-                ValueError('numerical validation requires the frozen Task harness'),
-            )
-        _at_probe_stage("prepare_harness", shutil.copy2, harness, snapshot)
-    results = []
-    for index, plan in enumerate(schedule):
-        if plan.get("status") == "unsupported":
-            results.append({"case_id": plan["case_id"], "status": "unsupported",
-                            "diagnosis": plan["diagnosis"]})
-            continue
-        request = directory / f"request-{index:04d}.json"
-        _at_probe_stage(
-            "prepare_request",
-            _write_probe_request,
-            request,
-            suite,
-            plan["case_id"],
-            digest,
-            Path(campaign.private_reference_dir or workspace),
-        )
 
-        transport_attempts = []
 
-        def probe_once(request=request, transport_attempts=transport_attempts):
-            from aka.contracts.execution import CommandSpec
-            if execute is None:
-                execute_command = campaign.services.numerical_command
+def _guard_changed_continuation(experiment, pending_path, *, request_id=None):
+    if not pending_path.is_file():
+        return None
+    pending = None
+    try:
+        pending = _load_pending(pending_path)
+        if request_id == pending["request_id"]:
+            return pending
+        record = _continuation_record(experiment, pending)
+        pending["experiment_ref"] = record.ref.as_dict()
+        durable_write_json(pending_path, pending, ensure_ascii=False)
+        if not _not_dispatched(record):
+            _numerical_artifact(experiment, record)
+        pending_path.unlink()
+        return None
+    except _PROBE_EXCEPTIONS as exc:
+        ref = pending.get("experiment_ref") if pending else None
+        raise NumericalProbeFailure("resume_original", exc, continuation_pending=True,
+                                    experiment_ref=ref) from exc
+
+
+def _run_probes(campaign, workspace, suite, digest, directory, *, experiment, files, pending_path):
+    try:
+        candidates, candidate_identity = _candidate_snapshot(files)
+        if _digest(files) != digest:
+            raise ValueError("review evidence changed before validation")
+    except _PROBE_EXCEPTIONS as exc:
+        raise NumericalProbeFailure("prepare_candidate", exc,
+                                    continuation_pending=pending_path.is_file()) from exc
+    suite_json = json.dumps(suite, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    binding = {"rotation": digest, "candidate_identity": candidate_identity,
+               "suite_sha256": hashlib.sha256(suite_json.encode("utf-8")).hexdigest()}
+    request_id = "numerical-probe:" + hashlib.sha256(json.dumps(
+        binding, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+    ).encode("utf-8")).hexdigest()
+    request = EvaluationRequest(workspace=workspace, mode="numerical",
+        numerical_probe=NumericalProbeRequest(suite_json, digest, candidate_identity, candidates))
+    pending = _guard_changed_continuation(experiment, pending_path, request_id=request_id)
+    try:
+        if pending is None:
+            try:
+                registered = experiment.find(request_id)
+            except LookupError:
+                registered = None
+            pending = {"schema": "aka.workflow.numerical-continuation.v1", "request_id": request_id,
+                       "candidate_identity": candidate_identity, "suite_json": suite_json,
+                       "rotation": digest, "experiment_ref": registered.ref.as_dict() if registered else None}
+            # Persist intent before dispatch: a crash must never silently create a new Job.
+            durable_write_json(pending_path, pending, ensure_ascii=False)
+            if registered is None:
+                record = experiment.run_recorded(request, request_id=request_id)
             else:
-                execute_command = execute
-            command = CommandSpec(workspace,
-                ("python3", str(driver.relative_to(workspace)), str(request.relative_to(workspace))),
-                timeout=600, operation="dev")
-            process = _at_probe_stage(
-                "launch_probe", execute_command, command,
-            )
-
-            interpreted = _at_probe_stage(
-                "interpret_receipt", interpret_numerical_output,
-                process.stdout, plan, suite, shapes,
-                transport_returncode=process.returncode,
-            )
-            transport_attempts.append(_at_probe_stage(
-                "record_transport",
-                _probe_transport_fact,
-                process,
-                receipt_status=interpreted.receipt_status,
-            ))
-            _at_probe_stage("check_transport", process.require_transport)
-            return interpreted
-
-        interpreted = retry_infrastructure(
-            workspace, f"numerical-probe:{digest}:{plan['case_id']}", probe_once
-        )
-        results.append({
-            "case_id": plan["case_id"],
-            **interpreted.as_dict(),
-            "transport_attempts": transport_attempts,
-        })
-    # Repair invalid reference inputs before asking the coding agent to act on
-    # any other failing case. All retained cases are measured again afterwards.
-    status = ("needs_validation" if any({"reference", "unknown"}.intersection(r.get("nonfinite_outputs", [])) for r in results)
-              else "needs_repair" if any(r["status"] == "needs_repair" for r in results)
-              else "needs_validation" if any(r["status"] == "needs_validation" for r in results)
-              else "advisory" if any(r["status"] == "unsupported" for r in results)
-              else "passed")
-    reason = next(
-        (r.get("reason") for r in results if r["status"] == status and r.get("reason")),
-        "unsupported" if status == "advisory" else status,
-    )
-    counted = [r for r in results if r["status"] != "unsupported"]
-    return {
-        "status": status,
-        "reason": reason,
-        "expected_probes": sum(r.get("expected_probes") or 0 for r in counted),
-        "observed_probes": sum(r.get("observed_probes") or 0 for r in counted),
-        "failed_probes": sum(r.get("failed_probes") or 0 for r in counted),
-        "probes": results,
-    }
-
-
-def _probe_transport_fact(process, *, receipt_status):
-    """Keep bounded gateway/receipt facts without retaining raw transport output."""
-    if receipt_status not in {"valid", "missing", "invalid_json", "invalid_schema"}:
-        raise ValueError("unsupported numerical receipt status")
-    fact = {
-        "return_code": int(process.returncode),
-        "receipt_status": receipt_status,
-    }
-    primary = process.primary_diagnostic
-    diagnostic = ({**primary.details, "failure_class": primary.category, "reason": primary.code}
-                  if primary else {})
-    mapping = {
-        "failure_class": "failure_class",
-        "reason": "failure_reason",
-        "http_status": "http_status",
-        "job_id": "job_id",
-    }
-    for source, destination in mapping.items():
-        value = diagnostic.get(source)
-        if isinstance(value, str) or (source == "http_status" and type(value) is int):
-            fact[destination] = value
-    return fact
+                record = experiment.resume_recorded(request, request_id=request_id,
+                    recovery_timeout=600, max_remeasurements=0)
+        else:
+            # Lookup failure after a retained intent is uncertainty, never fresh work.
+            _continuation_record(experiment, pending)
+            record = experiment.resume_recorded(request, request_id=request_id,
+                recovery_timeout=600, max_remeasurements=0)
+        pending["experiment_ref"] = record.ref.as_dict()
+        durable_write_json(pending_path, pending, ensure_ascii=False)
+        content, interpreted = _numerical_artifact(experiment, record)
+        durable_write_text(directory / "numerical_result.json", content.decode("utf-8"))
+        result = {**interpreted["summary"], "probes": interpreted["probes"],
+                  "interpreted_result": interpreted, "experiment_ref": record.ref.as_dict(),
+                  "request_id": request_id, "execution_attempts": [item.as_dict() for item in record.attempts]}
+        pending_path.unlink()
+        return result
+    except _PROBE_EXCEPTIONS as exc:
+        if pending is None:
+            raise NumericalProbeFailure("find_original", exc, continuation_pending=True) from exc
+        ref = getattr(exc, "experiment_ref", None)
+        if ref is not None:
+            pending["experiment_ref"] = ref.as_dict()
+            durable_write_json(pending_path, pending, ensure_ascii=False)
+        continuation_pending = True
+        try:
+            failed_record = _continuation_record(experiment, pending)
+            if _not_dispatched(failed_record):
+                pending["experiment_ref"] = failed_record.ref.as_dict()
+                pending_path.unlink()
+                continuation_pending = False
+        except _PROBE_EXCEPTIONS:
+            pass
+        raise NumericalProbeFailure("recorded_probe", exc, continuation_pending=continuation_pending,
+                                    experiment_ref=pending.get("experiment_ref")) from exc
 
 
 def _public_numerical_supplement(record):
@@ -368,6 +412,10 @@ def _public_numerical_supplement(record):
     probes = latest.get("probes") if isinstance(latest.get("probes"), list) else []
 
     def count(name):
+        if name in latest and latest[name] is None:
+            # The existing bounded diagnostic uses integer counts. Full evidence
+            # retains Evaluation's unknown value without inventing completeness.
+            return 0
         value = latest.get(name)
         if type(value) is int and value >= 0:
             return value
@@ -432,7 +480,7 @@ def _numerical_advice_root(campaign, workspace):
     return root
 
 
-def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, execute=None, harness=None):
+def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=False, experiment=None, harness=None):
     """Return repair/pending feedback, or an empty string when advice is resolved."""
     if campaign.optimization_mode != "production":
         return ""
@@ -440,9 +488,12 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
     files, shapes = _sources(campaign, workspace, harness=harness)
     digest = _digest(files)
     validation_digest = _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"})
+    experiment = experiment if experiment is not None else campaign.services.baseline_experiment
+    plan_root = _numerical_advice_root(campaign, workspace)
+    pending_path = _pending_path(plan_root, workspace)
     cache = getattr(campaign, "_supplemental_results", {})
     key = (str(workspace.resolve()), validation_digest, standard_correctness_passed)
-    if key in cache:
+    if key in cache and not pending_path.is_file():
         return cache[key]
 
     directory = workspace / VERIFY_DIR / ("supplemental-" + uuid.uuid4().hex)
@@ -457,9 +508,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
     # Workspace feedback copies are never accepted as supervisor state.
     plan_root = _numerical_advice_root(campaign, workspace)
     plan_path = plan_root / (hashlib.sha256(repr(plan_key).encode()).hexdigest() + ".json")
-    record = {"schema_version": 1, "evidence_digest": validation_digest,
-              "comparison": {"metric": "relative_l2", "max_rel_l2":
-                  _fp4_correctness_max_rel_l2(Path(campaign.private_reference_dir or workspace)) or MAX_REL_L2}}
+    record = {"schema_version": 1, "evidence_digest": validation_digest}
     try:
         if review is None and plan_path.is_file():
             review = json.loads(plan_path.read_text())
@@ -475,6 +524,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
             review = _request_review(campaign, workspace, files, digest)
         record["review"] = review
         if review["action"] == "complete":
+            _guard_changed_continuation(experiment, pending_path)
             record["status"] = "passed"
         else:
             plans[plan_key] = review
@@ -484,8 +534,8 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                 trial = directory / f"probe-{attempt}"
                 trial.mkdir()
                 try:
-                    evaluation = _run_probes(campaign, workspace, review["suite"], shapes, digest, trial,
-                                             execute=execute, harness=harness)
+                    evaluation = _run_probes(campaign, workspace, review["suite"], digest, trial,
+                                             experiment=experiment, files=files, pending_path=pending_path)
                 except NumericalProbeFailure as exc:
                     evaluation = {
                         "status": "needs_validation",
@@ -494,7 +544,10 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                         "observed_probes": 0,
                         "failed_probes": 0,
                         "diagnosis": str(exc.cause),
+                        "cause_chain": _private_failure_chain(exc.cause),
                         "failure": _public_failure_fact(exc.stage, exc.cause),
+                        "continuation_pending": exc.continuation_pending,
+                        "experiment_ref": exc.experiment_ref,
                     }
                 except _PROBE_EXCEPTIONS as exc:
                     evaluation = {
@@ -508,7 +561,8 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                     }
                 record.setdefault("evaluations", []).append(evaluation)
                 record["status"] = evaluation["status"]
-                if evaluation["status"] != "needs_validation" or attempt == 1:
+                if (evaluation["status"] != "needs_validation" or attempt == 1
+                        or evaluation.get("continuation_pending")):
                     break
                 # Input ABI, scheduling and reference-output failures belong to
                 # the probe planner. Keep the original risk in the request.
@@ -546,7 +600,7 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
             unchanged = _digest({**files, "shapes.json": shapes,
                                  "evaluator.py": workspace / "test_kernel.py"}) == validation_digest
             record.update(
-                status=("skipped_planner_timeout" if standard_passed and unchanged and not measured_failure
+                status=("skipped_planner_timeout" if standard_passed and unchanged and not measured_failure and not pending_path.is_file()
                         else "needs_validation"),
                 reason="probe_exception",
                 diagnosis=str(exc), standard_correctness_passed=bool(standard_passed),
@@ -559,6 +613,10 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
                 diagnosis=f"{exc}; timeout skip evidence unavailable: {evidence_error}",
                 failure=_public_failure_fact("timeout_evidence", evidence_error),
             )
+    except NumericalProbeFailure as exc:
+        record.update(status="needs_validation", reason="probe_exception",
+            diagnosis=str(exc.cause), cause_chain=_private_failure_chain(exc.cause),
+            failure=_public_failure_fact(exc.stage, exc.cause), continuation_pending=exc.continuation_pending, experiment_ref=exc.experiment_ref)
     except _PROBE_EXCEPTIONS as exc:
         record.update(
             status="needs_validation",
