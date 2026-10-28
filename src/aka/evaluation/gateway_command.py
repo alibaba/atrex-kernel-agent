@@ -5,7 +5,6 @@ from pathlib import Path
 from aka.contracts.execution import CommandSpec, ExecutionFile, UnsupportedExecution
 from aka.contracts.evaluation import PreparedEvaluation, StepEvaluation, MeasurementArtifact
 from aka.execution.gateway import sandbox as transport
-from aka.execution.legacy.runtime import current_transport_arguments
 from .gateway_request import prepare_request, _candidate_languages
 from .gateway_policy import _typed_workspace_limitation
 from .gateway_measurement import GatewayMeasurement, prepare_dev_output, with_measurement_conditions
@@ -71,10 +70,9 @@ class GatewayCommandEvaluator:
         baseline = (self.measurement_reader.baseline(command.workspace)
                     if self.measurement_reader is not None else None)
         environment = command.environment
-        compatibility_arguments = current_transport_arguments() if command.filesystem_access is None else ()
         argv = ["--hardware", command.hardware, "--workspace", str(command.workspace),
                 "--timeout", str(command.timeout), "--kind", command.operation,
-                *compatibility_arguments, "--", *command.command]
+                "--", *command.command]
         parser = transport.build_parser()
         parser.set_defaults(hardware=command.hardware, timeout=command.timeout,
             ssh=environment.get("ATREX_SANDBOX_SSH", ""), url=environment.get("ATREX_SANDBOX_URL", ""),
@@ -82,7 +80,7 @@ class GatewayCommandEvaluator:
             shape_batch_size=int(environment.get("ATREX_EVAL_SHAPE_BATCH_SIZE", transport.DEFAULT_EVAL_SHAPE_BATCH_SIZE)))
         args = parser.parse_args(argv)
         apply_profile_options(args, command.profile_options)
-        explicit_environment = workload_environment(command, args.env)
+        explicit_environment = workload_environment(command)
         args.env = [f"{key}={value}" for key, value in explicit_environment.items()]
         if args.shape_batch_size < 1:
             raise ValueError("shape batch size must be positive")
@@ -114,7 +112,7 @@ class GatewayCommandEvaluator:
         profile_controls = kind == "profile" and PROFILE_ENVIRONMENT_KEYS.intersection(explicit_environment)
         limitation = ("SSH uses the portable runner" if ssh else
             "PROFILE_* controls require the portable profile runner" if profile_controls else
-            "custom dev options" if args.input or command.input_files or args.keep_pod else
+            "custom dev options" if command.input_files else
             _typed_workspace_limitation(command.workspace, list(command.command), kind, reference_dir=reference))
         if kind == "dev" or limitation:
             if kind == "profile" and nondefault_profile(command.profile_options):

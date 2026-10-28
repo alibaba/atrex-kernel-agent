@@ -1,1 +1,1 @@
-"""Retained top-level CLI entries and measurement adapters."""
+"""Retained top-level CLI aliases."""

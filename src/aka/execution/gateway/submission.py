@@ -31,8 +31,8 @@ def submit_prepared(args, workspace, grace, prepared):
         request.setdefault("options", {})["timeout_s"] = budget.effective
     else:
         emit_diagnostic({"failure_class":"protocol", "reason":"job-runtime-budget-unconfirmed"})
-    if args.ssh or args.keep_pod or args.input:
-        raise ValueError("prepared typed requests do not support SSH, keep-pod or custom input")
+    if args.ssh or args.input:
+        raise ValueError("prepared typed requests do not support SSH or custom input")
     executable = transport._find_agate()
     try:
         if args.url and executable is None:

@@ -47,9 +47,8 @@ def _transport_options(args):
                         ("--runtime-health-command", args.runtime_health_command or None)):
         if value is not None:
             result.extend((flag, str(value)))
-    for flag, enabled in (("--check-health", args.check_health), ("--keep-pod", args.keep_pod)):
-        if enabled:
-            result.append(flag)
+    if args.check_health:
+        result.append("--check-health")
     return tuple(result)
 
 
@@ -83,7 +82,7 @@ def _command(args, environment):
         from .command_transport import freeze_cli_inputs
         inputs, skipped = freeze_cli_inputs(Path(args.workspace).resolve(), args.input,
                                             args.max_input_file_mb * 1024 * 1024)
-        if skipped and not args.dry_run:
+        if skipped:
             print("[sandbox] inputs skipped: " + ", ".join(skipped), file=sys.stderr)
     return CommandSpec(Path(args.workspace).resolve(), command, args.timeout, environment, args.hardware,
         tuple([] if args.no_sync else args.sync or transport.DEFAULT_SYNC_PATHS),
@@ -93,7 +92,7 @@ def _command(args, environment):
 
 def _bind(executor, command, args, environment):
     if not getattr(executor, "sandbox_cli_options", False):
-        if args.keep_pod or args.ssh_runtime_bind or args.ssh_gpu is not None or args.runtime_health_command or args.check_health:
+        if args.ssh_runtime_bind or args.ssh_gpu is not None or args.runtime_health_command or args.check_health:
             raise UnsupportedExecution("selected executor does not support sandbox transport options")
     if getattr(executor, "sandbox_cli_endpoint_environment", False):
         if (environment.get("ATREX_SANDBOX_SSH") or args.ssh_runtime_bind or args.ssh_gpu is not None
@@ -157,11 +156,10 @@ def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_
             command = prepare_command(command, environment_items=tuple(args.env), shape_batch_size=args.shape_batch_size)
         with transport_arguments(_transport_options(args)):
             if args.dry_run and not health:
-                if preview_command(command, keep_pod=args.keep_pod, input_requested=bool(args.input)):
+                if preview_command(command):
                     return 0
                 return transport.main(_transport_argv(arguments))
-            result = bound.run(command) if health else run_command(bound, command,
-                keep_pod=args.keep_pod, input_requested=bool(args.input))
+            result = bound.run(command) if health else run_command(bound, command)
         result.require_transport()
         sys.stdout.write(result.stdout or "")
         sys.stderr.write(result.stderr or "")

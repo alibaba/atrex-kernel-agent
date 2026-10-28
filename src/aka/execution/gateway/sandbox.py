@@ -25,12 +25,12 @@ invocation is stateless; callers must not rely on remote filesystem persistence.
 
 Examples::
 
-    python -m aka.legacy.execution.cli --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
-    python -m aka.legacy.execution.cli --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
+    python -m aka.legacy.workflow.measurement_cli --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+    python -m aka.legacy.workflow.measurement_cli --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
         bash profiling/nvidia/profile_nvidia.sh profile_driver.py --output-dir profiles/v1 --source
-    python -m aka.legacy.execution.cli --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
+    python -m aka.legacy.workflow.measurement_cli --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
         bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v1
-    python -m aka.legacy.execution.cli --kind run --hardware H20 --ssh gpu-host --no-sync -- \
+    python -m aka.legacy.workflow.measurement_cli --kind run --hardware H20 --ssh gpu-host --no-sync -- \
         python test_kernel.py --no-memory
 
 ``ATREX_SANDBOX_GPU``, ``ATREX_SANDBOX_PROFILE``, ``ATREX_SANDBOX_URL``,
@@ -1704,11 +1704,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-output-file-bytes", type=int, default=None, help=argparse.SUPPRESS)
     parser.add_argument("-e", "--env", action="append", default=[], metavar="KEY=VALUE")
     parser.add_argument(
-        "--keep-pod",
-        action="store_true",
-        help="Ask the gateway not to recycle the pod; filesystem persistence is still not assumed.",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Package and print the request summary only.",
@@ -3277,7 +3272,7 @@ def _main(argv: list[str] | None = None) -> int:
             "--intent",
             dev_intent,
             "--note",
-            f"aka.legacy.execution.cli {args.kind} compatibility path",
+            f"aka.execution.gateway.sandbox {args.kind} command path",
         ]
         if args.url:
             agate += ["--url", args.url]
@@ -3323,8 +3318,6 @@ def _main(argv: list[str] | None = None) -> int:
             if "=" not in item or item.startswith("="):
                 raise SystemExit(f"sandbox: invalid --env {item!r}; expected KEY=VALUE")
             agate += ["--env-var", item]
-        if args.keep_pod:
-            agate.append("--no-recycle")
         if output_transport == "oss":
             agate += ["--oss-output", OSS_OUTPUT_ARCHIVE]
         agate.append("bash __atrex_runner.sh")

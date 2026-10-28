@@ -198,7 +198,7 @@ def main(argv=None):
     args = parser.parse_args(arguments)
     options = arguments[:arguments.index("--")] if "--" in arguments else arguments
     forbidden = {"--gateway-profile", "--url", "--ssh", "--ssh-init", "--health-command", "--ssh-runtime-bind",
-                 "--ssh-gpu", "--runtime-health-command", "--check-health", "--keep-pod", "--dry-run"}
+                 "--ssh-gpu", "--runtime-health-command", "--check-health", "--dry-run"}
     if any(value.split("=", 1)[0] in forbidden for value in options):
         parser.error("the host owns Execution selection and lifecycle configuration")
     if args.no_sync and args.sync:
