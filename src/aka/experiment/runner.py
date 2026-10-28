@@ -321,9 +321,12 @@ class LegacyExperiment:
                 cancel.set()
                 raise
             return result
-        with ThreadPoolExecutor(max_workers=prepared.max_parallelism) as pool:
-            futures = [pool.submit(copy_context().run, attempt, index) for index in range(len(prepared.steps))]
-            results = tuple(future.result() for future in futures)
+        if prepared.max_parallelism == 1:
+            results = tuple(copy_context().run(attempt, index) for index in range(len(prepared.steps)))
+        else:
+            with ThreadPoolExecutor(max_workers=prepared.max_parallelism) as pool:
+                futures = [pool.submit(copy_context().run, attempt, index) for index in range(len(prepared.steps))]
+                results = tuple(future.result() for future in futures)
         if evaluator.fallback(prepared, results):
             results = tuple(attempt(len(prepared.steps) + index) for index in range(len(prepared.fallback_steps)))
         result = evaluator.interpret(prepared, results)
@@ -416,14 +419,18 @@ class LegacyExperiment:
             stage = prepared.retry_keys[index] if prepared.retry_keys else self.stage(request, index, command)
             return self.retry(request.workspace, stage, attempt, cancel=cancel)
 
-        pool = ThreadPoolExecutor(max_workers=min(prepared.max_parallelism, len(steps)))
+        pool = (ThreadPoolExecutor(max_workers=min(prepared.max_parallelism, len(steps)))
+                if prepared.max_parallelism != 1 else None)
         futures = []
         try:
-            futures = [pool.submit(copy_context().run, run_step, i) for i in range(len(steps))]
-            completed, _ = wait(futures, return_when=FIRST_EXCEPTION)
-            for future in completed:
-                future.result()
-            results = tuple(future.result() for future in futures)
+            if pool is None:
+                results = tuple(copy_context().run(run_step, i) for i in range(len(steps)))
+            else:
+                futures = [pool.submit(copy_context().run, run_step, i) for i in range(len(steps))]
+                completed, _ = wait(futures, return_when=FIRST_EXCEPTION)
+                for future in completed:
+                    future.result()
+                results = tuple(future.result() for future in futures)
             fallback = getattr(self.evaluator, "fallback", lambda plan, receipts: ())(prepared, results)
             if fallback:
                 initial_count = len(steps)
@@ -441,7 +448,8 @@ class LegacyExperiment:
                 raise ExperimentExecutionError(str(error)) from error
             raise
         finally:
-            pool.shutdown(wait=True, cancel_futures=True)
+            if pool is not None:
+                pool.shutdown(wait=True, cancel_futures=True)
         try:
             if records is not None:
                 records.phase(ref, "interpret")
