@@ -6,7 +6,11 @@ from .dependencies import CampaignDependencies
 def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      evaluator_factory=None, executor=None, experiment_factory=None,
                      execution_environment=None, measurement_parallelism=None,
-                     canonical_measurement_reader=None, workflow_observer=None):
+                     canonical_measurement_reader=None, workflow_observer=None, rule_set=None):
+    from .rule_sets import select_rule_set, LegacyRuleSet
+    rule_set = select_rule_set({}) if rule_set is None else rule_set
+    if not isinstance(rule_set, LegacyRuleSet):
+        raise TypeError("Workflow requires its selected Legacy rule assembler")
     from contextlib import ExitStack
     from .agent_host import create_agent
     from aka.task.problem.legacy import LegacyProblemProvider
@@ -63,7 +67,7 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                                 execution_environment=execution_environment,
                                 measurement_parallelism=measurement_parallelism,
                                 canonical_measurement_reader=canonical_measurement_reader,
-                                workflow_observer=workflow_observer)
+                                workflow_observer=workflow_observer, rule_set=rule_set)
         opened_services.append(selected)
         return selected
 
@@ -124,6 +128,10 @@ def run_campaign(campaign):
         fast_trials=campaign.fast_trials, token_budget=campaign.token_budget,
         handoff_resumes=campaign.handoff_resumes, max_stall=campaign.max_stall,
         conversion_budget_action=campaign.request.settings.conversion_budget_action,
+        conversion_tolerance=services.rule_set.conversion_tolerance,
+        goal_after_episodes=services.rule_set.goal_after_episodes,
+        goal_stall_threshold=services.rule_set.goal_stall_threshold,
+        goal_handoff_resumes=services.rule_set.goal_handoff_resumes,
     )
     engine.evaluation = EpisodeMeasurements(
         campaign.workspace, campaign.private_reference_dir, settings.min_improvement_pct,

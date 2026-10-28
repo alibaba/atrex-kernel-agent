@@ -69,7 +69,9 @@ class BorrowedExperiment:
 class WorkflowServices:
     def __init__(self, settings, campaign, *, executor, experiment_factory,
                  evaluator_factory, execution_environment=None, measurement_parallelism=4,
-                 canonical_measurement_reader, workflow_observer=None):
+                 canonical_measurement_reader, workflow_observer=None, rule_set=None):
+        from .rule_sets import select_rule_set
+        self.rule_set = select_rule_set({}) if rule_set is None else rule_set
         self.settings = settings
         self.campaign = campaign
         self.problem_provider = campaign.problem_provider
@@ -100,6 +102,7 @@ class WorkflowServices:
                 import sys
                 print(f"[workflow] auxiliary observer failed: {type(error).__name__}", file=sys.stderr)
         self.acceptance = LegacyAcceptancePolicy(
+            conversion_tolerance=self.rule_set.conversion_tolerance,
             candidate_workspace=campaign.candidate_workspace,
             production_policy=campaign._production_kernel_violations,
         )

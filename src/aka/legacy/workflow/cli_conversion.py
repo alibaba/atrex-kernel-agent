@@ -12,6 +12,38 @@ from .cli_problem import problem_request
 from .cli_request import campaign_request
 
 
+def _provided_fields(parser, raw_argv):
+    from dataclasses import fields
+    from aka.contracts.workflow import WorkflowSettings, CampaignRuntimeSettings
+    settings_names = {field.name for field in fields(WorkflowSettings)}
+    runtime_names = {field.name for field in fields(CampaignRuntimeSettings)}
+    settings, runtime = set(), set()
+    actions = {option: action.dest for action in parser._actions for option in action.option_strings}
+    reviewer_fields = {"v1": "framework_baseline_reviewers", "fast_episode": "fast_episode_reviewers",
+                       "full_episode": "full_episode_reviewers"}
+    for token in raw_argv:
+        option = token.split("=", 1)[0]
+        if option == "--":
+            break
+        if not option.startswith("--"):
+            continue
+        dest = actions.get(option)
+        if dest is None and parser.allow_abbrev:
+            matches = {value for name, value in actions.items() if name.startswith(option)}
+            if len(matches) == 1:
+                dest = matches.pop()
+        if dest in settings_names:
+            settings.add(dest)
+        if dest in runtime_names:
+            runtime.add(dest)
+        if dest in {"sandbox_timeout", "sandbox_hardware"}:
+            runtime.add(dest.removeprefix("sandbox_"))
+        for prefix, name in reviewer_fields.items():
+            if dest is not None and dest.startswith(prefix + "_ask_"):
+                settings.add(name)
+    return tuple(sorted(settings)), tuple(sorted(runtime))
+
+
 def parse_arguments(argv):
     ap = argparse.ArgumentParser(
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
@@ -425,6 +457,7 @@ def parse_arguments(argv):
         args.workspace = str(Path(args.workspace).expanduser().resolve())
 
 
+    args._provided_settings, args._provided_runtime = _provided_fields(ap, raw_argv)
     return args, raw_argv
 
 
@@ -435,6 +468,8 @@ def adapt_argv(argv):
         workspace=args.workspace,
         suffix=args.workspace_suffix or f"{args.framework}_{args.platform}")
     values = vars(args).copy()
+    workflow_options = values.pop("_provided_settings")
+    runtime_options = values.pop("_provided_runtime")
     from aka.execution.configuration import configure_legacy_arguments
     configure_legacy_arguments(values)
     values.pop("op_dir")
@@ -442,13 +477,6 @@ def adapt_argv(argv):
     values.update(name=source.directory.name, problem=source,
                   sandbox_hardware=sandbox_hardware)
     request = campaign_request(values)
-    explicit = {value.split("=",1)[0] for value in raw_argv if value.startswith("--")}
-    workflow_options = {field.name for field in __import__("dataclasses").fields(request.settings)
-                        if "--" + field.name.replace("_", "-") in explicit}
-    runtime_options = {field.name for field in __import__("dataclasses").fields(request.runtime)
-                       if "--" + field.name.replace("_", "-") in explicit}
-    if "--verify-shape-batch-size" in explicit:
-        runtime_options.add("shape_batch_size")
     return encode_launch(WorkflowLaunch(request, Path(args.workspace or Path.cwd()),
         args.workspace_suffix, tuple(raw_argv),
-        provided_settings=tuple(sorted(workflow_options)), provided_runtime=tuple(sorted(runtime_options))))
+        provided_settings=workflow_options, provided_runtime=runtime_options))

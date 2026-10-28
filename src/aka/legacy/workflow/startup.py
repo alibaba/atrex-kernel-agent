@@ -16,6 +16,8 @@ class WorkflowStartup:
                  execution_environment=None, evaluator_factory=None):
         self._workflow = workflow
         self.configuration = configuration or {}
+        from .rule_sets import validate_config
+        validate_config(self.configuration)
         self.observer = observer
         from aka.contracts.evaluation import EvaluationConfiguration
         self.evaluation_defaults = evaluation_defaults if evaluation_defaults is not None else EvaluationConfiguration()
@@ -34,11 +36,31 @@ class WorkflowStartup:
     def _effective_launch(self, launch):
         from dataclasses import replace
         settings, runtime = launch.request.settings, launch.request.runtime
-        if launch.provided_settings is not None and "conversion_budget_action" not in launch.provided_settings:
-            settings = replace(settings, conversion_budget_action=self.configuration.get("conversion_budget_action", "fail"))
-        if launch.provided_runtime is not None and "shape_batch_size" not in launch.provided_runtime:
-            runtime = replace(runtime, shape_batch_size=self.evaluation_defaults.shape_batch_size)
-        return replace(launch, request=replace(launch.request,settings=settings,runtime=runtime),
+        profile_settings = {"conversion_budget_action": self.configuration.get("conversion_budget_action", "fail"),
+                            **self.configuration.get("settings_defaults", {})}
+        profile_runtime = {"shape_batch_size": self.evaluation_defaults.shape_batch_size,
+                           **self.configuration.get("runtime_defaults", {})}
+        if launch.provided_settings is not None:
+            updates = {key: tuple(value) if isinstance(value, list) else value
+                       for key, value in profile_settings.items() if key not in launch.provided_settings}
+            settings = replace(settings, **updates)
+        if launch.provided_runtime is not None:
+            runtime = replace(runtime, **{key: value for key, value in profile_runtime.items()
+                                         if key not in launch.provided_runtime})
+        problem = launch.request.problem
+        original = launch.request.settings
+        if launch.provided_settings is not None and any(
+            getattr(original, name) != getattr(settings, name)
+            for name in ("optimization_mode", "framework", "platform")
+        ):
+            from .cli_problem import problem_request
+            def generated(setting):
+                return problem_request(problem.directory, setting.optimization_mode,
+                    workspace=launch.workspace_base,
+                    suffix=launch.workspace_suffix or f"{setting.framework}_{setting.platform}")
+            if problem.snapshot_directory == generated(original).snapshot_directory:
+                problem = generated(settings)
+        return replace(launch, request=replace(launch.request,problem=problem,settings=settings,runtime=runtime),
                        provided_settings=None, provided_runtime=None)
 
     def run(self, invocation):

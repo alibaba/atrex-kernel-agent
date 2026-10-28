@@ -34,9 +34,8 @@ from .telemetry import summarize_episode
 
 PROMPT_PATH = PROMPTS_DIR / "episode.md"
 FAST_PROMPT_PATH = PROMPTS_DIR / "fast_episode.md"
-GOAL_AFTER_EPISODES = 50
-GOAL_STALL_THRESHOLD = 3
-GOAL_HANDOFF_RESUMES = 20
+from .rule_sets import GOAL_AFTER_EPISODES, GOAL_STALL_THRESHOLD, GOAL_HANDOFF_RESUMES
+from .constants import CONVERT_PERF_TOL
 EVIDENCE_PREFIXES = ("plans/", "profiles/")
 MEMORY_EXPERIMENT_FIELDS = (
     "name",
@@ -256,6 +255,10 @@ class LongHorizonCampaign:
 
     acceptance: AcceptancePolicy = field(kw_only=True)
     conversion_budget_action: str = field(default="fail", kw_only=True)
+    conversion_tolerance: float = field(default=CONVERT_PERF_TOL, kw_only=True)
+    goal_after_episodes: int = field(default=GOAL_AFTER_EPISODES, kw_only=True)
+    goal_stall_threshold: int = field(default=GOAL_STALL_THRESHOLD, kw_only=True)
+    goal_handoff_resumes: int = field(default=GOAL_HANDOFF_RESUMES, kw_only=True)
 
     def __post_init__(self) -> None:
         if self.fast_episodes < 0:
@@ -318,8 +321,8 @@ class LongHorizonCampaign:
                 else "full"
             )
         if (
-            state.episodes >= GOAL_AFTER_EPISODES
-            and state.consecutive_without_promotion > GOAL_STALL_THRESHOLD
+            state.episodes >= self.goal_after_episodes
+            and state.consecutive_without_promotion > self.goal_stall_threshold
         ):
             return "goal"
         return "fast" if self._is_fast_episode(state.episodes + 1) else "full"
@@ -494,7 +497,7 @@ class LongHorizonCampaign:
                 "CONVERSION_DIRECTIVE": (
                     "This episode is a mandatory Triton-to-Gluon conversion attempt. Do not "
                     "submit another Triton kernel. A candidate must be a committed Gluon kernel, "
-                    f"pass correctness, and stay within {self.environment.CONVERT_PERF_TOL:.0%} of "
+                    f"pass correctness, and stay within {self.conversion_tolerance:.0%} of "
                     "the incumbent latency."
                     if conversion_pending
                     else "No mandatory framework conversion is currently latched."
@@ -1800,7 +1803,7 @@ class LongHorizonCampaign:
                     prompt,
                     handoff_path=handoff_path,
                     handoff_resumes=(
-                        max(self.handoff_resumes, GOAL_HANDOFF_RESUMES)
+                        max(self.handoff_resumes, self.goal_handoff_resumes)
                         if episode_mode == "goal"
                         else self.handoff_resumes
                     ),
