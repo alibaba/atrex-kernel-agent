@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from aka.legacy.task.durable import durable_write_json
+from aka.core._filesystem import durable_write_json
 
 from aka.legacy.task.candidate_workspace.excludes import (
     RUNTIME_DIR,

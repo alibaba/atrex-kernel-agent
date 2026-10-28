@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Sequence
 
-from aka.legacy.task.durable import durable_write_json, durable_write_text, ensure_private_directory
+from aka.core._filesystem import durable_write_json, durable_write_text, ensure_private_directory
 from aka.legacy.execution.processes import ACTIVE_MARKER, HANDOFF_ID_ENV
 from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND  # noqa: F401
 

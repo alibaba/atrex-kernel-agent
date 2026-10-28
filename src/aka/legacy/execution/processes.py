@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aka.legacy._filesystem import durable_rmdir, durable_unlink, durable_write_json, durable_write_text
+from aka.core._filesystem import durable_rmdir, durable_unlink, durable_write_json, durable_write_text
 
 HANDOFF_ID_ENV = "ATREX_ENVIRONMENT_RESTART_HANDOFF_ID"
 HANDOFF_LOCK_FD_ENV = "ATREX_ENVIRONMENT_RESTART_LOCK_FD"

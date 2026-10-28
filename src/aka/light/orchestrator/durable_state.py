@@ -1,5 +1,5 @@
 """Shared mechanics; Light policy is owned by its caller."""
-from aka.legacy.task.persistence import (
+from aka.core._filesystem import (
     fsync_directory,
     ensure_private_directory,
     durable_write_text,
