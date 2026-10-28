@@ -11,6 +11,7 @@ from pathlib import Path
 
 from .agent_skill_manifest import SKILL_MANIFEST
 from .constants import REPO_ROOT, STALL_STATE_FILE
+from aka.light.workspace.resource_catalog import resource
 
 RETIRED_SKILL_NAMES = frozenset({
     "humanize", "humanize-gen-plan", "humanize-refine-plan", "humanize-rlcr",
@@ -145,9 +146,9 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     for name in names:
         manifest = SKILL_MANIFEST[name]
         for filename in manifest.files:
-            source = REPO_ROOT / manifest.root / filename
+            source = resource(f"{manifest.root}/{filename}")
             if name == "runtime-records" and not research_records and filename != "references/records.md":
-                source = REPO_ROOT / "skills/runtime-report" / filename
+                source = resource(f"skills/runtime-report/{filename}")
             publish(workspace, f"skills/{name}/{filename}", source.read_bytes())
     names.extend(plugin_registry.install_agent_skills(workspace))
     for backend in (".claude", ".qoder", ".agents"):

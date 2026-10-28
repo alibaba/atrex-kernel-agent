@@ -661,7 +661,9 @@ def _make_input_bundle(
         # workspace walk.  Materialize only explicitly selected skill files so a profiling
         # snapshot can use its backend on the worker without uploading every installed skill.
         if any(path.startswith("skills/") for path in selected_inputs):
-            add_tree(tf, REPO_ROOT / "skills", "skills")
+            from aka.light.workspace.resource_catalog import resources
+            for name, source in resources():
+                add_file(tf, source, name)
     return base64.b64encode(archive.getvalue()).decode("ascii"), count, skipped
 
 
