@@ -241,9 +241,11 @@ def redact_hidden_shapes(value):
     # Numeric dimension vectors and matmul's NxM notation, including torch.Size.
     value = re.sub(r"torch\.Size\(\[[^\]]*\]\)|(?<![\w])([\[(])\s*-?\d+(?:\s*,\s*-?\d+)+\s*,?\s*[\])]",
                    "<hidden shape>", value)
-    value = re.sub(r"(?<![\w])\(\s*-?\d+\s*,\s*\)", "<hidden shape>", value)
+    value = re.sub(r"(?<![\w])(?:\(\s*-?\d+\s*,\s*\)|\[\s*-?\d+\s*\])", "<hidden shape>", value)
     value = re.sub(r"\b\d+(?:\s*[x×]\s*\d+)+\b", "<hidden shape>", value)
     value = re.sub(r"(?i)(\b(?:shape|size|stride|dimension|dim|numel|batch_size|seq_len)\s*(?:[=:]|of)?\s*)-?\d+",
+                   r"\1<hidden shape>", value)
+    value = re.sub(r"(\b(?:N|M|K|B|S|batch|seq|sequence_length|hidden_size|head_dim|num_heads)\s*[=:]\s*)\d+",
                    r"\1<hidden shape>", value)
     value = re.sub(r"(?i)(size of tensor [ab]\s*\()\d+(\))", r"\1<hidden shape>\2", value)
     value = re.sub(r"(?i)(\b(?:expected|got)\s+(?:size\s+)?)-?\d+(?=\b)",
