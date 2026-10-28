@@ -32,3 +32,13 @@ def profile_driver_script() -> Path:
 def ncu_profile_script() -> Path:
     """Same standalone parser for legacy/observed and Light remote jobs."""
     return Path(__file__).with_name("ncu_profile.py")
+
+
+def contribute_resources(ctx):
+    from aka.contracts.agent_resources import WorkspaceResourceContribution
+    resource = WorkspaceResourceContribution(
+        "evaluation-numerical-driver",
+        Path(__file__).with_name("drivers") / "remote_numerical.py",
+        visibility="runtime",
+    )
+    ctx.contribute("workspace_resources", resource.name, resource)

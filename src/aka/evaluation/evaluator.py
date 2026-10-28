@@ -80,6 +80,8 @@ class LegacyEvaluator:
 
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         prepared = self._prepare(request)
+        if request.mode == "numerical":
+            return prepared
         if request.mode in {"v0", "framework"} and self.configuration.hardware:
             from .gateway_command import GatewayCommandEvaluator
             command = replace(prepared.steps[0], hardware=self.configuration.hardware,
@@ -109,6 +111,9 @@ class LegacyEvaluator:
                 installed = request.workspace / item.path
                 if not installed.is_file() or installed.read_bytes() != expected:
                     raise ValueError("candidate evaluator harness differs from frozen Task content")
+        if request.mode == "numerical":
+            from .numerical_preparation import prepare_numerical
+            return prepare_numerical(request, config, self.evaluation_input, output_root=VERIFY_DIR)
         if request.mode == "fast":
             return PreparedEvaluation((), 1, _Plan(request))
         if request.mode in {"v0", "framework"}:
@@ -237,6 +242,9 @@ class LegacyEvaluator:
         """Explain unavailable or partial facts before a host raises on transport."""
         if not prepared.measurement_identities or index >= len(prepared.measurement_identities):
             return None
+        if prepared.context.request.mode == "numerical":
+            from .numerical_preparation import assess_numerical
+            return assess_numerical(prepared.context, prepared.context.step_cases[index], result)
         gateway = getattr(prepared.context, "gateway", None)
         if gateway is not None:
             from .gateway_command import GatewayCommandEvaluator
@@ -260,6 +268,9 @@ class LegacyEvaluator:
     ) -> VerificationResult:
         plan = prepared.context
         request = plan.request
+        if request.mode == "numerical":
+            from .numerical_preparation import interpret_numerical
+            return interpret_numerical(prepared, results)
         if plan.error:
             return VerificationResult("ERROR", None, None, None, error=plan.error)
         if len(results) != len(prepared.steps) and not (prepared.fallback_steps and len(results) == 1):

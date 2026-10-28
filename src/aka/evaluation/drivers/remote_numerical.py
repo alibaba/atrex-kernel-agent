@@ -10,10 +10,12 @@ remain owned by the evaluator.
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 import json
 import math
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+import stat
 import subprocess
 import sys
 import time
@@ -346,8 +348,8 @@ def install_inputs(namespace, case, seeds, receipts):
     namespace["_make_inputs"] = make_inputs
 
 
-def run(request_path):
-    request = json.loads(request_path.read_text())
+def _run_live(request_path, request=None):
+    request = json.loads(request_path.read_text()) if request is None else request
     suite = validate_suite(request["suite"])
     root = Path.cwd()
     input_path = root / "input.py"
@@ -549,6 +551,99 @@ def run(request_path):
                 cached.unlink()
     print(PREFIX + json.dumps(payload, allow_nan=False), flush=True)
     return 0
+
+
+def _safe_path(value):
+    if not isinstance(value, str) or not value or "\\" in value:
+        raise ValueError("numerical snapshot path is invalid")
+    path = PurePosixPath(value)
+    if path.is_absolute() or ".." in path.parts or path.as_posix() != value or value == ".":
+        raise ValueError("numerical snapshot path is invalid")
+    return path
+
+
+def _clear_cache(paths):
+    for path in paths:
+        if path.suffix == ".py":
+            path.with_suffix(".pyc").unlink(missing_ok=True)
+            for cached in (path.parent / "__pycache__").glob(f"{path.stem}.*.pyc"):
+                cached.unlink(missing_ok=True)
+
+
+@contextmanager
+def _snapshot_files(request, root, directory):
+    if "candidate_manifest" not in request:
+        yield  # Retained standalone requests preserve their original live-file route.
+        return
+    candidate, trusted = request["candidate_manifest"], request["trusted_manifest"]
+    if not isinstance(candidate, list) or not candidate or not isinstance(trusted, list):
+        raise ValueError("numerical snapshot manifests are invalid")
+    rows, frozen, seen = [], [], set()
+    trusted_paths = {row.get("path") for row in trusted if isinstance(row, dict)}
+    for role, manifest in (("candidate", candidate), ("trusted", trusted)):
+        for row in manifest:
+            if not isinstance(row, dict) or set(row) != {"path", "snapshot", "mode", "sha256"}:
+                raise ValueError("numerical snapshot entry is invalid")
+            relative, snapshot = _safe_path(row["path"]), _safe_path(row["snapshot"])
+            if snapshot.parts[0] != "snapshots" or type(row["mode"]) is not int or not 0 <= row["mode"] <= 0o777:
+                raise ValueError("numerical snapshot entry is invalid")
+            if row["path"] in seen or role == "candidate" and row["path"] in trusted_paths:
+                raise ValueError("numerical snapshot path overlaps trusted inputs")
+            seen.add(row["path"])
+            source, target = directory / snapshot, root / relative
+            if not source.resolve().is_relative_to((directory / "snapshots").resolve()) or source.is_symlink():
+                raise ValueError("numerical snapshot source escapes its frozen input root")
+            if not target.resolve().is_relative_to(root.resolve()) or target.is_symlink() or any(parent.is_symlink() for parent in target.parents if parent != root and parent.is_relative_to(root)):
+                raise ValueError("numerical snapshot target escapes its allocation")
+            content = source.read_bytes()
+            if hashlib.sha256(content).hexdigest() != row["sha256"]:
+                raise ValueError("numerical snapshot content identity mismatch")
+            original = (target.read_bytes(), stat.S_IMODE(target.stat().st_mode)) if target.exists() else None
+            frozen.append((target, content, row["mode"], original))
+            if role == "candidate":
+                rows.append({key: row[key] for key in ("path", "mode", "sha256")})
+    rows.sort(key=lambda row: row["path"])
+    identity = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")).hexdigest()
+    if identity != request["candidate_identity"]:
+        raise ValueError("numerical candidate snapshot identity mismatch")
+    touched, created = [], []
+    try:
+        for target, content, mode, original in frozen:
+            for parent in reversed(target.parents):
+                if parent.is_relative_to(root) and not parent.exists():
+                    parent.mkdir()
+                    created.append(parent)
+            touched.append((target, original))
+            target.write_bytes(content)
+            target.chmod(mode)
+        _clear_cache(target for target, _ in touched)
+        yield
+    finally:
+        for target, original in reversed(touched):
+            if original is None:
+                target.unlink(missing_ok=True)
+            else:
+                target.write_bytes(original[0])
+                target.chmod(original[1])
+        _clear_cache(target for target, _ in touched)
+        for path in reversed(created):
+            try:
+                path.rmdir()
+            except OSError:
+                pass  # Evaluator-owned diagnostics may remain in this isolated allocation.
+
+
+def run(request_path):
+    request = json.loads(request_path.read_text())
+    if not isinstance(request, dict) or "candidate_manifest" not in request:
+        return _run_live(request_path, request)
+    try:
+        with _snapshot_files(request, Path.cwd(), request_path.parent):
+            return _run_live(request_path, request)
+    except Exception as exc:
+        print(PREFIX + json.dumps({"schema_version": 1, "runs": [], "all_pass": False,
+            "error": f"{type(exc).__name__}: {exc}"}), flush=True)
+        return 0
 
 
 if __name__ == "__main__":

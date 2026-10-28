@@ -23,5 +23,7 @@ class LegacyEvaluatorFactory:
 
 
 def apply(ctx, config):
+    from .resources import contribute_resources
+    contribute_resources(ctx)
     ctx.provide(EVALUATOR_FACTORY, LegacyEvaluatorFactory(shape_batch_size=config["shape_batch_size"]))
     ctx.provide(EVALUATION_DEFAULTS, EvaluationConfiguration(shape_batch_size=config["shape_batch_size"]))
