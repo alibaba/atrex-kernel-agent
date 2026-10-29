@@ -21,8 +21,6 @@ def contribute(ctx, profiling=()):
     selected = tuple(profiling)
     ctx.contribute("workspace_resources", "execution-runtime", WorkspaceResourceContribution(
         "execution-runtime", ROOT / "runtime_tools", visibility="runtime"))
-    ctx.contribute("workspace_resources", "execution-profile-driver", WorkspaceResourceContribution(
-        "execution-profile-driver", ROOT / "profiling/profile_driver.py", visibility="runtime"))
     ctx.contribute("workspace_resources", "execution-shell-guard", WorkspaceResourceContribution(
         "execution-shell-guard", ROOT / "runtime_tools/session_shell_guard.sh", visibility="runtime"))
     if selected:

@@ -26,7 +26,7 @@ def remote_abba_script() -> Path:
 
 def profile_driver_script() -> Path:
     return _script("profile_driver.py", "reference/profile_driver.py",
-                   "execution/profiling/profile_driver.py")
+                   "evaluation/drivers/profile_driver.py")
 
 
 def ncu_profile_script() -> Path:
@@ -42,3 +42,6 @@ def contribute_resources(ctx):
         visibility="runtime",
     )
     ctx.contribute("workspace_resources", resource.name, resource)
+
+    ctx.contribute("workspace_resources", "execution-profile-driver", WorkspaceResourceContribution(
+        "execution-profile-driver", Path(__file__).with_name("drivers") / "profile_driver.py", visibility="runtime"))
