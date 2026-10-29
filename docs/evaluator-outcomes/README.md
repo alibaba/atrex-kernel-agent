@@ -18,7 +18,7 @@ flowchart TD
   C --> R{"Classifier permits retry and existing budget remains?"}
   R -->|Yes| S
   R -->|No| E["Evaluation provider projects bounded result"]
-  E --> W{"Complete boolean verdict and valid exit status?"}
+  E --> W{"Canonical completed boolean verdict and known outcome?"}
   W -->|Yes| M["Record eligible for cache; candidate rejection is also a verdict"]
   W -->|No| U["Keep evidence; unavailable result is not a reusable verdict"]
   O["Historical cached record"] --> V["Validate canonical status and outcome before reuse"]
@@ -29,8 +29,8 @@ flowchart TD
   F --> Q["Separate objective score ratio from latency ratio"]
 ```
 
-- **Transport — `evaluation/gateway.py`:** optional `result_adapter` and `retry_classifier` run inside the existing checkpoint/retry lifecycle. No adapter leaves the native envelope behavior intact. The classifier must return `None` for outcomes that must not be retried; the existing timeout, idempotency, cancellation, and retry budgets remain authoritative. Caller-supplied `identity_extra` should bind its evaluation contract. The callbacks are trusted Python code, never Agent-supplied executable content.
-- **Cache — `experiment/records.py` and `experiment/store.py`:** writing requires an actual boolean verdict, and reading rejects failed/unknown/unavailable canonical outcomes. Old evidence stays immutable. Completed candidate rejection and exhausted native ABBA wall-clock timeout remain reusable terminal decisions. This is not permission to blindly resubmit an uncertain physical job: its durable checkpoint remains authoritative.
+- **Transport — `evaluation/gateway.py`:** optional `result_adapter` and `retry_classifier` run inside the existing checkpoint/retry lifecycle. No adapter leaves the native envelope behavior intact. A supplied classifier replaces the native eval classifier, rather than chaining with it: return `None` to prohibit a retry, or explicitly delegate unrecognized eval failures to `eval_retry_kind`. The adapted envelope is checkpointed and reused during recovery; an adapted truthy error makes the process return code nonzero even if the allocation succeeded; the existing timeout, idempotency, cancellation, and retry budgets remain authoritative. Caller-supplied `identity_extra` should bind its evaluation contract. The callbacks are trusted Python code, never Agent-supplied executable content.
+- **Cache — `experiment/records.py` and `experiment/store.py`:** publication and reuse share `cacheable_evaluation`, requiring a canonical completed boolean verdict and rejecting unknown/unavailable outcomes. Contradictory receipts are recorded as `not_cacheable`, without a publication exception. Interrupted `validation_pending` records resume their original identity and job checkpoints. Old evidence stays immutable. Completed candidate rejection and exhausted native ABBA wall-clock timeout remain reusable terminal decisions. This is not permission to blindly resubmit an uncertain physical job: its durable checkpoint remains authoritative.
 - **Projection — `evaluation/projection.py`:** retain the existing relative-error summary and bounded, enumerated case status. Diagnostic detail does not change correctness.
 - **Reporting — `workspace/versions.py`:** comparable complete passing versions with the same objective receive `score_ratio_vs_v0` separately from `latency_speedup_vs_v0_geomean`. The ambiguous legacy geometric-speedup field is cleared for objective-bearing versions. Versions without an objective retain their existing representation. These fields do not drive promotion.
 
@@ -143,20 +143,35 @@ PY
 |---|---|---|
 | Change type | Mixed | Optional transport callbacks and report fields plus correctness fixes |
 | No test scripts in diff | Pass | Production modules and review documentation/data only |
-| Minimal implementation | Pass | Two explicit hooks reuse the existing lifecycle; cache write and read fixes address different entry points |
+| Minimal implementation | Pass | Two explicit hooks reuse the existing lifecycle; cache publication and reuse share one canonical predicate |
 | Why and impact | Pass | Unavailable evaluation reuse, lost diagnostics, ambiguous score ratios described above |
 | Design and failure paths | Pass | Diagram and module contracts above |
 | Before/after curve | Pass | Four fault counts, both variants, raw data and public reproduction |
 | Permissions and privacy | Pass | No new execution permissions; only generic synthetic evidence published |
 | Validation | Pass | Recovery/replay, native ABBA terminal cache, and consumer regressions |
-| Verdict | Approve | No blocking issue found in local review; hosting-platform checks and required reviews still apply |
+| Verdict | Ready for independent re-review | Local regressions pass; hosting-platform checks and required reviews still apply |
 
 ## Complete evaluator failure feedback
 
 A negative evaluator result must retain the information needed to repair the candidate. Previously the Agent projection kept only eight failure messages, cut diagnostic text, and discarded ordinary stdout/stderr on generalized failures. Rank-local state checks were not traversed. A producer could report an output mismatch with error metrics and tolerances while the Agent received only a generic correctness failure.
 
-The shared extractor now traverses rank results and reports output/state names, rank, check index, seed, original error, measured errors and producer tolerances. The projection preserves all failure entries and complete received text, including compiler/runner logs, numerical-probe failures and ABBA-side diagnostics. Timing/profile detail remains separately bounded. Existing upstream truncation annotations remain visible; this change cannot reconstruct bytes that an upstream executor never returned.
+The shared extractor now traverses rank results and reports output/state names, rank, check index, seed, original error, measured errors and producer tolerances. Within the diagnostic response budget below, the projection preserves all failure entries and complete received text, including compiler/runner logs, numerical-probe failures and ABBA-side diagnostics. `bound_performance_feedback` independently bounds optional timing detail; its `max_performance_bytes` argument does not bound diagnostics. Existing upstream truncation annotations remain visible; this change cannot reconstruct bytes that an upstream executor never returned.
 
 Hidden workload dimensions remain private: input generators and shape metadata are not copied into diagnostic records, and generalized feedback redacts shape fields and dimension encodings in error text (JSON shape fields, torch.Size, numeric vectors, matrix dimensions and size-mismatch messages). Opaque case IDs, output indices, error metrics, tolerances, source locations and error text remain useful. Credentials and configured private paths are still redacted. Verdicts, retry advice, acceptance thresholds, evaluator inputs and performance scoring are unchanged.
 
 Validation for this bug fix used Python 3.14 on macOS, without GPU execution: 16 existing consumer regressions passed and three optional/environment-dependent cases were skipped; seven local regression scenarios passed for long Unicode logs, more than eight errors, rank-local state checks, hidden dimensions/credentials, recorded producer output mismatch, unavailable-result logs, runner exceptions and missing receipts. No test scripts or private evidence are published. The failure-feedback change is a bug fix to the existing diagnostic contract; no new model/tool permission or optimization behavior is introduced. Rollback is a code revert with all original job evidence retained. Running processes need a controlled restart or replacement before they use the new code.
+
+
+## Diagnostic size and cache contract
+
+There is no assumed upstream guarantee that captured stdout/stderr fit a measurement record. AKA bounds the projected response in `public_result.bound_diagnostic_response` to **8 MiB of ASCII-escaped JSON**, before deriving `agent_result`. This counts JSON escaping of Unicode and embedded structured markers, not just raw UTF-8 stream length. Normal responses pass through unchanged. An oversized response retains valid result markers, verdicts, case execution status, scores, and non-diagnostic numeric evidence. It shortens diagnostic strings and, when needed, diagnostic/failure lists, with `diagnostic_truncation` reporting the original response bytes, limit, omitted text characters and omitted diagnostic entries. Unstructured stdout receives a shared text budget, including when a kernel prints many short lines. Numerical and ABBA markers use the same boundary.
+
+Diagnostic truncation is distinct from the existing transport `truncated` flag: shortening repair text does not invalidate a completed negative verdict or make it pass. Upstream incomplete execution/transport evidence still fails canonical validation. Original executor output and Gateway job checkpoints remain private; truncation is explicit, not a claim that the Agent received every byte. Operators can inspect that retained evidence when omitted detail is needed.
+
+`MeasurementTask.finish` checks the **entire serialized record plus its trailing newline against 32 MiB**, including request, identity, response and the derived Agent payload, before writing it. If non-diagnostic structure or the envelope still exceeds the hard bound, publication stops while the reservation remains resumable; no unreadable `record.json` or `validation_pending` marker is published. Original job IDs and evidence survive recovery. These limits bound the public response and record, not total private job-artifact retention.
+
+A stage-level failure reason appears once at stage scope, rather than once per allowed shape. A generic stage failure is omitted when more specific diagnostics already exist; distinct producer reasons remain visible. Malformed `input_artifact` fields cannot abort extraction, and malformed/empty rank results fall back to direct shape cases.
+
+Failing-case seeds are deliberately exposed as repair metadata alongside opaque case IDs. This is not a seed-blinded holdout contract: revealing a seed reduces that form of secrecy, even though hidden dimensions, generators and input values remain withheld. Candidate review must still reject seed/input-specialized answers; receipt diagnostics do not establish absence of overfitting. No seed generation, benchmark acceptance or scoring policy changes in this PR.
+
+Review-fix validation: Python 3.14 on macOS, no GPU dispatch. Eleven local regression scenarios passed, covering inconsistent Eval/ABBA receipts, positive/negative/terminal-timeout cache reuse, malformed producer fields, stage deduplication, unbracketed dimensions with intact error metrics, oversized Unicode and many-line logs, numerical marker/list limits, exact record-envelope overflow with identity-preserving recovery, and adapter/classifier replay. The seven prior diagnostic scenarios also passed unchanged. The pre-fix code reproduced publication exceptions and the reported diagnostic/redaction regressions. Checks remain local; no test scripts or private workload evidence are included in the PR. These review fixes restore the documented contracts and do not change tolerances, scoring or GPU kernels.

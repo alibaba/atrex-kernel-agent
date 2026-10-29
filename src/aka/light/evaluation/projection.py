@@ -8,7 +8,7 @@ from typing import Any
 
 from aka.light.runtime.request_errors import error_response
 from aka.light.execution.gateway_jobs import submission_rejection
-from aka.light.evaluation.evaluation_feedback import project_feedback, merge_feedback, bound_feedback
+from aka.light.evaluation.evaluation_feedback import project_feedback, merge_feedback, bound_performance_feedback
 from aka.light.evaluation.public_result import correctness_summary
 
 MAX_AGENT_PROFILE_KERNELS = 32
@@ -238,13 +238,14 @@ def redact_hidden_shapes(value):
             return json.dumps(redact_hidden_shapes(json.loads(value)), ensure_ascii=False)
         except ValueError:
             pass
+    # Consume a full unbracketed dimension run before rewriting NxM fragments.
+    value = re.sub(r"(?i)(\b(?:shapes?|sizes?|strides?|dimensions?|dims?|numel|batch_size|seq_len)\s*(?:[=:]|of)?\s*)-?\d+(?:(?:[ \t]*[,x×][ \t]*|[ \t]+)-?\d+)*",
+                   r"\1<hidden shape>", value)
     # Numeric dimension vectors and matmul's NxM notation, including torch.Size.
     value = re.sub(r"torch\.Size\(\[[^\]]*\]\)|(?<![\w])([\[(])\s*-?\d+(?:\s*,\s*-?\d+)+\s*,?\s*[\])]",
                    "<hidden shape>", value)
     value = re.sub(r"(?<![\w])(?:\(\s*-?\d+\s*,\s*\)|\[\s*-?\d+\s*\])", "<hidden shape>", value)
     value = re.sub(r"\b\d+(?:\s*[x×]\s*\d+)+\b", "<hidden shape>", value)
-    value = re.sub(r"(?i)(\b(?:shape|size|stride|dimension|dim|numel|batch_size|seq_len)\s*(?:[=:]|of)?\s*)-?\d+",
-                   r"\1<hidden shape>", value)
     value = re.sub(r"(\b(?:N|M|K|B|S|batch|seq|sequence_length|hidden_size|head_dim|num_heads)\s*[=:]\s*)\d+",
                    r"\1<hidden shape>", value)
     value = re.sub(r"(?i)(size of tensor [ab]\s*\()\d+(\))", r"\1<hidden shape>\2", value)
@@ -912,7 +913,8 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
             else:
                 result[key] = encoded[:limit].decode("utf-8", "ignore") + "\n<output truncated>\n"
             result["truncated"] = True
-    return result
+    from aka.light.evaluation.public_result import bound_diagnostic_response
+    return bound_diagnostic_response(result)
 
 
 def _abba_side_metrics(
@@ -1000,7 +1002,7 @@ def _agent_abba_public_result(
     # Both sides share one public response. Preserve errors instead of letting
     # two individually-valid feedback budgets overflow the transport projection.
     for side in (baseline, candidate):
-        side.update(bound_feedback(side, max_bytes=128 * 1024))
+        side.update(bound_performance_feedback(side, max_performance_bytes=128 * 1024))
     baseline_us = _positive_number(baseline.get("latency_us_geomean"))
     candidate_us = _positive_number(candidate.get("latency_us_geomean"))
     terminal_failure = payload.get("terminal_failure")

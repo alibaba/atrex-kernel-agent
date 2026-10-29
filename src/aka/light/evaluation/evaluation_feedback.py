@@ -90,10 +90,10 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
             add(stage, sid, value.get("error"))
             for field in ("reason", "traceback", "stdout", "stderr"):
                 add(stage, sid, value.get(field), log_stream=field)
-            ranks = value.get("rank_results") or [value]
-            for rank, row in enumerate(ranks):
-                if not isinstance(row, dict):
-                    continue
+            ranks = value.get("rank_results")
+            rows = ([(rank, row) for rank, row in enumerate(ranks) if isinstance(row, dict)]
+                    if isinstance(ranks, list) else [])
+            for rank, row in rows or [(0, value)]:
                 if row is not value:
                     for field in ("error", "reason", "traceback", "stdout", "stderr"):
                         add(stage, sid, row.get(field), rank=rank, log_stream=field)
@@ -101,8 +101,8 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
                     if not isinstance(case, dict):
                         continue
                     context = {"rank": row.get("rank", rank), "case_index": index}
-                    artifact = case.get("input_artifact") or {}
-                    if type(artifact.get("seed")) is int:
+                    artifact = case.get("input_artifact")
+                    if isinstance(artifact, dict) and type(artifact.get("seed")) is int:
                         context["seed"] = artifact["seed"]
                     add(stage, sid, case.get("error"), **context)
                     for kind in ("outputs", "mutated_inputs", "unexpected_mutations"):
@@ -154,16 +154,21 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
             verdicts = passed.get(stage, {})
             if isinstance(verdicts, dict):
                 if "status" in verdicts:
-                    verdicts = {sid: verdicts for sid in allowed}
+                    verdicts = {"": verdicts}
                 for sid, verdict in verdicts.items():
                     if (
-                        sid in allowed
+                        (sid in allowed or sid == "")
                         and isinstance(verdict, dict)
                         and str(verdict.get("status", "")).lower() in ("failed", "fail", "error")
-
                     ):
-                        add(stage, sid, verdict.get("reason") or "Agate reported stage failure")
-    return bound_feedback(
+                        reason = verdict.get("reason")
+                        details = [row for row in diagnostics if row["stage"] == stage
+                                   and (not sid or row["shape_id"] == sid)]
+                        if reason and not any(row["error"] == str(reason) for row in details):
+                            add(stage, sid, reason)
+                        elif not reason and not details:
+                            add(stage, sid, "Agate reported stage failure")
+    return bound_performance_feedback(
         {
             "diagnostics": diagnostics,
             "performance_by_shape": performance,
@@ -171,7 +176,7 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
     )
 
 
-def bound_feedback(value: dict[str, JsonValue], *, max_bytes: int = _MAX_FEEDBACK_BYTES) -> dict[str, JsonValue]:
+def bound_performance_feedback(value: dict[str, JsonValue], *, max_performance_bytes: int = _MAX_FEEDBACK_BYTES) -> dict[str, JsonValue]:
     """Bound optional timing detail; never discard failure diagnostics."""
     raw_diagnostics = value.get("diagnostics")
     raw_performance = value.get("performance_by_shape")
@@ -181,7 +186,7 @@ def bound_feedback(value: dict[str, JsonValue], *, max_bytes: int = _MAX_FEEDBAC
     truncation = dict(raw_truncation) if isinstance(raw_truncation, dict) else {}
     result: dict[str, JsonValue] = {"diagnostics": diagnostics, "performance_by_shape": performance}
     # Reserve room for the truncation annotation itself, including after merging.
-    while len(json.dumps(result, ensure_ascii=False).encode()) > max_bytes - 1024:
+    while len(json.dumps(performance, ensure_ascii=False).encode()) > max_performance_bytes - 1024:
         if performance:
             performance.pop(next(reversed(performance)))
             key = "omitted_performance_shapes"
@@ -215,7 +220,7 @@ def merge_feedback(values: Iterable[object]) -> dict[str, JsonValue]:
             for key, count in truncation.items():
                 if isinstance(count, int):
                     omitted[key] = _count(omitted.get(key)) + count
-    return bound_feedback(
+    return bound_performance_feedback(
         {
             "diagnostics": diagnostics,
             "performance_by_shape": performance,
@@ -251,7 +256,7 @@ def project_feedback(value: dict) -> dict:
         key: count for key, count in truncation.items()
         if key.startswith("omitted_") and type(count) is int and count >= 0
     } if isinstance(truncation, dict) else {}
-    return bound_feedback(projected)
+    return bound_performance_feedback(projected)
 
 
 def optimizer_result_with_feedback(payload, shape_ids, metadata, *, require_performance=True):

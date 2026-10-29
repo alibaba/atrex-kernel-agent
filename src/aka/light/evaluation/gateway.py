@@ -2977,7 +2977,18 @@ def run_direct_job(
     result_adapter: Callable[[dict], dict] | None = None,
     retry_classifier: Callable[[dict], str | None] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """Submit and wait for any public gateway job kind through HTTP."""
+    """Submit and wait through the durable Gateway job lifecycle.
+
+    result_adapter transforms each collected job before its terminal checkpoint
+    is written. A truthy adapted error sets returncode=1 even for succeeded jobs.
+    Recovery reuses that adapted envelope for retry and cacheability decisions;
+    it does not reapply the adapter to an already sealed terminal checkpoint.
+
+    retry_classifier replaces the default eval_retry_kind for eval requests.
+    A caller that wants native eval retries must delegate unrecognized outcomes
+    to eval_retry_kind itself; returning None deliberately forbids a retry.
+    Existing idempotency and retry budgets apply to either classifier.
+    """
     eval_request = kind == "eval"
 
     def completed(job):
