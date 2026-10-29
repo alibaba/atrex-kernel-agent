@@ -49,7 +49,7 @@ class LocalExperimentEpisodeEvidenceReader:
                 sequence=sequence, operation=str(row.get("gateway_kind") or "run"),
                 timestamp=row.get("timestamp"), source_sha256=source_sha256,
                 job_id=row.get("job_id"),
-                result_json=json.dumps(row["result"], ensure_ascii=False).encode("utf-8"),
+                result_json=json.dumps(row["result"], ensure_ascii=True).encode("utf-8"),
             )
 
     def read_episode_receipts(self, episode_workspace, *, source_sha256):
