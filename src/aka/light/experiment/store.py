@@ -277,6 +277,13 @@ class MeasurementStore:
                 record = self.read(record_id)
                 if record.get("task_digest") != task_digest or record.get("cacheable") is not True:
                     return None
+                if record["operation"] in {"evaluate", "same_allocation_abba"}:
+                    from aka.light.evaluation.public_result import cacheable_evaluation
+                    if not cacheable_evaluation(record["response"], record["request"]):
+                        # Older Dev-backed evaluators cached allocation success
+                        # even when no evaluation receipt existed. Keep the old
+                        # record intact, but do not use it as a permanent verdict.
+                        return None
                 from aka.light.evaluation.evaluation_failures import embedded_device_failure
                 negative = False
                 for line in record["response"].get("stdout", "").splitlines():
@@ -351,7 +358,8 @@ class MeasurementStore:
             # when its exact request identity remains intact.
             directory = self.root / "records" / str(record_id)
             resumable = False
-            if isinstance(record_id, str) and RECORD_ID.fullmatch(record_id) and state.get("status") == "running":
+            if (isinstance(record_id, str) and RECORD_ID.fullmatch(record_id)
+                    and state.get("status") in {"running", "validation_pending"}):
                 try:
                     resumable = read_json(directory / "request.json") == request
                 except (FileNotFoundError, ValueError):
@@ -412,11 +420,21 @@ class MeasurementTask:
         self.directory, self.request, self.kernels, self.marker = directory, request, kernels, marker
 
     def finish(self, response: dict, *, cacheable: bool, pending: bool = False) -> dict:
+        from aka.light.evaluation.public_result import seal_response
+        response = seal_response(response, self.request, record_id=self.record_id, kernels=self.kernels)
+        if self.request["operation"] in {"evaluate", "same_allocation_abba"}:
+            from aka.light.evaluation.public_result import cacheable_evaluation
+            cacheable = cacheable and cacheable_evaluation(response, self.request)
         record = {"schema_version": 1, "gateway_record_id": self.record_id,
                   "task_digest": self.key, "request": self.request, "kernels": self.kernels,
                   "operation": self.request["operation"], "response": response,
                   "result_digest": digest(response), "cacheable": cacheable,
                   "created_at": datetime.now(timezone.utc).isoformat()}
+        # Match private_write's actual encoding, including envelope and escaping.
+        # Refuse before publication: reserve() can recover this running task's
+        # existing Jobs instead of leaving an unreadable validation_pending record.
+        if len(json.dumps(record, sort_keys=True, separators=(",", ":")).encode()) + 1 > MAX_RECORD_BYTES:
+            raise EvidenceUnavailable("Measurement record exceeds its size limit; existing job evidence retained")
         private_write(self.directory / "record.json", record)
         # Keep a reference even if post-write validation encounters transient IO.
         private_write(self.marker, {"status": "validation_pending", "gateway_record_id": self.record_id})

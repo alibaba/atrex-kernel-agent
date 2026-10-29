@@ -16,6 +16,75 @@ PREFIXES = {
 }
 ERROR_PREFIXES = ("[sandbox] SOURCE_ERROR_JSON=", "[sandbox] GATEWAY_ERROR_JSON=")
 IDENTITIES = ("gateway_record_id", "kernel_id", "baseline_kernel_id")
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+def bound_diagnostic_response(response: dict) -> dict:
+    """Bound embedded diagnostics using their ASCII JSON storage size.
+
+    Only oversized responses are compacted. Verdicts and non-diagnostic numeric evidence stay
+    intact; the private executor receipt remains the source for omitted text.
+    This is diagnostic truncation, not incomplete execution/transport evidence.
+    """
+    def size(value):
+        return len(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
+
+    source = {key: value for key, value in response.items() if key != "agent_result"}
+    original_bytes = size(source)
+    if original_bytes <= MAX_RESPONSE_BYTES:
+        return response
+    # agent_result is derived from these streams; do not retain a stale copy.
+    text_limit, entry_limit = 1024 * 1024, 4096
+    while True:
+        omitted_chars, omitted_entries = 0, 0
+
+        def compact(value, field=""):
+            nonlocal omitted_chars, omitted_entries
+            if isinstance(value, str) and len(value) > text_limit:
+                omitted_chars += len(value) - text_limit
+                return value[:text_limit] + "\n<diagnostic text truncated>"
+            if isinstance(value, dict):
+                return {key: compact(item, key) for key, item in value.items()}
+            if isinstance(value, list):
+                if field in {"diagnostics", "actionable_diagnostics", "failures"}:
+                    omitted_entries += max(0, len(value) - entry_limit)
+                    value = value[:entry_limit]
+                return [compact(item, field) for item in value]
+            return value
+
+        lines, note_chars = [], 0
+        for line in source.get("stdout", "").splitlines():
+            marker = next((p for p in (*PREFIXES.values(), *ERROR_PREFIXES,
+                                      "__ATREX_NUMERICAL_RESULT__=") if line.startswith(p)), None)
+            if marker:
+                try:
+                    value = json.loads(line[len(marker):])
+                except ValueError:
+                    lines.append(compact(line))
+                else:
+                    lines.append(marker + json.dumps(compact(value), ensure_ascii=False))
+            else:
+                remaining = max(0, text_limit - note_chars)
+                kept = line[:remaining]
+                omitted_chars += len(line) - len(kept) + (0 if kept else 1)
+                if kept:
+                    lines.append(kept)
+                if len(line) > remaining and note_chars <= text_limit:
+                    lines.append("<diagnostic stdout truncated>")
+                note_chars += len(line) + 1
+        result = dict(source, stdout="\n".join(lines), stderr=compact(source.get("stderr", "")))
+        result["diagnostic_truncation"] = {
+            "reason": "Oversized diagnostic response; original executor evidence retained privately",
+            "original_response_bytes": original_bytes, "limit_bytes": MAX_RESPONSE_BYTES,
+            "omitted_text_chars": omitted_chars, "omitted_diagnostic_entries": omitted_entries,
+        }
+        if size(result) <= MAX_RESPONSE_BYTES:
+            return result
+        if text_limit == 256 and entry_limit == 1:
+            # Numeric/structural evidence must not be dropped to fit a verdict.
+            # The caller retains its running reservation and original job IDs.
+            raise ValueError("Non-diagnostic measurement evidence exceeds the response size limit")
+        text_limit, entry_limit = max(256, text_limit // 2), max(1, entry_limit // 2)
 
 
 def finite_number(value):
@@ -159,6 +228,8 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             result["errors"] = errors
     if response.get("truncated"):
         result["truncated"] = True
+    if response.get("diagnostic_truncation"):
+        result["diagnostic_truncation"] = response["diagnostic_truncation"]
     if missing_result:
         result.update(error={"code": "result_unavailable", "message": "No valid structured result was captured."},
                       outcome="unknown", next_action="Inspect the saved Record and ask the operator to reconcile the outcome; do not resubmit blindly.")
@@ -167,4 +238,13 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
 
 
 def seal_response(response: dict, request: dict, *, record_id=None, kernels=None) -> dict:
+    response = bound_diagnostic_response(response)
     return {**response, "agent_result": canonical_result(response, request, record_id=record_id, kernels=kernels)}
+
+
+def cacheable_evaluation(response: dict, request: dict) -> bool:
+    """One verdict contract for measurement publication and subsequent reuse."""
+    outcome = canonical_result(response, request)
+    return (outcome["status"] == "completed"
+            and isinstance(outcome["result"].get("correct"), bool)
+            and outcome["result"].get("outcome") not in {"unknown", "unavailable"})

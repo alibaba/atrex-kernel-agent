@@ -8,7 +8,7 @@ from typing import Any
 
 from aka.light.runtime.request_errors import error_response
 from aka.light.execution.gateway_jobs import submission_rejection
-from aka.light.evaluation.evaluation_feedback import project_feedback, merge_feedback, bound_feedback
+from aka.light.evaluation.evaluation_feedback import project_feedback, merge_feedback, bound_performance_feedback
 from aka.light.evaluation.public_result import correctness_summary
 
 MAX_AGENT_PROFILE_KERNELS = 32
@@ -18,7 +18,6 @@ MAX_AGENT_PROFILE_METRICS = 64
 MAX_AGENT_DIAGNOSTICS = 16
 SOURCE_ERROR_PREFIX = "[sandbox] SOURCE_ERROR_JSON="
 GATEWAY_ERROR_PREFIX = "[sandbox] GATEWAY_ERROR_JSON="
-MAX_GATEWAY_ERROR_BYTES = 64 * 1024
 _SECRET_KEY = re.compile(
     r"(?:authorization|password|ak|sk|atrex_aka_identity_key|agate[_-]?(?:ak|sk|token)|"
     r"(?:.*[_-])?(?:api|access|secret)[_-]?key(?:[_-]?id)?|"
@@ -108,15 +107,8 @@ def source_error_from_stdout(stdout: str) -> dict[str, Any] | None:
 
 
 def bounded_error(value: Any) -> Any:
-    """Retain the original JSON error, with an explicit bound for oversized errors."""
-    # Redact credential fields before truncation can turn a JSON tree into a
-    # text fragment and lose the field names needed for credential redaction.
-    value = redact_diagnostics(value)
-    rendered = json.dumps(value, ensure_ascii=False, allow_nan=False)
-    if len(rendered.encode("utf-8")) <= MAX_GATEWAY_ERROR_BYTES:
-        return value
-    text, omitted = _bounded_utf8_text(rendered, MAX_GATEWAY_ERROR_BYTES, marker="error")
-    return {"truncated": True, "bytes_omitted": omitted, "raw_error": text}
+    """Retain complete error evidence, redacting credentials."""
+    return redact_diagnostics(value)
 
 
 def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
@@ -230,6 +222,37 @@ def redact_diagnostics(value: Any, *, private_paths=(), private_values=()) -> An
     for path in sorted(set(item for item in private_paths if item), key=len, reverse=True):
         value = value.replace(path, "<supervisor>")
     return _SECRET_TEXT.sub(lambda match: (match[1] or match[2]) + "<redacted>", value)
+
+def redact_hidden_shapes(value):
+    """Hide workload dimensions while retaining error text and scalar metrics."""
+    if isinstance(value, dict):
+        return {key: "<hidden shape>" if key in {
+            "shape", "shapes", "input_shape", "output_shape", "strides", "init_kwargs", "forward_kwargs"
+        } else redact_hidden_shapes(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [redact_hidden_shapes(item) for item in value]
+    if not isinstance(value, str):
+        return value
+    if value.lstrip().startswith("{"):
+        try:
+            return json.dumps(redact_hidden_shapes(json.loads(value)), ensure_ascii=False)
+        except ValueError:
+            pass
+    # Consume a full unbracketed dimension run before rewriting NxM fragments.
+    value = re.sub(r"(?i)(\b(?:shapes?|sizes?|strides?|dimensions?|dims?|numel|batch_size|seq_len)\s*(?:[=:]|of)?\s*)-?\d+(?:(?:[ \t]*[,x×][ \t]*|[ \t]+)-?\d+)*",
+                   r"\1<hidden shape>", value)
+    # Numeric dimension vectors and matmul's NxM notation, including torch.Size.
+    value = re.sub(r"torch\.Size\(\[[^\]]*\]\)|(?<![\w])([\[(])\s*-?\d+(?:\s*,\s*-?\d+)+\s*,?\s*[\])]",
+                   "<hidden shape>", value)
+    value = re.sub(r"(?<![\w])(?:\(\s*-?\d+\s*,\s*\)|\[\s*-?\d+\s*\])", "<hidden shape>", value)
+    value = re.sub(r"\b\d+(?:\s*[x×]\s*\d+)+\b", "<hidden shape>", value)
+    value = re.sub(r"(\b(?:N|M|K|B|S|batch|seq|sequence_length|hidden_size|head_dim|num_heads)\s*[=:]\s*)\d+",
+                   r"\1<hidden shape>", value)
+    value = re.sub(r"(?i)(size of tensor [ab]\s*\()\d+(\))", r"\1<hidden shape>\2", value)
+    value = re.sub(r"(?i)(\b(?:expected|got)\s+(?:size\s+)?)-?\d+(?=\b)",
+                   r"\1<hidden shape>", value) if re.search(r"(?i)\b(shape|size|dimension)\b", value) else value
+    return value
+
 
 def _finite_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -725,7 +748,7 @@ def _positive_number(value: object) -> float | None:
 
 def evaluation(result: dict) -> dict:
     keys = {"all_pass", "latency_us_geomean", "latency_us_arith_mean",
-            "performance_score", "performance_objective", "max_abs_err", "max_rel_err",
+            "performance_score", "performance_objective", "max_abs_err", "max_rel_err", "rel_err",
             "shape_ids_are_opaque", "hidden_case_details", "mode", "n_shapes",
             "correctness_passed", "correctness_total", "speedup_vs_ref_geomean",
             "speedup_vs_ref_mean", "kernel_sha256", "utilization_pct", "sol_utilization_pct"}
@@ -747,11 +770,18 @@ def evaluation(result: dict) -> dict:
             str(key)[:128]: item for key, item in list(shapes.items())[:MAX_AGENT_EVALUATION_SHAPES]
             if _finite_number(item) is not None
         }
-    value["failures"] = [bounded_text(item) for item in (result.get("failures") or [])[:8]]
+    value["failures"] = [str(item) for item in (result.get("failures") or [])]
     value["actionable_diagnostics"] = [
-        {key: bounded_text(item) for key, item in row.items() if key in {"stage", "shape_id", "message"}}
-        for row in (result.get("actionable_diagnostics") or [])[:8] if isinstance(row, dict)
+        {key: str(item) for key, item in row.items() if key in {"stage", "shape_id", "message"}}
+        for row in (result.get("actionable_diagnostics") or []) if isinstance(row, dict)
     ]
+    for key in ("stdout", "stderr", "traceback"):
+        if isinstance(result.get(key), str):
+            value[key] = result[key]
+    if isinstance(result.get("case_status"), dict):
+        value["case_status"] = {str(key)[:128]: status
+            for key, status in list(result["case_status"].items())[:MAX_AGENT_EVALUATION_SHAPES]
+            if status in ("passed", "failed", "not_run", "incomplete")}
     if result.get("error") is not None:
         value["error"] = bounded_error(result["error"])
     if any(key in result for key in ("diagnostics", "performance_by_shape")):
@@ -771,11 +801,11 @@ def numerical_result(payload: dict) -> dict:
     and controller paths as for other Gateway diagnostics.
     """
     public = {"schema_version": 1, "runs": [], "all_pass": payload.get("all_pass") is True}
-    for row in payload.get("runs", [])[:3]:
+    for row in payload.get("runs", []):
         item = {key: row.get(key) for key in (
             "case_id", "passed", "exit_code", "expected_probes", "observed_probes",
             "failed_probes", "shape_count", "seeds", "world_size", "selection_digest")}
-        item["input_error"] = bounded_text(row.get("input_error") or "", limit=8192)
+        item["input_error"] = str(row.get("input_error") or "")
         result = row.get("result")
         item["result"] = None
         if isinstance(result, dict):
@@ -790,14 +820,14 @@ def numerical_result(payload: dict) -> dict:
             }
         public["runs"].append(item)
     if payload.get("error"):
-        public["error"] = bounded_text(payload["error"], limit=8192)
+        public["error"] = str(payload["error"])
     diagnostics = payload.get("private_diagnostics", payload.get("diagnostics", []))
     public["diagnostics"] = []
     if isinstance(diagnostics, list):
         failed = [row for row in diagnostics if isinstance(row, dict) and (
             row.get("exit_code") not in (None, 0) or row.get("timed_out") or row.get("diagnosis")
             or row.get("traceback") or row.get("capture_error"))]
-        for row in failed[-3:]:
+        for row in failed:
             item = {key: row[key] for key in (
                 "case_id", "shape_id", "seed", "stage", "exit_code", "timed_out",
                 "expected_probes", "observed_probes", "candidate_timeout_s") if key in row}
@@ -805,10 +835,10 @@ def numerical_result(payload: dict) -> dict:
                 if key in row:
                     value = row[key]
                     if isinstance(value, dict):
-                        item[key] = {"text": bounded_text(value.get("text", ""), limit=8192),
+                        item[key] = {"text": str(value.get("text", "")),
                                      "bytes": value.get("bytes"), "truncated": bool(value.get("truncated"))}
                     else:
-                        item[key] = bounded_text(value, limit=8192)
+                        item[key] = str(value)
             nested = row.get("evaluator")
             if isinstance(nested, dict):
                 item["evaluator"] = {key: nested[key] for key in ("exit_code", "result_file_present") if key in nested}
@@ -816,7 +846,7 @@ def numerical_result(payload: dict) -> dict:
                     if isinstance(nested.get(key), dict):
                         value = nested[key]
                         item["evaluator"][key] = {
-                            "text": bounded_text(value.get("text", ""), limit=8192),
+                            "text": str(value.get("text", "")),
                             "truncated": bool(value.get("truncated")),
                         }
             public["diagnostics"].append(item)
@@ -858,48 +888,33 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                     GATEWAY_ERROR_PREFIX: gateway_error_result,
                 }[prefix]
                 value = redact_diagnostics(formatter(raw), private_paths=private_paths, private_values=private_values)
+                if generalized and not wiki and not public_dev:
+                    value = redact_hidden_shapes(value)
                 projected.append(prefix + json.dumps(value, ensure_ascii=False))
             except (ValueError, TypeError, RecursionError, OverflowError):
                 projected.append(json.dumps({"error": "Gateway result could not be projected"}))
         else:
-            projected.append(redact_diagnostics(line, private_paths=private_paths, private_values=private_values))
+            line = redact_diagnostics(line, private_paths=private_paths, private_values=private_values)
+            projected.append(redact_hidden_shapes(line) if generalized and not wiki and not public_dev else line)
     stdout = "\n".join(projected) + ("\n" if projected else "")
-    if generalized and (process.returncode or numerical) and not wiki and not public_dev and operation != "env":
-        # A completed comparison can fail correctness while still providing
-        # useful, public per-side results. Keep them without exposing raw logs.
-        stdout = "\n".join(line for line in projected if line.startswith((
-            "[test_kernel] RESULT_JSON=", "[sandbox] ABBA_JSON=",
-            "[sandbox] PROFILE_JSON=", "[sandbox] CHECK_JSON=", "[sandbox] DISASSEMBLE_JSON=",
-            NUMERICAL_RESULT_PREFIX, SOURCE_ERROR_PREFIX, GATEWAY_ERROR_PREFIX,
-        )))
-        errors = gateway_errors_from_stdout(stdout)
-        if source_error_from_stdout(stdout) is not None:
-            stderr = "Candidate source rejected; fix the violations in SOURCE_ERROR_JSON and retry.\n"
-        elif errors:
-            from aka.light.runtime.request_errors import UNKNOWN_OUTCOME
-            stderr = UNKNOWN_OUTCOME + "\n" if any(error.get("outcome") == "unknown" for error in errors) else ""
-        elif stdout and not numerical:
-            # Operation-specific results already include failure/diagnostic
-            # fields. Do not contradict them with an infrastructure-sounding error.
-            stderr = ""
-        else:
-            stderr = "GPU request failed; hidden-case diagnostics withheld. Ask the operator to inspect the failure.\n"
-        if numerical and process.returncode == 0:
-            stderr = ""
+    if generalized and not wiki and not public_dev:
+        stderr = redact_hidden_shapes(stderr)
     # Structured lines were redacted before JSON encoding. Re-running free-form
     # regexes over encoded JSON can eat delimiters and corrupt result markers.
     stderr = redact_diagnostics(stderr, private_paths=private_paths, private_values=private_values)
     result = {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}
     for key, limit in (("stdout", 256 * 1024 if wiki else 384 * 1024), ("stderr", 16 * 1024)):
         encoded = result[key].encode()
-        if len(encoded) > limit:
+        if len(encoded) > limit and not (operation in {"evaluate", "same_allocation_abba"}
+                or numerical or "[test_kernel] RESULT_JSON=" in stdout or "[sandbox] ABBA_JSON=" in stdout):
             if key == "stdout" and any(line.startswith("[") for line in projected):
                 result[key] = json.dumps({"error": "Projected result exceeds context limit; narrow the request."}) + "\n"
                 result["exit_code"] = process.returncode or 2
             else:
                 result[key] = encoded[:limit].decode("utf-8", "ignore") + "\n<output truncated>\n"
             result["truncated"] = True
-    return result
+    from aka.light.evaluation.public_result import bound_diagnostic_response
+    return bound_diagnostic_response(result)
 
 
 def _abba_side_metrics(
@@ -967,7 +982,6 @@ def _abba_side_metrics(
             for key in ("failures", "actionable_diagnostics"):
                 if failure.get(key):
                     result.setdefault(key, []).extend(failure[key])
-                    result[key] = result[key][:MAX_AGENT_DIAGNOSTICS]
             if "error" in failure:
                 result["error"] = failure["error"]
     return result
@@ -988,7 +1002,7 @@ def _agent_abba_public_result(
     # Both sides share one public response. Preserve errors instead of letting
     # two individually-valid feedback budgets overflow the transport projection.
     for side in (baseline, candidate):
-        side.update(bound_feedback(side, max_bytes=128 * 1024))
+        side.update(bound_performance_feedback(side, max_performance_bytes=128 * 1024))
     baseline_us = _positive_number(baseline.get("latency_us_geomean"))
     candidate_us = _positive_number(candidate.get("latency_us_geomean"))
     terminal_failure = payload.get("terminal_failure")

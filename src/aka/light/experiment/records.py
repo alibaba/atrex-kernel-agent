@@ -22,7 +22,7 @@ from aka.light.workspace.files import MAX_FILE_BYTES, publish, relative_path
 from aka.light.agent.session_tail import read_regular_bytes
 
 from aka.light.evaluation.provider import PREFIXES, result_from_response
-from aka.light.evaluation.public_result import seal_response
+from aka.light.evaluation.public_result import cacheable_evaluation, seal_response
 from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError, error_response, field_error
 from aka.light.experiment.identifiers import GATEWAY_RECORD_ID_RE, KERNEL_RECORD_ID_RE
 QUERY_KINDS = {"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier"}
@@ -276,12 +276,8 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                         # complete negative promotion result, not uncertain
                         # infrastructure that the Supervisor should retry forever.
                         cacheable = True
-                    else:
-                        cacheable = (
-                            cacheable
-                            and sample is not None
-                            and isinstance(sample.get("correct"), bool)
-                        )
+                if operation in {"evaluate", "same_allocation_abba"}:
+                    cacheable = cacheable and cacheable_evaluation(response, request)
                 if sample is not None:
                     samples.append(sample)
                 if process.returncode != 0 or sample is None or not cacheable:
@@ -313,6 +309,8 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                              "status": "succeeded" if response["exit_code"] == 0 else "failed"}))
             response = dict(response, stdout="\n".join(lines) + "\n")
             response = seal_response(response, request, record_id=task.record_id, kernels=kernels)
+            if operation in {"evaluate", "same_allocation_abba"}:
+                cacheable = cacheable and cacheable_evaluation(response, request)
             task.finish(response, cacheable=cacheable and not custom_launcher, pending=pending)
             # A source rejection is definitive and repairable, not missing GPU
             # evidence. Require private checkpoints too; a Dev-printed marker
