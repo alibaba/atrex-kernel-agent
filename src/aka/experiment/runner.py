@@ -345,9 +345,9 @@ class LegacyExperiment:
         self._retain_episode(command.workspace, interpreted.episode_evaluations)
         return interpreted
 
-    def _observe_command(self, evaluator, prepared, index, command, result, records, ref):
+    def _observe_command(self, evaluator, prepared, index, command, result, records, ref, *, archive_result=True):
         # Raw backend bytes remain evidence even when Evaluation remaps its mirror.
-        if records is not None:
+        if records is not None and archive_result:
             for item in result.files:
                 records.publish_content(ref, item.content, "execution_output")
         observed = evaluator.observe_step(prepared, index, result)
@@ -409,10 +409,11 @@ class LegacyExperiment:
             command = steps[index]
             if index in cached:
                 result = cached[index]
-                self._publish_files(request, result.files, None, ref)
-                observed = self._observe_command(self.evaluator, prepared, index, command, result, records, ref)
+                self._publish_files(request, result.files, records, ref)
                 if self.check_result is not None:
                     self.check_result(result)
+                observed = self._observe_command(self.evaluator, prepared, index, command, result, records, ref,
+                                                 archive_result=False)
                 self._write_outputs(request, prepared, observed.artifacts, ref)
                 return result
 
@@ -430,14 +431,15 @@ class LegacyExperiment:
                     assessment = getattr(self.evaluator, "diagnose_step", lambda *args: None)(prepared, index, result)
                     if assessment is not None:
                         records.assessed(ref, attempt_id, assessment)
-                self._publish_files(request, result.files, None, ref)
-                observed = self._observe_command(self.evaluator, prepared, index, command, result, records, ref)
-                self._write_outputs(request, prepared, observed.artifacts, ref)
+                self._publish_files(request, result.files, records, ref)
                 if records is not None and command.submission is not None:
                     records.publish_content(ref, result.stdout.encode("utf-8"), "measurement_receipt")
                 result.require_transport()
                 if self.check_result is not None:
                     self.check_result(result)
+                observed = self._observe_command(self.evaluator, prepared, index, command, result, records, ref,
+                                                 archive_result=False)
+                self._write_outputs(request, prepared, observed.artifacts, ref)
                 return result
 
             if self.retry is None:
