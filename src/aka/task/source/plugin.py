@@ -4,8 +4,8 @@ from aka.core.keys import ServiceKey
 SOURCE = ServiceKey("source", "SourceProvider", module="aka.contracts.workspace")
 name = "source"
 provide = ("source",)
-identity_files = ("plugin.py", "kernel.py", "sol/source.py", "sol/render.py", "legacy.py")
-identity_packages = ("aka.contracts.content",)
+identity_files = ("plugin.py", "kernel.py", "sol/source.py", "sol/render.py", "legacy.py", "manifest.py")
+identity_packages = ("aka.contracts.content", "aka.contracts.workspace")
 Config = {"type": "object", "properties": {
     "kind": {"type": "string", "enum": ["kernel", "sol"]},
     "kernel_demo": {"type": "string"}, "operator_dir": {"type": "string"},

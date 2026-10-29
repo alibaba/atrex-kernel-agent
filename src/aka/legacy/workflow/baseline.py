@@ -68,7 +68,24 @@ class WorkflowBaseline:
         return self.preparation().framework_baseline_smoke_shape_ids(limit=limit)
 
     def ensure_framework_baseline_solution_manifest(self):
-        return self.preparation().ensure_framework_baseline_solution_manifest()
+        campaign = self.campaign
+        if (campaign.workspace / "solution.json").is_file() or not campaign.atrex_bench_root:
+            return
+        prepare = getattr(campaign.source_provider, "prepare_candidate_manifest", None)
+        if not callable(prepare):
+            raise TypeError("selected SourceProvider does not implement prepare_candidate_manifest")
+        from aka.contracts.workspace import CandidateManifestRequest
+        reference = None
+        if (campaign.workspace / "reference.py").is_file():
+            reference = campaign.candidate_workspace.read_working(
+                campaign.workspace, ("reference.py",)
+            ).files["reference.py"]
+        contribution = prepare(CandidateManifestRequest(
+            campaign.services.evaluation_input(), campaign.campaign_name, campaign.framework, reference
+        ))
+        if not isinstance(contribution, WorkspaceFile) or contribution.path != "solution.json":
+            raise TypeError("SourceProvider manifest requires a solution.json WorkspaceFile")
+        campaign.candidate_workspace.install_files(campaign.workspace, (contribution,))
 
     def framework_baseline_smoke_command(self, n):
         shapes = (

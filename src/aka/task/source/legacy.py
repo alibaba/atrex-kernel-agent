@@ -1,8 +1,11 @@
 """Dispatch request data through the preserved kernel and SOL renderers."""
 from aka.contracts.workspace import SourceRequest
+from .manifest import prepare_candidate_manifest
 
 
 class LegacySourceProvider:
+    prepare_candidate_manifest = staticmethod(prepare_candidate_manifest)
+
     def prepare(self, request: SourceRequest):
         if request.initial is not None:
             if request.initial.kind == "kernel":

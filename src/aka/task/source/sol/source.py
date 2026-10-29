@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 from .render import _render_kernel, _solution_json, _readme
 from aka.contracts.content import SourceContent, WorkspaceFile
+from ..manifest import prepare_candidate_manifest
 
 @dataclass(frozen=True)
 class SolSourceProvider:
@@ -13,6 +14,8 @@ class SolSourceProvider:
     platform: str
     gpu_wiki: str = ""
     definition: dict | None = None
+
+    prepare_candidate_manifest = staticmethod(prepare_candidate_manifest)
 
     def prepare(self, request=None):
         op = Path(self.operator_dir)

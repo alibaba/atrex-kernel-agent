@@ -7,7 +7,7 @@ from typing import Protocol, Any, Mapping
 from types import MappingProxyType
 
 from .content import SourceContent, WorkspaceFile
-from .problem import InitialSource
+from .problem import EvaluationInput, InitialSource
 from .filesystem import FilesystemAccess
 
 
@@ -83,9 +83,22 @@ class SourceRequest:
     initial: InitialSource | None = None
 
 
+@dataclass(frozen=True)
+class CandidateManifestRequest:
+    """Frozen native candidate inputs; the host decides whether to install them."""
+    evaluation_input: EvaluationInput
+    campaign_name: str
+    framework: str
+    reference_source: bytes | None
+
+
 class SourceProvider(Protocol):
     def prepare(self, request: SourceRequest | None = None) -> SourceContent:
         """Describe initial source files without writing an agent workspace."""
+        ...
+
+    def prepare_candidate_manifest(self, request: CandidateManifestRequest) -> WorkspaceFile:
+        """Optional pure candidate-format contribution; never writes a workspace."""
         ...
 
 
