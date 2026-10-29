@@ -2247,8 +2247,8 @@ def _typed_agate_command(
 
 
 
-def _main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
+    args = build_parser().parse_args(argv) if parsed_arguments is None else parsed_arguments
     if not args.hardware:
         raise SystemExit("sandbox: --hardware or ATREX_SANDBOX_GPU is required")
     # Explicit endpoint flags override inherited sandbox endpoint variables.  This
@@ -2305,7 +2305,7 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit("sandbox: --ssh-gpu requires --ssh")
     if args.timeout < 1:
         raise SystemExit("sandbox: --timeout must be positive")
-    if args.shape_batch_size <= 0:
+    if args.shape_batch_size is not None and args.shape_batch_size <= 0:
         raise SystemExit("sandbox: --shape-batch-size must be positive")
     try:
         queue_wait_grace = configured_queue_wait_grace(os.environ)
@@ -2863,7 +2863,7 @@ def _append_sandbox_telemetry(event: str, **fields: object) -> None:
         handle.write(json.dumps(payload, ensure_ascii=False, sort_keys=True) + "\n")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
     arguments = list(argv if argv is not None else sys.argv[1:])
     operation_id = f"sandbox-{os.getpid()}-{time.monotonic_ns()}"
     category = _sandbox_telemetry_category(arguments)
@@ -2878,7 +2878,8 @@ def main(argv: list[str] | None = None) -> int:
         category=category,
     )
     try:
-        returncode = _main(argv)
+        returncode = (_main(argv) if parsed_arguments is None
+                      else _main(argv, parsed_arguments=parsed_arguments))
     except BaseException as exc:
         _cancel_active_agate_jobs()
         _append_sandbox_telemetry(

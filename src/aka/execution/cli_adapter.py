@@ -17,6 +17,7 @@ def build_parser(*, register_measurement_options=None):
         description="Run correctness, performance, or profile commands on a remote GPU sandbox.",
         formatter_class=argparse.RawDescriptionHelpFormatter, epilog=transport.__doc__)
     register_transport_options(parser)
+    parser.set_defaults(prepared_request_fd=None, prepared_inputs_fd=None)
     if register_measurement_options is not None:
         register_measurement_options(parser)
     else:
@@ -169,7 +170,7 @@ def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_
             if args.dry_run and not health:
                 if preview_command(command, execution_capabilities=bound.capabilities):
                     return 0
-                return transport.main(_transport_argv(arguments))
+                return transport.main(_transport_argv(arguments), parsed_arguments=args)
             result = bound.run(command) if health else run_command(bound, command)
         result.require_transport()
         sys.stdout.write(result.stdout or "")
