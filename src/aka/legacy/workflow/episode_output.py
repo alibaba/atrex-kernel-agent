@@ -10,13 +10,33 @@ from pathlib import Path
 import re
 import subprocess
 
-from aka.contracts.workflow_export import EpisodeCandidateFact, EvaluationFact, ResultFact, _result_from_document, _document
+from aka.contracts.workflow_export import EpisodeCandidateFact, EvaluationFact, ResultFact
 
 FILENAME = 'public-candidate.json'
 
 
 def _digest(content):
     return hashlib.sha256(content).hexdigest()
+
+
+def _evaluation_document(evaluation):
+    """Encode Workflow's partial output from validated public facts."""
+    result = evaluation.result
+    return {
+        'kind': evaluation.kind,
+        'timestamp': evaluation.timestamp,
+        'source_sha256': dict(evaluation.source_sha256),
+        'result': {
+            'state': result.state, 'correctness': result.correctness,
+            'gate': result.gate, 'complete': result.complete,
+            'latency_us': result.latency_us,
+            'case_latencies_us': dict(result.case_latencies_us),
+            'expected_case_ids': list(result.expected_case_ids),
+            'subject': result.subject, 'objective': result.objective,
+            'score': result.score, 'metrics': dict(result.metrics),
+            'case_ids_opaque': result.case_ids_opaque,
+        },
+    }
 
 
 def _result(result, expected):
@@ -97,7 +117,7 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
                 continue
             evaluation = EvaluationFact(str(row.get('gateway_kind') or 'run'), row.get('timestamp'),
                 digests, _result(row.get('result'),expected_case_ids))
-            evaluations.append(_document(evaluation))
+            evaluations.append(_evaluation_document(evaluation))
     # The terminal coding session has stopped. Refuse a concurrent source change.
     if not unavailable:
         for name, content in files.items():
@@ -177,6 +197,6 @@ def _read(episode_dir, *, episode, version, expected_case_ids, attempt):
         result = dict(row['result']); result['expected_case_ids'] = tuple(result['expected_case_ids'])
         if result['expected_case_ids'] != tuple(expected_case_ids):
             raise ValueError('captured episode evaluation differs from campaign cases')
-        evaluations.append(EvaluationFact(**{**row,'result':_result_from_document(result)}))
+        evaluations.append(EvaluationFact(**{**row,'result':ResultFact(**result)}))
     return EpisodeCandidateFact(value['head_revision'],value['revision'],value['base_revision'],
                                 handles,tuple(evaluations)), tuple(artifacts)

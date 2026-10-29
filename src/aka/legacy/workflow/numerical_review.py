@@ -581,13 +581,13 @@ def supplemental_feedback(campaign, workspace, *, standard_correctness_passed=Fa
         if _digest({**files, "shapes.json": shapes, "evaluator.py": workspace / "test_kernel.py"}) != validation_digest:
             raise ValueError("candidate or contract changed during supplemental validation")
     except NumericalPlanningTimeout as exc:
-        from aka.evaluation.results import _latest_complete_episode_performance
+        from aka.evaluation.records import latest_complete_episode_performance
 
         try:
             # Episode receipts bind the full standard workload result to the current
             # kernel/manifest. Baselines supply their just-completed standard gate.
             standard_passed = standard_correctness_passed or (
-                _latest_complete_episode_performance(
+                latest_complete_episode_performance(
                     workspace, expected_shape_ids=set(json.loads(shapes.read_text()))
                 ) is not None
             )
