@@ -8,7 +8,8 @@ class GitSnapshots:
     def read_revision(self, workspace: Path, revision: str,
                       changed_paths: list[str]) -> RevisionContent:
         # Invalid revisions must not masquerade as deleted paths.
-        commit = _git(workspace, "rev-parse", "--verify", f"{revision}^{{commit}}").stdout.strip()
+        from .history import resolve_revision
+        commit = resolve_revision(workspace, revision)
         files = {}
         for relative in changed_paths:
             path = PurePosixPath(relative)

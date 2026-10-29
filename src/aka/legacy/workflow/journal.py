@@ -163,8 +163,7 @@ def _sync_live_best_effort(
     value: dict[str, Any],
     live_path: Path | None,
 ) -> None:
-    inferred = infer_live_memory_path(journal_path)
-    destination = inferred or live_path
+    destination = live_path
     if destination is None:
         return
     overrides: dict[str, Any] = {}
@@ -996,7 +995,7 @@ def main(argv: list[str] | None = None) -> int:
             value = append_experiment(
                 Path(args.path),
                 _json_object(args.experiment_json, "--experiment-json"),
-                live_path=Path(args.live_path) if args.live_path else None,
+                live_path=None,
             )
         else:
             value = finalize(
@@ -1004,8 +1003,12 @@ def main(argv: list[str] | None = None) -> int:
                 state=args.state,
                 outcome=_json_object(args.outcome_json, "--outcome-json"),
                 candidate_commit=args.candidate_commit,
-                live_path=Path(args.live_path) if args.live_path else None,
+                live_path=None,
             )
+        # Only the top-level CLI resolves the legacy Git worktree mirror.
+        inferred = infer_live_memory_path(Path(args.path))
+        _sync_live_best_effort(Path(args.path), value,
+            inferred or (Path(args.live_path) if args.live_path else None))
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         parser.error(str(exc))
     print(json.dumps(value, indent=2, ensure_ascii=False))

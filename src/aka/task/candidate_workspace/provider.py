@@ -9,6 +9,10 @@ def _legacy(handle):
 
 
 class GitCandidateWorkspace(GitSnapshots):
+    def exclude_runtime_paths(self, workspace, exclusions):
+        from .excludes import exclude_runtime_paths
+        return exclude_runtime_paths(workspace, exclusions)
+
     def current_revision(self, workspace):
         from .records import current_revision
         return current_revision(workspace)

@@ -4,7 +4,7 @@ import re
 
 from aka.contracts.content import WorkspaceFile
 from aka.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
-from aka.task.candidate_workspace.excludes import STALL_STATE_FILE
+from .runtime_paths import STALL_STATE_FILE
 
 
 def _record_revision(value):

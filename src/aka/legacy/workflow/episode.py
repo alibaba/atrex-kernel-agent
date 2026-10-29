@@ -279,7 +279,7 @@ class LongHorizonCampaign:
         from .records import read_memory
         memory = read_memory(self.workspace, 0)
         from .export import verified_memory
-        if (not verified_memory(self.workspace, memory)
+        if (not verified_memory(self.workspace, memory, self.base_campaign.candidate_workspace)
                 or self.base_campaign._generalized_memory_coverage_problem(memory)):
             raise RuntimeError("cannot retain an unverified baseline after conversion budget")
         code = "gluon_conversion_incomplete"
@@ -1087,6 +1087,7 @@ class LongHorizonCampaign:
         capture_episode_output(worktree.path, episode_dir, episode=episode,
             version=memory_version, base_revision=base_commit,
             expected_case_ids=tuple(sorted(str(key) for key in expected_cases)),
+            candidate_workspace=self.base_campaign.candidate_workspace,
             episode_evidence_reader=self.base_campaign.services.experiment_episode_evidence,
             episode_evidence_interpreter=self.base_campaign.services.evaluation_episode_interpreter)
         self.base_campaign.candidate_workspace.archive(
@@ -1416,7 +1417,7 @@ class LongHorizonCampaign:
                 branch,
                 worktree_path,
             )
-            CampaignStore.ensure_excluded(worktree.path)
+            CampaignStore.ensure_excluded(worktree.path, self.base_campaign.candidate_workspace)
             self.environment.link_episode_runtime(self.base_campaign, worktree.path)
             if self._recover_completed_handoff(
                 store,
@@ -1633,7 +1634,7 @@ class LongHorizonCampaign:
 
     def run(self) -> str:
         self.environment.prepare_campaign(self.base_campaign)
-        store = CampaignStore(self.workspace)
+        store = CampaignStore(self.workspace, self.base_campaign.candidate_workspace)
         state = store.load_state()
         if state.episodes == 0 and state.consecutive_without_promotion == 0:
             state.consecutive_without_promotion = self.environment.restored_stall(
@@ -1722,6 +1723,7 @@ class LongHorizonCampaign:
                 self.base_campaign.candidate_workspace.materialize(
                     worktree, self.workspace
                 )
+                CampaignStore.ensure_excluded(worktree.path, self.base_campaign.candidate_workspace)
                 active.update(
                     {
                         "episode_branch": worktree.branch,

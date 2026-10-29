@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Protocol, Any, Mapping
 from types import MappingProxyType
 
@@ -55,8 +55,11 @@ class RevisionFacts:
 class WorkingFacts:
     changed_paths: tuple[str, ...]
     content_identities: Mapping[str, str | None]
+    status_text: str | None = None
 
     def __post_init__(self):
+        if self.status_text is not None and not isinstance(self.status_text, str):
+            raise TypeError("working status text must be a string or None")
         paths = tuple(self.changed_paths)
         if any(not isinstance(path, str) for path in paths):
             raise TypeError("working changed paths must be strings")
@@ -103,6 +106,26 @@ class SourceProvider(Protocol):
 
 
 @dataclass(frozen=True)
+class WorkspaceExclusion:
+    """One literal workspace-relative runtime path, with an explicit directory scope."""
+    path: str
+    subtree: bool = False
+
+    def __post_init__(self):
+        if not isinstance(self.path, str):
+            raise TypeError("workspace exclusion path must be a string")
+        path = PurePosixPath(self.path)
+        if (not self.path or path.is_absolute() or path.as_posix() != self.path
+                or path == PurePosixPath(".") or ".." in path.parts
+                or any(char in self.path for char in "\\*?[]")
+                or any(ord(char) < 32 or ord(char) == 127 for char in self.path)
+                or any(part.casefold() == ".git" for part in path.parts)):
+            raise ValueError("workspace exclusion must be a safe literal relative path")
+        if type(self.subtree) is not bool:
+            raise TypeError("workspace exclusion subtree must be a boolean")
+
+
+@dataclass(frozen=True)
 class CandidateHandle:
     episode: int
     base_commit: str
@@ -133,6 +156,10 @@ class CandidateCheckpointState:
 
 
 class CandidateWorkspace(Protocol):
+    def exclude_runtime_paths(self, workspace: Path,
+                              exclusions: tuple[WorkspaceExclusion, ...]) -> None:
+        """Append explicit owner runtime exclusions without changing tracked content/index."""
+        ...
     def current_revision(self, workspace: Path) -> str:
         """Return the opaque current revision, or an empty string before initialization."""
         ...

@@ -11,7 +11,6 @@ import hashlib
 import json
 import os
 import shutil
-import subprocess
 import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
@@ -232,20 +231,10 @@ def _snapshot_after_exit(
     }
 
 
-def _git_text(workspace: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
 def capture_unexpected_exit(
     workspace: Path,
     *,
+    candidate_workspace,
     agent_cli: str,
     exit_status: int,
     timed_out: bool,
@@ -274,6 +263,14 @@ def capture_unexpected_exit(
     snapshot = _snapshot_after_exit(
         workspace, exit_number=exit_number, agent_cli=agent_cli
     )
+    try:
+        revision = candidate_workspace.current_revision(workspace)
+    except (OSError, RuntimeError, ValueError):
+        revision = ""
+    try:
+        status = getattr(candidate_workspace.working_facts(workspace), "status_text", None) or ""
+    except (OSError, RuntimeError, ValueError):
+        status = ""
     record = {
         "number": exit_number,
         "captured_at": _utc_now(),
@@ -285,10 +282,8 @@ def capture_unexpected_exit(
         "error": error,
         "stdout_tail": stdout_tail[-_MAX_TERMINAL_CHARS:],
         "stderr_tail": stderr_tail[-_MAX_TERMINAL_CHARS:],
-        "git_head": _git_text(workspace, "rev-parse", "HEAD"),
-        "git_status": _git_text(
-            workspace, "status", "--short", "--untracked-files=all"
-        ),
+        "git_head": revision,
+        "git_status": status,
         "snapshot": snapshot,
     }
     exits.append(record)

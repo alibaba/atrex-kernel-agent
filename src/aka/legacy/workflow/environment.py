@@ -4,7 +4,7 @@ from pathlib import Path
 
 from aka.legacy.workflow.constants import CONVERT_PERF_TOL as _constants_CONVERT_PERF_TOL
 from aka.task.candidate_workspace.policy import IMMUTABLE_BASELINE_PATHS as _constants_IMMUTABLE_BASELINE_PATHS
-from aka.task.candidate_workspace.excludes import STALL_STATE_FILE as _constants_STALL_STATE_FILE
+from .runtime_paths import STALL_STATE_FILE as _constants_STALL_STATE_FILE
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:

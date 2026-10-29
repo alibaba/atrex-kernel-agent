@@ -133,7 +133,7 @@ def _info(metadata, content):
                           digest(metadata['context']['selection']))
 
 
-def generate(workspace):
+def generate(workspace, *, candidate_workspace):
     workspace=Path(workspace).resolve()
     with campaign_lease(workspace):
         stopped=document(workspace/'.atrex_long_horizon/writer-state.json')
@@ -149,7 +149,7 @@ def generate(workspace):
             raise ValueError('checkpoint requires a finished episode; request_pause and wait for stop')
         context=document(workspace/CONTEXT)
         if context is None: raise ValueError('campaign has no frozen launch context')
-        facts=RetainedWorkflowExport().read(workspace)
+        facts=RetainedWorkflowExport(candidate_workspace).read(workspace)
         if facts.incumbent is None: raise ValueError('checkpoint requires a verified incumbent')
         if any(type(value) is not int or value < 0 for value in
                (facts.progress.observed_tokens, facts.progress.completed_episodes)):
@@ -249,11 +249,11 @@ def restore(content, *, workspace, campaign_id):
         return _info(metadata,content)
 
 
-def resume(workspace, *, campaign_id):
+def resume(workspace, *, campaign_id, candidate_workspace):
     from aka.bootstrap.host import run_selection
     from aka.contracts.startup import Invocation
     workspace=Path(workspace).resolve()
-    facts=RetainedWorkflowExport().read(workspace)
+    facts=RetainedWorkflowExport(candidate_workspace).read(workspace)
     if facts.campaign.id!=campaign_id:
         raise ValueError('cannot resume a different campaign')
     context=document(workspace/CONTEXT)

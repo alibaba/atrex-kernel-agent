@@ -122,7 +122,7 @@ def run_campaign(campaign):
 
     services = campaign.services
     settings = services.settings
-    CampaignStore.ensure_excluded(campaign.workspace)
+    CampaignStore.ensure_excluded(campaign.workspace, campaign.candidate_workspace)
     engine = LongHorizonCampaign(
         campaign,
         verifier=FormalVerification(services.formal_experiment, services.acceptance,

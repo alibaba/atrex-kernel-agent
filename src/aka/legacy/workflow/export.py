@@ -8,16 +8,16 @@ import math
 from datetime import datetime, timezone
 from pathlib import Path
 import re
-import subprocess
 
 from aka.contracts.workflow_export import (
     EXPORT_VERSION, CampaignRef, CandidateFact, EpisodeFact, ExportArtifact,
     ProgressFact, ResultFact, SessionFact, WorkflowExportSnapshot, snapshot_from_document, WORKFLOW_EXPORT,
 )
-from aka.task.candidate_workspace.excludes import VERIFY_DIR
+from .runtime_paths import VERIFY_DIR
 
 name = 'export'
 provide = ('workflow_export',)
+inject = ('candidate',)
 identity_packages = ('aka.legacy.workflow', 'aka.agent')
 Config = {'type': 'object', 'properties': {}, 'additionalProperties': False}
 Defaults = {}
@@ -55,7 +55,7 @@ def _integer(value):
     return value if type(value) is int and value >= 0 else None
 
 
-def verified_memory(workspace, memory):
+def verified_memory(workspace, memory, candidate_workspace):
     """Keep Workflow's existing promotion eligibility check private."""
     if not isinstance(memory, dict):
         return False
@@ -67,22 +67,25 @@ def verified_memory(workspace, memory):
             or performance.get('measurement_status') != 'complete'):
         return False
     revision = memory.get('git_commit_hash')
-    if not isinstance(revision, str) or not re.fullmatch(r'[0-9a-f]{40}', revision):
+    if not isinstance(revision, str) or not revision:
         return False
-    return subprocess.run(['git', 'cat-file', '-e', f'{revision}:kernel.py'],
-                          cwd=workspace, capture_output=True).returncode == 0
+    # The owner validates its own opaque identities; failed reads are not verification.
+    try:
+        return candidate_workspace.read_revision(workspace, revision, ['kernel.py']).files['kernel.py'] is not None
+    except (RuntimeError, ValueError):
+        return False
 
 
-def _record_revision(workspace, path, memory):
-    result = subprocess.run(['git', 'log', '-1', '--format=%H', 'HEAD', '--',
-                             path.relative_to(workspace).as_posix()],
-                            cwd=workspace, capture_output=True, text=True)
-    revision = result.stdout.strip() if result.returncode == 0 else ''
-    if revision:
-        blob = subprocess.run(['git', 'show', f'{revision}:{path.relative_to(workspace).as_posix()}'],
-                              cwd=workspace, capture_output=True)
-        if blob.returncode == 0 and json.loads(blob.stdout) == memory:
-            return revision
+def _record_revision(workspace, path, memory, candidate_workspace):
+    relative = path.relative_to(workspace).as_posix()
+    history = candidate_workspace.revision_history(workspace, changed_path=relative)
+    if not history:
+        return None
+    # Preserve the original latest-modification check; do not search older matches.
+    revision = history[0].revision
+    content = candidate_workspace.read_revision(workspace, revision, [relative]).files[relative]
+    if content is not None and json.loads(content) == memory:
+        return revision
     return None
 
 
@@ -428,6 +431,9 @@ def _warning_records(path):
 
 
 class RetainedWorkflowExport:
+    def __init__(self, candidate_workspace=None):
+        self.candidate_workspace = candidate_workspace
+
     def request_pause(self, workspace):
         workspace = Path(workspace).resolve()
         if not (workspace / RUNTIME / 'public-identity.json').is_file():
@@ -436,11 +442,11 @@ class RetainedWorkflowExport:
 
     def resume_checkpoint(self, workspace, *, campaign_id):
         from .checkpoint import resume
-        return resume(workspace, campaign_id=campaign_id)
+        return resume(workspace, campaign_id=campaign_id, candidate_workspace=self.candidate_workspace)
 
     def generate_checkpoint(self, workspace):
         from .checkpoint import generate
-        return generate(workspace)
+        return generate(workspace, candidate_workspace=self.candidate_workspace)
 
     def validate_checkpoint(self, content, *, workspace, campaign_id):
         from .checkpoint import validate
@@ -478,6 +484,8 @@ class RetainedWorkflowExport:
         workspace = Path(workspace).resolve()
         if not (workspace/RUNTIME).exists() and (workspace/'workflow-export.json').is_file():
             return snapshot_from_document(document(workspace/'workflow-export.json'))
+        if self.candidate_workspace is None:
+            raise TypeError('active Workflow export requires the selected CandidateWorkspace')
         runtime = workspace / RUNTIME
         state = document(runtime / 'state.json') or {}
         active = document(runtime / 'active_episode.json') or {}
@@ -498,9 +506,9 @@ class RetainedWorkflowExport:
         for version, memory, path in sorted(memories):
             attempt = by_version.get(version, {})
             revision = memory.get('git_commit_hash')
-            record_revision = _record_revision(workspace, path, memory)
+            record_revision = _record_revision(workspace, path, memory, self.candidate_workspace)
             # Carry-forward records describe the incumbent, never a rejected source.
-            promoted = version == 0 or attempt.get('accepted') is True or (version == 1 and not attempt and verified_memory(workspace,memory))
+            promoted = version == 0 or attempt.get('accepted') is True or (version == 1 and not attempt and verified_memory(workspace,memory,self.candidate_workspace))
             candidates.append(CandidateFact(version, _integer(attempt.get('episode')),
                 revision if isinstance(revision, str) else None, record_revision, promoted,
                 memory.get('timestamp'), _result(memory, attempt, expected),
@@ -526,15 +534,17 @@ class RetainedWorkflowExport:
         for candidate in candidates:
             if not candidate.revision or not candidate.record_revision:
                 continue
+            source = self.candidate_workspace.read_revision(
+                workspace, candidate.revision, ['kernel.py', 'solution.json']).files
             for filename, role, mime in (('kernel.py','candidate-source','text/x-python'),
                                           ('solution.json','candidate-manifest','application/json')):
-                blob = subprocess.run(['git','show',f'{candidate.revision}:{filename}'],cwd=workspace,capture_output=True)
-                if blob.returncode:
+                content = source[filename]
+                if content is None:
                     if filename == 'kernel.py':
                         raise ValueError('recorded candidate source is missing')
                     continue
                 artifacts.append(_artifact(f'v{candidate.version}_' + filename.replace('.','_'),
-                    f'candidates/v{candidate.version}/{filename}',role,blob.stdout,mime))
+                    f'candidates/v{candidate.version}/{filename}',role,content,mime))
         # Public authored plans and compact profiler evidence are declared by
         # Workflow; consumers do not follow paths embedded in private records.
         from .episode_evidence import selected, read as read_episode_evidence
@@ -618,4 +628,4 @@ class RetainedWorkflowExport:
 
 
 def apply(ctx, config):
-    ctx.provide(WORKFLOW_EXPORT, RetainedWorkflowExport())
+    ctx.provide(WORKFLOW_EXPORT, RetainedWorkflowExport(ctx.candidate))

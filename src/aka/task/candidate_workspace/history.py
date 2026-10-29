@@ -74,6 +74,51 @@ def revision_history(workspace: Path, *, revision=None, paths=(), changed_path=N
     return tuple(facts)
 
 
+def _status_path(encoded):
+    if not encoded.startswith(b'"'):
+        return encoded.decode("utf-8", errors="surrogateescape")
+    if not encoded.endswith(b'"'):
+        raise ValueError("invalid quoted workspace status path")
+    escaped = {ord('a'): 7, ord('b'): 8, ord('t'): 9, ord('n'): 10,
+               ord('v'): 11, ord('f'): 12, ord('r'): 13,
+               ord('"'): ord('"'), ord('\\'): ord('\\')}
+    content = bytearray()
+    position = 1
+    while position < len(encoded) - 1:
+        char = encoded[position]
+        position += 1
+        if char != ord('\\'):
+            content.append(char)
+            continue
+        char = encoded[position]
+        position += 1
+        if char in escaped:
+            content.append(escaped[char])
+        elif ord('0') <= char <= ord('7'):
+            digits = bytes((char,))
+            while len(digits) < 3 and position < len(encoded) - 1 and ord('0') <= encoded[position] <= ord('7'):
+                digits += bytes((encoded[position],))
+                position += 1
+            content.append(int(digits, 8))
+        else:
+            raise ValueError("invalid workspace status path escape")
+    return content.decode("utf-8", errors="surrogateescape")
+
+
+def _rename_paths(encoded):
+    quoted = escaped = False
+    for position, char in enumerate(encoded):
+        if escaped:
+            escaped = False
+        elif quoted and char == ord('\\'):
+            escaped = True
+        elif char == ord('"'):
+            quoted = not quoted
+        elif not quoted and encoded[position:position + 4] == b' -> ':
+            return _status_path(encoded[position + 4:]), _status_path(encoded[:position])
+    raise ValueError("workspace rename status has no path separator")
+
+
 def working_facts(workspace: Path, *, paths=()):
     workspace = Path(workspace).absolute()
     current_revision(workspace)
@@ -81,27 +126,30 @@ def working_facts(workspace: Path, *, paths=()):
         raise ValueError("working facts require an initialized Workspace root")
     paths = validate_paths(paths)
     _selected(workspace, tuple(WorkspaceFile(name, text="") for name in paths))
-    output = _git(workspace, "--no-optional-locks", "status", "--porcelain=v1", "-z",
-                  "--untracked-files=all").stdout.split(b"\0")
+    # One scan supplies both the original human diagnostic and mechanical paths.
+    # Git quotes whitespace/controls (even with quotePath=false), so rename
+    # separators outside C-quoted names remain unambiguous.
+    output = _git(workspace, "--no-optional-locks", "status", "--short",
+                  "--untracked-files=all").stdout
     changed = []
-    position = 0
-    while position < len(output):
-        row = output[position]
-        position += 1
-        if not row:
+    for raw in output.splitlines():
+        row = re.sub(rb"\x1b\[[0-9;]*m", b"", raw)
+        if row.startswith(b"##"):
             continue
         status = row[:2]
-        name = row[3:].decode("utf-8", errors="surrogateescape")
-        target = workspace / name
-        if status != b"??" or (target.is_file() and not target.is_symlink()):
-            changed.append(name)
         if b"R" in status or b"C" in status:
-            changed.append(output[position].decode("utf-8", errors="surrogateescape"))
-            position += 1
+            name, original = _rename_paths(row[3:])
+            changed.extend((name, original))
+        else:
+            name = _status_path(row[3:])
+            target = workspace / name
+            if status != b"??" or (target.is_file() and not target.is_symlink()):
+                changed.append(name)
     identities = {}
     for name in paths:
         if not (workspace / name).exists():
             identities[name] = None
         else:
             identities[name] = _git(workspace, "hash-object", "--", name).stdout.decode().strip()
-    return WorkingFacts(tuple(dict.fromkeys(changed)), identities)
+    return WorkingFacts(tuple(dict.fromkeys(changed)), identities,
+                        output.decode("utf-8", errors="surrogateescape").strip())

@@ -6,7 +6,7 @@ from typing import Any
 
 from aka.core._filesystem import durable_write_json
 
-from aka.task.candidate_workspace.excludes import (
+from .runtime_paths import (
     RUNTIME_DIR,
     VERIFY_DIR,
     LIVE_MEMORY_FILE,
@@ -18,18 +18,17 @@ from .telemetry import render_episode_brief
 
 
 class CampaignStore:
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, candidate_workspace):
         self.workspace = workspace.resolve()
         self.root = self.workspace / RUNTIME_DIR
         self.root.mkdir(parents=True, exist_ok=True)
-        self.ensure_excluded(self.workspace)
+        self.ensure_excluded(self.workspace, candidate_workspace)
 
     @staticmethod
-    def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
-
-        from aka.task.candidate_workspace.excludes import ensure_excluded
-
-        ensure_excluded(workspace, wiki_trace_only=wiki_trace_only)
+    def ensure_excluded(workspace: Path, candidate_workspace, *, wiki_trace_only: bool = False) -> None:
+        from .runtime_paths import early_exclusions, full_exclusions
+        candidate_workspace.exclude_runtime_paths(
+            workspace, early_exclusions() if wiki_trace_only else full_exclusions())
 
     @property
     def state_path(self) -> Path:

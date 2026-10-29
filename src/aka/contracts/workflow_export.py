@@ -167,11 +167,10 @@ class EpisodeCandidateFact:
     evaluations: tuple[EvaluationFact, ...] = ()
 
     def __post_init__(self):
-        import re
         _frozen_fields(self, 'artifacts')
         object.__setattr__(self, 'evaluations', tuple(self.evaluations))
         for revision in (self.head_revision, self.revision, self.base_revision):
-            if revision is not None and (not isinstance(revision, str) or not re.fullmatch('[0-9a-f]{40}', revision)):
+            if revision is not None and (not isinstance(revision, str) or not revision):
                 raise ValueError('invalid episode candidate revision')
         if self.revision is not None and self.revision != self.head_revision:
             raise ValueError('episode source revision differs from captured HEAD')
@@ -492,11 +491,10 @@ def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
                     raise ValueError('invalid episode mode or violation')
             final=row.get('final_candidate')
             if final is not None:
-                import re
                 final=dict(final)
                 for key in ('head_revision','revision','base_revision'):
                     revision=final[key]
-                    if revision is not None and (not isinstance(revision,str) or not re.fullmatch('[0-9a-f]{40}',revision)):
+                    if revision is not None and (not isinstance(revision,str) or not revision):
                         raise ValueError('invalid episode candidate revision')
                 if final['revision'] is not None and final['revision']!=final['head_revision']:
                     raise ValueError('episode source revision differs from captured HEAD')

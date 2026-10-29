@@ -7,8 +7,6 @@ import base64
 import hashlib
 import json
 from pathlib import Path
-import re
-import subprocess
 
 from aka.contracts.workflow_export import EpisodeCandidateFact, EvaluationFact, ResultFact
 
@@ -52,30 +50,28 @@ def _evaluation_fact(measurement):
 
 
 def capture(workspace, episode_dir, *, episode, version, base_revision, expected_case_ids,
-            episode_evidence_reader, episode_evidence_interpreter):
+            candidate_workspace, episode_evidence_reader, episode_evidence_interpreter):
     from .episode_evidence import capture as capture_evidence
     capture_evidence(workspace, episode_dir, episode=episode)
     workspace, episode_dir = Path(workspace), Path(episode_dir)
+    names = ('kernel.py', 'solution.json')
     files = {}
     unavailable = None
-    for name in ('kernel.py', 'solution.json'):
+    for name in names:
         path = workspace/name
         if path.is_symlink() or (path.exists() and not path.is_file()):
             unavailable = 'candidate source is not a regular workspace file'
             break
-        if path.is_file():
-            files[name] = path.read_bytes()
+    if unavailable is None:
+        working = candidate_workspace.read_working(workspace, names).files
+        files = {name: content for name, content in working.items() if content is not None}
     if 'kernel.py' not in files:
         unavailable = unavailable or 'candidate kernel is missing'
-    head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=workspace, text=True).strip()
+    head = candidate_workspace.current_revision(workspace)
+    committed = candidate_workspace.read_revision(workspace, head, list(names)).files
     revision = head
-    for name, content in files.items():
-        committed = subprocess.run(['git', 'show', f'{head}:{name}'], cwd=workspace, capture_output=True)
-        if committed.returncode or committed.stdout != content:
-            revision = None
-    # A deleted manifest also means the final source differs from HEAD.
-    if 'solution.json' not in files and subprocess.run(
-            ['git','cat-file','-e',f'{head}:solution.json'],cwd=workspace,capture_output=True).returncode == 0:
+    if (any(committed[name] != content for name, content in files.items())
+            or ('solution.json' not in files and committed['solution.json'] is not None)):
         revision = None
     digests = {name:_digest(content) for name,content in files.items()}
     evaluations = []
@@ -93,12 +89,14 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
                 evaluations.append(_evaluation_document(_evaluation_fact(measurement)))
     # The terminal coding session has stopped. Refuse a concurrent source change.
     if not unavailable:
-        for name, content in files.items():
+        for name in names:
             path = workspace/name
-            if path.is_symlink() or not path.is_file() or path.read_bytes()!=content:
+            if path.is_symlink() or (path.exists() and not path.is_file()):
                 raise ValueError('episode source changed during output capture')
-        if ('solution.json' not in files and (workspace/'solution.json').exists()) or subprocess.check_output(
-                ['git','rev-parse','HEAD'],cwd=workspace,text=True).strip()!=head:
+        observed = candidate_workspace.read_working(workspace, names).files
+        if any(observed[name] != files.get(name) for name in names):
+            raise ValueError('episode source changed during output capture')
+        if candidate_workspace.current_revision(workspace) != head:
             raise ValueError('episode source identity changed during output capture')
     value = {'schema':1, 'episode':episode, 'version':version, 'base_revision':base_revision,
         'head_revision':head, 'revision':revision, 'unavailable':unavailable,
@@ -141,7 +139,7 @@ def _read(episode_dir, *, episode, version, expected_case_ids, attempt):
             raise ValueError('unavailable episode output contains candidate evidence')
         return None, ()
     for key in ('head_revision','revision','base_revision'):
-        if value[key] is not None and (not isinstance(value[key],str) or not re.fullmatch('[0-9a-f]{40}',value[key])):
+        if value[key] is not None and (not isinstance(value[key],str) or not value[key]):
             raise ValueError('invalid captured episode revision')
     if value['revision'] is not None and value['revision'] != value['head_revision']:
         raise ValueError('captured source revision differs from final HEAD')

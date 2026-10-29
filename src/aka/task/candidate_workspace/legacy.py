@@ -11,7 +11,6 @@ from aka.task.io import atomic_write_json
 from aka.contracts.content import WorkspaceFile
 from .content import selected_file_bytes
 from .policy import CANDIDATE_PATHS, TIMELINE_PROBE_MARKERS
-from .excludes import ensure_excluded
 
 @dataclass(frozen=True)
 class EpisodeWorktree:
@@ -54,7 +53,6 @@ class EpisodeWorktree:
             capture_output=True,
             text=True,
         )
-        ensure_excluded(self.path)
         from .context import restore_context_projection, uses_context
         if uses_context(self.path):
             restore_context_projection(self.path, self.base_commit)

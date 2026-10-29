@@ -657,7 +657,7 @@ class Campaign:
         from .environment import install_campaign_resources
 
         self._assert_generalized_inputs_are_private()
-        CampaignStore.ensure_excluded(self.workspace, wiki_trace_only=True)
+        CampaignStore.ensure_excluded(self.workspace, self.candidate_workspace, wiki_trace_only=True)
         install_campaign_resources(self, self.workspace)
         install_workspace_policy(
             self.workspace,
@@ -1082,7 +1082,7 @@ class Campaign:
             from aka.legacy.workflow.journal import sync_live_memory
             from aka.legacy.workflow.store import CampaignStore
 
-            store = CampaignStore(self.workspace)
+            store = CampaignStore(self.workspace, self.candidate_workspace)
             created_at = datetime.now(timezone.utc).isoformat()
             try:
                 existing = json.loads(
@@ -1305,6 +1305,7 @@ class Campaign:
         order = self._framework_baseline_supervisor_order()
         progress = capture_framework_baseline_exit(
             self.workspace,
+            candidate_workspace=self.candidate_workspace,
             agent_cli=self.agent_cli,
             exit_status=exit_status,
             timed_out=timed_out,
@@ -1932,6 +1933,7 @@ class Campaign:
         except EnvironmentUnavailable:
             capture_framework_baseline_exit(
                 self.workspace,
+                candidate_workspace=self.candidate_workspace,
                 agent_cli=self.agent_cli,
                 exit_status=75,
                 timed_out=False,
@@ -1948,6 +1950,7 @@ class Campaign:
             # immediately launch another Agent after Ctrl-C.
             capture_framework_baseline_exit(
                 self.workspace,
+                candidate_workspace=self.candidate_workspace,
                 agent_cli=self.agent_cli,
                 exit_status=130,
                 timed_out=False,
