@@ -114,6 +114,13 @@ def prepared_input_workspace(command):
     untrusted argv never runs on the host here. Scoped executors must implement
     actual isolation and cannot use this compatibility view as that guarantee.
     """
+    if command.prepared_inputs is not None:
+        from .prepared_inputs import validate_prepared_inputs
+        validate_prepared_inputs(command)
+        if command.input_files:
+            validate_input_files(command)
+        yield command
+        return
     if not command.input_files:
         yield command
         return

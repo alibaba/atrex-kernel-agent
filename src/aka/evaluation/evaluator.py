@@ -24,11 +24,12 @@ from aka.contracts.evaluation import (
     VerificationRun,
     MeasurementArtifact,
     StepEvaluation,
+    EpisodeEvaluationContent,
 )
 from aka.contracts.execution import CommandSpec, JobResult
 from aka.contracts.workspace import CandidateWorkspace
 from aka.contracts.problem import EvaluationInput
-from aka.task.candidate_workspace.excludes import VERIFY_DIR
+from .runtime_paths import VERIFY_DIR
 from .abba import (
     _merge_batch_payloads,
     _payload_from_stdout,
@@ -78,18 +79,42 @@ class LegacyEvaluator:
         self.candidate_workspace = candidate_workspace
         self.abba_driver = abba_driver or Path(remote_abba.__file__)
 
+    def _command_evaluator(self):
+        from .gateway_command import GatewayCommandEvaluator
+        return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader,
+            execution_capabilities=self.configuration.execution_capabilities,
+            evaluation_input=self.evaluation_input, shape_batch_size=self.configuration.shape_batch_size)
+
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         prepared = self._prepare(request)
-        if request.mode == "numerical":
-            return prepared
         if request.mode in {"v0", "framework"} and self.configuration.hardware:
-            from .gateway_command import GatewayCommandEvaluator
             command = replace(prepared.steps[0], hardware=self.configuration.hardware,
-                              environment={**self.configuration.environment,
-                                  "ATREX_EVAL_SHAPE_BATCH_SIZE": str(self.configuration.shape_batch_size)})
-            gateway = GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).prepare(command)
+                              environment=self.configuration.environment)
+            gateway = self._command_evaluator().prepare(command)
             prepared = replace(prepared, steps=gateway.steps, max_parallelism=gateway.max_parallelism,
                                context=replace(prepared.context, gateway=gateway), fallback_steps=gateway.fallback_steps)
+        if self.evaluation_input is not None and (request.mode in {"abba", "numerical"} or
+                request.mode in {"v0", "framework"} and not self.configuration.hardware):
+            from .private_inputs import selected_content, portable_inputs
+            # Numerical preparation already freezes its trusted inputs exactly
+            # once. Only the declared runtime is added to its execution view.
+            content = {} if request.mode == "numerical" else selected_content(self.evaluation_input)
+            from .gateway_request import _candidate_languages, _json_object
+            requirements = ()
+            item = self.evaluation_input.worker_requirements
+            if item is not None:
+                text = item.source.read_text(encoding="utf-8") if item.source is not None else item.text
+                kernel = request.workspace / "kernel.py"
+                source = kernel.read_text(encoding="utf-8") if kernel.is_file() else ""
+                from aka.execution.environment_query import select_requirements
+                requirements = tuple(select_requirements(text, _candidate_languages(
+                    _json_object(request.workspace / "solution.json") or {}, candidate_sources=(source,))))
+            prepared = replace(prepared, steps=tuple(replace(step, requirements=requirements) for step in prepared.steps))
+            prepared = replace(prepared, steps=tuple(portable_inputs(step, self.evaluation_input, content,
+                evaluator=True, kind="run", capabilities=self.configuration.execution_capabilities,
+                inject_private=request.mode != "numerical") for step in prepared.steps))
+        if request.mode == "numerical":
+            return prepared
         if request.mode == "abba":
             config = self.configuration
             prepared = replace(prepared, retry_keys=tuple(
@@ -213,8 +238,7 @@ class LegacyEvaluator:
         gateway = getattr(prepared.context, "gateway", None)
         if gateway is None:
             return ()
-        from .gateway_command import GatewayCommandEvaluator
-        return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).fallback(gateway, results)
+        return self._command_evaluator().fallback(gateway, results)
 
     def observe_step(
         self, prepared: PreparedEvaluation, index: int, result: JobResult
@@ -222,8 +246,7 @@ class LegacyEvaluator:
         """Return completed ABBA content for immediate Experiment persistence."""
         plan = prepared.context
         if getattr(plan, "gateway", None) is not None:
-            from .gateway_command import GatewayCommandEvaluator
-            return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).observe_step(plan.gateway, index, result)
+            return self._command_evaluator().observe_step(plan.gateway, index, result)
         assessment = self.diagnose_step(prepared, index, result)
         if plan.request.mode in {"v0", "framework"}:
             from .baseline import BaselinePreparation
@@ -235,8 +258,8 @@ class LegacyEvaluator:
             raise failure
         if plan.request.mode == "abba" and result.returncode == 0:
             return StepEvaluation((self._artifact(f"result-{index:04d}.json",
-                _payload_from_stdout(self._dev_stdout(plan.request, result.stdout)), "measurement_batch"),), assessment)
-        return StepEvaluation(assessment=assessment)
+                _payload_from_stdout(self._dev_stdout(plan.request, result.stdout)), "measurement_batch"),), assessment, workspace_files=result.files)
+        return StepEvaluation(assessment=assessment, workspace_files=result.files)
 
     def diagnose_step(self, prepared, index, result):
         """Explain unavailable or partial facts before a host raises on transport."""
@@ -247,8 +270,7 @@ class LegacyEvaluator:
             return assess_numerical(prepared.context, prepared.context.step_cases[index], result)
         gateway = getattr(prepared.context, "gateway", None)
         if gateway is not None:
-            from .gateway_command import GatewayCommandEvaluator
-            return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).diagnose_step(gateway, index, result)
+            return self._command_evaluator().diagnose_step(gateway, index, result)
         from .measurement import assess_payload
         identity = prepared.measurement_identities[index]
         payload = None
@@ -279,8 +301,7 @@ class LegacyEvaluator:
             return self._fast_result(request)
         if request.mode in {"v0", "framework"}:
             if getattr(plan, "gateway", None) is not None:
-                from .gateway_command import GatewayCommandEvaluator
-                result = GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader).interpret(plan.gateway, results)
+                result = self._command_evaluator().interpret(plan.gateway, results).result
             else:
                 from .gateway_measurement import prepare_dev_output
                 result = replace(results[0], stdout=prepare_dev_output(request.workspace, results[0].stdout,
@@ -289,7 +310,10 @@ class LegacyEvaluator:
             if getattr(plan, "gateway", None) is not None:
                 BaselinePreparation.print_v0_evaluator_output(result)
             verification = self._baseline_result(request, result)
-            return replace(verification, measurements=tuple(assessment for index, raw in enumerate(results)
+            return replace(verification, episode_evaluations=tuple(
+                EpisodeEvaluationContent("run", json.dumps(run.result).encode())
+                for run in verification.runs if run.result is not None),
+                measurements=tuple(assessment for index, raw in enumerate(results)
                 if (assessment := self.diagnose_step(prepared, index, raw)) is not None))
         payloads = []
         for index, result in enumerate(results):

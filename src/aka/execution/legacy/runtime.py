@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import subprocess
 
-from aka.contracts.execution import Cancellation, JobResult, ExecutionFile, OutputOptions, ProfileOptions
+from aka.contracts.execution import Cancellation, JobResult, ExecutionFile, OutputOptions, ProfileOptions, PreparedExecutionInputs
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,7 @@ class SandboxRequest:
     input_files: tuple[ExecutionFile, ...] = ()
     output_options: OutputOptions | None = None
     profile_options: ProfileOptions | None = None
+    prepared_inputs: PreparedExecutionInputs | None = None
 
 
 @dataclass(frozen=True)

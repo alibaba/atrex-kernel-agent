@@ -3,19 +3,41 @@ from dataclasses import replace
 import json
 
 from aka.contracts.execution import UnsupportedExecution
-from aka.execution.gateway import sandbox as transport
+from aka.execution.command_syntax import requested_operation
 from .command_inputs import legacy_command_environment, validate_command, workload_environment
 
 
-def prepare_command(command, *, environment_items=(), shape_batch_size):
+def register_measurement_options(parser):
+    """Register measurement semantics; Execution retains its physical CLI options."""
+    parser.add_argument("--shape-batch-size", type=int, default=None)
+    parser.add_argument("--profile-level", choices=("survey", "sol", "deep"), default="sol")
+    parser.add_argument("--profiler", choices=("ncu", "nsys", "rocprofv3", "acu"), default=None)
+    parser.add_argument("--profile-counter", action="append", default=[], metavar="METRIC")
+    parser.add_argument("--kernel-regex", default=None)
+    parser.add_argument("--top-kernels", type=int, default=None)
+
+
+def prepare_command(command, *, environment_items=(), shape_batch_size=None,
+                    profile_level="sol", profiler=None, profile_counter=(), kernel_regex=None, top_kernels=None):
     """Convert explicit CLI options into the existing public command contract."""
-    kind = transport._requested_gateway_kind(command.operation, list(command.command))
+    kind = requested_operation(command.operation, list(command.command))
     if command.profile_options is not None and kind != "profile":
         raise UnsupportedExecution("profile options require a profile command")
+    from aka.contracts.execution import ProfileOptions
+    options = command.profile_options
+    selected = ProfileOptions(level=profile_level, profiler=profiler, counters=tuple(profile_counter),
+                              kernel_regex=kernel_regex, top_kernels=top_kernels)
+    if kind == "profile" and options is None:
+        options = selected
+    elif kind != "profile" and (profile_level != "sol" or profiler is not None or profile_counter or kernel_regex is not None or top_kernels is not None):
+        raise UnsupportedExecution("profile options require a profile command")
     environment = legacy_command_environment(command.environment, environment_items)
-    environment["ATREX_EVAL_SHAPE_BATCH_SIZE"] = str(shape_batch_size)
-    command = replace(command, environment=environment,
-        operation=kind if command.profile_options is not None else command.operation)
+    if shape_batch_size is not None:
+        if type(shape_batch_size) is not int or shape_batch_size < 1:
+            raise ValueError("shape batch size must be positive")
+        environment["ATREX_EVAL_SHAPE_BATCH_SIZE"] = str(shape_batch_size)
+    command = replace(command, environment=environment, profile_options=options,
+        operation=kind if options is not None else command.operation)
     workload_environment(command, environment_items)
     validate_command(command)
     return command

@@ -26,4 +26,11 @@ def handoff_identity(command):
              "sha256": hashlib.sha256(item.content).hexdigest()}
             for item in command.input_files
         ]
+    if command.prepared_inputs is not None:
+        result["prepared_inputs"] = {
+            name: [{"path": item.path, "mode": item.mode, "size_bytes": len(item.content),
+                    "sha256": hashlib.sha256(item.content).hexdigest()} for item in getattr(command.prepared_inputs, name)]
+            for name in ("files", "runtime_files")
+        }
+        result["prepared_inputs"]["private_paths"] = list(command.prepared_inputs.private_paths)
     return result

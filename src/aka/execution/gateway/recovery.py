@@ -58,36 +58,7 @@ DEV_DELAYS = ()
 def _patch_dev_command_script(command_path: Path, workspace: Path | None) -> None:
     """Map the same Task requirements to dev's raw command transport."""
     import os, shlex
-    requirements = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE")
-    if requirements:
-        from .sandbox import (
-            _candidate_languages,
-            _json_object,
-            _runtime_requirements,
-        )
-
-        solution = (
-            _json_object(workspace / "solution.json") or {}
-            if workspace is not None
-            else {}
-        )
-        candidate_sources = (
-            tuple(
-                path.read_text(encoding="utf-8")
-                for path in (workspace / "kernel.py", workspace / "test_kernel.py")
-                if path.is_file()
-            )
-            if workspace is not None
-            else ()
-        )
-        dependencies = _runtime_requirements(
-            requirements,
-            candidate_languages=_candidate_languages(
-                solution, candidate_sources=candidate_sources
-            ),
-        )
-    else:
-        dependencies = json.loads(os.environ.get("AKA_GATEWAY_DEV_DEPENDENCIES", "[]"))
+    dependencies = json.loads(os.environ.get("AKA_GATEWAY_DEV_DEPENDENCIES", "[]"))
     if not dependencies:
         return
     source = command_path.read_text(encoding="utf-8")

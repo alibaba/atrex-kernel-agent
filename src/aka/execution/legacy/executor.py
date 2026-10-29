@@ -20,7 +20,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
     sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
         operations=frozenset(("auto", "run", "profile", "dev", "preflight", "check", "disassemble")), cancellation=True, prepared_requests=True,
-        input_files=True, output_options=True,
+        input_files=True, output_options=True, prepared_inputs=True,
     )
     resource_identity = ResourceIdentity("legacy")
 
@@ -28,6 +28,8 @@ class LegacyExecutor(GatewayRecoveryMixin):
         self.request = request
         self.hooks = hooks
         self.configuration = dict(configuration or {})
+        if request is not None and request.ssh:
+            self.capabilities = replace(type(self).capabilities, prepared_requests=False, prepared_inputs=False)
         recovery_policy(self.configuration)
 
     def bind(self, context):
@@ -86,6 +88,11 @@ class LegacyExecutor(GatewayRecoveryMixin):
             preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus,
             on_observation=observed if command.on_observation is not None else None,
             input_files=command.input_files, output_options=command.output_options, profile_options=command.profile_options)
+        request = replace(request, prepared_inputs=command.prepared_inputs)
+        if command.requirements:
+            import json
+            request = replace(request, environment={**request.environment,
+                "AKA_GATEWAY_DEV_DEPENDENCIES": json.dumps(command.requirements)})
         if not request.ssh:
             transport = self._job_transport()
             environment = dict(request.environment)
@@ -173,12 +180,14 @@ class LegacyExecutor(GatewayRecoveryMixin):
             grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
             effective_timeout = timeout + grace + 240
         from aka.execution.outcomes import run_owned
+        from aka.execution.prepared_inputs import payload as prepared_payload
         from aka.execution.gateway.requests import effective_budget
         try:
             result = run_owned(cmd, environment=environment, workspace=workspace,
                 timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
                 cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment,
-                input_payload=request.submission, on_observation=request.on_observation)
+                input_payload=request.submission, on_observation=request.on_observation,
+                prepared_input_payload=prepared_payload(request.prepared_inputs, request.input_files))
         except BaseException as error:
             if isinstance(getattr(error, "execution_outcome", None), JobResult):
                 error.execution_outcome = replace(error.execution_outcome,

@@ -1,6 +1,5 @@
 """Build Legacy measurement requests from explicit, read-only CLI inputs."""
 import json
-import os
 import re
 from pathlib import Path
 from typing import Any, Iterable
@@ -8,15 +7,7 @@ from .metadata import distributed_evaluation_world_size as _distributed_evaluati
 from aka.task.problem.inputs import validate_performance_baseline
 FP4_MAX_REL_L2 = 0.2
 
-def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
-    """Read a simple ``--flag value``/``--flag=value`` option from command argv."""
-    command = parts
-    for index, token in enumerate(command):
-        if token == name:
-            return command[index + 1] if index + 1 < len(command) else default
-        if token.startswith(name + "="):
-            return token.split("=", 1)[1]
-    return default
+from aka.execution.command_syntax import option_value as _option_value
 
 def _option_values(parts: list[str], name: str) -> list[str]:
     """Read every repeated ``--flag value``/``--flag=value`` option."""
@@ -109,6 +100,8 @@ def prepare_request(
     kind: str,
     *,
     reference_dir: Path,
+    reference_content=None,
+    runtime_version: str = "",
     requirements: Iterable[str] = (),
     profiler: str | None = None,
     profile_level: str = "sol",
@@ -117,9 +110,17 @@ def prepare_request(
     top_kernels: int | None = None,
 ) -> dict[str, Any]:
     """Build the public run/profile request without importing the agate package."""
-    shapes = _json_object(
-        reference_dir / "shapes.json", required=True
-    )
+    content = reference_content or {}
+    def reference_json(name, required=False):
+        if name not in content:
+            return _json_object(reference_dir / name, required=required)
+        value = json.loads(content[name])
+        if not isinstance(value, dict):
+            raise ValueError(name + " must contain a JSON object")
+        return value
+    def reference_text(name):
+        return content[name].decode("utf-8") if name in content else (workspace / name).read_text(encoding="utf-8")
+    shapes = reference_json("shapes.json", required=True)
     assert shapes is not None
     requested_shape_ids = _option_values(command, "--shape-id")
     if requested_shape_ids:
@@ -152,15 +153,15 @@ def prepare_request(
     languages = _candidate_languages(solution, candidate_sources=(candidate,))
     reference: dict[str, Any] = {
         "operator": workspace.name,
-        "reference_py": (workspace / "reference.py").read_text(encoding="utf-8"),
-        "input_py": (workspace / "input.py").read_text(encoding="utf-8"),
+        "reference_py": reference_text("reference.py"),
+        "input_py": reference_text("input.py"),
         "shapes": shapes,
     }
     for filename, field in (
         ("metadata.json", "metadata"),
         ("roofline.json", "roofline"),
     ):
-        value = _json_object(reference_dir / filename)
+        value = reference_json(filename)
         if value is not None:
             if requested_shape_ids and isinstance(value.get("shapes"), dict):
                 value = dict(value)
@@ -200,7 +201,6 @@ def prepare_request(
         else None,
         reference.get("operator"),
     )
-    runtime_version = os.environ.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip()
     if runtime_version:
         request["atrex_bench_version"] = runtime_version
     if requirements:

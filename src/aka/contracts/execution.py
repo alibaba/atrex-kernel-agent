@@ -75,6 +75,7 @@ class CommandSpec:
     profile_options: ProfileOptions | None = None
     input_files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
     output_options: OutputOptions | None = None
+    prepared_inputs: PreparedExecutionInputs | None = field(default=None, repr=False)
 
     def __post_init__(self):
         object.__setattr__(self, "command", tuple(self.command))
@@ -93,6 +94,13 @@ class CommandSpec:
         paths = [Path(item.path).as_posix() for item in self.input_files]
         if len(paths) != len(set(paths)):
             raise ValueError("execution input paths must be unique")
+        if self.prepared_inputs is not None:
+            if not isinstance(self.prepared_inputs, PreparedExecutionInputs):
+                raise TypeError("prepared inputs require PreparedExecutionInputs")
+            prepared_paths = {Path(item.path).as_posix() for item in (
+                *self.prepared_inputs.files, *self.prepared_inputs.runtime_files)}
+            if prepared_paths.intersection(paths):
+                raise ValueError("prepared and explicit input paths must be distinct")
 
 
 @dataclass(frozen=True)
@@ -103,12 +111,15 @@ class BackendCapabilities:
     filesystem_isolation: bool = False
     input_files: bool = False
     output_options: bool = False
+    prepared_inputs: bool = False
 
     def require(self, command: CommandSpec) -> None:
         if command.filesystem_access is not None and not self.filesystem_isolation:
             raise UnsupportedExecution("executor cannot enforce the requested file and environment scope")
         if command.input_files and not self.input_files:
             raise UnsupportedExecution("executor does not support explicit input files")
+        if command.prepared_inputs is not None and not self.prepared_inputs:
+            raise UnsupportedExecution("executor does not support closed prepared inputs")
         if command.output_options is not None and not self.output_options:
             raise UnsupportedExecution("executor does not support explicit output collection")
         if command.profile_options is not None and command.operation != "profile":
@@ -254,6 +265,35 @@ class ExecutionFile:
             raise TypeError("execution file content must be immutable bytes")
         if type(self.mode) is not int or not 0 <= self.mode <= 0o777:
             raise ValueError("invalid execution file permissions")
+
+
+@dataclass(frozen=True)
+class PreparedExecutionInputs:
+    """Host-prepared execution content; no roots, mounts or additional authority.
+
+    Private members enter only the trusted temporary execution view and cannot
+    be synchronized back as command outputs. Runtime grouping retains the
+    existing separate transport bundle.
+    """
+    files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
+    runtime_files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
+    private_paths: tuple[str, ...] = ()
+
+    def __post_init__(self):
+        for name in ("files", "runtime_files"):
+            values = tuple(getattr(self, name))
+            if any(not isinstance(item, ExecutionFile) for item in values):
+                raise TypeError("prepared content requires immutable ExecutionFile values")
+            object.__setattr__(self, name, values)
+        paths = [Path(item.path).as_posix() for item in (*self.files, *self.runtime_files)]
+        if len(paths) != len(set(paths)):
+            raise ValueError("prepared content paths must be unique across groups")
+        private = tuple(self.private_paths)
+        if any(not isinstance(path, str) or path not in paths for path in private):
+            raise ValueError("private paths must name prepared content members")
+        if len(private) != len(set(private)):
+            raise ValueError("private prepared paths must be unique")
+        object.__setattr__(self, "private_paths", private)
 
 
 @dataclass(frozen=True)

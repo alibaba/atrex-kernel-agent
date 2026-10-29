@@ -18,7 +18,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
         if "requirements_file" in self.configuration:
             raise ValueError("worker requirements belong to Task, not gateway provider configuration")
     capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile", "check", "disassemble")), True, True,
-                                       input_files=True, output_options=True)
+                                       input_files=True, output_options=True, prepared_inputs=True)
     resource_identity = ResourceIdentity("gateway")
 
     def bind(self, context):
@@ -112,9 +112,13 @@ class GatewayExecutor(GatewayRecoveryMixin):
                 value = self.configuration[key]
                 import json
                 environment[env] = json.dumps(value) if isinstance(value, list) else str(value)
+        if command.requirements:
+            import json
+            environment["AKA_GATEWAY_DEV_DEPENDENCIES"] = json.dumps(command.requirements)
 
         grace = queue_wait_grace(environment)
         from aka.execution.outcomes import run_owned
+        from aka.execution.prepared_inputs import payload as prepared_payload
         def decorate(result):
             return replace(result, environment_snapshot=support.environment,
                 environment_identity=support.environment.identity, environment_support=support,
@@ -127,6 +131,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
             result = run_owned(argv, environment=environment, workspace=command.workspace,
                 timeout=command.timeout + grace + 240, resource=self.resource_identity,
                 hardware=command.hardware, cancel_event=command.cancel_event, input_payload=command.submission,
+                prepared_input_payload=prepared_payload(command.prepared_inputs, command.input_files),
                 on_observation=observed if command.on_observation is not None else None)
         except BaseException as error:
             if isinstance(getattr(error, "execution_outcome", None), JobResult):

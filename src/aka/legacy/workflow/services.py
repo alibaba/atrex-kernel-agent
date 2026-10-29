@@ -10,6 +10,7 @@ from aka.evaluation.baseline import (
 )
 from aka.evaluation import records
 from aka.contracts.execution import ExecutionContext, validate_executor
+from aka.contracts.experiment import EpisodeEvidenceScope
 from aka.execution.binding import SandboxExecutor
 
 
@@ -21,15 +22,15 @@ class BorrowedExperiment:
         self.formal = formal
 
     def run(self, request):
-        with self.services.experiment(formal=self.formal) as experiment:
+        with self.services.experiment(formal=self.formal, workspace=request.workspace) as experiment:
             return experiment.run(request)
 
     def run_command(self, command):
-        with self.services.experiment(formal=self.formal) as experiment:
+        with self.services.experiment(formal=self.formal, workspace=command.workspace) as experiment:
             return experiment.run_command(command)
 
     def run_recorded(self, request, *, request_id):
-        with self.services.experiment(formal=self.formal) as experiment:
+        with self.services.experiment(formal=self.formal, workspace=request.workspace) as experiment:
             self._recorded(experiment, "run_recorded")
             return experiment.run_recorded(request, request_id=request_id)
 
@@ -39,7 +40,7 @@ class BorrowedExperiment:
             raise TypeError("selected Experiment does not implement " + method)
 
     def resume_recorded(self, request, *, request_id, recovery_timeout=None, max_remeasurements=0):
-        with self.services.experiment(formal=self.formal) as experiment:
+        with self.services.experiment(formal=self.formal, workspace=request.workspace) as experiment:
             self._recorded(experiment, "resume_recorded")
             return experiment.resume_recorded(request, request_id=request_id,
                 recovery_timeout=recovery_timeout, max_remeasurements=max_remeasurements)
@@ -138,7 +139,7 @@ class WorkflowServices:
     def measurement_reader(self):
         return self.canonical_measurement_reader
 
-    def create_evaluator(self):
+    def create_evaluator(self, *, execution_capabilities=None):
         s = self.settings
         evaluator = self.evaluator_factory.create(
             EvaluationConfiguration(
@@ -150,6 +151,7 @@ class WorkflowServices:
                 native=bool(self.campaign.atrex_bench_root),
                 hardware=s.hardware, environment=self._measurement_environment(),
                 measurement_reader=self.measurement_reader(),
+                execution_capabilities=execution_capabilities,
             ),
             candidate_workspace=self.campaign.candidate_workspace,
             evaluation_input=self.evaluation_input(),
@@ -182,18 +184,30 @@ class WorkflowServices:
         )
 
     @contextmanager
-    def experiment(self, *, formal=False):
+    def experiment(self, *, formal=False, workspace=None):
         if self._closed:
             raise RuntimeError("Workflow services have been closed")
         s = self.settings
         bound = SandboxExecutor(self.executor, ExecutionContext(
             self._measurement_environment(), s.hardware, s.timeout, formal))
-        evaluator = self.create_evaluator()
+        evaluator = self.create_evaluator(execution_capabilities=bound.capabilities)
         with self.experiment_factory.open(workspace=self.campaign.workspace,
-                purpose="formal" if formal else "development", executor=bound, evaluator=evaluator) as experiment:
+                purpose="formal" if formal else "development", executor=bound, evaluator=evaluator,
+                evaluation_input=self.evaluation_input(),
+                episode_evidence=self._episode_evidence(workspace)) as experiment:
             if any(not callable(getattr(experiment, method, None)) for method in ("run", "run_command")):
                 raise TypeError("factory did not return an Experiment")
             yield experiment
+
+    def _episode_evidence(self, workspace):
+        if workspace is None:
+            return None
+        from pathlib import Path
+        from .store import RUNTIME_DIR
+        actual = Path(workspace)
+        if not (actual / RUNTIME_DIR / "journal.json").is_file():
+            return None
+        return EpisodeEvidenceScope(actual, self.campaign.candidate_workspace)
 
     def close(self):
         with self._command_lock:
@@ -205,14 +219,17 @@ class WorkflowServices:
             host.close()
 
     @contextmanager
-    def agent_experiment(self, access):
+    def agent_experiment(self, workspace, access):
         """Borrow the selected services with the current Agent's exact scope."""
         if self._closed:
             raise RuntimeError("Workflow services have been closed")
         bound = SandboxExecutor(self.executor, ExecutionContext(
             {}, self.settings.hardware, self.settings.timeout, False, access))
         with self.experiment_factory.open(workspace=self.campaign.workspace,
-                purpose="development", executor=bound, evaluator=self.create_evaluator()) as experiment:
+                purpose="development", executor=bound,
+                evaluator=self.create_evaluator(execution_capabilities=bound.capabilities),
+                evaluation_input=self.evaluation_input(),
+                episode_evidence=self._episode_evidence(workspace)) as experiment:
             if any(not callable(getattr(experiment, method, None)) for method in ("run", "run_command")):
                 raise TypeError("factory did not return an Experiment")
             yield experiment

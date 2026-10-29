@@ -16,6 +16,8 @@ from .execution import CommandSpec, Executor, JobResult
 from .evaluation import EvaluationFailure, EvaluationRequest, Evaluator, VerificationResult
 from .experiment_identity import ExperimentRef
 from .measurement import MeasurementAssessment, MeasurementIdentity
+from .problem import EvaluationInput
+from .workspace import CandidateWorkspace
 from aka.core.keys import ServiceKey
 
 
@@ -70,6 +72,16 @@ class Experiment(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class EpisodeEvidenceScope:
+    """Explicit host retention intent with a borrowed late-content reader.
+
+    This scope grants no filesystem authority and owns no dependency lifetime.
+    """
+    workspace: Path
+    candidate_workspace: CandidateWorkspace
+
+
 class ExperimentFactory(Protocol):
     """Open one operation in the selected workspace's recording namespace.
 
@@ -80,7 +92,9 @@ class ExperimentFactory(Protocol):
     """
 
     def open(self, *, workspace: Path, purpose: Literal["development", "formal"],
-             executor: Executor, evaluator: Evaluator) -> ContextManager[Experiment]: ...
+             executor: Executor, evaluator: Evaluator,
+             evaluation_input: EvaluationInput | None = None,
+             episode_evidence: EpisodeEvidenceScope | None = None) -> ContextManager[Experiment]: ...
 
 
 class ExperimentExecutionError(RuntimeError):

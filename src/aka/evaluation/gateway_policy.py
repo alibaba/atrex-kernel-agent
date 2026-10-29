@@ -1,21 +1,19 @@
 """Legacy source-contract and measurement route policy."""
 import ast
 from pathlib import Path
-from aka.execution.gateway.sandbox import (
-    _evaluator_input_path, _is_test_kernel_command, _test_kernel_script_index,
-    _is_generalized_workspace, _json_object, _option_value,
-)
+from aka.execution.command_syntax import is_test_kernel_command as _is_test_kernel_command, test_kernel_script_index as _test_kernel_script_index, option_value as _option_value
+from .gateway_request import _json_object
 
 def _typed_workspace_limitation(
-    workspace: Path, command: list[str], kind: str, *, reference_dir=None
+    workspace: Path, command: list[str], kind: str, *, reference_dir=None, reference_content=None, private=False
 ) -> str | None:
     """Explain why the typed run/profile source contract cannot represent a workspace."""
     required = ("kernel.py", "reference.py", "input.py")
-    missing = [name for name in required if not (workspace / name).is_file()]
+    missing = [name for name in required if not (workspace / name).is_file() and name not in (reference_content or {})]
     if missing:
         return "missing " + ", ".join(missing)
     try:
-        if not ((reference_dir or workspace) / "shapes.json").is_file():
+        if "shapes.json" not in (reference_content or {}) and not ((reference_dir or workspace) / "shapes.json").is_file():
             raise ValueError("missing shapes.json")
     except ValueError as exc:
         return str(exc)
@@ -25,7 +23,7 @@ def _typed_workspace_limitation(
         and _test_kernel_script_index(command, typed_launcher=True) is None
     ):
         return "evaluator launcher semantics require the dev route"
-    if kind == "profile" and _is_generalized_workspace(workspace):
+    if kind == "profile" and private:
         return "generalized tasks inject one private real shape through the dev profile route"
     if (workspace / "workload.jsonl").is_file():
         return (

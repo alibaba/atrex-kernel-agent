@@ -3,44 +3,29 @@ import hashlib
 import json
 import os
 from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
-from .file_records import _atomic
+from aka.contracts.evaluation import EpisodeEvaluationContent
+from aka.contracts.experiment import EpisodeEvidenceScope
 EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 
-def record_episode_evaluation(
-    workspace: Path,
-    result: dict[str, Any],
-    *,
-    gateway_kind: str,
-    job_id: object = None,
-) -> None:
-    """Persist exact optimizer-facing results for terminal memory construction.
-
-    Long-horizon workers use ``--no-memory`` because canonical memory belongs to the
-    supervisor.  Keep their complete evaluator results in excluded episode runtime
-    state so a pivot or interruption can still record this round's real per-shape
-    performance without parsing model-authored journal prose.
-    """
-    runtime = workspace / ".atrex_long_horizon"
-    if not (runtime / "journal.json").is_file():
+def record_episode_evaluation(scope: EpisodeEvidenceScope | None, content: EpisodeEvaluationContent) -> None:
+    """Append host-selected episode evidence after its final outputs are published."""
+    if scope is None:
         return
+    workspace = scope.workspace
     try:
-        kernel_sha256 = hashlib.sha256(
-            (workspace / "kernel.py").read_bytes()
-        ).hexdigest()
+        kernel = scope.candidate_workspace.read_working(workspace, ("kernel.py",)).files["kernel.py"]
+        kernel_sha256 = hashlib.sha256(kernel).hexdigest() if kernel is not None else None
     except OSError:
         kernel_sha256 = None
-    manifest = workspace / "solution.json"
-    solution_sha256 = (
-        hashlib.sha256(manifest.read_bytes()).hexdigest() if manifest.exists() else None
-    )
+    manifest = scope.candidate_workspace.read_working(workspace, ("solution.json",)).files["solution.json"]
+    solution_sha256 = hashlib.sha256(manifest).hexdigest() if manifest is not None else None
+    result = json.loads(content.result_json)
     payload = {
         "schema_version": 3,
         "solution_sha256": solution_sha256,
         "timestamp": datetime.now(timezone.utc).isoformat(),
-        "gateway_kind": gateway_kind,
-        "job_id": str(job_id) if job_id else None,
+        "gateway_kind": content.operation,
+        "job_id": content.job_id,
         "kernel_sha256": kernel_sha256,
         "result": result,
     }
@@ -61,17 +46,3 @@ def record_episode_evaluation(
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
-
-
-def record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str, job_id=None) -> None:
-    """Record the last ordinary RESULT_JSON emitted by a dev evaluator command."""
-    for line in reversed(stdout.splitlines()):
-        if not line.startswith("[test_kernel] RESULT_JSON="):
-            continue
-        try:
-            result = json.loads(line[len("[test_kernel] RESULT_JSON=") :])
-        except json.JSONDecodeError:
-            return
-        if isinstance(result, dict):
-            record_episode_evaluation(workspace, result, gateway_kind=gateway_kind, job_id=job_id)
-        return

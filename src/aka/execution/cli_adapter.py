@@ -3,14 +3,26 @@ import os
 from pathlib import Path
 import sys
 
-from aka.contracts.execution import CommandSpec, ExecutionContext, OutputOptions, ProfileOptions, UnsupportedExecution
+from aka.contracts.execution import CommandSpec, ExecutionContext, OutputOptions, UnsupportedExecution
 from .gateway import sandbox as transport
 from .legacy.runtime import ExecutionHooks, SandboxRequest, transport_arguments
 from .selection import execution_environment, execution_scope, read_execution_patches, selected_execution
+from .command_syntax import command_parts
 
 
-def _parser():
-    parser = transport.build_parser()
+def build_parser(*, register_measurement_options=None):
+    import argparse
+    from .cli_options import register_transport_options
+    parser = argparse.ArgumentParser(
+        description="Run correctness, performance, or profile commands on a remote GPU sandbox.",
+        formatter_class=argparse.RawDescriptionHelpFormatter, epilog=transport.__doc__)
+    register_transport_options(parser)
+    if register_measurement_options is not None:
+        register_measurement_options(parser)
+    else:
+        # Health-only hosts do not select a measurement implementation.
+        parser.set_defaults(shape_batch_size=None, profile_level="sol", profiler=None,
+                            profile_counter=[], kernel_regex=None, top_kernels=None)
     parser.add_argument("--profile", default=None)
     parser.add_argument("--profiles-dir", type=Path)
     parser.add_argument("--patch", type=Path, action="append", default=[])
@@ -66,12 +78,7 @@ def _host_environment(args):
 
 
 def _command(args, environment):
-    command = tuple(transport._command_parts(args.command))
-    profile = None
-    if (args.profile_level != "sol" or args.profiler is not None or args.profile_counter
-            or args.kernel_regex is not None or args.top_kernels is not None):
-        profile = ProfileOptions(args.profile_level, args.profiler, tuple(args.profile_counter),
-                                 args.kernel_regex, args.top_kernels)
+    command = tuple(command_parts(args.command))
     limit = args.max_output_file_bytes
     if limit is None and args.max_output_file_mb != 512:
         limit = args.max_output_file_mb * 1024 * 1024
@@ -79,15 +86,15 @@ def _command(args, environment):
               if args.inline_output is not None or args.include_raw_profile is not None or limit is not None else None)
     inputs = ()
     if args.input:
-        from .command_transport import freeze_cli_inputs
-        inputs, skipped = freeze_cli_inputs(Path(args.workspace).resolve(), args.input,
-                                            args.max_input_file_mb * 1024 * 1024)
+        from . import snapshot_command_inputs
+        inputs, skipped = snapshot_command_inputs(Path(args.workspace).resolve(), tuple(args.input),
+            filesystem_access=None, max_file_bytes=args.max_input_file_mb * 1024 * 1024)
         if skipped:
             print("[sandbox] inputs skipped: " + ", ".join(skipped), file=sys.stderr)
     return CommandSpec(Path(args.workspace).resolve(), command, args.timeout, environment, args.hardware,
         tuple([] if args.no_sync else args.sync or transport.DEFAULT_SYNC_PATHS),
         "preflight" if args.preflight or args.check_health else args.kind,
-        num_gpus=args.num_gpus, profile_options=profile, input_files=inputs, output_options=output)
+        num_gpus=args.num_gpus, input_files=inputs, output_options=output)
 
 
 def _bind(executor, command, args, environment):
@@ -119,10 +126,11 @@ def _bind(executor, command, args, environment):
     return binder(request, ExecutionHooks(spawn_owned_session, raise_if_environment_blocked, queue_wait_grace))
 
 
-def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_only=False):
+def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_only=False,
+            register_measurement_options=None):
     """Keep host binding private; callbacks consume public commands and CLI choices."""
     arguments = list(sys.argv[1:] if argv is None else argv)
-    parser = _parser()
+    parser = build_parser(register_measurement_options=register_measurement_options)
     args = parser.parse_args(arguments)
     if not args.hardware:
         parser.error("--hardware or ATREX_SANDBOX_GPU is required")
@@ -130,14 +138,15 @@ def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_
         parser.error("--no-sync and --sync are mutually exclusive")
     if sum(value is not None for value in (args.ssh, args.url, args.gateway_profile)) > 1:
         parser.error("sandbox endpoints are mutually exclusive")
-    if args.timeout < 1 or args.shape_batch_size < 1 or (args.wall_timeout is not None and args.wall_timeout < 1):
+    if (args.timeout < 1 or args.shape_batch_size is not None and args.shape_batch_size < 1
+            or args.wall_timeout is not None and args.wall_timeout < 1):
         parser.error("command, shape batch and wall budgets must be positive")
     if args.max_input_file_mb < 1 or args.max_output_file_mb < 1 or (args.max_output_file_bytes is not None and args.max_output_file_bytes < 1):
         parser.error("file byte limits must be positive")
     health = args.preflight or args.check_health
     if health_only and not health:
         parser.error("this Execution entry requires --preflight or --check-health")
-    if not transport._command_parts(args.command) and not health:
+    if not command_parts(args.command) and not health:
         parser.error("provide a command after -- or use --preflight")
     selection = dict(selected_execution())
     if args.profile is not None:
@@ -153,10 +162,12 @@ def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_
         command = _command(args, environment)
         bound = _bind(executor, command, args, environment)
         if not health:
-            command = prepare_command(command, environment_items=tuple(args.env), shape_batch_size=args.shape_batch_size)
+            command = prepare_command(command, environment_items=tuple(args.env), shape_batch_size=args.shape_batch_size,
+                profile_level=args.profile_level, profiler=args.profiler, profile_counter=tuple(args.profile_counter),
+                kernel_regex=args.kernel_regex, top_kernels=args.top_kernels)
         with transport_arguments(_transport_options(args)):
             if args.dry_run and not health:
-                if preview_command(command):
+                if preview_command(command, execution_capabilities=bound.capabilities):
                     return 0
                 return transport.main(_transport_argv(arguments))
             result = bound.run(command) if health else run_command(bound, command)

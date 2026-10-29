@@ -17,7 +17,7 @@ class LegacyExperimentFactory:
         self._closed = True
 
     @contextmanager
-    def open(self, *, workspace, purpose, executor, evaluator):
+    def open(self, *, workspace, purpose, executor, evaluator, evaluation_input=None, episode_evidence=None):
         if self._closed:
             raise RuntimeError("Experiment selection has been closed")
         if purpose not in {"development", "formal"}:
@@ -30,9 +30,11 @@ class LegacyExperimentFactory:
         from .retry import retry_infrastructure
 
         workspace = Path(workspace).resolve()
-        # This storage choice stays inside the selected Factory. Canonical and
-        # episode operations receive the same canonical workspace from the host.
+        # The workspace identifies the retained record namespace. Episode evidence
+        # carries the separate actual operation workspace without moving records.
         records = FileExperimentRecords(self.records_root or workspace.parent / ".aka-experiments", str(workspace))
         yield LegacyExperiment(executor, evaluator, records=records, purpose=purpose,
-            command_evaluator=GatewayCommandEvaluator(measurement_reader=self.measurement_reader),
+            command_evaluator=GatewayCommandEvaluator(measurement_reader=self.measurement_reader,
+                execution_capabilities=executor.capabilities, evaluation_input=evaluation_input),
+            episode_evidence=episode_evidence,
             retry=retry_infrastructure if purpose == "formal" else None, stage=evaluation_stage)

@@ -12,7 +12,7 @@ from threading import Event, Lock, Thread
 
 from aka.contracts.execution import CommandSpec, ExecutionFile, OutputOptions, ProfileOptions
 from aka.contracts.filesystem_access import require_path_access
-from aka.evaluation.command_inputs import PROFILE_ENVIRONMENT_KEYS, workload_environment, transport_environment_key, legacy_command_environment
+from aka.execution.configuration import validate_workload_environment
 from .command_access import decode_access, read_input, snapshot_inputs
 from .command_protocol import ENDPOINT_ENV, TOKEN_ENV, receive, receive_json, send, send_json
 from .file_records import _job
@@ -80,9 +80,9 @@ def _execute(command, *, endpoint, token, input_paths, max_input_file_bytes,
     if not endpoint or not token:
         raise CommandEndpointError("request", "missing_session")
     workspace = command.workspace.absolute()
-    if any(transport_environment_key(key) for key in command.environment):
-        raise ValueError("transport configuration cannot enter workload environment")
-    workload_environment(command)
+    if command.prepared_inputs is not None or command.submission is not None:
+        raise ValueError("host-only prepared inputs cannot enter Agent command transport")
+    validate_workload_environment(command.environment)
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.connect(endpoint)
         with connection.makefile("rb") as reader, connection.makefile("wb", buffering=0) as writer:
@@ -192,21 +192,25 @@ def _execute(command, *, endpoint, token, input_paths, max_input_file_bytes,
 
 
 def main(argv=None):
-    from aka.execution.gateway.sandbox import build_parser, _command_parts, _requested_gateway_kind
-    parser = build_parser()
+    from aka.evaluation.command_inputs import PROFILE_ENVIRONMENT_KEYS, legacy_command_environment
+    from aka.execution.cli_adapter import build_parser
+    from aka.execution.command_syntax import command_parts, requested_operation
+    from aka.evaluation.cli_adapter import register_measurement_options
+    parser = build_parser(register_measurement_options=register_measurement_options)
     arguments = list(sys.argv[1:] if argv is None else argv)
     args = parser.parse_args(arguments)
     options = arguments[:arguments.index("--")] if "--" in arguments else arguments
     forbidden = {"--gateway-profile", "--url", "--ssh", "--ssh-init", "--health-command", "--ssh-runtime-bind",
-                 "--ssh-gpu", "--runtime-health-command", "--check-health", "--dry-run"}
+                 "--ssh-gpu", "--runtime-health-command", "--check-health", "--dry-run",
+                 "--profile", "--profiles-dir", "--patch", "--wall-timeout"}
     if any(value.split("=", 1)[0] in forbidden for value in options):
         parser.error("the host owns Execution selection and lifecycle configuration")
     if args.no_sync and args.sync:
         parser.error("--no-sync and --sync are mutually exclusive")
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0:
         parser.error("file byte limits must be positive")
-    command = tuple(_command_parts(args.command))
-    operation = "preflight" if args.preflight else _requested_gateway_kind(args.kind, list(command))
+    command = tuple(command_parts(args.command))
+    operation = "preflight" if args.preflight else requested_operation(args.kind, list(command))
     profile = None
     if (args.profile_level != "sol" or args.profiler is not None or args.profile_counter
             or args.kernel_regex is not None or args.top_kernels is not None):

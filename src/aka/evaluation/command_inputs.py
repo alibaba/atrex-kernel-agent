@@ -9,15 +9,10 @@ from .gateway_request import _parse_env_items
 
 PROFILE_ENVIRONMENT_KEYS = frozenset(("PROFILE_ITERS", "PROFILE_WARMUP",
     "PROFILE_WORKLOAD_IDX", "PROFILE_SHAPE_ID", "PROFILE_DEVICE"))
-_CONFIG_KEYS = frozenset(("ATREX_PRIVATE_REFERENCE_DIR", "ATREX_EVAL_SHAPE_BATCH_SIZE"))
-_CONFIG_PREFIXES = ("AGATE_", "ATREX_SANDBOX_", "AKA_GATEWAY_", "AKA_EXECUTION_", "AKA_EXPERIMENT_COMMAND_")
+from aka.execution.configuration import transport_environment_key
 _PROTECTED_FILES = frozenset(("kernel.py", "test_kernel.py", "reference.py", "input.py",
     "shapes.json", "metadata.json", "roofline.json", "solution.json", "requirements.txt",
     "agent_problem.json"))
-
-
-def transport_environment_key(key):
-    return key in _CONFIG_KEYS or key.startswith(_CONFIG_PREFIXES)
 
 
 def legacy_command_environment(environment, env_items=()):
@@ -62,18 +57,6 @@ def validate_command(command):
     if command.submission is not None and command.input_files:
         raise UnsupportedExecution("prepared typed requests do not support custom input files")
     workload_environment(command)
-
-
-def apply_profile_options(args, options):
-    if options is None:
-        return
-    for source, target in (("level", "profile_level"), ("profiler", "profiler"),
-                           ("kernel_regex", "kernel_regex"), ("top_kernels", "top_kernels")):
-        value = getattr(options, source)
-        if value is not None:
-            setattr(args, target, value)
-    if options.counters:
-        args.profile_counter = list(options.counters)
 
 
 def nondefault_profile(options):

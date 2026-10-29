@@ -63,6 +63,8 @@ def submit_prepared(args, workspace, grace, prepared):
                     command_timeout=transport._gateway_job_timeout(args.timeout, grace),
                     wait_budget=args.timeout + grace)
     except transport.GatewayHTTPError as error:
+        from .diagnostics import report_typed_limitation
+        report_typed_limitation(f"http {error.status}")
         # No second route is submitted here. The owning experiment receives admission facts.
         emit_diagnostic({"failure_class": "infrastructure" if error.status in {429,502,503,504} else "request",
                          "http_status": error.status, "reason": "gateway-http-rejection"})
@@ -72,6 +74,9 @@ def submit_prepared(args, workspace, grace, prepared):
         print(f"HTTP {error.status}", file=sys.stderr)
         return 2
     job = transport._job_response(process.stdout or "")
+    if process.returncode:
+        from .diagnostics import report_typed_limitation
+        report_typed_limitation((process.stdout or "") + "\n" + (process.stderr or ""))
     if job is not None and transport._report_cancellation(job):
         return process.returncode or 1
     if job is not None and transport._report_infrastructure_failure(job):
@@ -123,10 +128,9 @@ def run_kernel_operation(args, workspace, grace):
     solution = transport._json_object(workspace / "solution.json") or {}
     request = {"spec": {"target_hardware": [args.hardware], "languages": transport._candidate_languages(solution)},
                "candidate": candidate.read_text(encoding="utf-8"), "env_vars": transport._parse_env_items(args.env)}
-    requirements_path = os.environ.get("ATREX_SANDBOX_REQUIREMENTS_FILE", "")
-    if requirements_path:
-        request["requirements"] = transport._runtime_requirements(requirements_path,
-            candidate_languages=request["spec"]["languages"])
+    requirements = json.loads(os.environ.get("AKA_GATEWAY_DEV_DEPENDENCIES", "[]"))
+    if requirements:
+        request["requirements"] = requirements
     for field in ("arch", "sanitize", "fmt"):
         value = getattr(options, field, None)
         if value:

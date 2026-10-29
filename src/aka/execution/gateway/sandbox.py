@@ -84,6 +84,21 @@ from aka.core._filesystem import durable_write_json  # noqa: E402
 from aka.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
 from aka.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
 
+from aka.execution.command_syntax import (
+    _command_executable_index as _command_executable_index,
+    command_parts as _command_parts,
+    is_profile_command as _is_profile_command,
+    is_test_kernel_command as _is_test_kernel_command,
+    is_unsafe_target_command as _is_unsafe_target_command,
+    _mentions_evaluator_target as _mentions_evaluator_target,
+    option_value as _option_value,
+    _parsed_command_parts as _parsed_command_parts,
+    _python_script_index as _python_script_index,
+    requested_operation as _requested_gateway_kind,
+    _shell_command_operand as _shell_command_operand,
+    _standard_command_name as _standard_command_name,
+    test_kernel_script_index as _test_kernel_script_index,
+)
 from aka.execution.outcomes import emit_fact, emit_diagnostic, backend_attempt
 
 
@@ -229,29 +244,7 @@ ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 TYPED_KINDS = frozenset({"run", "profile"})
-TYPED_FALLBACK_REASONS = (
-    "kind_not_supported",
-    "invalid_source",
-    "source validation failed",
-    "deps_install_failed",
-    "gateway_dependency_install_failed",
-    "http 404",
-    "http 413",
-    "http 501",
-)
-AGENT_PROBLEM_FILENAME = "agent_problem.json"
-MODE_STATE_FILENAME = ".orchestrator_mode.json"
-PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
-PRIVATE_EVALUATOR_FILENAMES = ("shapes.json", "metadata.json", "roofline.json")
-PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
 EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
-PROFILE_ENVIRONMENT_KEYS = (
-    "PROFILE_ITERS",
-    "PROFILE_WARMUP",
-    "PROFILE_WORKLOAD_IDX",
-    "PROFILE_SHAPE_ID",
-    "PROFILE_DEVICE",
-)
 
 
 def _safe_relative(value: str) -> str:
@@ -361,7 +354,7 @@ def _make_input_bundle(
         except OSError as exc:
             skipped.append(f"{arcname} ({exc})")
             return
-        if size > max_file_bytes:
+        if max_file_bytes is not None and size > max_file_bytes:
             skipped.append(f"{arcname} ({size} bytes > input limit)")
             return
         tf.add(source, arcname=arcname, recursive=False)
@@ -380,7 +373,7 @@ def _make_input_bundle(
         nonlocal count
         if arcname in seen or arcname not in selected_inputs:
             return
-        if len(payload) > max_file_bytes:
+        if max_file_bytes is not None and len(payload) > max_file_bytes:
             skipped.append(f"{arcname} ({len(payload)} bytes > input limit)")
             return
         info = tarfile.TarInfo(arcname)
@@ -472,22 +465,8 @@ def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
     raise ValueError(f"sandbox input does not exist: {value!r}")
 
 
-def _parsed_command_parts(parts: list[str]) -> tuple[list[str], bool]:
-    """Return command words and whether a single shell string stayed opaque."""
-    command = parts[1:] if parts and parts[0] == "--" else list(parts)
-    if len(command) != 1:
-        return command, False
-    try:
-        parsed = shlex.split(command[0])
-    except ValueError:
-        return command, True
-    if shlex.join(parsed) == command[0]:
-        return parsed, False
-    return command, True
 
 
-def _command_parts(parts: list[str]) -> list[str]:
-    return _parsed_command_parts(parts)[0]
 
 
 def _python_inline_imports(parts: list[str]) -> set[str]:
@@ -595,407 +574,24 @@ def _command_input_paths(
     return frozenset(selected)
 
 
-def _standard_command_name(value: str, names: set[str]) -> str | None:
-    """Return a command name only for PATH lookup or a conventional system path."""
-    name = Path(value).name
-    if name in names and value in {name, f"/bin/{name}", f"/usr/bin/{name}"}:
-        return name
-    return None
 
 
-def _command_executable_index(
-    command: list[str], *, typed_launcher: bool = False
-) -> int | None:
-    """Skip supported shell assignments, env, and execution wrappers."""
-    def assignment_end(start: int, *, shell_prefix: bool = False) -> int | None:
-        while start < len(command):
-            name, separator, _ = command[start].partition("=")
-            if not separator or re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) is None:
-                break
-            if shell_prefix and shlex.quote(command[start]) != command[start]:
-                break
-            if typed_launcher and name not in {
-                "PYTHONDONTWRITEBYTECODE",
-                "PYTHONUNBUFFERED",
-            }:
-                return None
-            start += 1
-        return start
-
-    index = assignment_end(0, shell_prefix=True)
-    if index is None:
-        return None
-    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
-        index += 1
-        while index < len(command):
-            option = command[index]
-            if option == "--":
-                index += 1
-                break
-            if option == "-" or option == "--ignore-environment" or option == "--debug":
-                if typed_launcher:
-                    return None
-                index += 1
-                continue
-            if re.fullmatch(r"-[iv]+", option):
-                if typed_launcher:
-                    return None
-                index += 1
-                continue
-            if option in {"-C", "--chdir", "-u", "--unset"}:
-                if index + 1 >= len(command):
-                    return None
-                if typed_launcher:
-                    return None
-                index += 2
-                continue
-            if (option.startswith(("-C", "-u")) and len(option) > 2) or (
-                option.startswith(("--chdir=", "--unset="))
-                and option.partition("=")[2]
-            ):
-                if typed_launcher:
-                    return None
-                index += 1
-                continue
-            if option.startswith("-"):
-                return None
-            break
-        index = assignment_end(index)
-        if index is None:
-            return None
-    while index < len(command):
-        launcher = command[index]
-        wrapper = _standard_command_name(
-            launcher,
-            {"command", "exec", "nice", "nohup", "stdbuf", "time", "timeout"},
-        )
-        if wrapper is None:
-            break
-        if typed_launcher:
-            return None
-        index += 1
-
-        if wrapper == "command":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option == "-p":
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "exec":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option == "-a":
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if re.fullmatch(r"-[cl]+", option):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "nice":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-n", "--adjustment"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if (
-                    re.fullmatch(r"-(?:n)?\d+", option)
-                    or option.startswith("--adjustment=")
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "time":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-f", "--format", "-o", "--output"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if (
-                    re.fullmatch(r"-[fo].+", option)
-                    or option.startswith("--format=")
-                    or option.startswith("--output=")
-                    or re.fullmatch(r"-[apqv]+", option)
-                    or option in {"--append", "--portability", "--quiet", "--verbose"}
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        elif wrapper == "timeout":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-k", "--kill-after", "-s", "--signal"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if (
-                    re.fullmatch(r"-[ks].+", option)
-                    or option.startswith(("--kill-after=", "--signal="))
-                    or option in {"--foreground", "--preserve-status", "--verbose"}
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-            if index >= len(command):
-                return None
-            index += 1
-        elif wrapper == "stdbuf":
-            while index < len(command):
-                option = command[index]
-                if option == "--":
-                    index += 1
-                    break
-                if option in {"-e", "--error", "-i", "--input", "-o", "--output"}:
-                    if index + 1 >= len(command):
-                        return None
-                    index += 2
-                    continue
-                if re.fullmatch(r"-[eio].+", option) or option.startswith(
-                    ("--error=", "--input=", "--output=")
-                ):
-                    index += 1
-                    continue
-                if option.startswith("-"):
-                    return None
-                break
-        else:
-            if index < len(command) and command[index] == "--":
-                index += 1
-            elif index < len(command) and command[index].startswith("-"):
-                return None
-    if index < len(command) and command[index] in {"env", "/usr/bin/env"}:
-        nested = _command_executable_index(
-            command[index:], typed_launcher=typed_launcher
-        )
-        return index + nested if nested is not None else None
-    return index if index < len(command) else None
 
 
-def _python_script_index(
-    parts: list[str], script_name: str, *, typed_launcher: bool = False
-) -> int | None:
-    """Locate a Python script; optionally require a prefix typed run may omit."""
-    command, opaque = _parsed_command_parts(parts)
-    if opaque:
-        return None
-    index = _command_executable_index(command, typed_launcher=typed_launcher)
-
-    if (
-        index is None
-        or re.fullmatch(r"python(?:3(?:\.\d+)*)?", Path(command[index]).name) is None
-    ):
-        return None
-    index += 1
-    while index < len(command):
-        option = command[index]
-        if option == "--":
-            index += 1
-            break
-        if re.fullmatch(r"-[bBdEiIOPqRsSuvx]+", option):
-            if typed_launcher and re.fullmatch(r"-[Bu]+", option) is None:
-                return None
-            index += 1
-            continue
-        if option in {"-W", "-X"}:
-            if index + 1 >= len(command):
-                return None
-            if typed_launcher:
-                return None
-            index += 2
-            continue
-        if len(option) > 2 and option.startswith(("-W", "-X")):
-            if typed_launcher:
-                return None
-            index += 1
-            continue
-        if option == "--check-hash-based-pycs":
-            if index + 1 >= len(command) or command[index + 1] not in {
-                "always",
-                "default",
-                "never",
-            }:
-                return None
-            if typed_launcher:
-                return None
-            index += 2
-            continue
-        if option.startswith("-"):
-            return None
-        break
-
-    if index < len(command) and Path(command[index]).name == script_name:
-        return index
-    return None
 
 
-def _test_kernel_script_index(
-    parts: list[str], *, typed_launcher: bool = False
-) -> int | None:
-    return _python_script_index(
-        parts, "test_kernel.py", typed_launcher=typed_launcher
-    )
 
 
-def _is_test_kernel_command(parts: list[str]) -> bool:
-    return _test_kernel_script_index(parts) is not None
 
 
-def _shell_command_operand(
-    command: list[str], executable_index: int
-) -> tuple[str, int] | None:
-    """Locate a shell script or the command string consumed by ``-c``."""
-    shell = _standard_command_name(command[executable_index], {"bash", "sh"})
-    if shell is None:
-        return None
-    index = executable_index + 1
-    while index < len(command):
-        option = command[index]
-        if option == "--":
-            index += 1
-            break
-        if shell == "bash" and option in {"--init-file", "--rcfile"}:
-            if index + 1 >= len(command):
-                return None
-            index += 2
-            continue
-        if shell == "bash" and (
-            option.startswith("--init-file=") or option.startswith("--rcfile=")
-        ):
-            index += 1
-            continue
-        if shell == "bash" and option in {
-            "--debug",
-            "--debugger",
-            "--login",
-            "--noediting",
-            "--noprofile",
-            "--norc",
-            "--posix",
-            "--protected",
-            "--restricted",
-            "--verbose",
-        }:
-            index += 1
-            continue
-        if shell == "bash" and option in {
-            "--dump-po-strings",
-            "--dump-strings",
-            "--help",
-            "--version",
-            "--wordexp",
-        }:
-            return None
-        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*c", option):
-            return ("command", index + 1) if index + 1 < len(command) else None
-        if re.fullmatch(r"-[abefhiklmpruvxBCHP]*[oO]", option):
-            if index + 1 >= len(command):
-                return None
-            index += 2
-            continue
-        if re.fullmatch(r"-[abefhiklmpruvxBCHP]+", option):
-            index += 1
-            continue
-        if option.startswith("-"):
-            return None
-        break
-    return ("script", index) if index < len(command) else None
 
 
-def _is_profile_command(parts: list[str]) -> bool:
-    """Return whether argv invokes one of the repository profiler wrappers."""
-    command, opaque = _parsed_command_parts(parts)
-    if opaque:
-        return False
-    if _python_script_index(command, "profile_driver.py") is not None:
-        return True
-    index = _command_executable_index(command)
-    if index is None:
-        return False
-    frontend = _standard_command_name(command[index], {"ncu", "nsys", "rocprofv3"})
-    if frontend is not None and (
-        frontend != "nsys"
-        or (index + 1 < len(command) and command[index + 1] == "profile")
-    ):
-        for nested_index in range(index + 1, len(command)):
-            if (
-                _python_script_index(
-                    command[nested_index:], "profile_driver.py"
-                )
-                is not None
-            ):
-                return True
-    wrappers = {"profiling/nvidia/profile_nvidia.sh", "profiling/amd/profile_kernel.sh"}
-    executable = PurePosixPath(command[index]).as_posix()
-    if Path(executable).name == "profile_driver.py" or executable in wrappers:
-        return True
-    operand = _shell_command_operand(command, index)
-    return bool(
-        operand
-        and operand[0] == "script"
-        and PurePosixPath(command[operand[1]]).as_posix() in wrappers
-    )
 
 
-def _mentions_evaluator_target(value: str) -> bool:
-    """Find target names in shell text without pretending to parse shell grammar."""
-    unquoted = value.translate(str.maketrans("", "", "\\'\""))
-    return re.search(
-        r"(?<![A-Za-z0-9_.-])"
-        r"(?:test_kernel\.py|profile_driver\.py|profile_nvidia\.sh|profile_kernel\.sh)"
-        r"(?![A-Za-z0-9_.-])",
-        unquoted,
-    ) is not None
 
 
-def _is_unsafe_target_command(parts: list[str]) -> bool:
-    """Reject target-bearing commands outside the supported launcher grammar."""
-    command, _ = _parsed_command_parts(parts)
-    if _is_test_kernel_command(command) or _is_profile_command(command):
-        return False
-    return any(_mentions_evaluator_target(token) for token in command)
 
 
-def _option_value(parts: list[str], name: str, default: Any = None) -> Any:
-    """Read a simple ``--flag value``/``--flag=value`` option from command argv."""
-    command = _command_parts(parts)
-    for index, token in enumerate(command):
-        if token == name:
-            return command[index + 1] if index + 1 < len(command) else default
-        if token.startswith(name + "="):
-            return token.split("=", 1)[1]
-    return default
 
 
 def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
@@ -1046,107 +642,19 @@ def _runtime_requirements(
     return list(select_requirements(contents, candidate_languages))
 
 
-def _is_generalized_workspace(workspace: Path) -> bool:
-    """Return whether production policy enables private exact-case handling."""
-    state = _json_object(workspace / MODE_STATE_FILENAME) or {}
-    return (
-        state.get("mode") == "production"
-        and (workspace / AGENT_PROBLEM_FILENAME).is_file()
-    )
-
-
-def _private_reference_dir(workspace: Path) -> Path | None:
-    """Resolve private evaluator inputs only for a generalized production workspace."""
-    if not _is_generalized_workspace(workspace):
-        return None
-    raw = os.environ.get(PRIVATE_REFERENCE_ENV, "")
-    if not raw:
-        raise ValueError(
-            f"{PRIVATE_REFERENCE_ENV} is required for generalized Atrex-Bench evaluation"
-        )
-    private_dir = Path(raw).expanduser().resolve()
-    if not private_dir.is_dir():
-        raise ValueError("configured private Atrex-Bench reference directory is missing")
-    private_problem = private_dir / AGENT_PROBLEM_FILENAME
-    public_problem = workspace / AGENT_PROBLEM_FILENAME
-    # A user-provided contract remains evaluator-owned and must match byte-for-byte.
-    # An automatically authored production contract intentionally exists only in the
-    # campaign workspace, so absence from the detailed-shape source is valid.
-    if private_problem.is_file() and (
-        private_problem.read_bytes() != public_problem.read_bytes()
-    ):
-        raise ValueError(
-            "workspace agent_problem.json does not match the evaluator-owned public contract"
-        )
-    return private_dir
-
-
-def _evaluator_input_path(workspace: Path, filename: str, *, required: bool) -> Path:
-    private_dir = _private_reference_dir(workspace)
-    path = (
-        (private_dir / filename) if private_dir is not None else (workspace / filename)
-    )
-    if required and not path.is_file():
-        raise ValueError(f"required evaluator input is missing: {filename}")
-    return path
-
-
-def _private_evaluator_inputs(workspace: Path) -> dict[str, Path]:
-    private_dir = _private_reference_dir(workspace)
-    if private_dir is None:
-        return {}
-    inputs: dict[str, Path] = {}
-    for filename in PRIVATE_EVALUATOR_FILENAMES:
-        path = private_dir / filename
-        if filename in {"shapes.json", "metadata.json"} and not path.is_file():
-            raise ValueError(f"required private evaluator input is missing: {filename}")
-        if path.is_file():
-            inputs[filename] = path
-    return inputs
-
-
-def _sort_shape_id(shape_id: str) -> tuple[int, object]:
-    return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
-
-
-def _private_profile_case(
-    workspace: Path, env_items: Iterable[str]
-) -> tuple[str, bytes] | None:
-    """Materialize exactly one private real shape for an ephemeral remote profile."""
-    private_dir = _private_reference_dir(workspace)
-    if private_dir is None:
-        return None
-    shapes = _json_object(private_dir / "shapes.json", required=True)
-    if not shapes:
-        raise ValueError("private shapes.json must contain a non-empty object")
-    environment = _parse_env_items(env_items)
-    shape_id = environment.get("PROFILE_SHAPE_ID") or sorted(
-        (str(value) for value in shapes), key=_sort_shape_id
-    )[0]
-    entry = shapes.get(shape_id)
-    if not isinstance(entry, dict):
-        raise ValueError(f"PROFILE_SHAPE_ID={shape_id!r} is not a real evaluator shape id")
-    payload = {
-        "schema_version": 1,
-        "shape_id": shape_id,
-        "init_kwargs": entry.get("init_kwargs") or {},
-        "input_kwargs": entry.get("input_kwargs") or {},
-    }
-    return (
-        PRIVATE_PROFILE_CASE_FILENAME,
-        (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"),
-    )
 
 
 
-def _requested_gateway_kind(requested: str, command: list[str]) -> str:
-    if requested != "auto":
-        return requested
-    if _is_test_kernel_command(command):
-        return "run"
-    if _is_profile_command(command):
-        return "profile"
-    return "dev"
+
+
+
+
+
+
+
+
+
+
 
 
 def _parse_env_items(items: Iterable[str]) -> dict[str, str]:
@@ -1161,34 +669,8 @@ def _parse_env_items(items: Iterable[str]) -> dict[str, str]:
     return env_vars
 
 
-def _with_inherited_profile_environment(items: Iterable[str]) -> list[str]:
-    """Forward the documented PROFILE_* shell assignments without forwarding secrets."""
-    result = list(items)
-    configured = _parse_env_items(result)
-    for key in PROFILE_ENVIRONMENT_KEYS:
-        if key not in configured and key in os.environ:
-            result.append(f"{key}={os.environ[key]}")
-    return result
 
 
-def _profile_command_environment(items: Iterable[str]) -> tuple[list[str], list[str]]:
-    """Move PROFILE_* controls into the uploaded command for a dev fallback.
-
-    The gateway intentionally accepts only a small environment-variable allowlist,
-    which does not include the profiler driver's local PROFILE_* controls.  A
-    generalized profile already falls back to an uploaded dev command so it can
-    consume one privately injected real shape.  Prefix those non-secret controls
-    on that command instead of asking the gateway API to inject them.
-    """
-    command_environment: list[str] = []
-    gateway_environment: list[str] = []
-    for item in items:
-        key = item.split("=", 1)[0]
-        if key in PROFILE_ENVIRONMENT_KEYS:
-            command_environment.append(item)
-        else:
-            gateway_environment.append(item)
-    return command_environment, gateway_environment
 
 
 def _make_atrex_bench_runtime_bundle(
@@ -1282,7 +764,7 @@ def safe(value):
 
 def add_file(tf, path):
     rel = path.relative_to(root).as_posix()
-    if rel in seen or path.is_symlink() or not path.is_file():
+    if rel in cfg.get("private_paths", ()) or rel in seen or path.is_symlink() or not path.is_file():
         return
     size = path.stat().st_size
     raw = path.suffix.lower() in RAW or (cfg["include_raw_profile"] is False and any(p.lower() == "att" for p in path.parts))
@@ -1501,114 +983,10 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
+    from aka.execution.cli_options import register_transport_options
+    register_transport_options(parser)
     parser.add_argument("--prepared-request-fd", type=int, help=argparse.SUPPRESS)
-    parser.add_argument("--num-gpus", type=int, default=1, help=argparse.SUPPRESS)
-    parser.add_argument(
-        "--hardware",
-        default=os.environ.get("ATREX_SANDBOX_GPU", ""),
-        help="Remote GPU hardware token, e.g. REMOTE_GPU (default: ATREX_SANDBOX_GPU).",
-    )
-    parser.add_argument(
-        "--kind",
-        choices=("auto", "run", "profile", "dev", "check", "disassemble"),
-        default="auto",
-        help=(
-            "Gateway interface to use. auto routes test_kernel.py to run, profiler "
-            "wrappers to profile, and other commands to dev (default: auto). Typed "
-            "jobs fall back to dev only when their source contract is unsupported."
-        ),
-    )
-    parser.add_argument(
-        "--gateway-profile",
-        choices=("pre", "prod"),
-        default=None,
-        help="Gateway endpoint profile (default: ATREX_SANDBOX_PROFILE, then normal agate resolution).",
-    )
-    parser.add_argument(
-        "--url",
-        default=None,
-        help="Explicit gateway URL (default: ATREX_SANDBOX_URL; overrides environment profile/config).",
-    )
-    parser.add_argument(
-        "--ssh",
-        default=None,
-        metavar="[USER@]HOST",
-        help=(
-            "OpenSSH target for Bubblewrap-isolated remote GPU execution "
-            "(default: ATREX_SANDBOX_SSH). Reuses ~/.ssh/config and is "
-            "mutually exclusive with gateway endpoint options."
-        ),
-    )
-    parser.add_argument(
-        "--ssh-init",
-        default=os.environ.get("ATREX_SANDBOX_SSH_INIT", ""),
-        metavar="COMMAND",
-        help=(
-            "Remote shell initialization run before commands and probes, e.g. a "
-            "Conda activation (default: ATREX_SANDBOX_SSH_INIT)."
-        ),
-    )
-    parser.add_argument(
-        "--ssh-runtime-bind",
-        action="append",
-        default=None,
-        metavar="REMOTE_PATH[=SANDBOX_PATH]",
-        help=(
-            "Read-only runtime directory exposed inside the SSH Bubblewrap sandbox "
-            "(repeatable; default: ATREX_SANDBOX_SSH_RUNTIME_BINDS JSON array)."
-        ),
-    )
-    parser.add_argument(
-        "--ssh-gpu",
-        default=None,
-        metavar="INDEX",
-        help=(
-            "Physical NVIDIA GPU index exposed to an SSH job (required with --ssh; "
-            f"default: {SSH_GPU_ENV}). MIG selectors are rejected until capability-node "
-            "assignment is implemented."
-        ),
-    )
-    parser.add_argument(
-        "--health-command",
-        default=os.environ.get(
-            "ATREX_SANDBOX_HEALTH_COMMAND", DEFAULT_SSH_HEALTH_COMMAND
-        ),
-        metavar="COMMAND",
-        help=(
-            "Remote GPU health probe used to distinguish candidate failures from "
-            "environment failures (default: ATREX_SANDBOX_HEALTH_COMMAND)."
-        ),
-    )
-    parser.add_argument(
-        "--runtime-health-command",
-        default=os.environ.get("ATREX_SANDBOX_RUNTIME_HEALTH_COMMAND", ""),
-        metavar="COMMAND",
-        help="Additional trusted evaluator/framework probe; replayed by recovery.",
-    )
-    parser.add_argument(
-        "--preflight",
-        action="store_true",
-        help="Check SSH health before optimization and record failures for recovery.",
-    )
-    parser.add_argument(
-        "--check-health",
-        action="store_true",
-        help="Run only the configured SSH health probe; do not upload a workspace.",
-    )
-    parser.add_argument(
-        "--workspace", default=".", help="Local workspace to upload (default: cwd)."
-    )
-    parser.add_argument(
-        "--timeout",
-        type=int,
-        default=int(
-            os.environ.get("ATREX_SANDBOX_TIMEOUT", str(DEFAULT_COMMAND_TIMEOUT))
-        ),
-        help=(
-            "Remote command execution timeout in positive seconds "
-            "(default: 600; queue wait is budgeted separately)."
-        ),
-    )
+    parser.add_argument("--prepared-inputs-fd", type=int, help=argparse.SUPPRESS)
     parser.add_argument(
         "--shape-batch-size",
         type=int,
@@ -1618,35 +996,6 @@ def build_parser() -> argparse.ArgumentParser:
             )
         ),
         help="Maximum Atrex-Bench shapes per concurrent eval job (default: 4).",
-    )
-    parser.add_argument(
-        "--sync",
-        action="append",
-        default=[],
-        metavar="PATH",
-        help="Relative profile/result path to copy back (repeatable; default: profiles).",
-    )
-    parser.add_argument(
-        "--no-sync", action="store_true", help="Do not copy any files back."
-    )
-    parser.add_argument(
-        "--inline-output",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Return synchronized files through the legacy stdout archive instead of "
-            "agate OSS (default: use OSS with standard agate gateway profiles; "
-            "custom gateway URLs and config use inline output)."
-        ),
-    )
-    parser.add_argument(
-        "--include-raw-profile",
-        action=argparse.BooleanOptionalAction,
-        default=None,
-        help=(
-            "Include raw .ncu-rep/ATT artifacts with legacy inline output "
-            "(OSS output includes them by default)."
-        ),
     )
     parser.add_argument(
         "--profile-level",
@@ -1678,37 +1027,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Limit the typed profile result to the N hottest kernels.",
     )
-    parser.add_argument(
-        "--input",
-        action="append",
-        default=[],
-        metavar="PATH",
-        help=(
-            "Additional required workspace file or directory for a non-evaluator command "
-            "(repeatable). Arbitrary commands otherwise receive only paths referenced by "
-            "their argv; the full workspace is never uploaded implicitly."
-        ),
-    )
-    parser.add_argument(
-        "--max-input-file-mb",
-        type=int,
-        default=16,
-        help="Skip individual workspace input files larger than this (default: 16 MiB).",
-    )
-    parser.add_argument(
-        "--max-output-file-mb",
-        type=int,
-        default=512,
-        help="Skip individual returned artifacts larger than this (default: 512 MiB).",
-    )
-    parser.add_argument("--max-output-file-bytes", type=int, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("-e", "--env", action="append", default=[], metavar="KEY=VALUE")
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Package and print the request summary only.",
-    )
-    parser.add_argument("command", nargs=argparse.REMAINDER, help="Command after --.")
     return parser
 
 
@@ -2849,7 +2167,7 @@ def _typed_agate_command(
     # shapes/reference files locally to assemble its typed eval payload, so point
     # --reference-dir at the private source while keeping the candidate in the
     # public workspace.  The private directory is never copied into the workspace.
-    reference_dir = (reference_dir or _private_reference_dir(workspace) or workspace) if kind in {"run", "profile"} else workspace
+    reference_dir = (reference_dir or workspace) if kind in {"run", "profile"} else workspace
     command += ["--gpu", args.hardware]
     num_gpus = request.get("spec", {}).get("num_gpus", 1)
     if num_gpus > 1 and kind in {"run", "profile"}:
@@ -2926,9 +2244,6 @@ def _typed_agate_command(
     return command
 
 
-def _typed_fallback_allowed(detail: object) -> bool:
-    text = str(detail).lower()
-    return any(reason in text for reason in TYPED_FALLBACK_REASONS)
 
 
 
@@ -2964,6 +2279,10 @@ def _main(argv: list[str] | None = None) -> int:
                 "sandbox: ATREX_SANDBOX_SSH, ATREX_SANDBOX_URL, and "
                 "ATREX_SANDBOX_PROFILE are mutually exclusive"
             )
+    if args.prepared_inputs_fd is not None and (
+            args.ssh or args.prepared_request_fd is not None or args.kind in {"check", "disassemble"}
+            or args.preflight or args.check_health):
+        raise SystemExit("sandbox: selected transport or operation cannot accept closed prepared inputs")
     if args.ssh:
         try:
             args.ssh = _validate_ssh_target(args.ssh)
@@ -3068,11 +2387,6 @@ def _main(argv: list[str] | None = None) -> int:
         )
     profile_command = _is_profile_command(args.command)
     profile_request = gateway_kind == "profile" or profile_command
-    if profile_command:
-        try:
-            args.env = _with_inherited_profile_environment(args.env)
-        except ValueError as exc:
-            raise SystemExit(f"sandbox: {exc}") from exc
     num_gpus = args.num_gpus
     typed_limitation = None
     if num_gpus < 1:
@@ -3082,61 +2396,40 @@ def _main(argv: list[str] | None = None) -> int:
     if args.ssh and evaluator_command and num_gpus > 1:
         raise SystemExit("sandbox: distributed evaluator commands are not supported by the SSH runner")
 
-    if evaluator_command:
-        selected = set(_evaluation_input_paths(workspace, args.command))
-        try:
-            for value in args.input:
-                selected.update(_expand_workspace_input(workspace, value))
-        except ValueError as exc:
-            raise SystemExit(f"sandbox: {exc}") from exc
-        selected_inputs = frozenset(selected)
+    private_paths = ()
+    if args.prepared_inputs_fd is not None:
+        if args.ssh or args.prepared_request_fd is not None:
+            raise SystemExit("sandbox: closed prepared inputs do not support SSH or typed requests")
+        from aka.execution.prepared_inputs import read as read_prepared_inputs, archive
+        prepared = read_prepared_inputs(args.prepared_inputs_fd)
+        limit = args.max_input_file_mb * 1024 * 1024
+        bundle = archive(prepared.files, max_file_bytes=limit)
+        runtime_bundle = archive(prepared.runtime_files, max_file_bytes=None) if prepared.runtime_files else None
+        file_count, skipped = len(prepared.files), []
+        private_paths = prepared.private_paths
     else:
+        if evaluator_command:
+            selected = set(_evaluation_input_paths(workspace, args.command))
+            try:
+                for value in args.input:
+                    selected.update(_expand_workspace_input(workspace, value))
+            except ValueError as exc:
+                raise SystemExit(f"sandbox: {exc}") from exc
+            selected_inputs = frozenset(selected)
+        else:
+            try:
+                selected_inputs = _command_input_paths(workspace, args.command, args.input)
+            except ValueError as exc:
+                raise SystemExit(f"sandbox: {exc}") from exc
         try:
-            selected_inputs = _command_input_paths(
-                workspace,
-                args.command,
-                args.input,
-            )
-        except ValueError as exc:
-            raise SystemExit(f"sandbox: {exc}") from exc
-    try:
-        injected_inputs = (
-            _private_evaluator_inputs(workspace) if evaluator_command else {}
-        )
-        injected_payloads: dict[str, bytes] = {}
-        if profile_command and _is_generalized_workspace(workspace):
-            profile_case = _private_profile_case(workspace, args.env)
-            if profile_case is not None:
-                filename, payload = profile_case
-                injected_payloads[filename] = payload
-                selected_inputs = frozenset((*selected_inputs, filename))
-        bundle, file_count, skipped = _make_input_bundle(
-            workspace,
-            args.max_input_file_mb * 1024 * 1024,
-            selected_inputs,
-            injected_inputs,
-            injected_payloads,
-        )
-    except (OSError, UnicodeDecodeError, ValueError) as exc:
-        raise SystemExit(f"sandbox: cannot prepare evaluator inputs: {exc}") from exc
-    if evaluator_command:
-        runtime_bundle = _make_atrex_bench_runtime_bundle(
-            workspace,
-            evaluator_only=evaluator_command,
-        )
-    else:
-        # Profile drivers and ad-hoc dev commands never import the evaluator;
-        # uploading it pushes the gateway's ray-submit argv past MAX_ARG limits.
-        runtime_bundle = None
+            bundle, file_count, skipped = _make_input_bundle(
+                workspace, args.max_input_file_mb * 1024 * 1024, selected_inputs)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            raise SystemExit(f"sandbox: cannot prepare evaluator inputs: {exc}") from exc
+        runtime_bundle = _make_atrex_bench_runtime_bundle(workspace, evaluator_only=True) if evaluator_command else None
     bundle_bytes = len(bundle.encode("ascii"))
     runtime_bundle_bytes = len(runtime_bundle.encode("ascii")) if runtime_bundle else 0
     gateway_environment = list(args.env)
-    if profile_command and _is_generalized_workspace(workspace):
-        command_environment, gateway_environment = _profile_command_environment(
-            args.env
-        )
-        if command_environment:
-            command = shlex.join(["env", *command_environment]) + " " + command
     agate_executable = None if args.ssh else _find_agate()
     direct_http = bool(args.url and agate_executable is None)
     standard_oss_gateway = bool(
@@ -3212,6 +2505,7 @@ def _main(argv: list[str] | None = None) -> int:
     from aka.execution.command_transport import RAW_PROFILE_SUFFIXES
     output_cfg = {
         "paths": sync_paths,
+        "private_paths": private_paths,
         "max_file_bytes": args.max_output_file_bytes if args.max_output_file_bytes is not None else args.max_output_file_mb * 1024 * 1024,
         "include_raw_profile": args.include_raw_profile,
         "raw_profile_suffixes": RAW_PROFILE_SUFFIXES,
@@ -3480,7 +2774,7 @@ def _main(argv: list[str] | None = None) -> int:
                     "install atrex-gateway-client first"
                 ) from exc
 
-    hide_evaluator_details = evaluator_command and _is_generalized_workspace(workspace)
+    hide_evaluator_details = evaluator_command and bool(private_paths)
     if proc.stderr and not hide_evaluator_details:
         print("\n".join(line for line in proc.stderr.rstrip().splitlines()
                               if line != INFRASTRUCTURE_MARKER), file=sys.stderr)

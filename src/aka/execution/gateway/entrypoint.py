@@ -12,7 +12,8 @@ def run_transport(argv, *, launcher=None):
     from aka.execution.outcomes import FactChannel, emit_fact, captured_result, FACTS_FD
     from aka.execution.gateway.recovery import TransportCapture
     launcher = launcher or (sys.executable, "-m", "aka.execution.gateway.sandbox")
-    descriptors = (int(argv[argv.index("--prepared-request-fd") + 1]),) if "--prepared-request-fd" in argv else ()
+    descriptors = tuple(int(argv[argv.index(flag) + 1]) for flag in (
+        "--prepared-request-fd", "--prepared-inputs-fd") if flag in argv)
     from .returned_files import FILES_FD
     if os.environ.get(FILES_FD):
         descriptors += (int(os.environ[FILES_FD]),)

@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any, Iterable, Mapping, Protocol, Sequence, TYPE_CHECKING
 from aka.core.keys import ServiceKey
 
-from .execution import CommandSpec, JobResult
+from .execution import BackendCapabilities, CommandSpec, ExecutionFile, JobResult
 from .workspace import CandidateWorkspace
 from .problem import EvaluationInput
 from .experiment_identity import ExperimentRef
@@ -78,15 +78,38 @@ class MeasurementArtifact:
 
 
 @dataclass(frozen=True)
+class EpisodeEvaluationContent:
+    """Interpreted method content for host retention, without storage layout."""
+    operation: str
+    result_json: bytes = field(repr=False)
+    job_id: str | None = None
+
+    def __post_init__(self):
+        import json
+        if not isinstance(self.operation, str) or not self.operation:
+            raise ValueError("retained evaluation operation must be nonempty")
+        if not isinstance(self.result_json, bytes):
+            raise TypeError("retained evaluation content must be immutable bytes")
+        if not isinstance(json.loads(self.result_json), dict):
+            raise ValueError("retained evaluation content must be a JSON object")
+        if self.job_id is not None and not isinstance(self.job_id, str):
+            raise TypeError("retained evaluation Job metadata must be a string or None")
+
+
+@dataclass(frozen=True)
 class StepEvaluation:
     """Completed step outputs; returned before the final interpretation."""
     artifacts: tuple[MeasurementArtifact, ...] = ()
     assessment: MeasurementAssessment | None = None
+    workspace_files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
 
     def __post_init__(self):
         object.__setattr__(self, "artifacts", tuple(self.artifacts))
         if self.assessment is not None and not isinstance(self.assessment, MeasurementAssessment):
             raise TypeError("step assessment must use the public measurement contract")
+        object.__setattr__(self, "workspace_files", tuple(self.workspace_files))
+        if any(not isinstance(item, ExecutionFile) for item in self.workspace_files):
+            raise TypeError("step workspace outputs require ExecutionFile values")
 
 
 @dataclass(frozen=True)
@@ -150,12 +173,16 @@ class VerificationResult:
     experiment_ref: ExperimentRef | None = None
     artifacts: tuple[MeasurementArtifact, ...] = field(default=(), repr=False)
     measurements: tuple[MeasurementAssessment, ...] = ()
+    episode_evaluations: tuple[EpisodeEvaluationContent, ...] = field(default=(), repr=False)
 
     def __post_init__(self):
         self.artifacts = tuple(self.artifacts)
         self.measurements = tuple(self.measurements)
+        self.episode_evaluations = tuple(self.episode_evaluations)
         if any(not isinstance(item, MeasurementAssessment) for item in self.measurements):
             raise TypeError("verification measurements must use the public contract")
+        if any(not isinstance(item, EpisodeEvaluationContent) for item in self.episode_evaluations):
+            raise TypeError("retained evaluations require EpisodeEvaluationContent values")
 
     @property
     def passed(self) -> bool:
@@ -188,6 +215,27 @@ class EvaluationFailure:
     code: str
     message: str
     candidate_repairable: bool = False
+
+
+@dataclass(frozen=True)
+class CommandEvaluation:
+    """Evaluation interpretation; Experiment publishes outputs and returns result."""
+    result: JobResult
+    verification: VerificationResult | None = None
+    artifacts: tuple[MeasurementArtifact, ...] = ()
+    episode_evaluations: tuple[EpisodeEvaluationContent, ...] = field(default=(), repr=False)
+
+    def __post_init__(self):
+        if not isinstance(self.result, JobResult):
+            raise TypeError("command evaluation requires JobResult")
+        if self.verification is not None and not isinstance(self.verification, VerificationResult):
+            raise TypeError("command verification requires VerificationResult")
+        object.__setattr__(self, "artifacts", tuple(self.artifacts))
+        object.__setattr__(self, "episode_evaluations", tuple(self.episode_evaluations))
+        if any(not isinstance(item, MeasurementArtifact) for item in self.artifacts):
+            raise TypeError("command artifacts require MeasurementArtifact values")
+        if any(not isinstance(item, EpisodeEvaluationContent) for item in self.episode_evaluations):
+            raise TypeError("retained evaluations require EpisodeEvaluationContent values")
 
 
 class EvaluationUnavailable(RuntimeError):
@@ -303,7 +351,7 @@ class CommandEvaluator(Protocol):
     def prepare(self, command: CommandSpec) -> PreparedEvaluation: ...
     def observe_step(self, prepared: PreparedEvaluation, index: int, result: JobResult) -> StepEvaluation: ...
     def fallback(self, prepared: PreparedEvaluation, results: Sequence[JobResult]) -> tuple[CommandSpec, ...]: ...
-    def interpret(self, prepared: PreparedEvaluation, results: Sequence[JobResult]) -> JobResult: ...
+    def interpret(self, prepared: PreparedEvaluation, results: Sequence[JobResult]) -> CommandEvaluation: ...
 
 
 @dataclass(frozen=True)
@@ -318,9 +366,12 @@ class EvaluationConfiguration:
     hardware: str = ""
     environment: Mapping[str, str] = field(default_factory=dict)
     measurement_reader: CanonicalMeasurementReader | None = field(default=None, repr=False, compare=False)
+    execution_capabilities: BackendCapabilities | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
+        if self.execution_capabilities is not None and not isinstance(self.execution_capabilities, BackendCapabilities):
+            raise TypeError("evaluation preparation requires bound BackendCapabilities")
 
 
 class EvaluatorFactory(Protocol):

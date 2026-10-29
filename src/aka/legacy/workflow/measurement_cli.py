@@ -8,7 +8,7 @@ def main(argv=None):
         from aka.experiment.command_client import main as command_main
         return command_main(argv)
     from aka.execution.cli_adapter import run_cli
-    from aka.evaluation.cli_adapter import prepare_command, preview_command
+    from aka.evaluation.cli_adapter import prepare_command, preview_command, register_measurement_options
     from aka.evaluation.evaluator import LegacyEvaluator
     from aka.evaluation.gateway_command import GatewayCommandEvaluator
     from aka.experiment.factory import LegacyExperimentFactory
@@ -23,11 +23,13 @@ def main(argv=None):
     def run(executor, command):
         return run_command(command, factory=factory, executor=executor, evaluator=evaluator)
 
-    def preview(command):
-        return preview_command(command, evaluator=GatewayCommandEvaluator(measurement_reader=reader))
+    def preview(command, *, execution_capabilities):
+        return preview_command(command, evaluator=GatewayCommandEvaluator(
+            measurement_reader=reader, execution_capabilities=execution_capabilities))
 
     try:
-        return run_cli(argv, prepare_command=prepare_command, run_command=run, preview_command=preview)
+        return run_cli(argv, prepare_command=prepare_command, run_command=run, preview_command=preview,
+                       register_measurement_options=register_measurement_options)
     except PerformanceBaselineError as error:
         print(f"[sandbox] invalid performance baseline: {error.reason}; GPU submission skipped", file=sys.stderr)
         return 2

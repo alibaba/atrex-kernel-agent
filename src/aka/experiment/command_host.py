@@ -13,7 +13,7 @@ from threading import Event, Lock, Thread
 from aka.contracts.execution import CommandSpec, ExecutionFile, JobResult, OutputOptions, ProfileOptions
 from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
 from aka.contracts.filesystem_access import require_path_access
-from aka.evaluation.command_inputs import transport_environment_key, workload_environment
+from aka.execution.configuration import transport_environment_key, validate_workload_environment
 from .command_access import access_data, client_access, pinned, read_input
 from .command_protocol import ENDPOINT_ENV, TOKEN_ENV, receive_json, receive, send, send_json
 from .scoped_publication import validate_target
@@ -108,7 +108,7 @@ class ExperimentCommandHost:
 
                     monitor = Thread(target=controls, daemon=True)
                     monitor.start()
-                    with owner.open_experiment(session.access) as experiment:
+                    with owner.open_experiment(session.workspace, session.access) as experiment:
                         result = experiment.run_command(command)
                     if not isinstance(result, JobResult):
                         raise TypeError("Experiment.run_command must return JobResult")
@@ -256,7 +256,7 @@ class ExperimentCommandHost:
             filesystem_access=session.access, input_files=inputs,
             profile_options=ProfileOptions(**value["profile_options"]) if value.get("profile_options") is not None else None,
             output_options=OutputOptions(**value["output_options"]) if value.get("output_options") is not None else None)
-        workload_environment(command)
+        validate_workload_environment(command.environment)
         self.capabilities.require(command)
         for item in inputs:
             frozen = read_input(session.access, session.workspace / item.path)

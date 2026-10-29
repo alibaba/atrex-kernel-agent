@@ -325,7 +325,7 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
 
 def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
               cancel_event=None, spawn=None, check_environment=lambda: None, input_payload=None,
-              on_observation=None):
+              on_observation=None, prepared_input_payload=None):
     """Return operational failures with cleanup evidence; preserve host interrupts."""
     channel = FactChannel()
     if on_observation is not None:
@@ -336,13 +336,22 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
     from .gateway.returned_files import FILES_FD, read as read_files
     returned = tempfile.TemporaryFile()
     payload = tempfile.TemporaryFile() if input_payload is not None else None
+    prepared_inputs = tempfile.TemporaryFile() if prepared_input_payload is not None else None
     if payload is not None:
         payload.write(input_payload)
         payload.seek(0)
         argv = [*argv]
         position = argv.index("--") if "--" in argv else len(argv)
         argv[position:position] = ["--prepared-request-fd", str(payload.fileno())]
-    descriptors = (channel.writer, returned.fileno()) + ((payload.fileno(),) if payload is not None else ())
+    if prepared_inputs is not None:
+        prepared_inputs.write(prepared_input_payload)
+        prepared_inputs.seek(0)
+        argv = [*argv]
+        position = argv.index("--") if "--" in argv else len(argv)
+        argv[position:position] = ["--prepared-inputs-fd", str(prepared_inputs.fileno())]
+    descriptors = ((channel.writer, returned.fileno())
+                   + ((payload.fileno(),) if payload is not None else ())
+                   + ((prepared_inputs.fileno(),) if prepared_inputs is not None else ()))
     process = None
     stdout = stderr = ""
     status = None
@@ -410,6 +419,8 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
         channel.close()
         if payload is not None:
             payload.close()
+        if prepared_inputs is not None:
+            prepared_inputs.close()
     code = process.returncode if process is not None and process.returncode is not None else 1
     result = captured_result(subprocess.CompletedProcess(argv, code, stdout, stderr),
         resource=resource, hardware=hardware, records=channel.records, status=status,
