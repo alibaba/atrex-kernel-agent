@@ -3,9 +3,10 @@ from dataclasses import asdict
 import hashlib
 
 
-def handoff_identity(command):
+def handoff_identity(command, *, prepared_path_identities=None):
     """Omit absent additions so unchanged historical commands retain identity."""
     result = {}
+    path_identities = prepared_path_identities or {}
     access = command.filesystem_access
     if access is not None:
         result["filesystem_access"] = {
@@ -28,9 +29,9 @@ def handoff_identity(command):
         ]
     if command.prepared_inputs is not None:
         result["prepared_inputs"] = {
-            name: [{"path": item.path, "mode": item.mode, "size_bytes": len(item.content),
+            name: [{"path": path_identities.get(item.path, item.path), "mode": item.mode, "size_bytes": len(item.content),
                     "sha256": hashlib.sha256(item.content).hexdigest()} for item in getattr(command.prepared_inputs, name)]
             for name in ("files", "runtime_files")
         }
-        result["prepared_inputs"]["private_paths"] = list(command.prepared_inputs.private_paths)
+        result["prepared_inputs"]["private_paths"] = [path_identities.get(path, path) for path in command.prepared_inputs.private_paths]
     return result

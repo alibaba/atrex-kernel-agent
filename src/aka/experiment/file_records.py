@@ -312,6 +312,7 @@ class FileExperimentRecords:
              "mode": item.mode, "content_type": item.content_type} for item in inputs
         ]} if inputs else plan
         if identities:
+            generated_paths = {item.path: f"$preparation/{index}" for index, item in enumerate(inputs)}
             # Measurement identity owns semantic inputs; generated local output paths
             # and launcher filenames cannot change a resumed batch's identity.
             identity = [{"measurement": step.measurement_identity.digest if step.measurement_identity else None,
@@ -319,7 +320,7 @@ class FileExperimentRecords:
                          "hardware": command.hardware, "num_gpus": command.num_gpus,
                          "languages": list(command.languages), "requirements": list(command.requirements),
                          "environment_digest": _digest(dict(command.environment)),
-                         **handoff_identity(command)}
+                         **handoff_identity(command, prepared_path_identities=generated_paths)}
                         if step.measurement_identity else plan[index]
                         for index, (step, command) in enumerate(zip(steps, commands))]
         digest = _digest(identity)
