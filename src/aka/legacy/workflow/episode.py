@@ -1086,7 +1086,9 @@ class LongHorizonCampaign:
             expected_cases = set((baseline.get("performance") or {}).get("latency_us_by_shape") or {})
         capture_episode_output(worktree.path, episode_dir, episode=episode,
             version=memory_version, base_revision=base_commit,
-            expected_case_ids=tuple(sorted(str(key) for key in expected_cases)))
+            expected_case_ids=tuple(sorted(str(key) for key in expected_cases)),
+            episode_evidence_reader=self.base_campaign.services.experiment_episode_evidence,
+            episode_evidence_interpreter=self.base_campaign.services.evaluation_episode_interpreter)
         self.base_campaign.candidate_workspace.archive(
             worktree, episode_dir / "archive", "HEAD"
         )

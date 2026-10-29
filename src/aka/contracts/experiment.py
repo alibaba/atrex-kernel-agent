@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, ContextManager, Literal, Protocol
+from typing import Any, ContextManager, Iterator, Literal, Protocol
 from pathlib import Path
 import math
 
@@ -16,6 +16,51 @@ from .execution import CommandSpec, Executor, JobResult
 from .evaluation import EvaluationFailure, EvaluationRequest, Evaluator, VerificationResult
 from .experiment_identity import ExperimentRef
 from .measurement import MeasurementAssessment, MeasurementIdentity
+from aka.core.keys import ServiceKey
+
+
+EXPERIMENT_EPISODE_EVIDENCE = ServiceKey(
+    "experiment_episode_evidence", "ExperimentEpisodeEvidenceReader",
+    module="aka.contracts.experiment",
+)
+
+
+def _receipt_value(value):
+    """Detach legacy JSON metadata without adding validation of ignored fields."""
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _receipt_value(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_receipt_value(item) for item in value)
+    return value
+
+
+@dataclass(frozen=True)
+class RetainedEpisodeReceipt:
+    """Storage-independent source-matched method content, in append order.
+
+    Legacy Job metadata is retained evidence, never a trusted JobReference.
+    Interpretation, including validation of method values, belongs to Evaluation.
+    """
+    sequence: int
+    operation: str
+    timestamp: str | None
+    source_sha256: Mapping[str, str | None]
+    job_id: object
+    result_json: bytes
+
+    def __post_init__(self):
+        if not isinstance(self.result_json, bytes):
+            raise TypeError("retained method content must be immutable bytes")
+        object.__setattr__(self, "source_sha256", MappingProxyType(dict(self.source_sha256)))
+        object.__setattr__(self, "job_id", _receipt_value(self.job_id))
+
+
+class ExperimentEpisodeEvidenceReader(Protocol):
+    def read_episode_receipts(
+        self, episode_workspace: Path, *, source_sha256: Mapping[str, str | None],
+    ) -> Iterator[RetainedEpisodeReceipt]:
+        """Read matching receipts lazily, preserving per-row failure ordering."""
+        ...
 
 class Experiment(Protocol):
     def run(self, request: EvaluationRequest) -> VerificationResult: ...

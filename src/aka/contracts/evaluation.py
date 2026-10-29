@@ -6,13 +6,55 @@ from .workflow_records import CanonicalMeasurementReader
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Mapping, Protocol, Sequence
+from typing import Any, Iterable, Mapping, Protocol, Sequence, TYPE_CHECKING
+from aka.core.keys import ServiceKey
 
 from .execution import CommandSpec, JobResult
 from .workspace import CandidateWorkspace
 from .problem import EvaluationInput
 from .experiment_identity import ExperimentRef
 from .measurement import MeasurementIdentity, MeasurementPoint, MeasurementAssessment, MeasurementDiagnostic
+
+if TYPE_CHECKING:
+    from .experiment import RetainedEpisodeReceipt
+
+
+EVALUATION_EPISODE_INTERPRETER = ServiceKey(
+    "evaluation_episode_interpreter", "EvaluationEpisodeInterpreter",
+    module="aka.contracts.evaluation",
+)
+
+
+@dataclass(frozen=True)
+class EpisodeMeasurementFacts:
+    """Interpreted retained measurements, without a Workflow acceptance decision."""
+    operation: str
+    timestamp: str | None
+    source_sha256: Mapping[str, str | None]
+    gate: str | None
+    correctness: str | None
+    complete: bool
+    latency_us: float | None
+    case_latencies_us: Mapping[str, float]
+    expected_case_ids: tuple[str, ...]
+    objective: str | None
+    score: float | None
+    metrics: Mapping[str, float]
+    assessment: MeasurementAssessment | None = None
+
+    def __post_init__(self):
+        for name in ("source_sha256", "case_latencies_us", "metrics"):
+            object.__setattr__(self, name, MappingProxyType(dict(getattr(self, name))))
+        object.__setattr__(self, "expected_case_ids", tuple(self.expected_case_ids))
+
+
+class EvaluationEpisodeInterpreter(Protocol):
+    def interpret_episode_receipts(
+        self, receipts: Iterable[RetainedEpisodeReceipt], *,
+        expected_case_ids: tuple[str, ...],
+    ) -> tuple[EpisodeMeasurementFacts, ...]:
+        """Interpret retained method content without running or approving reuse."""
+        ...
 
 
 @dataclass(frozen=True)

@@ -9,7 +9,8 @@ WORKFLOW = ServiceKey("workflow", "Workflow", module="aka.contracts.workflow")
 name = "workflow"
 provide = ("workflow",)
 inject = ("agent", "problem", "source", "candidate", "executor", "execution_context", "measurement_parallelism",
-          "evaluator_factory", "evaluation_defaults", "experiment_factory", "workflow_observer", "canonical_measurement_reader")
+          "evaluator_factory", "evaluation_defaults", "experiment_factory", "workflow_observer", "canonical_measurement_reader",
+          "experiment_episode_evidence", "evaluation_episode_interpreter")
 identity_packages = (
     "aka.legacy.workflow",
     "aka.task",
@@ -52,6 +53,8 @@ def apply(ctx, config):
         measurement_parallelism=ctx.measurement_parallelism,
         experiment_factory=ctx.experiment_factory,
         canonical_measurement_reader=ctx.canonical_measurement_reader,
+        experiment_episode_evidence=ctx.experiment_episode_evidence,
+        evaluation_episode_interpreter=ctx.evaluation_episode_interpreter,
         workflow_observer=ctx.workflow_observer,
     )
     ctx.effect(workflow.close, label="close Workflow selection")

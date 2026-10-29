@@ -63,6 +63,16 @@
       "required": true
     },
     {
+      "id": "experiment-episode-evidence",
+      "name": "aka.experiment.episode_evidence_plugin",
+      "required": true
+    },
+    {
+      "id": "evaluation-episode-interpreter",
+      "name": "aka.evaluation.episode_evidence_plugin",
+      "required": true
+    },
+    {
       "id": "workflow",
       "name": "aka.legacy.workflow.plugin",
       "required": true,

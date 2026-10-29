@@ -13,7 +13,9 @@
     "measurement_parallelism": "aka.execution.plugin:MEASUREMENT_PARALLELISM",
     "experiment_factory": "aka.experiment.plugin:EXPERIMENT_FACTORY",
     "canonical_measurement_reader": "aka.legacy.workflow.canonical_reader_plugin:CANONICAL_MEASUREMENT_READER",
-    "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER"
+    "workflow_observer": "aka.legacy.workflow.observer:WORKFLOW_OBSERVER",
+    "experiment_episode_evidence": "aka.contracts.experiment:EXPERIMENT_EPISODE_EVIDENCE",
+    "evaluation_episode_interpreter": "aka.contracts.evaluation:EVALUATION_EPISODE_INTERPRETER"
   },
   "composition": "workflow",
   "target": "startup",
@@ -30,7 +32,9 @@
     "experiment_factory",
     "canonical_measurement_reader",
     "workflow_observer",
-    "workflow"
+    "workflow",
+    "experiment_episode_evidence",
+    "evaluation_episode_interpreter"
   ],
   "resources": [
     {
@@ -71,6 +75,8 @@
     "experiment_factory",
     "canonical_measurement_reader",
     "workflow_observer",
-    "workflow"
+    "workflow",
+    "experiment_episode_evidence",
+    "evaluation_episode_interpreter"
   ]
 }

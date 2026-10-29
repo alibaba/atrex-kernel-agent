@@ -6,7 +6,8 @@ from .dependencies import CampaignDependencies
 def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      evaluator_factory=None, executor=None, experiment_factory=None,
                      execution_environment=None, measurement_parallelism=None,
-                     canonical_measurement_reader=None, workflow_observer=None, rule_set=None):
+                     canonical_measurement_reader=None, workflow_observer=None, rule_set=None,
+                     experiment_episode_evidence=None, evaluation_episode_interpreter=None):
     from .rule_sets import DEFAULT_RULE_SET, select_rule_set, LegacyRuleSet
     rule_set = select_rule_set({"rule_set": DEFAULT_RULE_SET}) if rule_set is None else rule_set
     if not isinstance(rule_set, LegacyRuleSet):
@@ -34,6 +35,9 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
         if evaluator_factory is None:
             from aka.evaluation.plugin import LegacyEvaluatorFactory
             evaluator_factory = LegacyEvaluatorFactory()
+            if evaluation_episode_interpreter is None:
+                from aka.evaluation.episode_evidence import LegacyEvaluationEpisodeInterpreter
+                evaluation_episode_interpreter = LegacyEvaluationEpisodeInterpreter()
         if canonical_measurement_reader is None:
             from .records import WorkflowMeasurementReader
             canonical_measurement_reader = WorkflowMeasurementReader()
@@ -41,6 +45,9 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
             from aka.experiment.factory import LegacyExperimentFactory
             experiment_factory = LegacyExperimentFactory(measurement_reader=canonical_measurement_reader)
             owned.callback(experiment_factory.close)
+            if experiment_episode_evidence is None:
+                from aka.experiment.episode_evidence import LocalExperimentEpisodeEvidenceReader
+                experiment_episode_evidence = LocalExperimentEpisodeEvidenceReader()
         if not callable(getattr(experiment_factory, "open", None)):
             raise TypeError("provider does not implement ExperimentFactory")
         if not callable(getattr(evaluator_factory, "create", None)):
@@ -67,6 +74,8 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                                 execution_environment=execution_environment,
                                 measurement_parallelism=measurement_parallelism,
                                 canonical_measurement_reader=canonical_measurement_reader,
+                                experiment_episode_evidence=experiment_episode_evidence,
+                                evaluation_episode_interpreter=evaluation_episode_interpreter,
                                 workflow_observer=workflow_observer, rule_set=rule_set)
         opened_services.append(selected)
         return selected

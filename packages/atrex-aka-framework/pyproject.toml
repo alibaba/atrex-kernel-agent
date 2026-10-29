@@ -32,6 +32,8 @@ evaluator_factory = "aka.evaluation.plugin:EVALUATOR_FACTORY"
 evaluation_defaults = "aka.evaluation.plugin:EVALUATION_DEFAULTS"
 
 experiment_factory = "aka.experiment.plugin:EXPERIMENT_FACTORY"
+experiment_episode_evidence = "aka.contracts.experiment:EXPERIMENT_EPISODE_EVIDENCE"
+evaluation_episode_interpreter = "aka.contracts.evaluation:EVALUATION_EPISODE_INTERPRETER"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

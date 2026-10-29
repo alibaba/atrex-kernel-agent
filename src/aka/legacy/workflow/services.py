@@ -68,7 +68,8 @@ class BorrowedExperiment:
 class WorkflowServices:
     def __init__(self, settings, campaign, *, executor, experiment_factory,
                  evaluator_factory, execution_environment=None, measurement_parallelism=4,
-                 canonical_measurement_reader, workflow_observer=None, rule_set=None):
+                 canonical_measurement_reader, workflow_observer=None, rule_set=None,
+                 experiment_episode_evidence=None, evaluation_episode_interpreter=None):
         from .rule_sets import DEFAULT_RULE_SET, select_rule_set
         self.rule_set = select_rule_set({"rule_set": DEFAULT_RULE_SET}) if rule_set is None else rule_set
         self.settings = settings
@@ -84,6 +85,8 @@ class WorkflowServices:
             raise ValueError("measurement_parallelism must be positive")
         self.executor = executor
         self.experiment_factory = experiment_factory
+        self.experiment_episode_evidence = experiment_episode_evidence
+        self.evaluation_episode_interpreter = evaluation_episode_interpreter
         self.execution_environment = dict(execution_environment or {})
         self.measurement_parallelism = measurement_parallelism
         if any(not callable(getattr(canonical_measurement_reader, method, None))
