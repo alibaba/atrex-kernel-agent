@@ -94,6 +94,8 @@ class GatewayCommandEvaluator:
             context["kind"] = "dev"
             command = replace(command, operation="run") if command.operation == "auto" else command
             return PreparedEvaluation((command,), 1, context)
+        if self.execution_capabilities is None:
+            raise UnsupportedExecution("measurement preparation requires bound execution capabilities")
         from .private_inputs import selected_content, portable_inputs
         content = selected_content(self.evaluation_input)
         reference_content = {name: item.content for name, item in content.items()}
@@ -299,7 +301,9 @@ class GatewayCommandEvaluator:
         retained = ()
         if context["evaluator"]:
             # Physical Job identity is execution-owned; no stdout Job discovery.
-            job_id = ",".join(reference.identifier for item in results for reference in item.job_references) or None
+            job_id = (",".join(reference.identifier for item in results
+                if item.stdout.lstrip().startswith("{") for reference in item.job_references) or None
+                if context["measurement"] is not None else None)
             retained = (EpisodeEvaluationContent(context["kind"], content, job_id),)
         return CommandEvaluation(result, verification,
             (MeasurementArtifact("evaluation.json", content, "evaluation"),), retained)

@@ -112,7 +112,7 @@ class LegacyEvaluator:
             prepared = replace(prepared, steps=tuple(replace(step, requirements=requirements) for step in prepared.steps))
             prepared = replace(prepared, steps=tuple(portable_inputs(step, self.evaluation_input, content,
                 evaluator=True, kind="run", capabilities=self.configuration.execution_capabilities,
-                inject_private=request.mode != "numerical") for step in prepared.steps))
+                inject_private=request.mode != "numerical", prepared_files=prepared.inputs) for step in prepared.steps))
         if request.mode == "numerical":
             return prepared
         if request.mode == "abba":

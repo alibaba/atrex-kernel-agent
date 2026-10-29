@@ -7,7 +7,7 @@ import stat
 from aka.contracts.execution import ExecutionFile, PreparedExecutionInputs, UnsupportedExecution
 from aka.execution.command_syntax import option_value
 
-_PRIVATE_FILES = frozenset(("shapes.json", "metadata.json", "roofline.json"))
+_PRIVATE_FILES = ("shapes.json", "metadata.json", "roofline.json")
 PROFILE_CASE_PATH = ".atrex_private_profile_case.json"
 
 
@@ -28,15 +28,14 @@ def selected_content(evaluation_input):
     return result
 
 
-def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capabilities, inject_private=True):
+def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capabilities, inject_private=True, prepared_files=()):
     """Construct a closed remote-only view without writing the Agent workspace."""
     if evaluation_input is None:
         return command
     from aka.execution.input_snapshot import snapshot_command_inputs
     files = {}
     private = evaluation_input.private_reference_dir is not None
-    # Public Task files are already installed. Include selected byte-for-byte
-    # replacements only where the original evaluator injected private content.
+    # Private Task members replace only matching public allowlist paths.
     if evaluator and private and inject_private:
         for name in _PRIVATE_FILES:
             item = content.get(name)
@@ -77,10 +76,14 @@ def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capa
         return command
     if capabilities is None or not capabilities.prepared_inputs:
         raise UnsupportedExecution("selected executor cannot transport the closed Task evaluation inputs")
+    from .portable_selection import public_inputs
+    public = {item.path: item for item in public_inputs(command, evaluator=evaluator, prepared_files=prepared_files)}
+    public.update(files)
+    files = public
     if kind == "profile" and private:
         from .command_inputs import PROFILE_ENVIRONMENT_KEYS
         controls = tuple(f"{key}={value}" for key, value in command.environment.items() if key in PROFILE_ENVIRONMENT_KEYS)
         if controls:
             command = replace(command, command=("env", *controls, *command.command),
                 environment={key: value for key, value in command.environment.items() if key not in PROFILE_ENVIRONMENT_KEYS})
-    return replace(command, prepared_inputs=PreparedExecutionInputs(tuple(files.values()), runtime_files, tuple(sorted(private_paths))))
+    return replace(command, prepared_inputs=PreparedExecutionInputs(tuple(files[name] for name in sorted(files)), tuple(sorted(runtime_files, key=lambda item: item.path)), tuple(sorted(private_paths))))
