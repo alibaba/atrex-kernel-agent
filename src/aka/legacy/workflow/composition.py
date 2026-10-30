@@ -7,7 +7,8 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
                      evaluator_factory=None, executor=None, experiment_factory=None,
                      execution_environment=None, measurement_parallelism=None,
                      canonical_measurement_reader=None, workflow_observer=None, rule_set=None,
-                     experiment_episode_evidence=None, evaluation_episode_interpreter=None):
+                     experiment_episode_evidence=None, evaluation_episode_interpreter=None,
+                     evaluation_defaults=None):
     from .rule_sets import DEFAULT_RULE_SET, select_rule_set, LegacyRuleSet
     rule_set = select_rule_set({"rule_set": DEFAULT_RULE_SET}) if rule_set is None else rule_set
     if not isinstance(rule_set, LegacyRuleSet):
@@ -71,6 +72,7 @@ def compose_workflow(*, agent=None, task=None, optimization_mode="leaderboard",
         selected = WorkflowServices(campaign.request.runtime, campaign,
                                 executor=executor, experiment_factory=experiment_factory,
                                 evaluator_factory=evaluator_factory,
+                                evaluation_defaults=evaluation_defaults,
                                 execution_environment=execution_environment,
                                 measurement_parallelism=measurement_parallelism,
                                 canonical_measurement_reader=canonical_measurement_reader,

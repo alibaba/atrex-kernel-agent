@@ -70,7 +70,8 @@ class WorkflowServices:
     def __init__(self, settings, campaign, *, executor, experiment_factory,
                  evaluator_factory, execution_environment=None, measurement_parallelism=4,
                  canonical_measurement_reader, workflow_observer=None, rule_set=None,
-                 experiment_episode_evidence=None, evaluation_episode_interpreter=None):
+                 experiment_episode_evidence=None, evaluation_episode_interpreter=None,
+                 evaluation_defaults=None):
         from .rule_sets import DEFAULT_RULE_SET, select_rule_set
         self.rule_set = select_rule_set({"rule_set": DEFAULT_RULE_SET}) if rule_set is None else rule_set
         self.settings = settings
@@ -82,6 +83,9 @@ class WorkflowServices:
         if not callable(getattr(evaluator_factory, "create", None)):
             raise TypeError("provider does not implement EvaluatorFactory")
         self.evaluator_factory = evaluator_factory
+        self.evaluation_defaults = evaluation_defaults if evaluation_defaults is not None else EvaluationConfiguration()
+        if not isinstance(self.evaluation_defaults, EvaluationConfiguration):
+            raise TypeError("Workflow requires the selected EvaluationConfiguration")
         if type(measurement_parallelism) is not int or measurement_parallelism < 1:
             raise ValueError("measurement_parallelism must be positive")
         self.executor = executor
@@ -149,6 +153,8 @@ class WorkflowServices:
                 hardware=s.hardware, environment=self._measurement_environment(),
                 measurement_reader=self.measurement_reader(),
                 execution_capabilities=execution_capabilities,
+                comparison_method=self.evaluation_defaults.comparison_method,
+                measurement_repetitions=self.evaluation_defaults.measurement_repetitions,
             ),
             candidate_workspace=self.campaign.candidate_workspace,
             evaluation_input=self.evaluation_input(),

@@ -49,6 +49,7 @@ def apply(ctx, config):
         agent=ctx.agent,
         task=dict(problem=ctx.problem, source=ctx.source, workspace=ctx.candidate),
         evaluator_factory=ctx.evaluator_factory,
+        evaluation_defaults=ctx.evaluation_defaults,
         executor=ctx.executor,
         execution_environment=ctx.execution_context.environment,
         measurement_parallelism=ctx.measurement_parallelism,
