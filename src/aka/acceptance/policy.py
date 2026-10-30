@@ -102,6 +102,15 @@ class PerformanceScorePolicy:
 class GeoMeanLatencyPolicy(PerformanceScorePolicy):
     """Promote from the evaluator's public GeoMean latency facts."""
 
+    def __init__(self, *, conversion_tolerance: float = CONVERT_PERF_TOL,
+                 threshold_tolerance: float = 0.0):
+        if (type(threshold_tolerance) not in (int, float)
+                or not 0 <= threshold_tolerance < 1
+                or not math.isfinite(threshold_tolerance)):
+            raise ValueError("threshold tolerance must be finite and in [0, 1)")
+        super().__init__(conversion_tolerance=conversion_tolerance)
+        self.threshold_tolerance = threshold_tolerance
+
     @staticmethod
     def _usable_latencies(verification: VerificationResult) -> bool:
         try:
@@ -142,7 +151,10 @@ class GeoMeanLatencyPolicy(PerformanceScorePolicy):
                 ),
             )
         result = replace(verification, improvement_pct=improvement)
-        if improvement <= requirements.min_improvement_pct:
+        if (improvement <= requirements.min_improvement_pct
+                or (self.threshold_tolerance > 0 and math.isclose(
+                    improvement, requirements.min_improvement_pct,
+                    rel_tol=self.threshold_tolerance, abs_tol=self.threshold_tolerance))):
             result = replace(
                 result,
                 gate="FAIL",

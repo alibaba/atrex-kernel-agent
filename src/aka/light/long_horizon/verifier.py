@@ -5,6 +5,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+from aka.acceptance import GeoMeanLatencyPolicy
+from aka.contracts.acceptance import AcceptanceRequirements
 from aka.evaluation.abba import (
     verification_schedule, _geomean, _merge_batch_results,
     _result_latency, _result_performance_score,
@@ -54,11 +56,11 @@ def score_verification_payload(
     if any(len(values) != repeats for values in sides.values()) or not candidate or not incumbent:
         verdict.error = "Not every ABBA run passed with a valid GeoMean latency"
         return verdict
-    verdict.improvement_pct = (incumbent - candidate) / incumbent * 100
-    if (verdict.improvement_pct > min_improvement_pct
-            and not math.isclose(verdict.improvement_pct, min_improvement_pct, rel_tol=1e-12, abs_tol=1e-12)):
-        verdict.gate = "PASS"
-    else:
+    verdict.gate = "PASS"
+    verdict = GeoMeanLatencyPolicy(threshold_tolerance=1e-12).decide(
+        verdict, AcceptanceRequirements(min_improvement_pct=min_improvement_pct),
+    ).verification
+    if not verdict.passed and verdict.improvement_pct is not None:
         verdict.error = f"GeoMean latency reduction {verdict.improvement_pct:.3f}% did not exceed {min_improvement_pct:.3f}%"
     return verdict
 

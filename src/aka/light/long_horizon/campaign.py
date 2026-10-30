@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from aka.acceptance import PerformanceScorePolicy
 from aka.contracts.workspace import CandidateHandle
 from aka.light.orchestrator.hardware import hardware_vendor
 from aka.light.orchestrator.version_records import FACT_FIELDS, version_record_path
@@ -69,23 +70,6 @@ def _render(template: str, values: dict[str, object]) -> str:
 
 def _iso_timestamp(value: str) -> float:
     return datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
-
-
-def _conversion_parity_passes(verification: VerificationResult) -> bool:
-    candidate = verification.candidate_latency_us
-    incumbent = verification.incumbent_latency_us
-    if not isinstance(candidate, (int, float)) or not isinstance(
-        incumbent, (int, float)
-    ):
-        return False
-    if candidate > incumbent * (1.0 + main_adapter.CONVERT_PERF_TOL):
-        return False
-    return bool(verification.runs) and all(
-        run.exit_code == 0
-        and isinstance(run.result, dict)
-        and bool(run.result.get("all_pass"))
-        for run in verification.runs
-    )
 
 
 def _representative_candidate_result(
@@ -1099,7 +1083,9 @@ class LongHorizonCampaign:
             if (
                 conversion_pending
                 and not verification.passed
-                and _conversion_parity_passes(verification)
+                and PerformanceScorePolicy(
+                    conversion_tolerance=main_adapter.CONVERT_PERF_TOL,
+                ).conversion_parity_passes(verification)
             ):
                 verification = VerificationResult(
                     "PASS",
