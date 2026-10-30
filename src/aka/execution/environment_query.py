@@ -57,7 +57,7 @@ def _snapshot(backend, endpoint, query, detail, capabilities, errors, operations
         if isinstance(source.get("operations"), (list, tuple)):
             declarations["backend_operations"] = source["operations"]
     for key in ("operations", "supported_languages", "aliases", "limits", "max_gpus",
-                "requirements_supported", "dependency_catalog", "dependency_policy"):
+                "requirements_supported", "dependency_catalog", "dependency_policy", "features"):
         if key in capabilities:
             declarations[key] = capabilities[key]
     if "operations" in declarations:
@@ -211,6 +211,11 @@ def match_environment(query, snapshot):
     dimensions["operation"] = ("supported" if operations is not None and operation in operations else
                                 "unsupported" if operations is not None else "unknown")
     max_gpus = declarations.get("max_gpus")
+    features = declarations.get("features")
+    for name in query.features:
+        value = features.get(name) if isinstance(features, Mapping) else None
+        dimensions["feature:" + name] = ("supported" if value is True else
+                                        "unsupported" if value is False else "unknown")
     dimensions["num_gpus"] = ("unsupported" if type(max_gpus) is int and query.num_gpus > max_gpus else
                                "supported" if type(max_gpus) is int or query.num_gpus == 1 else "unknown")
     frameworks = observed.get("frameworks", {})
@@ -298,7 +303,8 @@ def command_query(command):
     if path and not requirements and command.submission is None:
         from .gateway.sandbox import _runtime_requirements
         requirements = tuple(_runtime_requirements(path, candidate_languages=languages))
-    return EnvironmentQuery(command.hardware, command.operation, languages, requirements, command.num_gpus)
+    return EnvironmentQuery(command.hardware, command.operation, languages, requirements, command.num_gpus,
+                            features=("source_archives",) if command.source_archives else ())
 
 
 def select_requirements(contents, languages=()):

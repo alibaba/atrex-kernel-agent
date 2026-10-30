@@ -47,9 +47,10 @@ class EnvironmentQuery:
     requirements: tuple[str, ...] = ()
     num_gpus: int = 1
     fresh: bool = False
+    features: tuple[str, ...] = ()
 
     def __post_init__(self):
-        for name in ("languages", "requirements"):
+        for name in ("languages", "requirements", "features"):
             values = tuple(getattr(self, name))
             if any(not isinstance(value, str) or not value.strip() for value in values):
                 raise ValueError(f"{name} must contain nonempty strings")

@@ -57,6 +57,28 @@ class OutputOptions:
 
 
 @dataclass(frozen=True)
+class PreparedSourceArchive:
+    """Immutable owner-prepared archive, independent of storage credentials."""
+    role: Literal["candidate", "baseline"]
+    path: str
+    entry_point: str
+    content: bytes = field(repr=False)
+
+    def __post_init__(self):
+        if self.role not in {"candidate", "baseline"}:
+            raise ValueError("source archive role must be candidate or baseline")
+        for name in (self.path, self.entry_point):
+            path = Path(name)
+            if (not isinstance(name, str) or not name or path.is_absolute()
+                    or path.as_posix() != name or ".." in path.parts
+                    or path == Path(".") or "\\" in name
+                    or any(ord(char) < 32 for char in name)):
+                raise ValueError("source archive paths must be safe relative names")
+        if not isinstance(self.content, bytes) or not self.content:
+            raise TypeError("source archive content must be nonempty immutable bytes")
+
+
+@dataclass(frozen=True)
 class CommandSpec:
     workspace: Path
     command: tuple[str, ...]
@@ -76,12 +98,24 @@ class CommandSpec:
     input_files: tuple[ExecutionFile, ...] = field(default=(), repr=False)
     output_options: OutputOptions | None = None
     prepared_inputs: PreparedExecutionInputs | None = field(default=None, repr=False)
+    source_archives: tuple[PreparedSourceArchive, ...] = field(default=(), repr=False)
+    idempotency_key: str | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "command", tuple(self.command))
         object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
         object.__setattr__(self, "languages", tuple(self.languages))
         object.__setattr__(self, "requirements", tuple(self.requirements))
+        archives = tuple(self.source_archives)
+        if any(not isinstance(item, PreparedSourceArchive) for item in archives):
+            raise TypeError("source archives require PreparedSourceArchive values")
+        if (len({item.role for item in archives}) != len(archives)
+                or len({item.path for item in archives}) != len(archives)):
+            raise ValueError("source archive roles and paths must be unique")
+        object.__setattr__(self, "source_archives", archives)
+        if self.idempotency_key is not None and (not isinstance(self.idempotency_key, str)
+                or not self.idempotency_key or "\0" in self.idempotency_key):
+            raise ValueError("idempotency key must be nonempty text")
         if self.filesystem_access is not None and not isinstance(self.filesystem_access, FilesystemAccess):
             raise TypeError("execution scope requires FilesystemAccess")
         if self.profile_options is not None and not isinstance(self.profile_options, ProfileOptions):
@@ -112,8 +146,11 @@ class BackendCapabilities:
     input_files: bool = False
     output_options: bool = False
     prepared_inputs: bool = False
+    source_archives: bool = False
 
     def require(self, command: CommandSpec) -> None:
+        if command.source_archives and not self.source_archives:
+            raise UnsupportedExecution("executor does not support prepared source archives")
         if command.filesystem_access is not None and not self.filesystem_isolation:
             raise UnsupportedExecution("executor cannot enforce the requested file and environment scope")
         if command.input_files and not self.input_files:

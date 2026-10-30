@@ -295,6 +295,15 @@ class GatewayJobs:
             raise ValueError("replay requires the original idempotency key")
         if command.submission is None:
             raise UnsupportedExecution("replay requires an immutable prepared request")
+        if command.source_archives:
+            from .source_archives import replay_archived
+            return replay_archived(self, command, idempotency_key=idempotency_key, retry=retry)
+        return self._replay_prepared(command, idempotency_key=idempotency_key, retry=retry)
+
+    def _replay_prepared(self, command, *, idempotency_key, retry, deadline=None, request_identity=None):
+        """Continue admission within the caller's original preparation deadline."""
+        if command.idempotency_key is not None and command.idempotency_key != idempotency_key:
+            raise ValueError("replay cannot change the physical idempotency key")
         prepared = json.loads(command.submission)
         kind = prepared.get("kind")
         if prepared.get("schema_version") != 1 or kind not in {"run", "profile", "check", "disassemble"}:
@@ -315,8 +324,9 @@ class GatewayJobs:
         else:
             budget_diagnostics = (*budget_diagnostics, ExecutionDiagnostic("budget", "job-runtime-budget-unconfirmed",
                                     {"operation": kind}))
-        identity = hashlib.sha256(command.submission).hexdigest()
-        deadline = self.clock() + elapsed_budget
+        identity = request_identity or hashlib.sha256(command.submission).hexdigest()
+        if deadline is None:
+            deadline = self.clock() + elapsed_budget
         attempts, diagnostics = [], []
         last = None
         for index in range(len(retry.delays) + 1):

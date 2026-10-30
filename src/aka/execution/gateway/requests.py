@@ -17,8 +17,14 @@ def validate_native_abba(request):
     abba = request.get("abba") if isinstance(request, dict) else None
     if not isinstance(abba, dict) or set(abba) != {"baseline", "repeats"}:
         raise ValueError("same-allocation ABBA requires baseline and SDK block repetitions")
-    if not isinstance(abba["baseline"], str) or not abba["baseline"].strip():
-        raise ValueError("same-allocation ABBA baseline must be nonempty source")
+    baseline = abba["baseline"]
+    if isinstance(baseline, str):
+        valid_baseline = bool(baseline.strip())
+    else:
+        from .source_archives import source_descriptor
+        valid_baseline = source_descriptor(baseline)
+    if not valid_baseline:
+        raise ValueError("same-allocation ABBA baseline must be nonempty source or an archive descriptor")
     if type(abba["repeats"]) is not int or abba["repeats"] < 1:
         raise ValueError("same-allocation ABBA SDK block repetitions must be positive")
 

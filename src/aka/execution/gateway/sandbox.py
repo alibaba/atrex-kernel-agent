@@ -1738,6 +1738,7 @@ def _run_direct_job(
     payload: dict[str, Any],
     timeout: int,
     queue_wait_grace: int,
+    on_submitted=None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
     import uuid
@@ -1747,11 +1748,13 @@ def _run_direct_job(
     endpoint, profile = _submission_route(url)
     identity = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     key = payload.get("idempotency_key")
+    deadline = time.monotonic() + timeout + queue_wait_grace
     emit_fact({"event": "attempt_started", "attempt_id": attempt_id, "operation": kind, "backend": "gateway"})
     emit_fact({"event": "submission_intent", "attempt_id": attempt_id, "request_identity": identity,
                "idempotency_key": key})
     try:
-        accepted = _gateway_json(endpoint or url, "POST", f"/v1/jobs/{kind}", payload, 30)
+        accepted = _gateway_json(endpoint or url, "POST", f"/v1/jobs/{kind}", payload,
+                                 min(30, max(0, deadline - time.monotonic())))
     except GatewayHTTPError as error:
         try:
             native = json.loads(error.detail)
@@ -1768,7 +1771,8 @@ def _run_direct_job(
     emit_fact({"event": "submitted", "attempt_id": attempt_id, "identifier": job_id,
                "operation": kind, "backend": "gateway", "endpoint": endpoint, "profile": profile,
                "request_identity": identity, "idempotency_key": key})
-    deadline = time.monotonic() + timeout + queue_wait_grace
+    if on_submitted is not None:
+        on_submitted(accepted)
     try:
         while True:
             remaining = deadline - time.monotonic()
@@ -1776,7 +1780,7 @@ def _run_direct_job(
                 raise TimeoutError(f"gateway job {job_id} exceeded client timeout")
             wait_for = min(30.0, remaining)
             job = _gateway_json(endpoint or url, "GET",
-                f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}", None, wait_for + 10)
+                f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}", None, min(wait_for + 10, remaining))
             if job.get("status") in ("succeeded", "failed", "cancelled"):
                 process = subprocess.CompletedProcess(args=["direct-gateway", kind, job_id],
                     returncode=0 if job.get("status") == "succeeded" else 1, stdout=json.dumps(job), stderr="")

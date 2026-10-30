@@ -18,7 +18,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
         if "requirements_file" in self.configuration:
             raise ValueError("worker requirements belong to Task, not gateway provider configuration")
     capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile", "check", "disassemble", "same_allocation_abba")), True, True,
-                                       input_files=True, output_options=True, prepared_inputs=True)
+                                       input_files=True, output_options=True, prepared_inputs=True, source_archives=True)
     resource_identity = ResourceIdentity("gateway")
 
     def bind(self, context):
@@ -55,6 +55,8 @@ class GatewayExecutor(GatewayRecoveryMixin):
 
     def _run(self, command):
         self.capabilities.require(command)
+        from .source_archives import prepared_payload
+        input_payload = prepared_payload(command)
         from .requests import NATIVE_ABBA, prepared_operation
         if command.operation == NATIVE_ABBA:
             if command.submission is None:
@@ -78,7 +80,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
                     self._selected_job_transport = bound._selected_job_transport
         from aka.execution.environment_query import command_query, require_supported
         support = self._environment_backend(command.environment).check(command_query(command), discover=False)
-        require_supported(support, require_known=command.operation == NATIVE_ABBA)
+        require_supported(support, require_known=command.operation == NATIVE_ABBA or bool(command.source_archives))
         if type(command.timeout) is not int or command.timeout <= 0:
             raise ValueError("execution timeout must be a positive integer")
         argv = [sys.executable, "-m", "aka.execution.gateway.entrypoint",
@@ -137,7 +139,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
         try:
             result = run_owned(argv, environment=environment, workspace=command.workspace,
                 timeout=command.timeout + grace + 240, resource=self.resource_identity,
-                hardware=command.hardware, cancel_event=command.cancel_event, input_payload=command.submission,
+                hardware=command.hardware, cancel_event=command.cancel_event, input_payload=input_payload,
                 prepared_input_payload=prepared_payload(command.prepared_inputs, command.input_files),
                 on_observation=observed if command.on_observation is not None else None)
         except BaseException as error:

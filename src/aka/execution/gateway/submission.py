@@ -29,9 +29,14 @@ def submit_prepared(args, workspace, grace, prepared):
         emit_diagnostic({"failure_class":"protocol", "reason":"job-runtime-budget-unconfirmed"})
     if args.ssh or args.input:
         raise ValueError("prepared typed requests do not support SSH or custom input")
+    from .source_archives import read_archives, validate_archives, run_archived, SourceArchiveError
+    archives = read_archives(prepared)
+    validate_archives(prepared, archives, args.kind)
     executable = transport._find_agate()
     try:
-        if args.url and executable is None:
+        if archives:
+            process = run_archived(args, workspace, grace, request, archives, transport=transport)
+        elif args.url and executable is None:
             process = transport._run_direct_job(url=args.url, kind={"run":"eval", "check":"compile"}.get(kind, kind),
                 payload=request, timeout=args.timeout, queue_wait_grace=grace)
         elif executable is None:
@@ -58,6 +63,11 @@ def submit_prepared(args, workspace, grace, prepared):
                     url=args.url, gateway_profile=args.gateway_profile,
                     command_timeout=transport._gateway_job_timeout(args.timeout, grace),
                     wait_budget=args.timeout + grace)
+    except SourceArchiveError as error:
+        emit_diagnostic({"failure_class": "infrastructure", "reason": error.code,
+                         **({"http_status": error.status} if error.status is not None else {})})
+        print(transport.INFRASTRUCTURE_MARKER, file=sys.stderr)
+        return transport.ENVIRONMENT_TEMPFAIL
     except transport.GatewayHTTPError as error:
         from .diagnostics import report_typed_limitation
         report_typed_limitation(f"http {error.status}")
