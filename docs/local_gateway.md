@@ -85,6 +85,12 @@ overrides preserve the requested warmup and per-run timing budgets; allocation
 timeouts may be up to 10800 seconds. The installed Atrex-Bench must support
 native ABBA and the JSON runner configuration contract.
 
+Clock requests are reported separately from applied locks in the Eval result's
+`clock_lock` field. The local adapter currently manages NVIDIA clocks; on AMD it
+runs with `clock_locked=false`, matching the remote gateway's unsupported-device
+behavior. It does not equate a ROCm performance level with a fixed clock or report
+an unapplied lock as successful. Correctness checks and every ABBA leg still run.
+
 ## Security Boundary
 
 This server is not a container or privilege boundary. Uploaded files and commands execute as the account
