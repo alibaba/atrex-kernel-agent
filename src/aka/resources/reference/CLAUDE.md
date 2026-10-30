@@ -84,3 +84,10 @@ For `request_not_started`, wait at least `retry_after_seconds` and retry with ba
 private-state or dependency failures may need operator help. Correct rejected `episode-report`
 requests and retry until accepted, then stop. A Baseline session has its own smoke-and-exit
 procedure and does not submit an Episode report.
+
+## Memory command
+
+Use the memory command explicitly declared by the host in workspace `CLAUDE.md`.
+If the host has not declared one, use `python -m aka.resources.tools.memory_manager`.
+Replace `<memory-command>` in resource examples with that complete invocation and
+keep the example's command arguments unchanged. The host's explicit selection takes precedence.

@@ -55,7 +55,8 @@ Hard rules for this session:
 - Workspace: `{{WORKSPACE}}` — this is your cwd, and a git repo. **git HEAD is the PyTorch V0 baseline.**
 - You are producing version **v{{N}}**. Previous version: **v{{PREV}}** (the PyTorch reference measurement).
 - Selected module Skills and declared reference/plugin resources are installed in this workspace. Inspect `python -m aka.resources.cli list` and `.atrex_plugins/instructions.md` for the available content; use each declared path
-  (`python -m aka.legacy.workflow.memory_manager summary --workspace .`, `reference/v_iteration.schema.json`).
+  (`reference/v_iteration.schema.json`). Use the memory command declared in workspace `CLAUDE.md`; replace
+  `<memory-command>` with that complete invocation in `<memory-command> summary --workspace .`.
 {{AGENT_RUNTIME}}
 
 {{HARDWARE}}

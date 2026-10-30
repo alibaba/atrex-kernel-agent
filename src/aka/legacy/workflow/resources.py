@@ -13,8 +13,11 @@ def contribute(ctx, config):
 def initial_files(registry, *, sol=False, policy=None):
     installation = registry.resource_result()
     instructions = installation.resource('workflow-instructions').source
-    result = [WorkspaceFile('CLAUDE.md', source=instructions) if policy is None
-              else WorkspaceFile('CLAUDE.md', text=policy(instructions.read_text(encoding='utf-8')))]
+    text = instructions.read_text(encoding="utf-8")
+    if policy is not None:
+        text = policy(text)
+    text += "\n\nSelected memory command: `python -m aka.legacy.workflow.memory_manager`.\n"
+    result = [WorkspaceFile("CLAUDE.md", text=text)]
     try:
         driver = installation.resource('execution-profile-driver')
     except KeyError:

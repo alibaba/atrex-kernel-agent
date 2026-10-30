@@ -7,6 +7,9 @@
     {
       "id": "resources",
       "config": {
+        "plugins": [
+          "${aka:repo_root}/plugins/gpu-wiki"
+        ],
         "bundles": [
           "measurement-session",
           "research-records"
@@ -23,8 +26,8 @@
         "name": "aka.agent.plugin",
         "required": true,
         "config": {
-          "sandbox": "bwrap",
-          "proc_mode": "projected"
+          "sandbox": "none",
+          "proc_mode": "private"
         }
       }
     },

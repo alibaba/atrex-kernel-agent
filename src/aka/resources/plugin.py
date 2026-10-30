@@ -6,7 +6,7 @@ identity_packages = ("aka.resources", "aka.contracts.agent_resources", "aka.cont
 Config = {"type": "object", "properties": {
     "plugin_dir": {"type": "string"},
     "plugins": {"type": "array", "items": {"type": "string", "minLength": 1}},
-    "bundles": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True},
+    "bundles": {"type": "array", "items": {"type": "string", "minLength": 1}},
 }, "additionalProperties": False}
 Defaults = {"plugin_dir": "", "plugins": [], "bundles": []}
 interpolate = ("plugin_dir", "plugins")

@@ -151,3 +151,10 @@ library primitives — are unaffected.
 - Profiling capabilities (Stage 1): consult `python -m aka.resources.cli list` and the selected `profiling/profile_guide.md`; report missing required capabilities.
 - Plan generation (Stage 2): installed `.agents/skills/gen-plan/SKILL.md` with independent Codex
   and Qoder review synthesis
+
+## Memory command
+
+Use the memory command explicitly declared by the host in workspace `CLAUDE.md`.
+If the host has not declared one, use `python -m aka.resources.tools.memory_manager`.
+Replace `<memory-command>` in resource examples with that complete invocation and
+keep the example's command arguments unchanged. The host's explicit selection takes precedence.

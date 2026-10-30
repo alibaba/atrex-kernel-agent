@@ -59,7 +59,7 @@ Use its Task Context fields with the injected setup prompt when writing the work
   `acu` and must be reachable as `ncu` on PATH. See `profiling/profile_guide.md` for activation
   and the mandatory performance-counter release step.
 - Use `profiling/common/compute_utilization.py` and the measurement/extraction helpers for supporting
-  calculations; use `python -m aka.legacy.workflow.memory_manager` only for workspace memory operations allowed by the
+  calculations. Use the memory command declared in workspace `CLAUDE.md` for workspace memory operations allowed by the
   current prompt.
 
 ## Mechanical Stop and Acceptance Rules

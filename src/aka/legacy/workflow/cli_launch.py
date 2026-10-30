@@ -24,7 +24,7 @@ def _profile_path(value):
     if value in OPTIONAL_PROFILES:
         try:
             from importlib.resources import files
-            return Path(str(files("aka.light").joinpath("profiles", f"{value}.json")))
+            return Path(str(files("aka.light.workflow").joinpath("profiles", f"{value}.json")))
         except (ImportError, ModuleNotFoundError) as exc:
             raise RuntimeError(
                 f"launch profile {value!r} requires the optional atrex-aka-light package"

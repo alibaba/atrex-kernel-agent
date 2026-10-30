@@ -135,14 +135,15 @@ python profiling/common/compute_utilization.py \
    - Correctness results: case list, max `rel_err`, PASS/FAIL (include any TIMEOUT_FAIL cases)
    - Baseline performance: latency(us), TFLOPS, bandwidth(GB/s), and peak utilization percentages
 
-7. Write baseline iteration data to `memory/v0.json` using `aka.legacy.workflow.memory_manager`:
+7. Write baseline iteration data to `memory/v0.json` using the memory command declared in workspace `CLAUDE.md`.
+   Replace `<memory-command>` below with that complete invocation:
 
 ```bash
 # Create the iteration file
-python -m aka.legacy.workflow.memory_manager create --workspace kernel_opt_<name> --version v0
+<memory-command> create --workspace kernel_opt_<name> --version v0
 
 # Fill in performance and metadata
-python -m aka.legacy.workflow.memory_manager update --workspace kernel_opt_<name> --version v0 \
+<memory-command> update --workspace kernel_opt_<name> --version v0 \
     --set 'performance.latency_us=<value>' \
     --set 'performance.tflops=<value>' \
     --set 'performance.bandwidth_gbps=<value>' \

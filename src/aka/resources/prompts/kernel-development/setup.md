@@ -19,7 +19,8 @@ payload is forbidden.
 
 Environment (resolve all paths against your cwd = the workspace):
 - Selected module Skills and declared reference/plugin resources are installed in this workspace. Inspect `python -m aka.resources.cli list` and `.atrex_plugins/instructions.md` for the available content; use each declared path
-  (e.g. `python -m aka.legacy.workflow.memory_manager summary --workspace .`, `reference/v_iteration.schema.json`).
+  (e.g. `reference/v_iteration.schema.json`). Use the memory command declared in workspace `CLAUDE.md`; replace
+  `<memory-command>` with that complete invocation in `<memory-command> summary --workspace .`.
 {{AGENT_RUNTIME}}
 
 {{HARDWARE}}
@@ -48,7 +49,7 @@ Do the following, in order, but only through baseline:
 2. **Write `README.md`** — static config from the parameters below + Step 0 outputs (use `reference/README.md` as the template).
 3. **Stage 1 — Baseline.** {{BASELINE_DRIVER}}: implement `kernel.py`, use the evaluator
    route declared above, run exactly one base-seed full-workload measurement for baseline performance, write `baseline_report.md`, write
-   `memory/v0.json` (via `aka.legacy.workflow.memory_manager`), and `git commit` ("V0: baseline kernel").
+   `memory/v0.json` (via the memory command declared in workspace `CLAUDE.md`), and `git commit` ("V0: baseline kernel").
    If a subagent is used, include the mandatory sandbox block above verbatim in its task. It must run
    `python test_kernel.py --version v0 --no-memory` exactly once through `python -m aka.experiment.command_client --kind run`.
    Do not run `--multi-seed` for V0. Parse the emitted
