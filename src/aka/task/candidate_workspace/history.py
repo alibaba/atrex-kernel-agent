@@ -119,7 +119,9 @@ def _rename_paths(encoded):
     raise ValueError("workspace rename status has no path separator")
 
 
-def working_facts(workspace: Path, *, paths=()):
+def working_facts(workspace: Path, *, paths=(), include_untracked=True):
+    if type(include_untracked) is not bool:
+        raise TypeError("include_untracked must be boolean")
     workspace = Path(workspace).absolute()
     current_revision(workspace)
     if not (workspace / ".git").exists():
@@ -130,7 +132,7 @@ def working_facts(workspace: Path, *, paths=()):
     # Git quotes whitespace/controls (even with quotePath=false), so rename
     # separators outside C-quoted names remain unambiguous.
     output = _git(workspace, "--no-optional-locks", "status", "--short",
-                  "--untracked-files=all").stdout
+                  "--untracked-files=all" if include_untracked else "--untracked-files=no").stdout
     changed = []
     for raw in output.splitlines():
         row = re.sub(rb"\x1b\[[0-9;]*m", b"", raw)
@@ -153,3 +155,11 @@ def working_facts(workspace: Path, *, paths=()):
             identities[name] = _git(workspace, "hash-object", "--", name).stdout.decode().strip()
     return WorkingFacts(tuple(dict.fromkeys(changed)), identities,
                         output.decode("utf-8", errors="surrogateescape").strip())
+
+
+def revision_changes(workspace, base_revision, revision):
+    """Return the complete literal path delta between two explicit revisions."""
+    base = resolve_revision(workspace, base_revision)
+    revision = resolve_revision(workspace, revision)
+    return tuple(name.decode('utf-8', errors='surrogateescape') for name in
+                 _git(workspace, 'diff', '--name-only', '--no-renames', '-z', base, revision).stdout.split(b'\0') if name)

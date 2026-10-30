@@ -41,13 +41,29 @@ class GitCandidateWorkspace(GitSnapshots):
         from .source import source_identity
         return source_identity(source)
 
+    def fork_revision(self, workspace, revision, destination):
+        from .retention import fork_revision
+        return fork_revision(workspace, revision, destination)
+
+    def retain_revision(self, workspace, revision, *, retention_key):
+        from .retention import retain_revision
+        return retain_revision(workspace, revision, retention_key=retention_key)
+
+    def import_revision(self, workspace, source_workspace, revision, *, retention_key):
+        from .retention import import_revision
+        return import_revision(workspace, source_workspace, revision, retention_key=retention_key)
+
     def revision_history(self, workspace, *, revision=None, paths=(), changed_path=None):
         from .history import revision_history
         return revision_history(workspace, revision=revision, paths=paths, changed_path=changed_path)
 
-    def working_facts(self, workspace, *, paths=()):
+    def revision_changes(self, workspace, base_revision, revision):
+        from .history import revision_changes
+        return revision_changes(workspace, base_revision, revision)
+
+    def working_facts(self, workspace, *, paths=(), include_untracked=True):
         from .history import working_facts
-        return working_facts(workspace, paths=paths)
+        return working_facts(workspace, paths=paths, include_untracked=include_untracked)
 
     def restore_revision(self, workspace, *, expected_revision, revision, retain_working_files):
         from .restore import restore_revision

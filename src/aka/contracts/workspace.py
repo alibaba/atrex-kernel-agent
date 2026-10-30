@@ -170,6 +170,20 @@ class CandidateWorkspace(Protocol):
     def current_revision(self, workspace: Path) -> str:
         """Return the opaque current revision, or an empty string before initialization."""
         ...
+    def retain_revision(self, workspace: Path, revision: str, *, retention_key: str) -> None:
+        """Retain verified local provenance under an owner-validated literal key."""
+        ...
+    def import_revision(self, workspace: Path, source_workspace: Path, revision: str,
+                        *, retention_key: str) -> None:
+        """Import and retain an explicit local source revision without changing HEAD."""
+        ...
+    def fork_revision(self, workspace: Path, revision: str, destination: Path) -> None:
+        """Atomically create a standalone controller workspace at an explicit revision.
+
+        Preserve declared frozen context; do not inherit active candidates or
+        introduce external object alternates, hardlinks or remote authority.
+        """
+        ...
     def read_working(self, workspace: Path, paths: tuple[str, ...]) -> RevisionContent:
         """Read selected working bytes without following links or interpreting content."""
         ...
@@ -191,8 +205,12 @@ class CandidateWorkspace(Protocol):
                          changed_path: str | None = None) -> tuple[RevisionFacts, ...]:
         """Return reachable history in stable newest-first order, with explicit path identities."""
         ...
-    def working_facts(self, workspace: Path, *, paths: tuple[str, ...] = ()) -> WorkingFacts:
-        """Read index/worktree changes and explicit working content identities without mutation."""
+    def revision_changes(self, workspace: Path, base_revision: str, revision: str) -> tuple[str, ...]:
+        """Read exact changed paths between explicit revisions without moving the workspace."""
+        ...
+    def working_facts(self, workspace: Path, *, paths: tuple[str, ...] = (),
+                      include_untracked: bool = True) -> WorkingFacts:
+        """Read changes and explicit content identities; tracked-only checks are explicit."""
         ...
     def restore_revision(self, workspace: Path, *, expected_revision: str,
                          revision: str, retain_working_files: bool) -> str:

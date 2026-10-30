@@ -216,7 +216,7 @@ def _candidate(handle, candidate_commit, *, require_worktree_match):
         committed = read_source(handle.path, revision=revision)
         if require_worktree_match and read_source(handle.path).files != committed.files:
             return "working source must match the sealed candidate", paths
-        if any(marker.encode() in data for data in committed.files.values() if data is not None
+        if any(marker.encode() in data for name, data in committed.files.items() if data is not None and name != POLICY
                for marker in TIMELINE_PROBE_MARKERS):
             return "candidate source contains timeline profiling probes", paths
     except (ValueError, OSError, RuntimeError) as error:
@@ -263,7 +263,7 @@ def _candidate_source(handle, source):
     from .binding import inspect_candidate
     from .context import context_changes, uses_context
     from .history import working_facts
-    from .policy import CANDIDATE_PATHS, TIMELINE_PROBE_MARKERS
+    from .policy import TIMELINE_PROBE_MARKERS
     from aka.task.git import protected_violation
     from .records import record
     facts = inspect_candidate(handle.path, handle)
@@ -276,13 +276,14 @@ def _candidate_source(handle, source):
         changed = context_changes(handle.path, base)
         if changed:
             raise ValueError("candidate modified frozen workspace context: " + ", ".join(changed))
-    violation = protected_violation(list(working_facts(handle.path).changed_paths))
+    dirty = working_facts(handle.path).changed_paths
+    violation = protected_violation(list(dirty))
     if violation:
         raise ValueError(violation)
     selected = dict(source.files)
     if selected.get("kernel.py") is None:
         raise ValueError("candidate source requires kernel.py")
-    if any(marker.encode() in data for data in selected.values() if data is not None
+    if any(marker.encode() in data for name, data in selected.items() if data is not None and name != POLICY
            for marker in TIMELINE_PROBE_MARKERS):
         raise ValueError("candidate source contains timeline profiling probes")
     baseline = read_source(handle.path, revision=base)
@@ -296,8 +297,8 @@ def _candidate_source(handle, source):
             raise ValueError("a single-file candidate may seal only kernel.py")
         if selected == dict(baseline.files):
             raise ValueError("candidate has no Kernel change; report pivot or select another")
-        if not set(changed).issubset(CANDIDATE_PATHS):
-            raise ValueError("candidate changed source outside its existing edit scope")
+        if any(name != "kernel.py" for name in changed) or "solution.json" in dirty:
+            raise ValueError("single-file sealing requires unchanged manifest and a kernel-only candidate")
         deleted = ()
     else:
         if current_policy != policy or current_raw != raw or selected.get(POLICY) != raw:
