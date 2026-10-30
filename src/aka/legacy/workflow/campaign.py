@@ -54,7 +54,7 @@ from aka.task.hardware import hardware_vendor
 from aka.task.source.inspection import kernel_is_gluon
 from aka.task.problem import AGENT_PROBLEM_FILENAME
 from aka.legacy.workflow.policy import install_workspace_policy, optimization_mode_directive
-from aka.legacy.acceptance.source_policy import production_kernel_violations, production_structure_violations
+from aka.legacy.workflow.review_rules.source_policy import production_kernel_violations, production_structure_violations
 from .plan_reviewers import (
     REVIEWER_ENVIRONMENT,
     discover_plan_reviewers,
@@ -64,7 +64,7 @@ from .review_trace import ReviewTrace
 from aka.evaluation.metadata import distributed_evaluation_world_size, evaluator_num_gpus
 from aka.resources.plugins import PluginRegistry
 from aka.legacy.workflow.agent_session import SessionResult
-from aka.legacy.acceptance.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
+from aka.legacy.workflow.review_rules.review import _production_review_candidate_paths, _production_review_digest, _validate_production_review
 from .records import _record_local_test_result
 from aka.resources.prompts import render_prompt
 from .runtime_directives import _agent_runtime_directive, _baseline_driver_directive
@@ -2292,7 +2292,7 @@ class Campaign:
                 subprocess.run(
                     [
                         sys.executable,
-                        "-m", "aka.legacy.workflow.sol_finalize",
+                        "-m", "aka.resources.reference.sol_finalize",
                         "--workspace",
                         str(self.workspace),
                     ],

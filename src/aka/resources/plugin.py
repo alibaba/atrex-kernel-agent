@@ -6,12 +6,14 @@ identity_packages = ("aka.resources", "aka.contracts.agent_resources", "aka.cont
 Config = {"type": "object", "properties": {
     "plugin_dir": {"type": "string"},
     "plugins": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "bundles": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": True},
 }, "additionalProperties": False}
-Defaults = {"plugin_dir": "", "plugins": []}
+Defaults = {"plugin_dir": "", "plugins": [], "bundles": []}
 interpolate = ("plugin_dir", "plugins")
 
 
 def apply(ctx, config):
+    from .bundles import bundle_contributions
     from .contributions import _selected_scope
     from .plugins import _selected_catalog, _selected_plugins
     value = config.get("plugin_dir", "")
@@ -21,7 +23,12 @@ def apply(ctx, config):
     plugins = tuple(Path(value).expanduser().resolve() for value in config.get("plugins", ()))
     if any(not (path / "plugin.json").is_file() for path in plugins):
         raise ValueError("selected tool plugin requires plugin.json")
+    resources, skills = bundle_contributions(config.get("bundles", ()))
     for variable, value in ((_selected_catalog, catalog), (_selected_plugins, plugins),
                             (_selected_scope, ctx.current_scope)):
         token = variable.set(value)
         ctx.effect(lambda variable=variable, token=token: variable.reset(token), label="restore resource selection")
+    for resource in resources:
+        ctx.contribute("workspace_resources", resource.name, resource)
+    for skill in skills:
+        ctx.contribute("agent_skills", skill.name, skill)

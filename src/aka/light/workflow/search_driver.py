@@ -13,10 +13,10 @@ import json
 from pathlib import Path
 from threading import Event
 
-from aka.light.long_horizon import main_adapter
-from aka.light.long_horizon.campaign import LongHorizonCampaign
-from aka.light.orchestrator.durable_state import durable_write_json
-from aka.light.orchestrator.version_records import version_record_path
+from aka.light.workflow.long_horizon import main_adapter
+from aka.light.workflow.long_horizon.campaign import LongHorizonCampaign
+from aka.light.workflow.orchestration.durable_state import durable_write_json
+from aka.light.workflow.orchestration.version_records import version_record_path
 from .search import latency, read_state
 from .search_git import commit_files
 
@@ -178,7 +178,7 @@ class EpisodeSearchDriver:
         # An archived terminal Episode is not run again after coordinator restart.
         if current < episode or (child.workspace / ".atrex_long_horizon/active_episode.json").exists():
             child.start_runtime()
-            from aka.light.long_horizon.session import LongSessionRunner
+            from aka.light.workflow.long_horizon.session import LongSessionRunner
             runner = LongSessionRunner(agent=child.agent, agent_cli=child.agent_cli,
                 usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0,
                 source_inventory=lambda workspace: tuple(child.candidate_workspace.read_source(workspace).files))

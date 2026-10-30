@@ -197,6 +197,14 @@ class ResourcesRegistry(AgentResourceRegistry, Protocol):
         """Validate the selected resources against the recorded identity before mutation."""
         ...
 
+    def resource_file(self, name: str, relative: str) -> Path:
+        """Read one member of exactly one selected declared resource root.
+
+        Mounted and runtime-only roots are eligible; missing, ambiguous or escaped
+        members fail without a fallback root or additional filesystem grant.
+        """
+        ...
+
     def catalog(self) -> list[dict]: ...
 
     def skill_catalog(self) -> list[dict]: ...

@@ -38,7 +38,7 @@ class WorkflowOptions:
                 continue
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be positive finite seconds")
-        from aka.light.wiki.config import WikiConfig
+        from aka.resources.wiki.config import WikiConfig
         WikiConfig(**(self.wiki_options or {}))
         from .deadline import episode_timeout
         episode_timeout(self.episode_timeout_seconds)

@@ -10,7 +10,7 @@ import tempfile
 
 from aka.contracts.workspace import WorkspaceFilesSnapshot
 from aka.filesystem import open_private_directory, read_regular_bytes
-from aka.light.orchestrator.durable_state import durable_write_json, fsync_directory
+from aka.light.workflow.orchestration.durable_state import durable_write_json, fsync_directory
 from aka.contracts.content import WorkspaceFile
 
 TREES = ("skills", "tools")

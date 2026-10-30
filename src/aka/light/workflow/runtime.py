@@ -4,7 +4,7 @@ from dataclasses import dataclass, replace
 from aka.contracts.evaluation import EvaluationConfiguration
 from aka.contracts.execution import ExecutionContext
 from aka.execution.binding import SandboxExecutor, task_environment
-from aka.light.wiki.config import WikiConfig
+from aka.resources.wiki.config import WikiConfig
 
 
 @dataclass(frozen=True)
@@ -32,7 +32,7 @@ class ManagedRuntimeFactory:
 
     def open(self, configuration, *, workspace_provider):
         from .journal import JournalFactory
-        from aka.light.orchestrator.supervisor_runtime import SupervisorRuntime
+        from aka.light.workflow.orchestration.supervisor_runtime import SupervisorRuntime
         c, w = self.campaign, self.workflow
         evaluation_input = w.problem.content(c.problem, c.workspace,
             generated_digest=getattr(c, "_generated_agent_problem_digest", None)).evaluation

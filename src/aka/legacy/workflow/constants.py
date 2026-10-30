@@ -50,7 +50,7 @@ GATEWAY_CANDIDATE_RECOVERY_MODES = ("disabled", "typed-once")
 FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
 
 
-from aka.legacy.acceptance.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
+from aka.legacy.workflow.review_rules.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
 
 
 DEPENDENCY_REVIEW_TIMEOUT_S = 600

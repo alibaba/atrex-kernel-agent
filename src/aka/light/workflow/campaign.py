@@ -3,9 +3,9 @@ from dataclasses import fields, replace
 
 from aka.contracts.agent import AgentRunRequest
 from aka.contracts.workspace import SourceRequest
-from aka.light.orchestrator.campaign import Campaign
-from aka.light.orchestrator.constants import REPO_ROOT
-from aka.light.orchestrator.session_io import SessionResult
+from aka.light.workflow.orchestration.campaign import Campaign
+from aka.light.workflow.orchestration.constants import REPO_ROOT
+from aka.light.workflow.orchestration.session_io import SessionResult
 
 
 class ManagedCampaign(Campaign):
@@ -65,10 +65,10 @@ class ManagedCampaign(Campaign):
         return super().start_runtime()
 
     def run(self):
-        from aka.light.orchestrator.environment_recovery import EnvironmentUnavailable as LightEnvironmentUnavailable
+        from aka.light.workflow.orchestration.environment_recovery import EnvironmentUnavailable as LightEnvironmentUnavailable
 
         try:
-            from aka.light.runtime.paths import supervisor_campaign_root
+            from aka.light.workflow.support.paths import supervisor_campaign_root
             search_root = supervisor_campaign_root(self.workspace) / "search"
             if self.module_options.search is not None:
                 if not self.atrex_bench_root or self.sandbox_ssh:
@@ -94,7 +94,7 @@ class ManagedCampaign(Campaign):
 
     def agent_environment(self):
         # Evaluation/Execution credentials and routing remain in the host.
-        from aka.light.orchestrator.environment_recovery import environment_state_file
+        from aka.light.workflow.orchestration.environment_recovery import environment_state_file
         state = environment_state_file()
         return {"ATREX_ENVIRONMENT_STATE_FILE": str(state)} if state is not None else {}
 
@@ -103,7 +103,7 @@ class ManagedCampaign(Campaign):
         from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
         workspace = Path(workspace).resolve(strict=True)
         if role != "optimizer":
-            from aka.light.orchestrator.agent_workspace import WORKSPACE_LAYOUTS
+            from aka.light.workflow.orchestration.agent_workspace import WORKSPACE_LAYOUTS
             if role not in WORKSPACE_LAYOUTS:
                 raise ValueError("Unknown auxiliary session role")
             inputs, _ = WORKSPACE_LAYOUTS[role]
@@ -310,7 +310,7 @@ class ManagedCampaign(Campaign):
         """Record Workflow-owned V0 evidence through the selected Workspace transaction."""
         import json
         from aka.contracts.content import WorkspaceFile
-        from aka.light.orchestrator.version_records import (
+        from aka.light.workflow.orchestration.version_records import (
             save_version_record, version_commit_paths, version_record_path,
         )
         path = version_record_path(self.workspace, 0, prefer_summary=self.generate_memory)

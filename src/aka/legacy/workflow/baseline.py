@@ -215,7 +215,7 @@ class WorkflowBaseline:
     ):
         from aka.contracts.acceptance import FrameworkCandidateFacts
         from aka.task.source.inspection import kernel_is_gluon
-        from aka.legacy.acceptance.source_policy import production_structure_violations
+        from aka.legacy.workflow.review_rules.source_policy import production_structure_violations
 
         campaign = self.campaign
         blob = self._workspace_state.working_identity("kernel.py")

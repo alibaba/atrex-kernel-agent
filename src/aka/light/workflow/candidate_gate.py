@@ -3,7 +3,7 @@ from dataclasses import dataclass
 from collections.abc import Callable
 
 from aka.contracts.workspace import RevisionContent
-from aka.light.supervisor.errors import AgentRequestError, RuntimeStateError
+from aka.light.workflow.host.errors import AgentRequestError, RuntimeStateError
 from .measurement_policy import CORRECTNESS_CASES
 
 
@@ -27,7 +27,7 @@ class CandidateValidation:
 
 class CandidateGate:
     def verifier(self, **options):
-        from aka.light.long_horizon.recorded_verifier import RecordedABBAValidator
+        from aka.light.workflow.long_horizon.recorded_verifier import RecordedABBAValidator
         return RecordedABBAValidator(**options)
 
     def validate_candidate(self, context, source):
@@ -64,7 +64,7 @@ class CandidateGate:
             feedback = context.supplemental(source)
             context.ensure_live()
             if feedback:
-                from aka.light.orchestrator.constants import SUPPLEMENTAL_REPAIR_PREFIX
+                from aka.light.workflow.orchestration.constants import SUPPLEMENTAL_REPAIR_PREFIX
                 if feedback.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
                     raise AgentRequestError("The candidate failed a measured supplemental probe; report not accepted.", code="candidate_numerical_failed", next_action=feedback)
                 raise RuntimeStateError("Supplemental numerical validation is incomplete; report not accepted.", code="candidate_numerical_pending", next_action=feedback)

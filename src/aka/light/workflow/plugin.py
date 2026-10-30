@@ -39,8 +39,6 @@ def validate_config(config):
 
 def apply(ctx, config):
     from .provider import LightWorkflow, WorkflowOptions
-    from .resources import contribute
-    contribute(ctx, config)
     workflow = LightWorkflow(ctx.agent, ctx.problem, ctx.source, ctx.candidate,
                              executor=ctx.executor, execution_context=ctx.execution_context,
                              experiment_factory=ctx.experiment_factory, evaluator_factory=ctx.evaluator_factory,

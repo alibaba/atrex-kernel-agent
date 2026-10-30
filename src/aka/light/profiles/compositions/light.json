@@ -5,6 +5,15 @@
   ],
   "patches": [
     {
+      "id": "resources",
+      "config": {
+        "bundles": [
+          "measurement-session",
+          "research-records"
+        ]
+      }
+    },
+    {
       "id": "agent",
       "remove": true
     },

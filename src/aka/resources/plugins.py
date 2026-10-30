@@ -34,6 +34,23 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
                 "Invoke `python -m aka.resources.cli call <plugin.tool> --input <request.json>`.\n\n"
                 + super().instructions(phase, **values))
 
+    def resource_file(self, name: str, relative: str) -> Path:
+        """Return a member of exactly one selected declared resource, mounted or private."""
+        if not isinstance(name, str) or not name or not isinstance(relative, str) or not relative:
+            raise PluginError("invalid_config", "Resource member requires a name and relative path")
+        member = Path(relative)
+        if member.is_absolute() or ".." in member.parts:
+            raise PluginError("invalid_config", "Resource member requires a name and relative path")
+        matches = [resource[0] for plugin in self.plugins
+                   if (resource := plugin.resources.get(name)) is not None]
+        if len(matches) != 1:
+            raise PluginError("invalid_config", "Resource name is missing or ambiguous in the selection")
+        root = matches[0].resolve()
+        path = (root / member).resolve()
+        if not root.is_dir() or not path.is_relative_to(root) or not path.is_file():
+            raise PluginError("invalid_manifest", "Selected resource member is missing or outside its root")
+        return path
+
     def environment(self, workspace: Path, campaign_name: str = "") -> dict[str, str]:
         environment = super().environment(workspace, {"campaign_name": campaign_name})
         reserved = {"ATREX_PLUGIN_WORKSPACE": str(workspace.resolve()),

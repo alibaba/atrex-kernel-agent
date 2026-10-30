@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 
 from aka.filesystem import open_private_directory, read_regular_bytes
-from aka.light.supervisor.workspace import publish
+from aka.light.workflow.host.workspace import publish
 
 MAX_JSON_BYTES = 16 * 1024 * 1024
 MAX_CONVERSATION_BYTES = 256 * 1024 * 1024

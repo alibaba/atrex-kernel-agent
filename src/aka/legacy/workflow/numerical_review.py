@@ -129,7 +129,7 @@ def _digest(files):
 
 
 def _sources(campaign, workspace, *, harness=None):
-    from aka.legacy.acceptance.review import _production_review_candidate_paths
+    from aka.legacy.workflow.review_rules.review import _production_review_candidate_paths
 
     private = Path(campaign.private_reference_dir or workspace)
     if harness is None:

@@ -15,7 +15,7 @@ import os
 from pathlib import Path
 
 from aka.filesystem import open_private_directory
-from aka.light.orchestrator.durable_state import durable_write_json
+from aka.light.workflow.orchestration.durable_state import durable_write_json
 from aka.filesystem import read_regular_bytes
 
 

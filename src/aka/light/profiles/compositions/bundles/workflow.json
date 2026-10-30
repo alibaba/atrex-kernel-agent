@@ -16,6 +16,9 @@
       "config": {
         "plugins": [
           "${aka:repo_root}/plugins/gpu-wiki"
+        ],
+        "bundles": [
+          "kernel-development"
         ]
       }
     },
