@@ -47,6 +47,7 @@ include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", 
 "aka.agent" = ["*", "**/*"]
 "aka.execution" = ["*", "**/*"]
 "aka.core" = ["profiles/*.json"]
+"aka.bootstrap" = ["profiles/*.json", "profiles/bundles/*.json"]
 
 "aka.task" = ["*", "**/*"]
 

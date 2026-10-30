@@ -170,7 +170,7 @@ _atrex_guarded_python() {
         esac
     done
     if _atrex_python_code_imports_blocked_module "$code"; then
-        echo "atrex policy: host kernel/JIT-capable GPU imports must run through python -m aka.legacy.workflow.measurement_cli" >&2
+        echo "atrex policy: host kernel/JIT-capable GPU imports must run through python -m aka.bootstrap.measurement_cli" >&2
         return 126
     fi
     if (( code_index >= 0 )); then
@@ -178,7 +178,7 @@ _atrex_guarded_python() {
         # optimizer's process guard cannot regex-match prose embedded in the
         # command line.  Preserve interpreter flags before -c and user args
         # after the code string.  Nested sandbox commands never enter this
-        # branch because their first argument is python -m aka.legacy.workflow.measurement_cli.
+        # branch because their first argument is python -m aka.bootstrap.measurement_cli.
         local -a prefix=("${original[@]:0:code_index}")
         local -a trailing=("${original[@]:code_index + 2}")
         # macOS still ships Bash 3.2. Under `set -u`, expanding an empty

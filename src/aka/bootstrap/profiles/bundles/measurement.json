@@ -1,0 +1,14 @@
+{
+  "api_version": 1,
+  "entries": [
+    {
+      "id": "execution",
+      "name": "aka.execution.plugin",
+      "required": true,
+      "config": {"profile": "legacy"}
+    },
+    {"id": "evaluation", "name": "aka.evaluation.plugin", "required": true},
+    {"id": "canonical-reader", "name": "aka.legacy.workflow.canonical_reader_plugin", "required": true},
+    {"id": "experiment", "name": "aka.experiment.plugin", "required": true}
+  ]
+}

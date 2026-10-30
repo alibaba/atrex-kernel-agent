@@ -12,7 +12,7 @@ dependencies = ["atrex-aka-framework==0.2.0", "packaging>=23"]
 [project.entry-points."aka.commands"]
 optimize = "aka.bootstrap.workflow_cli:main"
 workflow = "aka.bootstrap.workflow_cli:main"
-execution = "aka.legacy.workflow.measurement_cli:main"
+execution = "aka.bootstrap.measurement_cli:main"
 
 [project.entry-points."aka.tokens"]
 workflow = "aka.legacy.workflow.plugin:WORKFLOW"

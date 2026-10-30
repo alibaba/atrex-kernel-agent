@@ -47,6 +47,11 @@ def preview_command(command, *, evaluator):
     """Print the measurement preview without exposing opaque context to callers."""
     plan = evaluator.prepare(command)
     context = plan.context
+    if not isinstance(context, dict) or "measurement" not in context:
+        print(json.dumps({"hardware": command.hardware, "workspace": str(command.workspace),
+            "operation": command.operation, "step_count": len(plan.steps),
+            "measurement_identities": [identity.digest for identity in plan.measurement_identities]}, indent=2))
+        return True
     measurement = context["measurement"]
     if measurement is None:
         return False

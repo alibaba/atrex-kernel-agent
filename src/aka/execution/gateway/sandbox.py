@@ -25,12 +25,12 @@ invocation is stateless; callers must not rely on remote filesystem persistence.
 
 Examples::
 
-    python -m aka.legacy.workflow.measurement_cli --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
-    python -m aka.legacy.workflow.measurement_cli --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
+    python -m aka.bootstrap.measurement_cli --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+    python -m aka.bootstrap.measurement_cli --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
         bash profiling/nvidia/profile_nvidia.sh profile_driver.py --output-dir profiles/v1 --source
-    python -m aka.legacy.workflow.measurement_cli --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
+    python -m aka.bootstrap.measurement_cli --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
         bash profiling/amd/profile_kernel.sh profile_driver.py --output-dir profiles/v1
-    python -m aka.legacy.workflow.measurement_cli --kind run --hardware H20 --ssh gpu-host --no-sync -- \
+    python -m aka.bootstrap.measurement_cli --kind run --hardware H20 --ssh gpu-host --no-sync -- \
         python test_kernel.py --no-memory
 
 ``ATREX_SANDBOX_GPU``, ``ATREX_SANDBOX_PROFILE``, ``ATREX_SANDBOX_URL``,

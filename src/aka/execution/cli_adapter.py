@@ -1,5 +1,6 @@
 """Bind the retained command CLI without owning measurement or experiments."""
 import os
+from contextlib import nullcontext
 from pathlib import Path
 import sys
 
@@ -128,7 +129,7 @@ def _bind(executor, command, args, environment):
 
 
 def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_only=False,
-            register_measurement_options=None):
+            register_measurement_options=None, executor=None):
     """Keep host binding private; callbacks consume public commands and CLI choices."""
     arguments = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser(register_measurement_options=register_measurement_options)
@@ -149,14 +150,20 @@ def run_cli(argv=None, *, prepare_command, run_command, preview_command, health_
         parser.error("this Execution entry requires --preflight or --check-health")
     if not command_parts(args.command) and not health:
         parser.error("provide a command after -- or use --preflight")
-    selection = dict(selected_execution())
-    if args.profile is not None:
-        selection["profile"] = args.profile
-    if args.patch:
-        selection["patches"] = [*selection.get("patches", ()), *read_execution_patches(args.patch)]
-    if args.profiles_dir is not None:
-        selection["profiles_dir"] = str(args.profiles_dir.expanduser().resolve())
-    with execution_scope(selection=selection) as executor:
+    if executor is not None:
+        if args.profile is not None or args.patch or args.profiles_dir is not None:
+            parser.error("Executor is selected by the command composition; use a composition patch")
+        scope = nullcontext(executor)
+    else:
+        selection = dict(selected_execution())
+        if args.profile is not None:
+            selection["profile"] = args.profile
+        if args.patch:
+            selection["patches"] = [*selection.get("patches", ()), *read_execution_patches(args.patch)]
+        if args.profiles_dir is not None:
+            selection["profiles_dir"] = str(args.profiles_dir.expanduser().resolve())
+        scope = execution_scope(selection=selection)
+    with scope as executor:
         environment = _host_environment(args)
         if health and not environment.get("ATREX_SANDBOX_SSH"):
             parser.error("--check-health/--preflight requires --ssh")

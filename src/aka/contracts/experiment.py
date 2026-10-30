@@ -92,10 +92,16 @@ class ExperimentFactory(Protocol):
     """
 
     def open(self, *, workspace: Path, purpose: Literal["development", "formal"],
-             executor: Executor, evaluator: Evaluator,
+             executor: Executor, evaluator: Evaluator | None = None,
              evaluation_input: EvaluationInput | None = None,
              episode_evidence: EpisodeEvidenceScope | None = None,
-             command_evaluator: CommandEvaluator | None = None) -> ContextManager[Experiment]: ...
+             command_evaluator: CommandEvaluator | None = None) -> ContextManager[Experiment]:
+        """Development commands may omit Evaluator with an injected CommandEvaluator.
+
+        Formal scopes still require Evaluator. An EvaluationRequest without it
+        is rejected before recording or execution.
+        """
+        ...
 
 
 class ExperimentExecutionError(RuntimeError):
