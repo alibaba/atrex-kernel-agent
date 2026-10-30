@@ -111,11 +111,13 @@ def inspect(root: Path, *, identity: str | None = None) -> tuple[LoadedProblem, 
     return problem, ProblemSnapshot(root, content_identity)
 
 
-def restore(root: Path, origin: Path, mode: str) -> LoadedProblem:
+def restore(root: Path, origin: Path, mode: str, *, source_configuration=None) -> LoadedProblem:
     problem, _ = inspect(root)
     manifest = json.loads((root / "manifest.json").read_bytes())
     if manifest["origin"] != str(origin) or manifest["mode"] != mode:
         raise ValueError("Problem snapshot belongs to a different source or optimization mode")
+    if manifest.get("source_configuration") != source_configuration:
+        raise ValueError("Retained Task source configuration differs; use a new Task snapshot")
     return problem
 
 
@@ -141,11 +143,11 @@ def copy_snapshot(snapshot: ProblemSnapshot, destination: Path):
     return inspect(destination, identity=snapshot.identity)
 
 
-def capture(problem: LoadedProblem, root: Path, origin: Path, mode: str) -> LoadedProblem:
+def capture(problem: LoadedProblem, root: Path, origin: Path, mode: str, *, source_configuration=None) -> LoadedProblem:
     """Publish atomically. Existing snapshots are restored, never overwritten."""
     root = root.resolve()
     if root.exists():
-        return restore(root, origin, mode)
+        return restore(root, origin, mode, source_configuration=source_configuration)
     if problem.agent is None or problem.initial_source is None or problem.evaluation is None:
         raise TypeError("Problem snapshots require explicit Agent, initial source and evaluation roles")
     root.parent.mkdir(parents=True, exist_ok=True)
@@ -203,6 +205,8 @@ def capture(problem: LoadedProblem, root: Path, origin: Path, mode: str) -> Load
                         private="evaluation" if problem.evaluation.private_reference_dir else None,
                         runtime=runtime, case_ids=problem.evaluation.case_ids,
                         harness=harness, worker_requirements=requirements)
+        if source_configuration is not None:
+            manifest["source_configuration"] = source_configuration
         if manifest["private"] is not None:
             from .layout import validate_private_shapes, validate_agent_problem
             captured_shapes = staging / "evaluation/shapes.json"
@@ -226,4 +230,4 @@ def capture(problem: LoadedProblem, root: Path, origin: Path, mode: str) -> Load
                 raise
             # Another capture published first. Validate that snapshot below
             # after discarding our staging directory.
-    return restore(root, origin, mode)
+    return restore(root, origin, mode, source_configuration=source_configuration)

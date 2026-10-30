@@ -1,7 +1,7 @@
 """Load existing kernel/native/SOL operators with their original validation rules."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from aka.contracts.problem import LoadedProblem
@@ -19,6 +19,15 @@ class LegacyProblemProvider:
     optimization_mode: str = "leaderboard"
     native_harness: Path | None = None
     worker_requirements: Path | None = None
+    source_tree: dict | None = None
+
+    def __post_init__(self):
+        if self.source_tree is not None:
+            from aka.task.source.tree import validate_import_options
+            options = validate_import_options(self.source_tree)
+            object.__setattr__(self, "source_tree", {
+                key: str(Path(value).expanduser().absolute()) for key, value in options.items()
+            })
 
     def load(self, directory: Path, *, optimization_mode=None, snapshot_directory: Path | None = None) -> LoadedProblem:
         """Preserve the original operator resolver's validation order and errors."""
@@ -26,7 +35,10 @@ class LegacyProblemProvider:
         d = Path(directory).resolve()
         if snapshot_directory is not None and snapshot_directory.exists():
             from .snapshot import restore
-            return restore(snapshot_directory.resolve(), d, optimization_mode)
+            return restore(snapshot_directory.resolve(), d, optimization_mode,
+                           source_configuration=self.source_tree)
+        if self.source_tree is not None and snapshot_directory is None:
+            raise ValueError("Source-tree inputs require a retained Task snapshot")
         if not d.is_dir():
             raise SystemExit(f"--op-dir not found: {d}")
         ref = d / "reference.py"
@@ -86,6 +98,25 @@ class LegacyProblemProvider:
         )
         if snapshot_directory is not None:
             from .snapshot import capture
+            if self.source_tree is not None:
+                if sol or runtime is None:
+                    raise ValueError("Source trees require a native Atrex-Bench Task")
+                from aka.task.source.tree_provider import TreeSourceProvider
+                import tempfile
+                content = TreeSourceProvider(self.source_tree).prepare()
+                # Retain pure source content through the existing path-based
+                # snapshot roles, without changing the semantic reference.
+                with tempfile.TemporaryDirectory(prefix="aka-task-source-") as raw:
+                    root = Path(raw)
+                    selected = []
+                    for item in content.files:
+                        path = root / item.path
+                        path.parent.mkdir(parents=True, exist_ok=True)
+                        path.write_bytes(item.source.read_bytes() if item.source is not None else item.text.encode("utf-8"))
+                        selected.append(WorkspaceFile(item.path, source=path, copy=item.copy))
+                    problem = replace(problem, initial_source=InitialSource("kernel", root / "kernel.py", tuple(selected)))
+                    return capture(problem, snapshot_directory, d, optimization_mode,
+                                   source_configuration=self.source_tree)
             return capture(problem, snapshot_directory, d, optimization_mode)
         return problem
 
