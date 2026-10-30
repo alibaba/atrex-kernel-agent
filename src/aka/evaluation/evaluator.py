@@ -65,6 +65,7 @@ class _Plan:
     gateway: object = None
     native: bool = False
     baseline: object = None
+    candidate_source: MeasurementArtifact | None = None
 
 
 class LegacyEvaluator:
@@ -260,7 +261,8 @@ class LegacyEvaluator:
             return self._command_evaluator().observe_step(plan.gateway, index, result)
         assessment = self.diagnose_step(prepared, index, result)
         if plan.native:
-            return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"),),
+            source = (plan.candidate_source,) if index == 0 and plan.candidate_source is not None else ()
+            return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"), *source),
                 assessment, workspace_files=result.files)
         if plan.request.mode in {"v0", "framework"}:
             from .baseline import BaselinePreparation
@@ -464,6 +466,7 @@ class LegacyEvaluator:
         )
 
     def _baseline_result(self, request, observation):
+        from .measurement import shape_latency_facts
         if observation.returncode != 0 and observation.primary_diagnostic is not None:
             primary, *secondary = observation.diagnostics
             details = {**primary.details, "failure_class": primary.category,
@@ -577,6 +580,7 @@ class LegacyEvaluator:
             None,
             runs=[run],
             error=error,
+            candidate_latency_us_by_shape=shape_latency_facts(result.get("latency_us_by_shape")),
         )
 
 

@@ -20,6 +20,16 @@ def _bytes(value):
     return hashlib.sha256(value).hexdigest()
 
 
+def shape_latency_facts(value):
+    """Project usable aggregates; malformed raw values remain receipt evidence."""
+    from collections.abc import Mapping
+    if not isinstance(value, Mapping):
+        return {}
+    return {shape: latency for shape, latency in value.items()
+            if isinstance(shape, str) and shape and type(latency) in (int, float)
+            and math.isfinite(latency) and latency > 0}
+
+
 def _content_inputs(workspace, reference, excluded=(), evaluation_input=None):
     """Content names are logical roles; local checkout paths never enter identity."""
     content = {}
@@ -132,7 +142,7 @@ def legacy_identities(prepared, configuration, evaluation_input=None):
     return tuple(result)
 
 
-def gateway_identity(request, reference_files, kind="run"):
+def gateway_identity(request, reference_files, kind="run", *, full_request=None, method_inputs=None, workload_scope="unknown"):
     # The human job name and local sidecar paths are not measurement inputs.
     frozen = {key: value for key, value in request.items() if key not in {"name", "idempotency_key"}}
     input_digest = _digest({"request": frozen, "reference_files": reference_files})
@@ -152,6 +162,34 @@ def gateway_identity(request, reference_files, kind="run"):
         parameters["comparison_method"] = "native-abba"
     if request.get("env_vars"):
         parameters["worker_environment_digest"] = _digest(request["env_vars"])
+    full = full_request or request
+    # Task identity excludes candidate bytes and timing controls. Performance
+    # comparability still checks those controls independently in Experiment.
+    workload = {key: value for key, value in full.items()
+                if key not in {"name", "idempotency_key", "candidate", "abba", "mode", "env_vars"}}
+    if isinstance(workload.get("reference"), dict):
+        workload["reference"] = {key: value for key, value in workload["reference"].items() if key != "operator"}
+    options = dict(workload.get("options", {}))
+    options.pop("bench_iters", None)
+    workload["options"] = options
+    workload["runner_overrides"] = {key: value for key, value in full.get("runner_overrides", {}).items()
+                                    if key not in {"perf_timeout_s", "skip_kernel_attribution"}}
+    workload["method_inputs"] = method_inputs or {}
+    if full.get("env_vars"):
+        workload["worker_environment_digest"] = _digest(full["env_vars"])
+    parameters["workload_digest"] = _digest(workload)
+    parameters["candidate_source_sha256"] = _bytes(full["candidate"].encode())
+    parameters["candidate_source_artifact_sha256"] = parameters["candidate_source_sha256"]
+    parameters["candidate_source_format"] = "raw-kernel/1"
+    parameters["workload_scope"] = workload_scope
+    # Six complete typed correctness cases are the proved full/untimed
+    # equivalence. Other seed policies keep their identities but cannot reuse it.
+    parameters["correctness_digest"] = _digest({"workload": workload,
+        "candidate_source_sha256": parameters["candidate_source_sha256"]})
+    parameters["correctness_reuse_policy"] = "typed-six-case/1" if (
+        kind == "run" and not abba and workload_scope == "full-task"
+        and full.get("mode") in {"full", "correctness_only"}
+        and type(options.get("num_correctness_cases")) is int and options["num_correctness_cases"] == 6) else "none"
     requirements = tuple(request.get("requirements", ()))
     policy = str(request.get("deps_mode") or ("explicit-requirements" if requirements else "unknown"))
     method = "atrex-bench/profile" if kind == "profile" else "atrex-bench/abba" if abba else "atrex-bench/eval"

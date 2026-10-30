@@ -39,11 +39,40 @@ class GatewayCommandEvaluator:
         context["repetitions"] = count
         context["batch_count"] = len(prepared.steps)
         from aka.contracts.measurement import MeasurementPoint
+        method_inputs = {}
+        expected_shapes = ()
+        if self.evaluation_input is not None:
+            expected_shapes = self.evaluation_input.case_ids
+            import hashlib
+            for name, item in context.get("task_content", {}).items():
+                method_inputs[name] = hashlib.sha256(item.content).hexdigest()
+                if name == "shapes.json" and not expected_shapes:
+                    expected_shapes = tuple(json.loads(item.content))
+            harness = self.evaluation_input.harness
+            if harness is not None and harness.path not in method_inputs:
+                content = harness.source.read_bytes() if harness.source is not None else harness.text.encode()
+                method_inputs[harness.path] = hashlib.sha256(content).hexdigest()
+        explicit_subset = any(token == "--shape-id" or token.startswith("--shape-id=") for token in command.command)
+        full_scope = (kind == "run" and bool(expected_shapes) and context.get("task_matches", False)
+                      and not explicit_subset and not command.input_files
+                      and request.get("mode") in {"full", "correctness_only"}
+                      and set(request.get("reference", {}).get("shapes", {})) == set(expected_shapes))
+        if isinstance(request.get("candidate"), str):
+            context["candidate_source"] = request["candidate"].encode()
+        from .measurement import gateway_identity
+        frozen_identities = []
+        for index, identity in enumerate(prepared.measurement_identities):
+            if identity.method.startswith("atrex-bench/"):
+                step_request = json.loads(prepared.steps[index].submission)
+                identity = gateway_identity(step_request["request"], step_request.get("reference_files", {}),
+                    "profile" if kind == "profile" else "run", full_request=request, method_inputs=method_inputs,
+                    workload_scope="full-task" if full_scope else "subset-or-custom" if expected_shapes else "unknown")
+            frozen_identities.append(identity)
         identities = tuple(replace(identity,
             points=tuple(MeasurementPoint(point.side, point.revision, point.repeat + outer * (
                 int(identity.parameters.get("abba_sdk_blocks", 0)) * 2 or 1), point.shape_id) for point in identity.points),
             parameters={**identity.parameters, "measurement_repetitions": count, "measurement_repetition": outer})
-            for outer in range(count) for identity in prepared.measurement_identities)
+            for outer in range(count) for identity in frozen_identities)
         return replace(prepared, steps=prepared.steps * count, measurement_identities=identities,
                        fallback_steps=() if count > 1 else prepared.fallback_steps)
 
@@ -54,6 +83,9 @@ class GatewayCommandEvaluator:
             measurement = None
             kind = command.operation
             private = self.evaluation_input is not None and self.evaluation_input.private_reference_dir is not None
+            from .private_inputs import selected_content
+            content = {}
+            task_matches = True
             if command.submission is not None:
                 prepared = json.loads(command.submission)
                 if not isinstance(prepared, dict) or prepared.get("schema_version") != 1:
@@ -65,6 +97,17 @@ class GatewayCommandEvaluator:
                 request = prepared.get("request")
                 if not isinstance(request, dict):
                     raise ValueError("prepared request must be an object")
+                if kind in {"run", "profile"}:
+                    content = selected_content(self.evaluation_input)
+                # An explicit wire request is a full Task measurement only when
+                # its trusted content equals the selected frozen input bundle.
+                reference = request.get("reference", {})
+                for name, field in (("input.py", "input_py"), ("reference.py", "reference_py"),
+                                    ("shapes.json", "shapes"), ("metadata.json", "metadata"), ("roofline.json", "roofline")):
+                    item = content.get(name)
+                    if item is not None:
+                        expected = json.loads(item.content) if name.endswith(".json") else item.content.decode()
+                        task_matches = task_matches and isinstance(reference, dict) and reference.get(field) == expected
                 if request.get("abba") and not native:
                     raise ValueError("native ABBA requires the same_allocation_abba operation")
                 if native:
@@ -112,7 +155,8 @@ class GatewayCommandEvaluator:
                         batch_size=len(request["reference"]["shapes"]))
             step = replace(command, profile_options=None) if command.profile_options is not None else command
             return PreparedEvaluation((step,), 1, {"command": command, "measurement": measurement,
-                "kind": "same_allocation_abba" if command.operation == "same_allocation_abba" else kind, "private": private, "evaluator": False},
+                "kind": "same_allocation_abba" if command.operation == "same_allocation_abba" else kind, "private": private, "evaluator": False,
+                "task_content": content, "task_matches": task_matches},
                 measurement_identities=identities)
         baseline = (self.measurement_reader.baseline(command.workspace)
                     if self.measurement_reader is not None else None)
@@ -136,6 +180,8 @@ class GatewayCommandEvaluator:
             raise UnsupportedExecution("measurement preparation requires bound execution capabilities")
         from .private_inputs import selected_content, portable_inputs
         content = selected_content(self.evaluation_input)
+        context["task_content"] = content
+        context["task_matches"] = True
         reference_content = {name: item.content for name, item in content.items()}
         reference = self.evaluation_input.directory if self.evaluation_input is not None else command.workspace
         if private:
@@ -244,9 +290,11 @@ class GatewayCommandEvaluator:
 
     def observe_step(self, prepared, index, result):
         assessment = self.diagnose_step(prepared, index, result)
+        source = ((MeasurementArtifact("candidate.py", prepared.context["candidate_source"], "candidate-source", "text/x-python"),)
+                  if index == 0 and "candidate_source" in prepared.context else ())
         if prepared.context["measurement"] is None and prepared.context["kind"] != "same_allocation_abba":
-            return StepEvaluation(assessment=assessment, workspace_files=result.files)
-        return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"),), assessment,
+            return StepEvaluation(source, assessment=assessment, workspace_files=result.files)
+        return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"), *source), assessment,
             workspace_files=() if prepared.context["kind"] == "profile" and index < len(prepared.steps) else result.files)
 
     def diagnose_step(self, prepared, index, result):
@@ -366,12 +414,14 @@ class GatewayCommandEvaluator:
     @staticmethod
     def _command_evaluation(result, context, results):
         from .evaluator import result_from_stdout
+        from .measurement import shape_latency_facts
         try:
             payload = result_from_stdout(result.stdout)
         except (RuntimeError, json.JSONDecodeError):
             return CommandEvaluation(result)
         verification = VerificationResult("PASS" if payload.get("all_pass") else "FAIL",
-            payload.get("latency_us_geomean"), None, None)
+            payload.get("latency_us_geomean"), None, None,
+            candidate_latency_us_by_shape=shape_latency_facts(payload.get("latency_us_by_shape")))
         content = json.dumps(payload).encode()
         retained = ()
         if context["evaluator"]:

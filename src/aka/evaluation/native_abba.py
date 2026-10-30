@@ -17,7 +17,7 @@ from .transport_results import _compile_failures
 
 def prepare_comparison(request, configuration, workspace, evaluation_input, context):
     """Freeze public Workspace revisions and Task inputs in typed Job requests."""
-    from aka.contracts.evaluation import PreparedEvaluation
+    from aka.contracts.evaluation import PreparedEvaluation, MeasurementArtifact
     from aka.contracts.execution import CommandSpec, UnsupportedExecution
     from aka.contracts.measurement import MeasurementPoint
     from .gateway_request import prepare_request, _candidate_languages
@@ -114,7 +114,8 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
             steps.append(step)
             identities.append(identity)
     return PreparedEvaluation(tuple(steps), max(1, min(configuration.max_parallelism, len(steps))),
-        replace(context, schedule=tuple(verification_schedule(configuration.repeats)), shape_ids=tuple(shapes), native=True),
+        replace(context, schedule=tuple(verification_schedule(configuration.repeats)), shape_ids=tuple(shapes), native=True,
+            candidate_source=MeasurementArtifact("candidate.py", candidate[0].encode(), "candidate-source", "text/x-python")),
         measurement_identities=tuple(identities))
 
 
@@ -255,4 +256,6 @@ def interpret_payloads(payloads: list[dict], shapes: list[str], repeats: int, re
         samples.append({"correct": True, "baseline": baseline, "candidate": candidate})
     combined = aggregate(samples, "same_allocation_abba")
     baseline, candidate = combined["baseline"]["latency_us_geomean"], combined["candidate"]["latency_us_geomean"]
-    return VerificationResult("PASS", candidate, baseline, (baseline / candidate - 1) * 100, runs=runs)
+    return VerificationResult("PASS", candidate, baseline, (baseline / candidate - 1) * 100, runs=runs,
+        candidate_latency_us_by_shape=combined["candidate"]["latency_us_by_shape"],
+        incumbent_latency_us_by_shape=combined["baseline"]["latency_us_by_shape"])

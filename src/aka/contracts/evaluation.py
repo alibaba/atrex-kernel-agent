@@ -158,6 +158,15 @@ class VerificationRun:
         return asdict(self)
 
 
+def _shape_latencies(values):
+    import math
+    values = dict(values)
+    if any(not isinstance(shape, str) or type(value) not in (int, float)
+           or not math.isfinite(value) or value <= 0 for shape, value in values.items()):
+        raise ValueError("shape latency facts require string identities and positive finite values")
+    return MappingProxyType(values)
+
+
 @dataclass
 class VerificationResult:
     gate: str
@@ -174,8 +183,12 @@ class VerificationResult:
     artifacts: tuple[MeasurementArtifact, ...] = field(default=(), repr=False)
     measurements: tuple[MeasurementAssessment, ...] = ()
     episode_evaluations: tuple[EpisodeEvaluationContent, ...] = field(default=(), repr=False)
+    candidate_latency_us_by_shape: Mapping[str, float] = field(default_factory=dict, kw_only=True)
+    incumbent_latency_us_by_shape: Mapping[str, float] = field(default_factory=dict, kw_only=True)
 
     def __post_init__(self):
+        self.candidate_latency_us_by_shape = _shape_latencies(self.candidate_latency_us_by_shape)
+        self.incumbent_latency_us_by_shape = _shape_latencies(self.incumbent_latency_us_by_shape)
         self.artifacts = tuple(self.artifacts)
         self.measurements = tuple(self.measurements)
         self.episode_evaluations = tuple(self.episode_evaluations)
@@ -206,6 +219,10 @@ class VerificationResult:
             value["experiment_ref"] = self.experiment_ref.as_dict()
         if self.measurements:
             value["measurements"] = [item.as_dict() for item in self.measurements]
+        if self.candidate_latency_us_by_shape:
+            value["candidate_latency_us_by_shape"] = dict(self.candidate_latency_us_by_shape)
+        if self.incumbent_latency_us_by_shape:
+            value["incumbent_latency_us_by_shape"] = dict(self.incumbent_latency_us_by_shape)
         return value
 
 
