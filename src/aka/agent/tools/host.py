@@ -186,8 +186,12 @@ class ToolHost:
             return {}
         if environment.get(ENDPOINT_ENV) != str(self.endpoint):
             raise PermissionError("Agent tool endpoint cannot change")
+        client_path = str(Path(__file__).resolve().parent.parent)
+        if environment.get("AKA_AGENT_TOOL_CLIENT_PATH") != client_path:
+            raise PermissionError("Agent tool client path cannot change")
         self._authenticate({"version": 1, "token": token, "workspace": str(workspace)})
-        return {ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token}
+        return {ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token,
+                "AKA_AGENT_TOOL_CLIENT_PATH": client_path}
 
     def revoke(self, token):
         with self._lock:
@@ -232,8 +236,12 @@ class ToolHost:
             timer.daemon = True
             timer.start()
         try:
-            yield ToolSession(MappingProxyType({ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token}),
-                FilesystemAccess((FilesystemMount(self.directory, self.directory, False),)))
+            client_root = Path(__file__).resolve().parent
+            client_files = tuple(client_root / name for name in ("__init__.py", "client.py", "protocol.py"))
+            yield ToolSession(MappingProxyType({ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token,
+                "AKA_AGENT_TOOL_CLIENT_PATH": str(client_root.parent)}),
+                FilesystemAccess((FilesystemMount(self.directory, self.directory, False),
+                    *(FilesystemMount(path, path, False) for path in client_files))))
         finally:
             pending = self.revoke(token)
             if timer is not None:
