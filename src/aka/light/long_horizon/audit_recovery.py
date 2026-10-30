@@ -11,12 +11,11 @@ from pathlib import Path
 from typing import Any
 
 from aka.light.orchestrator.durable_state import durable_write_json, durable_write_text
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.filesystem import read_regular_bytes
 from aka.light.orchestrator.version_records import version_record_path
 
 from .promotion_audit import (
     PromotionAuditUnverifiable,
-    promotion_git,
     committed_promotion_audit,
     promotion_audit_path,
     promotion_binding,
@@ -33,30 +32,40 @@ def _receipt_path(workspace: Path, episode: int) -> Path:
     return promotion_audit_path(workspace, episode).with_suffix(".recovery.json")
 
 
-def _validate_committed_files(workspace: Path, version: int) -> None:
+def _validate_committed_files(workspace: Path, version: int, candidate_workspace) -> None:
     # Acknowledging an audit loss cannot repair a missing Kernel/report or an edited checkout.
     record = str(version_record_path(workspace, version).relative_to(workspace))
-    from aka.light.workspace.sources import from_git, snapshot as source_snapshot
-    if from_git(workspace, "HEAD") != source_snapshot(workspace):
+    revision = candidate_workspace.current_revision(workspace)
+    committed_source = candidate_workspace.read_source(workspace, revision=revision)
+    working_source = candidate_workspace.read_source(workspace)
+    if candidate_workspace.source_identity(committed_source) != candidate_workspace.source_identity(working_source):
         raise ValueError("Kernel source tree differs from the committed promotion")
-    for relative in ("kernel.py", record):
-        if promotion_git(workspace, "hash-object", "--", relative).strip() != promotion_git(
-            workspace, "rev-parse", f"HEAD:{relative}",
-        ).strip():
+    paths = ("kernel.py", record)
+    history = candidate_workspace.revision_history(workspace, revision=revision, paths=paths)
+    if not history:
+        raise ValueError("Committed promotion revision is unavailable")
+    committed = history[0].content_identities
+    working = candidate_workspace.working_facts(workspace, paths=paths).content_identities
+    for relative in paths:
+        if working.get(relative) != committed.get(relative):
             raise ValueError(f"{relative} differs from the committed promotion")
-    memory = json.loads(promotion_git(workspace, "show", f"HEAD:{record}"))
+    content = candidate_workspace.read_revision(workspace, revision, (record,))
+    raw = content.files.get(record)
+    if raw is None:
+        raise ValueError("Committed version record is unavailable")
+    memory = json.loads(raw)
     if not isinstance(memory, dict) or memory.get("version") != f"v{version}":
         raise ValueError("Committed version record has an invalid version")
 
 
-def recover_promotion_audit(workspace: Path, **identity: Any) -> dict[str, Any] | None:
+def recover_promotion_audit(workspace: Path, *, candidate_workspace, **identity: Any) -> dict[str, Any] | None:
     try:
-        record = committed_promotion_audit(workspace, **identity)
+        record = committed_promotion_audit(workspace, candidate_workspace=candidate_workspace, **identity)
     except PromotionAuditUnverifiable as error:
         # A missing file can be acknowledged, but corruption/identity failures cannot.
         if error.reason != "missing":
             raise
-        binding = promotion_binding(workspace, **identity)
+        binding = promotion_binding(workspace, candidate_workspace=candidate_workspace, **identity)
         if binding is None:
             raise
         path = _receipt_path(workspace, identity["episode"])
@@ -79,7 +88,7 @@ def recover_promotion_audit(workspace: Path, **identity: Any) -> dict[str, Any] 
         ):
             raise PromotionAuditUnverifiable("invalid_recovery", "recovery receipt does not match this promotion") from error
         try:
-            _validate_committed_files(workspace, identity["version"])
+            _validate_committed_files(workspace, identity["version"], candidate_workspace)
         except (OSError, ValueError, RuntimeError) as failure:
             raise PromotionAuditUnverifiable("invalid_recovery", str(failure)) from failure
         return receipt
@@ -88,10 +97,12 @@ def recover_promotion_audit(workspace: Path, **identity: Any) -> dict[str, Any] 
 
 def pause_for_audit_repair(
     workspace: Path, store: CampaignStore, active: dict[str, Any], error: PromotionAuditUnverifiable,
+    *, candidate_workspace,
 ) -> PromotionAuditRecoveryRequired:
     binding = promotion_binding(
         workspace, episode=int(active["episode"]), version=int(active["memory_version"]),
         base_commit=active["base_commit"], branch=active["episode_branch"],
+        candidate_workspace=candidate_workspace,
     )
     active["promotion_audit"] = {
         "status": "audit_unverifiable", "reason": error.reason,
@@ -101,7 +112,7 @@ def pause_for_audit_repair(
     store.save_active(active)
     command = shlex.join([
         "python3", "-m", "aka.light.long_horizon.audit_recovery", "--workspace", str(workspace),
-        "--promotion-commit", promotion_git(workspace, "rev-parse", "HEAD").strip(),
+        "--promotion-commit", candidate_workspace.current_revision(workspace),
     ])
     message = (
         f"audit_unverifiable: {error}\nGit promotion and active checkpoint are preserved. "
@@ -117,13 +128,13 @@ def pause_for_audit_repair(
 
 
 def repair_promotion_audit(
-    workspace: Path, *, promotion_commit: str, source: Path | None = None, reason: str = "",
+    workspace: Path, *, promotion_commit: str, candidate_workspace, source: Path | None = None, reason: str = "",
 ) -> dict[str, Any]:
     """Restore exact bytes or acknowledge loss, scoped to one stopped Campaign's HEAD."""
     workspace = workspace.resolve()
-    if not workspace.is_dir() or not (workspace / ".git").exists():
+    if not workspace.is_dir() or not candidate_workspace.current_revision(workspace):
         raise ValueError("--workspace must be the existing Campaign Git workspace")
-    store = CampaignStore(workspace)
+    store = CampaignStore(workspace, candidate_workspace=candidate_workspace)
     active = store.load_active()
     if not active:
         raise ValueError("No active Episode checkpoint to repair")
@@ -134,10 +145,10 @@ def repair_promotion_audit(
     # Recovery checks promotion evidence regardless of checkpoint phase, even
     # after recording the outcome. Authorize repair by the committed identity,
     # not the last bookkeeping step reached before interruption.
-    binding = promotion_binding(workspace, **identity)
+    binding = promotion_binding(workspace, candidate_workspace=candidate_workspace, **identity)
     if binding is None or binding["promotion_commit"] != promotion_commit:
         raise ValueError("--promotion-commit must exactly match the checkpoint's committed promotion at HEAD")
-    _validate_committed_files(workspace, identity["version"])
+    _validate_committed_files(workspace, identity["version"], candidate_workspace)
     if source is None and not reason.strip():
         raise ValueError("Acknowledging lost audit evidence requires a non-empty --reason")
     path = promotion_audit_path(workspace, identity["episode"])
@@ -148,12 +159,12 @@ def repair_promotion_audit(
         validate_private_audit(raw, binding)
         # Preserve whitespace and formatting: the commit binds bytes, not equivalent JSON.
         text = raw.decode("utf-8")
-        if promotion_git(workspace, "rev-parse", "HEAD").strip() != promotion_commit:
+        if candidate_workspace.current_revision(workspace) != promotion_commit:
             raise ValueError("Campaign advanced during audit repair; stop it before retrying")
         durable_write_text(path, text)
         return {"status": "restored", "promotion_commit": promotion_commit, "audit_path": str(path)}
     try:
-        committed_promotion_audit(workspace, **identity)
+        committed_promotion_audit(workspace, candidate_workspace=candidate_workspace, **identity)
     except PromotionAuditUnverifiable as error:
         if error.reason != "missing":
             raise ValueError("Only missing audits can be acknowledged; restore/investigate corrupt evidence") from error
@@ -164,7 +175,7 @@ def repair_promotion_audit(
         raise ValueError("Recovery receipt path cannot be a symlink")
     if receipt_path.exists():
         # Idempotent repair cannot overwrite a conflicting or damaged operator decision.
-        receipt = recover_promotion_audit(workspace, **identity)
+        receipt = recover_promotion_audit(workspace, candidate_workspace=candidate_workspace, **identity)
         assert receipt is not None
         return receipt
     receipt = {
@@ -172,7 +183,7 @@ def repair_promotion_audit(
         "binding": binding, "reason": reason.strip(),
         "recorded_at": datetime.now(timezone.utc).isoformat(),
     }
-    if promotion_git(workspace, "rev-parse", "HEAD").strip() != promotion_commit:
+    if candidate_workspace.current_revision(workspace) != promotion_commit:
         raise ValueError("Campaign advanced during audit repair; stop it before retrying")
     durable_write_json(receipt_path, receipt)
     return receipt
@@ -188,9 +199,12 @@ def main(argv: list[str] | None = None) -> int:
     acknowledge = commands.add_parser("acknowledge-missing", allow_abbrev=False)
     acknowledge.add_argument("--reason", required=True, help="Operator's justification for accepting lost audit evidence")
     args = parser.parse_args(argv)
+    from aka.task.candidate_workspace.provider import GitCandidateWorkspace
+
     try:
         result = repair_promotion_audit(
             args.workspace, promotion_commit=args.promotion_commit,
+            candidate_workspace=GitCandidateWorkspace(),
             source=args.file if args.command == "restore" else None,
             reason=args.reason if args.command == "acknowledge-missing" else "",
         )

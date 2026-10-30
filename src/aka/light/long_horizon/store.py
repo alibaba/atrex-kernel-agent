@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -18,31 +17,21 @@ LIVE_MEMORY_FILE = "memory/live.json"
 
 
 class CampaignStore:
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, *, candidate_workspace):
+        self.candidate_workspace = candidate_workspace
         self.workspace = workspace.resolve()
         self.root = self.workspace / RUNTIME_DIR
         self.root.mkdir(parents=True, exist_ok=True)
-        self.ensure_excluded(self.workspace)
+        self.ensure_excluded(self.workspace, candidate_workspace=candidate_workspace)
 
     @staticmethod
-    def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
+    def ensure_excluded(workspace: Path, *, candidate_workspace, wiki_trace_only: bool = False) -> None:
         """Install supervisor excludes, or only the early Wiki trace subset.
 
         Workspace setup happens before the framework baseline commit.  At that
         point only consumer-owned Wiki telemetry may be excluded; installing
         the complete supervisor set would also hide baseline plans.
         """
-        result = subprocess.run(
-            ["git", "rev-parse", "--git-path", "info/exclude"],
-            cwd=str(workspace), capture_output=True, text=True,
-        )
-        if result.returncode:
-            raise RuntimeError(f"cannot locate git exclude file: {result.stderr.strip()}")
-        path = Path(result.stdout.strip())
-        if not path.is_absolute():
-            path = workspace / path
-        path.parent.mkdir(parents=True, exist_ok=True)
-        text = path.read_text(encoding="utf-8") if path.exists() else ""
         wiki_trace_rules = (
             "/.gpu_wiki_profile/",
             "/trace-retention-manifest.json",
@@ -61,11 +50,10 @@ class CampaignStore:
             "/.humanize/",
         )
         rules = wiki_trace_rules if wiki_trace_only else supervisor_rules
-        missing = [rule for rule in rules if rule not in text.splitlines()]
-        if missing:
-            suffix = ("" if not text or text.endswith("\n") else "\n") + "\n".join(missing) + "\n"
-            with path.open("a", encoding="utf-8") as stream:
-                stream.write(suffix)
+        from aka.contracts.workspace import WorkspaceExclusion
+        candidate_workspace.exclude_runtime_paths(workspace, tuple(
+            WorkspaceExclusion(rule.removeprefix('/').removesuffix('/'), subtree=rule.endswith('/'))
+            for rule in rules))
 
     @property
     def state_path(self) -> Path:

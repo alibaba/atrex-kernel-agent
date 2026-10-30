@@ -13,7 +13,7 @@ from aka.contracts.measurement import MeasurementAssessment
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
-from aka.light.orchestrator.agent_runtime.model import (
+from aka.contracts.agent import (
     AgentRuntimeCapabilities,
     NormalizedAgentEvent,
     TokenUsage,

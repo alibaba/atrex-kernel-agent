@@ -4,7 +4,6 @@ import hashlib
 import json
 import math
 import shutil
-import subprocess
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -15,16 +14,8 @@ from aka.acceptance import PerformanceScorePolicy
 from aka.contracts.workspace import CandidateHandle
 from aka.light.orchestrator.hardware import hardware_vendor
 from aka.light.orchestrator.version_records import FACT_FIELDS, version_record_path
-from aka.light.workspace.sources import from_git as source_from_git
 
 from . import main_adapter
-from .git_episode import (
-    git_blob,
-    git_head,
-    git_text,
-    record_episode_outcome,
-    working_changes,
-)
 from .journal import initialize as initialize_journal
 from .journal import load as load_journal
 from .journal import normalize_accepted_ppu_diagnostics
@@ -193,6 +184,7 @@ def _latest_complete_episode_performance(
     episode_workspace: Path | None,
     *,
     expected_shape_ids: set[str] | None,
+    workspace_provider,
 ) -> dict[str, Any] | None:
     """Read passing, source-matched Episode latency evidence without requiring scores."""
     if episode_workspace is None:
@@ -201,9 +193,7 @@ def _latest_complete_episode_performance(
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
         kernel_path = episode_workspace / "kernel.py"
-        from aka.light.workspace.sources import snapshot as source_snapshot
-        kernel_bytes = source_snapshot(episode_workspace)
-        kernel_sha256 = hashlib.sha256(kernel_bytes).hexdigest()
+        kernel_sha256 = workspace_provider.source_identity(workspace_provider.read_source(episode_workspace))
         kernel_mtime = kernel_path.stat().st_mtime
     except (OSError, ValueError):
         return None
@@ -272,13 +262,12 @@ def _latest_complete_episode_performance(
 
 
 def _episode_head_matches_incumbent(
-    workspace: Path, episode_workspace: Path | None
+    workspace: Path, episode_workspace: Path | None, *, workspace_provider
 ) -> bool:
     if episode_workspace is None:
         return False
     try:
-        from aka.light.workspace.sources import snapshot
-        return snapshot(episode_workspace) == snapshot(workspace)
+        return workspace_provider.read_source(episode_workspace).files == workspace_provider.read_source(workspace).files
     except (OSError, ValueError):
         return False
 
@@ -486,7 +475,7 @@ class LongHorizonCampaign:
         selected_verifier = verifier or self.verifier
         if isinstance(selected_verifier, RecordedABBAValidator):
             context = self.base_campaign.acceptance_measurement_context(
-                source_from_git(worktree.path, worktree.base_commit),
+                self.base_campaign.candidate_workspace.read_source(worktree.path, revision=worktree.base_commit),
             )
             acceptance_request = selected_verifier.agent_instructions(**context)
         research_records = self.base_campaign.research_records
@@ -576,18 +565,31 @@ class LongHorizonCampaign:
         )
 
 
+    def _record_episode_outcome(self, workspace, *, base_commit, version, episode,
+                                status, memory_record, generate_memory=False):
+        from aka.contracts.content import WorkspaceFile
+        if memory_record.get("version") != f"v{version}":
+            raise ValueError("Version record identity does not match")
+        version_record_path(workspace, version)
+        files = [WorkspaceFile(f".atrex_versions/v{version}.json", text=json.dumps(
+            {key: value for key, value in memory_record.items() if key in FACT_FIELDS},
+            ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n")]
+        if generate_memory:
+            files.append(WorkspaceFile(f"memory/v{version}.json", text=json.dumps(
+                memory_record, ensure_ascii=True, separators=(",", ":"), sort_keys=True) + "\n"))
+        return self.base_campaign.candidate_workspace.record(workspace,
+            expected_revision=base_commit, files=tuple(files),
+            message=f"v{version}: long-horizon episode {episode} {status}")
+
     def _require_canonical_memory(self, version: int) -> None:
         """Require committed version facts, whether or not a summary is enabled."""
         record = str(version_record_path(self.workspace, version).relative_to(self.workspace))
         memory = main_adapter.read_memory(self.workspace, version)
         if not isinstance(memory, dict) or memory.get("version") != f"v{version}":
             raise RuntimeError(f"episode did not write valid version record {record}")
-        committed_text = git_text(
-            self.workspace,
-            "show",
-            f"HEAD:{record}",
-            check=False,
-        )
+        candidate_workspace = self.base_campaign.candidate_workspace
+        revision = candidate_workspace.current_revision(self.workspace)
+        committed_text = candidate_workspace.read_revision(self.workspace, revision, (record,)).files.get(record)
         try:
             committed_memory = json.loads(committed_text)
         except (TypeError, json.JSONDecodeError) as exc:
@@ -635,7 +637,8 @@ class LongHorizonCampaign:
             from aka.light.supervisor.journal import sealed_candidate_source
 
             try:
-                source = sealed_candidate_source(private_journal, worktree.path)
+                source = sealed_candidate_source(private_journal, worktree.path,
+                    workspace_provider=self.base_campaign.candidate_workspace)
                 if source is None:
                     return "private report has no sealed candidate"
                 violation, _ = self.base_campaign.candidate_workspace.restore_sealed_candidate(worktree, candidate, source)
@@ -648,9 +651,10 @@ class LongHorizonCampaign:
         try:
             journal = load_journal(journal_path)
             finalized_at = _iso_timestamp(str(journal["finalized_at"]))
-            committed_at = float(
-                git_text(worktree.path, "show", "-s", "--format=%ct", candidate)
-            )
+            history = self.base_campaign.candidate_workspace.revision_history(worktree.path, revision=candidate)
+            if not history:
+                raise ValueError("candidate revision history is unavailable")
+            committed_at = float(history[0].committed_at)
         except (KeyError, ValueError, OSError, json.JSONDecodeError) as exc:
             return f"cannot validate terminal journal ordering: {exc}"
         if finalized_at <= committed_at:
@@ -659,8 +663,7 @@ class LongHorizonCampaign:
             )
         if self.base_campaign.optimization_mode == "production":
             try:
-                from aka.light.workspace.sources import from_git
-                sealed = from_git(worktree.path, candidate)
+                sealed = self.base_campaign.candidate_workspace.read_source(worktree.path, revision=candidate)
                 # Recovered reports must not bypass the newly installed gate.
                 self.base_campaign.selected_episode_evaluation(worktree.episode, sealed)
                 return self.base_campaign.supplemental_numerical_feedback(worktree.path, sealed)
@@ -876,9 +879,10 @@ class LongHorizonCampaign:
                 _latest_complete_episode_performance(
                     episode_workspace,
                     expected_shape_ids=expected_shape_ids,
+                    workspace_provider=self.base_campaign.candidate_workspace,
                 )
                 if _episode_head_matches_incumbent(
-                    self.workspace, episode_workspace
+                    self.workspace, episode_workspace, workspace_provider=self.base_campaign.candidate_workspace
                 )
                 else None
             )
@@ -1155,7 +1159,7 @@ class LongHorizonCampaign:
             "violation": violation or None,
             "base_commit": base_commit,
             "episode_branch": worktree.branch,
-            "episode_head": git_head(worktree.path),
+            "episode_head": self.base_campaign.candidate_workspace.current_revision(worktree.path),
             "candidate_commit": candidate_commit or None,
             "changed_paths": paths,
             "session_id": session_id or None,
@@ -1222,15 +1226,22 @@ class LongHorizonCampaign:
                 verification=verification,
                 episode_mode=episode_mode,
             )
+            from aka.contracts.content import WorkspaceFile
+            from aka.light.orchestrator.version_records import save_version_record, version_commit_paths
+            from .promotion_audit import AUDIT_TRAILER, write_promotion_audit
+            audit_digest = write_promotion_audit(self.workspace, episode, evidence)
+            save_version_record(self.workspace, memory_version, memory,
+                                generate_memory=self.base_campaign.generate_memory)
+            record_paths = version_commit_paths(self.workspace, memory_version,
+                generate_memory=self.base_campaign.generate_memory)
             promotion_commit = self.base_campaign.candidate_workspace.promote(
                 self.workspace,
                 base_commit=base_commit,
                 candidate_commit=candidate_commit,
                 episode=episode,
-                evidence=evidence,
-                memory_version=memory_version,
-                memory_record=memory,
-                generate_memory=self.base_campaign.generate_memory,
+                record_files=tuple(WorkspaceFile(name, source=self.workspace / name) for name in record_paths),
+                commit_message=(f"episode {episode}: promote verified long-horizon candidate\n\n"
+                                f"{AUDIT_TRAILER}{audit_digest}"),
             )
             attempt["promotion_commit"] = promotion_commit
             state.accepted += 1
@@ -1253,7 +1264,7 @@ class LongHorizonCampaign:
                 episode_workspace=worktree.path,
                 episode_mode=episode_mode,
             )
-            outcome_commit = record_episode_outcome(
+            outcome_commit = self._record_episode_outcome(
                 self.workspace,
                 base_commit=base_commit,
                 version=memory_version,
@@ -1426,61 +1437,44 @@ class LongHorizonCampaign:
             and attempt.get("episode_branch") == branch
             for attempt in state.attempts
         )
-        registered = {
-            Path(line.split(" ", 1)[1]).resolve()
-            for line in git_text(
-                self.workspace, "worktree", "list", "--porcelain"
-            ).splitlines()
-            if line.startswith("worktree ")
-        }
+        candidate_workspace = self.base_campaign.candidate_workspace
+        current_revision = candidate_workspace.current_revision(self.workspace)
+        recovery_handle = (
+            CandidateHandle(episode, base_commit, branch, worktree_path)
+            if worktree_path is not None and worktree_path != self.workspace.resolve()
+            else None
+        )
+        binding = (candidate_workspace.inspect_candidate(self.workspace, recovery_handle)
+                   if recovery_handle is not None else None)
+        registered = binding is not None and binding.registered
         resumable_worktree = bool(
-            git_head(self.workspace) == base_commit
-            and phase in {
-                "preparing",
-                "exploring",
-                "verifying",
-                "promoting",
-                "recording",
-            }
+            current_revision == base_commit
+            and phase in {"preparing", "exploring", "verifying", "promoting", "recording"}
             and episode > 0
             and memory_version > 0
             and worktree_path is not None
             and worktree_path != self.workspace.resolve()
             and worktree_path.is_dir()
-            and worktree_path in registered
+            and registered
             and branch
-            and git_text(
-                worktree_path,
-                "symbolic-ref",
-                "--quiet",
-                "--short",
-                "HEAD",
-                check=False,
-            )
-            == branch
-            and subprocess.run(
-                ["git", "merge-base", "--is-ancestor", base_commit, "HEAD"],
-                cwd=str(worktree_path),
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            ).returncode
-            == 0
+            and binding.branch == branch
+            and base_commit in {
+                fact.revision for fact in candidate_workspace.revision_history(
+                    worktree_path, revision=binding.revision
+                )
+            }
         )
         if resumable_worktree:
             assert worktree_path is not None
-            if phase == "promoting" and working_changes(self.workspace):
+            if phase == "promoting" and candidate_workspace.working_facts(self.workspace).changed_paths:
                 # The candidate remains authoritative in the episode worktree. Roll back
                 # only an incomplete supervisor squash before retrying promotion.
-                subprocess.run(
-                    ["git", "reset", "--hard", base_commit],
-                    cwd=str(self.workspace),
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+                candidate_workspace.restore_revision(
+                    self.workspace, expected_revision=base_commit,
+                    revision=base_commit, retain_working_files=False,
                 )
-            worktree = self.base_campaign.candidate_workspace.restore_handle(episode, base_commit, branch, worktree_path)
-            CampaignStore.ensure_excluded(worktree.path)
+            worktree = CandidateHandle(episode, base_commit, branch, worktree_path)
+            CampaignStore.ensure_excluded(worktree.path, candidate_workspace=self.base_campaign.candidate_workspace)
             if self._recover_completed_handoff(
                 store,
                 state,
@@ -1495,23 +1489,27 @@ class LongHorizonCampaign:
             store.save_active(active)
             print(
                 f"[long-horizon] resuming interrupted episode={episode} in existing "
-                f"worktree {worktree.path} with {len(working_changes(worktree.path))} "
+                f"worktree {worktree.path} with {len(candidate_workspace.working_facts(worktree.path).changed_paths)} "
                 "visible intermediate path(s)",
                 flush=True,
             )
             return worktree, active
-        if git_head(self.workspace) != base_commit:
-            message = git_text(self.workspace, "log", "-1", "--format=%s", check=False)
-            parent = git_text(self.workspace, "rev-parse", "HEAD^", check=False)
+        if current_revision != base_commit:
+            history = candidate_workspace.revision_history(self.workspace, revision=current_revision)
+            current = history[0] if history else None
+            message = (current.message.splitlines() or [""])[0] if current is not None else ""
+            parent = current.parents[0] if current is not None and current.parents else ""
             from .promotion_audit import PromotionAuditUnverifiable
             from .audit_recovery import recover_promotion_audit, pause_for_audit_repair
             try:
                 audit_recovery = recover_promotion_audit(
                     self.workspace, episode=episode, base_commit=base_commit,
                     branch=branch, version=memory_version,
+                    candidate_workspace=candidate_workspace,
                 )
             except PromotionAuditUnverifiable as error:
-                raise pause_for_audit_repair(self.workspace, store, active, error) from error
+                raise pause_for_audit_repair(self.workspace, store, active, error,
+                                           candidate_workspace=candidate_workspace) from error
             promoted = (
                 phase in {"promoting", "promoted"}
                 and parent == base_commit
@@ -1519,6 +1517,7 @@ class LongHorizonCampaign:
                 == f"episode {episode}: promote verified long-horizon candidate"
                 and audit_recovery is not None
             )
+            record_path = str(version_record_path(self.workspace, memory_version).relative_to(self.workspace))
             outcome_recorded = (
                 phase in {"recording", "recorded"}
                 and memory_version > 0
@@ -1526,14 +1525,9 @@ class LongHorizonCampaign:
                 and parent == base_commit
                 and message
                 == f"v{memory_version}: long-horizon episode {episode} {terminal_status}"
-                and bool(
-                    git_text(
-                        self.workspace,
-                        "show",
-                        f"HEAD:{version_record_path(self.workspace, memory_version).relative_to(self.workspace)}",
-                        check=False,
-                    )
-                )
+                and bool(candidate_workspace.read_revision(
+                    self.workspace, current_revision, (record_path,),
+                ).files.get(record_path))
             )
             if not (promoted or outcome_recorded):
                 # The episode never reached a terminal handoff and its base is now
@@ -1556,11 +1550,11 @@ class LongHorizonCampaign:
                 if promoted:
                     state.accepted += 1
                     state.consecutive_without_promotion = 0
-                    recovered_attempt["promotion_commit"] = git_head(self.workspace)
+                    recovered_attempt["promotion_commit"] = current_revision
                     recovered_attempt["promotion_audit"] = audit_recovery
                 else:
                     state.consecutive_without_promotion += 1
-                    recovered_attempt["outcome_commit"] = git_head(self.workspace)
+                    recovered_attempt["outcome_commit"] = current_revision
                     if terminal_status == "pivot":
                         state.pivoted += 1
                     elif terminal_status == "blocked":
@@ -1579,22 +1573,19 @@ class LongHorizonCampaign:
             # A crash during squash promotion can leave the incumbent index/worktree dirty
             # while HEAD still points at the immutable base. The active marker proves these
             # are supervisor-owned partial changes, so roll them back before continuing.
-            if phase == "promoting" and working_changes(self.workspace):
-                subprocess.run(
-                    ["git", "reset", "--hard", base_commit],
-                    cwd=str(self.workspace),
-                    check=True,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
+            if phase == "promoting" and candidate_workspace.working_facts(self.workspace).changed_paths:
+                candidate_workspace.restore_revision(
+                    self.workspace, expected_revision=base_commit,
+                    revision=base_commit, retain_working_files=False,
                 )
             if (
                 worktree_path is not None
                 and worktree_path != self.workspace.resolve()
                 and worktree_path.is_dir()
-                and worktree_path in registered
+                and registered
                 and branch
             ):
-                worktree = self.base_campaign.candidate_workspace.restore_handle(episode, base_commit, branch, worktree_path)
+                worktree = CandidateHandle(episode, base_commit, branch, worktree_path)
                 if self._recover_completed_handoff(
                     store,
                     state,
@@ -1628,7 +1619,7 @@ class LongHorizonCampaign:
                 episode_workspace=worktree_path,
                 episode_mode=episode_mode,
             )
-            outcome_commit = record_episode_outcome(
+            outcome_commit = self._record_episode_outcome(
                 self.workspace,
                 base_commit=base_commit,
                 version=memory_version,
@@ -1683,7 +1674,7 @@ class LongHorizonCampaign:
             except OSError:
                 pass
         if worktree_path is not None and worktree_path != self.workspace.resolve():
-            if worktree_path in registered:
+            if registered:
                 self.base_campaign.candidate_workspace.remove(
                     CandidateHandle(episode, base_commit, branch or "atrex/recovery", worktree_path),
                     self.workspace,
@@ -1695,7 +1686,7 @@ class LongHorizonCampaign:
 
     def run(self) -> str:
         main_adapter.prepare_campaign(self.base_campaign)
-        store = CampaignStore(self.workspace)
+        store = CampaignStore(self.workspace, candidate_workspace=self.base_campaign.candidate_workspace)
         state = store.load_state()
         if state.episodes == 0 and state.consecutive_without_promotion == 0:
             state.consecutive_without_promotion = main_adapter.restored_stall(
@@ -1720,6 +1711,7 @@ class LongHorizonCampaign:
             agent=self.base_campaign.agent,
             agent_cli=getattr(self.base_campaign, "agent_cli", "claude"),
             usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0,
+            source_inventory=lambda workspace: tuple(self.base_campaign.candidate_workspace.read_source(workspace).files),
         )
         starting_episodes = state.episodes
         reason = "budget: max-iters" if self.max_version is not None else "max-episodes"
@@ -1774,13 +1766,13 @@ class LongHorizonCampaign:
             if resumed:
                 active.setdefault("mode", episode_mode)
                 if active.get("resumed_from_phase") == "preparing":
-                    self.base_campaign.candidate_workspace.reset_scratch(worktree)
+                    self.base_campaign.candidate_workspace.clear_paths(worktree.path, ("scratch",))
                     main_adapter.link_episode_runtime(
                         self.base_campaign, worktree.path
                     )
             else:
                 memory_version = main_adapter.latest_version(self.workspace) + 1
-                base_commit = git_head(self.workspace)
+                base_commit = self.base_campaign.candidate_workspace.current_revision(self.workspace)
                 worktree = self.base_campaign.candidate_workspace.plan(
                     self.workspace, episode, base_commit, root=self.worktree_root
                 )
@@ -1795,7 +1787,7 @@ class LongHorizonCampaign:
                 }
                 store.save_active(active)
                 self.base_campaign.candidate_workspace.materialize(worktree, self.workspace)
-                self.base_campaign.candidate_workspace.reset_scratch(worktree)
+                self.base_campaign.candidate_workspace.clear_paths(worktree.path, ("scratch",))
                 active.update(
                     {
                         "episode_branch": worktree.branch,
@@ -1805,7 +1797,7 @@ class LongHorizonCampaign:
                 )
                 store.save_active(active)
                 main_adapter.link_episode_runtime(self.base_campaign, worktree.path)
-                unexpected = working_changes(worktree.path)
+                unexpected = self.base_campaign.candidate_workspace.working_facts(worktree.path).changed_paths
                 if unexpected:
                     raise RuntimeError(
                         "runtime linking dirtied the episode boundary: "
@@ -1869,6 +1861,9 @@ class LongHorizonCampaign:
                 ),
                 reasoning_effort=EPISODE_REASONING_EFFORT,
                 telemetry_environment=telemetry_environment,
+                access=self.base_campaign.agent_access(agent_workspace),
+                tool_session_factory=lambda selected_workspace, **grant: self.base_campaign._supervisor_runtime.session(
+                    selected_workspace, telemetry_environment, **grant),
                 record_usage=lambda tokens: store.record_usage(
                     state, usage_receipt, tokens
                 ),

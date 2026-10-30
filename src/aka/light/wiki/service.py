@@ -14,12 +14,11 @@ import threading
 import time
 import uuid
 
-from aka.light.execution.process import ExecutionControl
 from aka.light.runtime.errors import GatewayExecutionUnavailable, SessionRevokedError
 from aka.light.supervisor.errors import RuntimeStateError
 from aka.light.supervisor.workspace import publish
-from aka.light.orchestrator.agent_home import open_private_directory
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.filesystem import open_private_directory
+from aka.filesystem import read_regular_bytes
 
 
 def digest(value):
@@ -70,7 +69,7 @@ class WikiService:
     def execute(self, owner, capability, command, staged, environment, argv):
         started = time.monotonic()
         policy = self.config
-        deadline = started + policy.timeout
+        deadline = min(started + policy.timeout, capability.deadline or float("inf"))
         request_id = uuid.uuid4().hex
         live = lambda: owner._live(capability)
         tool = Path(command[1]).stem
@@ -139,11 +138,11 @@ class WikiService:
                            "argv": command[2:], "config": asdict(policy)}
                 publish(staged, "wiki-request.json", json.dumps(request).encode())
                 record["status"] = "running"
-                control = ExecutionControl(deadline, request_id, live, acquire, self.slots.release)
+                acquire()
                 try:
-                    process = owner.executor.run_gateway(
+                    process = owner.run_executor(
                         [sys.executable, "-m", "aka.light.wiki.worker", str(staged / "wiki-request.json")],
-                        staged, environment, control)
+                        staged, environment, capability, deadline=deadline)
                 except GatewayExecutionUnavailable as error:
                     if not live():
                         raise SessionRevokedError("Session revoked") from error
@@ -151,6 +150,7 @@ class WikiService:
                     raise WikiUnavailable("wiki_query_timeout" if record["status"] == "timed_out" else "wiki_unavailable",
                                           "Wiki query did not complete within its execution limits.") from error
                 finally:
+                    self.slots.release()
                     self._timing(staged, record)
                 if not live():
                     raise SessionRevokedError("Session revoked")

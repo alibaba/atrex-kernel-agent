@@ -5,43 +5,26 @@
   ],
   "patches": [
     {
-      "id": "experiment",
-      "remove": true
-    },
-    {
-      "id": "canonical-reader",
-      "remove": true
-    },
-    {
-      "id": "execution",
-      "isolate": [
-        "executor"
-      ]
-    },
-    {
       "id": "agent",
       "remove": true
     },
     {
       "id": "agent",
       "insert": {
-        "name": "aka.light.agent.plugin",
+        "name": "aka.agent.plugin",
         "required": true,
         "config": {
           "sandbox": "none",
-          "capture": true
+          "proc_mode": "private"
         }
       }
     },
     {
-      "id": "candidate",
-      "remove": true
-    },
-    {
-      "id": "candidate",
-      "insert": {
-        "name": "aka.light.workspace.plugin",
-        "required": true
+      "id": "evaluation",
+      "config": {
+        "shape_batch_size": 1,
+        "comparison_method": "native-abba",
+        "measurement_repetitions": 1
       }
     },
     {
@@ -56,48 +39,6 @@
         "config": {
           "startup": true
         }
-      }
-    },
-    {
-      "id": "tool_runtime",
-      "insert": {
-        "name": "aka.light.runtime.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "executor",
-      "insert": {
-        "name": "aka.light.execution.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_evaluation",
-      "insert": {
-        "name": "aka.light.evaluation.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_experiments",
-      "insert": {
-        "name": "aka.light.experiment.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_acceptance",
-      "insert": {
-        "name": "aka.light.acceptance.plugin",
-        "required": true
-      }
-    },
-    {
-      "id": "light_journal",
-      "insert": {
-        "name": "aka.light.workflow.journal_plugin",
-        "required": true
       }
     }
   ]

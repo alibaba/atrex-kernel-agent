@@ -7,12 +7,12 @@ import os
 from pathlib import Path
 import stat
 
-from aka.light.orchestrator.session_tail import read_regular_bytes
-from aka.light.workspace.sources import source_name
+from aka.filesystem import read_regular_bytes
 
 
-def _inventory(workspace: Path) -> dict:
+def _inventory(workspace: Path, source_paths=("kernel.py",)) -> dict:
     entries = []
+    public_roots = {Path(name).parts[0] for name in source_paths if Path(name).parts and not name.startswith(".")}
     # List only public candidate/state names. Never ingest private metadata or
     # arbitrary scratch text into the recovery prompt. All reads refuse links.
     for root in (workspace, workspace / "scratch", workspace / "tools", workspace / "skills"):
@@ -24,7 +24,7 @@ def _inventory(workspace: Path) -> dict:
                     if index >= 256 or len(entries) >= 64:
                         break
                     if (child.name.startswith(".") or child.is_symlink()
-                            or (root == workspace and not source_name(child.name))):
+                            or (root == workspace and child.name not in public_roots)):
                         continue
                     info = child.stat(follow_symlinks=False)
                     if not (stat.S_ISREG(info.st_mode) or stat.S_ISDIR(info.st_mode)):
@@ -84,9 +84,9 @@ def _receipts(stdout: str, session_id: str) -> dict:
 
 
 def recovery_prompt(workspace: Path, original: str, stdout: str, session_id: str,
-                    retry: int, maximum: int) -> str:
+                    retry: int, maximum: int, *, source_paths=("kernel.py",)) -> str:
     snapshot = {"reason": "max_output_tokens", "recovery": retry, "max_recoveries": maximum,
-                **_inventory(workspace), **_receipts(stdout, session_id)}
+                **_inventory(workspace, source_paths), **_receipts(stdout, session_id)}
     return original.rstrip() + "\n\n## Continue this Episode after an output limit\n\n" + (
         "This is a NEW provider session in the SAME Episode and workspace, with the same "
         "task, tools, visibility and remaining budget. Preserve the current kernel/source tree, "

@@ -11,11 +11,11 @@
     {
       "id": "agent",
       "insert": {
-        "name": "aka.light.agent.plugin",
+        "name": "aka.agent.plugin",
         "required": true,
         "config": {
           "sandbox": "bwrap",
-          "capture": false
+          "proc_mode": "projected"
         }
       }
     }

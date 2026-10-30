@@ -26,7 +26,8 @@ from typing import Any
 
 UTC = timezone.utc
 
-from aka.light.orchestrator.agent_home import open_private_directory
+from aka.filesystem import open_private_directory
+from aka.contracts.workspace import CandidateHandle, RevisionContent
 
 from aka.light.supervisor.direction_genealogy import (
     RELATIONSHIP_FIELDS,
@@ -52,8 +53,7 @@ from aka.light.supervisor.identifiers import (
     GATEWAY_RECORD_ID_RE,
     KERNEL_RECORD_ID_RE,
 )
-from aka.light.supervisor.measurement_records import MeasurementStore, private_write, read_json
-from aka.light.supervisor.measurements import result_from_response
+from aka.light.workflow.journal_records import private_write, read_json
 from aka.light.supervisor.workspace import MAX_FILE_BYTES, publish, read_input, relative_path
 
 DIRECTION_PROPOSAL_FIELDS = {
@@ -507,7 +507,7 @@ def _append_event(path: Path, campaign_root: Path, event: dict[str, Any]) -> Non
 
 
 def update_direction(
-    path: Path, campaign_root: Path, request: Mapping[str, object]
+    path: Path, campaign_root: Path, request: Mapping[str, object], *, evidence_reader
 ) -> dict[str, object]:
     _mutable_journal(path)
     value = dict(request)
@@ -572,7 +572,7 @@ def update_direction(
         direction_id = _text(value["direction_id"], "Direction ID")
         advance_direction(statuses, started, direction_id, action)
         supporting = (
-            _closure_support(path, campaign_root, direction_id, value, history=history)
+            _closure_support(path, campaign_root, direction_id, value, history=history, evidence_reader=evidence_reader)
             if action in _CLOSURES
             else []
         )
@@ -589,63 +589,27 @@ def update_direction(
     return {"status": "recorded", "direction_id": direction_id}
 
 
-def _read_private_gateway_evidence(journals_root: Path, record_id: str) -> dict[str, Any]:
-    """Read a Journal-internal evidence view from the private Measurement Store.
-
-    ``journals_root`` is the Runtime-owned ``<scope>/journals`` collection;
-    its sibling ``<scope>/measurements`` stores the referenced Gateway Records.
-    This is not an Agent response projection. Raw request/options/inputs stay in
-    the private store; only a derived full-evaluation eligibility flag is carried
-    into report validation. Agent output is assembled separately by the Journal
-    handlers and compatibility publisher.
-    """
+def _read_private_gateway_evidence(journals_root: Path, record_id: str, *, evidence_reader) -> dict[str, Any]:
+    """Consume the host-selected shared Experiment projection without storage paths."""
     if GATEWAY_RECORD_ID_RE.fullmatch(record_id) is None:
         raise ValueError("Gateway Record ID must be a valid gateway-... ID returned by the Runtime")
-    store = MeasurementStore(journals_root.parent / "measurements")
     try:
-        record = store.read(record_id)
-    except FileNotFoundError as error:
-        raise ValueError(
-            "Gateway Record is not available in this Campaign; use record-read to check its ID"
-        ) from error
+        return evidence_reader(record_id)
+    except LookupError as error:
+        raise ValueError("Gateway Record is not available in this Campaign; use record-read to check its ID") from error
     except (ValueError, KeyError, TypeError, OSError) as error:
-        raise RuntimeStateError(
-            "Gateway Record evidence is unreadable or inconsistent; ask the operator to restore it"
-        ) from error
-    identity = record["kernels"].get("candidate", {})
-    response = record["response"]
-    result = result_from_response(response, record["operation"])
-    options = record["request"]["options"]
-    standard_full_evaluation = (
-        record["operation"] == "evaluate"
-        and (options.get("evaluation_mode") or "full") == "full"
-        and not options.get("evaluation_input_path")
-        and not options.get("evaluation_shapes_path")
-        and not any(
-            arg == "--shape-id" or arg.startswith("--shape-id=")
-            for arg in options.get("command", [])
-        )
-    )
-    return {
-        "gateway_record_id": record_id,
-        "gateway_kind": "run" if record["operation"] == "evaluate" else record["operation"],
-        **identity,
-        "result": result or {},
-        "execution_status": "completed" if record.get("cacheable") else "unknown",
-        "exit_code": response["exit_code"],
-        "standard_full_evaluation": standard_full_evaluation,
-    }
+        raise RuntimeStateError("Gateway Record evidence is unreadable or inconsistent; ask the operator to restore it") from error
 
 
 def _has_passing_evaluate(
-    campaign_root: Path, record_ids: object, kernel_digest: str
+    campaign_root: Path, record_ids: object, kernel_digest: str, *, evidence_reader
 ) -> bool:
     if not isinstance(record_ids, list):
         return False
     for record_id in record_ids:
         if not isinstance(record_id, str):
             continue
-        record = _read_private_gateway_evidence(campaign_root, record_id)
+        record = _read_private_gateway_evidence(campaign_root, record_id, evidence_reader=evidence_reader)
         if _passing_evaluate(record, kernel_digest):
             return True
     return False
@@ -665,18 +629,18 @@ def _passing_evaluate(record: dict[str, Any], kernel_digest: str) -> bool:
     )
 
 
-def selected_evaluation(path: Path, journals_root: Path, source: bytes) -> dict[str, Any]:
+def selected_evaluation(path: Path, journals_root: Path, source: RevisionContent, *, workspace_provider, evidence_reader) -> dict[str, Any]:
     """Controller-only lookup; revalidate exact source against the sealed report.
 
     Pass ``SupervisorRuntime.journals_root`` explicitly, rather than inferring
     the collection root from the Episode journal file's directory depth.
     """
     current = load_journal(path)
-    digest = "sha256:" + hashlib.sha256(source).hexdigest()
+    digest = "sha256:" + workspace_provider.source_identity(source)
     if current.get("state") != "candidate_ready" or current.get("candidate_kernel_digest") != digest:
         raise ValueError("Selected report does not match the acceptance Kernel")
     if current.get("research_records") is False:
-        record_ids = _validate_record_ids(journals_root, current["outcome"].get("gateway_record_ids"),
+        record_ids = _validate_record_ids(journals_root, current["outcome"].get("gateway_record_ids"), evidence_reader=evidence_reader,
                                           label="Episode Report")
     else:
         selected_id = current["outcome"]["selected_experiment_id"]
@@ -685,13 +649,13 @@ def selected_evaluation(path: Path, journals_root: Path, source: bytes) -> dict[
             raise ValueError("Selected report has no unique Experiment")
         record_ids = matches[0]["gateway_record_ids"]
     for record_id in reversed(record_ids):
-        record = _read_private_gateway_evidence(journals_root, record_id)
+        record = _read_private_gateway_evidence(journals_root, record_id, evidence_reader=evidence_reader)
         if _passing_evaluate(record, digest):
             return dict(record["result"], gateway_record_id=record_id)
     raise ValueError("Selected report evidence has no passing standard Evaluate for this Kernel")
 
 
-def sealed_candidate_source(journal: dict[str, Any], git_workspace: Path) -> bytes | None:
+def sealed_candidate_source(journal: dict[str, Any], git_workspace: Path, *, workspace_provider) -> RevisionContent | None:
     """Read committed source only when it matches a finalized private report."""
     if journal.get("state") != "candidate_ready":
         return None
@@ -699,14 +663,13 @@ def sealed_candidate_source(journal: dict[str, Any], git_workspace: Path) -> byt
     if (not journal.get("finalized_at") or not isinstance(commit, str)
             or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", commit) is None):
         raise RuntimeError("Private candidate report has no valid sealed commit")
-    from aka.light.workspace.sources import from_git
-    source = from_git(git_workspace, commit)
-    if journal.get("candidate_kernel_digest") != "sha256:" + hashlib.sha256(source).hexdigest():
+    source = workspace_provider.read_source(git_workspace, revision=commit)
+    if journal.get("candidate_kernel_digest") != "sha256:" + workspace_provider.source_identity(source):
         raise RuntimeError("Sealed candidate commit does not match the private report digest")
     return source
 
 
-def _validate_record_ids(campaign_root: Path, raw: object, *, label: str = "Experiment") -> list[str]:
+def _validate_record_ids(campaign_root: Path, raw: object, *, evidence_reader, label: str = "Experiment") -> list[str]:
     records = _text_list(raw, f"{label} gateway_record_ids")
     if not records:
         if label == "Episode Report":
@@ -727,7 +690,7 @@ def _validate_record_ids(campaign_root: Path, raw: object, *, label: str = "Expe
         raise field_error("gateway_record_ids", f"{label} gateway_record_ids must not contain duplicates")
     for index, record_id in enumerate(records):
         try:
-            record = _read_private_gateway_evidence(campaign_root, record_id)
+            record = _read_private_gateway_evidence(campaign_root, record_id, evidence_reader=evidence_reader)
         except ValueError as error:
             raise field_error(f"gateway_record_ids.{index}", str(error),
                               next_action="Use record-read to verify the exact ID returned in this Campaign, correct the citation, then resubmit.") from error
@@ -755,7 +718,7 @@ def _completed_record(record: Mapping[str, Any]) -> bool:
 
 def _closure_support(
     path: Path, campaign_root: Path, direction_id: str, value: Mapping[str, object],
-    *, history: _VisibleHistory | None = None,
+    *, history: _VisibleHistory | None = None, evidence_reader,
 ) -> list[str]:
     assessment = value.get("hypothesis_status")
     if not isinstance(assessment, str) or assessment not in _HYPOTHESIS_STATUSES:
@@ -786,9 +749,9 @@ def _closure_support(
             raise ValueError(f"Supporting Experiment {experiment_id} is outside visible history")
         if experiment.get("direction_id") != direction_id:
             raise ValueError("Supporting Experiment must belong to the Direction being closed")
-        records = _validate_record_ids(campaign_root, experiment.get("gateway_record_ids"))
+        records = _validate_record_ids(campaign_root, experiment.get("gateway_record_ids"), evidence_reader=evidence_reader)
         if assessment != "unresolved" and not any(
-            _completed_record(_read_private_gateway_evidence(campaign_root, record_id))
+            _completed_record(_read_private_gateway_evidence(campaign_root, record_id, evidence_reader=evidence_reader))
             for record_id in records
         ):
             raise AgentRequestError(
@@ -808,6 +771,7 @@ def record_experiment(
     path: Path,
     campaign_root: Path,
     request: Mapping[str, object],
+    *, evidence_reader,
 ) -> dict[str, object]:
     value = dict(request)
     current = _mutable_journal(path)
@@ -831,7 +795,7 @@ def record_experiment(
     action = value.get("action")
     if not isinstance(action, str) or action not in EXPERIMENT_ACTIONS:
         raise ValueError(f"Experiment action must be one of {sorted(EXPERIMENT_ACTIONS)}")
-    record_ids = _validate_record_ids(campaign_root, value["gateway_record_ids"])
+    record_ids = _validate_record_ids(campaign_root, value["gateway_record_ids"], evidence_reader=evidence_reader)
     if action == "baseline" and any(
         item.get("action") == "baseline" for item in current["experiments"]
     ):
@@ -892,8 +856,9 @@ def validate_report_evidence(
     status: str,
     selected_id: object,
     gateway_record_ids: object = None,
-    source_policy: dict | None = None,
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]], bytes | None]:
+    workspace_provider,
+    evidence_reader,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], RevisionContent | None]:
     """Read-only preflight shared by HTTP submission and Supervisor terminal rechecks."""
     current = load_journal(path)
     if current.get("research_records") is False:
@@ -903,11 +868,10 @@ def validate_report_evidence(
             if gateway_record_ids is not None:
                 raise ValueError(f"{status} cannot include gateway_record_ids")
             return current, {}, None
-        records = _validate_record_ids(campaign_root, gateway_record_ids, label="Episode Report")
-        from aka.light.workspace.sources import snapshot as source_snapshot
-        source = source_snapshot(workspace, policy=source_policy)
-        digest = "sha256:" + hashlib.sha256(source).hexdigest()
-        if not _has_passing_evaluate(campaign_root, records, digest):
+        records = _validate_record_ids(campaign_root, gateway_record_ids, evidence_reader=evidence_reader, label="Episode Report")
+        source = workspace_provider.read_source(workspace)
+        digest = "sha256:" + workspace_provider.source_identity(source)
+        if not _has_passing_evaluate(campaign_root, records, digest, evidence_reader=evidence_reader):
             raise field_error("gateway_record_ids",
                 "Episode Report must cite a passing standard full Evaluate Gateway Record for "
                 "byte-identical current candidate source; inspect record-read, repair the Kernel or "
@@ -934,7 +898,7 @@ def validate_report_evidence(
         )
     for event in current["direction_events"]:
         if event.get("hypothesis_status") is not None:
-            _closure_support(path, campaign_root, event["direction_id"], event, history=history)
+            _closure_support(path, campaign_root, event["direction_id"], event, history=history, evidence_reader=evidence_reader)
     if status != "candidate_ready":
         if selected_id is not None and selected_id != "":
             raise ValueError(f"{status} cannot include selected_experiment_id")
@@ -959,11 +923,10 @@ def validate_report_evidence(
         raise ValueError("selected Experiment Direction is outside visible history")
     if directions[direction_id]["status"] not in _CLOSED_STATUSES:
         raise ValueError("selected Experiment Direction must have been started and closed")
-    records = _validate_record_ids(campaign_root, selected.get("gateway_record_ids"))
-    from aka.light.workspace.sources import snapshot as source_snapshot
-    kernel_source = source_snapshot(workspace, policy=source_policy)
-    kernel_digest = "sha256:" + hashlib.sha256(kernel_source).hexdigest()
-    if not _has_passing_evaluate(campaign_root, records, kernel_digest):
+    records = _validate_record_ids(campaign_root, selected.get("gateway_record_ids"), evidence_reader=evidence_reader)
+    kernel_source = workspace_provider.read_source(workspace)
+    kernel_digest = "sha256:" + workspace_provider.source_identity(kernel_source)
+    if not _has_passing_evaluate(campaign_root, records, kernel_digest, evidence_reader=evidence_reader):
         raise ValueError(
             "selected Experiment must cite a passing Evaluate Gateway record whose "
             "Kernel exactly matches the current candidate source; inspect the cited records "
@@ -983,6 +946,8 @@ class SupervisorJournalService:
         evidence_root: Path,
         git_workspace: Path | None = None,
         supervisor_git: bool = False,
+        workspace_provider,
+        evidence_reader,
     ) -> None:
         self.workspace = workspace
         self.git_workspace = git_workspace or workspace
@@ -990,15 +955,18 @@ class SupervisorJournalService:
         self.evidence_root = evidence_root
         self.path = evidence_root / "journal.json"
         self.supervisor_git = supervisor_git
+        self.workspace_provider = workspace_provider
+        self.evidence_reader = evidence_reader
 
-    def sealed_source(self) -> bytes | None:
+    def sealed_source(self) -> RevisionContent | None:
         if not self.supervisor_git:
             return None
-        return sealed_candidate_source(load_journal(self.path), self.git_workspace)
+        return sealed_candidate_source(load_journal(self.path), self.git_workspace,
+                                       workspace_provider=self.workspace_provider)
 
     def execute(
         self, request: Mapping[str, object], *,
-        validate_candidate: Callable[[bytes], dict[str, Any]] | None = None,
+        validate_candidate: Callable[[RevisionContent], dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         operation = request.get("operation")
         if not isinstance(operation, str):
@@ -1021,7 +989,7 @@ class SupervisorJournalService:
             body = request.get("request")
             if not isinstance(body, Mapping):
                 raise ValueError("direction_update requires a request object")
-            return update_direction(self.path, self.campaign_root, body)
+            return update_direction(self.path, self.campaign_root, body, evidence_reader=self.evidence_reader)
         if operation == "directions_list":
             directions = [
                 {
@@ -1044,7 +1012,7 @@ class SupervisorJournalService:
             body = request.get("request")
             if not isinstance(body, Mapping):
                 raise ValueError("experiment_record requires a request object")
-            return record_experiment(self.path, self.campaign_root, body)
+            return record_experiment(self.path, self.campaign_root, body, evidence_reader=self.evidence_reader)
         if operation == "experiments_list":
             experiments = [
                 {
@@ -1088,7 +1056,7 @@ class SupervisorJournalService:
         raise ValueError(f"unsupported Journal operation: {operation}")
 
     def _check_legacy_journal(self) -> None:
-        from aka.light.orchestrator.session_tail import read_regular_bytes
+        from aka.filesystem import read_regular_bytes
 
         try:
             raw = read_regular_bytes(
@@ -1180,7 +1148,7 @@ class SupervisorJournalService:
             # Legacy reports retain the IDs and analysis. Measurement truth is
             # read from the private store, never parsed from the Agent's prose.
             for record_id in reversed(item["gateway_record_ids"]):
-                record = _read_private_gateway_evidence(self.campaign_root, record_id)
+                record = _read_private_gateway_evidence(self.campaign_root, record_id, evidence_reader=self.evidence_reader)
                 if item["experiment_id"] == selected and not _passing_evaluate(
                     record, current["candidate_kernel_digest"]
                 ):
@@ -1215,7 +1183,7 @@ class SupervisorJournalService:
 
     def _submit_report(
         self, raw: Mapping[str, object], *,
-        validate_candidate: Callable[[bytes], dict[str, Any]] | None = None,
+        validate_candidate: Callable[[RevisionContent], dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         persisted = load_journal(self.path)
         research_records = persisted.get("research_records", True)
@@ -1256,7 +1224,6 @@ class SupervisorJournalService:
         elif blocker is not None and blocker != "":
             raise ValueError(f"Episode Report status {status} cannot include blocker")
         selected_id = raw.get("selected_experiment_id")
-        from aka.light.workspace.sources import policy_at
         current, directions, kernel_source = validate_report_evidence(
             self.path,
             self.campaign_root,
@@ -1264,7 +1231,8 @@ class SupervisorJournalService:
             status=status,
             selected_id=selected_id,
             gateway_record_ids=raw.get("gateway_record_ids"),
-            source_policy=policy_at(self.git_workspace, committed=True),
+            workspace_provider=self.workspace_provider,
+            evidence_reader=self.evidence_reader,
         )
         candidate_commit = raw.get("candidate_commit") or ""
         if status == "candidate_ready" and not self.supervisor_git:
@@ -1276,14 +1244,12 @@ class SupervisorJournalService:
                     "candidate_ready requires the full candidate_commit from git rev-parse HEAD; "
                     "commit kernel.py before reporting"
                 )
-            from aka.light.long_horizon.git_episode import EpisodeWorktree
-
-            violation, _ = EpisodeWorktree(
+            violation, _ = self.workspace_provider.validate_candidate(CandidateHandle(
                 current["episode"],
                 current["base_commit"],
                 current["episode_branch"],
                 self.git_workspace,
-            ).validate_candidate(candidate_commit)
+            ), candidate_commit)
             if violation:
                 raise ValueError(violation)
         elif candidate_commit:
@@ -1310,6 +1276,9 @@ class SupervisorJournalService:
             if errors:
                 raise ValueError("invalid accepted_ppu_diagnostics: " + "; ".join(errors))
         if kernel_source is not None:
+            handle = CandidateHandle(current["episode"], current["base_commit"],
+                                     current["episode_branch"], self.git_workspace)
+            self.workspace_provider.validate_candidate_source(handle, kernel_source)
             if validate_candidate is None:
                 raise RuntimeStateError("Supervisor candidate validation is unavailable; report was not accepted")
             # All report/evidence checks precede GPU work. The callback measures
@@ -1318,12 +1287,10 @@ class SupervisorJournalService:
                 "multi_seed_correctness": validate_candidate(kernel_source),
             }
         if kernel_source is not None and self.supervisor_git:
-            from aka.light.long_horizon.git_episode import EpisodeWorktree
-
-            candidate_commit = EpisodeWorktree(
+            candidate_commit = self.workspace_provider.seal_candidate(CandidateHandle(
                 current["episode"], current["base_commit"], current["episode_branch"],
                 self.git_workspace,
-            ).commit_candidate(kernel_source)
+            ), kernel_source)
         current["state"] = status
         current["outcome"] = {
             "summary": summary,
@@ -1341,7 +1308,7 @@ class SupervisorJournalService:
         current["candidate_commit"] = candidate_commit or None
         if kernel_source is not None:
             current["candidate_kernel_digest"] = (
-                "sha256:" + hashlib.sha256(kernel_source).hexdigest()
+                "sha256:" + self.workspace_provider.source_identity(kernel_source)
             )
         current["finalized_at"] = _now()
         current["submitted_report"] = dict(raw)

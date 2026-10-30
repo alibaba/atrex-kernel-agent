@@ -11,17 +11,14 @@ from dataclasses import asdict, replace
 import hashlib
 import json
 from pathlib import Path
-import tempfile
 from threading import Event
 
 from aka.light.long_horizon import main_adapter
 from aka.light.long_horizon.campaign import LongHorizonCampaign
-from aka.light.long_horizon.git_episode import git_blob, git_head
-from aka.light.orchestrator.durable_state import durable_write_json, durable_replace
+from aka.light.orchestrator.durable_state import durable_write_json
 from aka.light.orchestrator.version_records import version_record_path
 from .search import latency, read_state
-from .search_git import commit_files, git
-from aka.light.workspace.sources import from_git, unpack, snapshot as source_snapshot
+from .search_git import commit_files
 
 
 class EpisodeSearchDriver:
@@ -35,7 +32,7 @@ class EpisodeSearchDriver:
         values = {"request": asdict(self.campaign.request),
                   "workflow": asdict(self.campaign.module_options),
                   "agent": self.campaign.agent.configuration_identity,
-                  "inherit_state": self.campaign.candidate_workspace.inherit_state,
+                  "inherit_state": self.campaign.module_options.inherit_state,
                   "research_records": self.campaign.research_records,
                   "wiki": self.campaign.tool_runtime.wiki,
                   "repetitions": self.campaign.tool_runtime.measurement_repetitions,
@@ -57,17 +54,18 @@ class EpisodeSearchDriver:
         record = main_adapter.read_memory(self.campaign.workspace, version)
         if not isinstance(record, dict) or record.get("quality_gate", {}).get("result") != "PASS":
             raise RuntimeError("Pooled search requires a verified Bootstrap/Framework baseline")
-        return self._kernel(self.campaign.workspace, git_head(self.campaign.workspace), record, 0, 0)
+        return self._kernel(self.campaign.workspace, self.campaign.candidate_workspace.current_revision(self.campaign.workspace), record, 0, 0)
 
     def _kernel(self, workspace, commit, record, trajectory, episode):
-        source = from_git(workspace, commit)
+        source = self.campaign.candidate_workspace.read_source(workspace, revision=commit)
         value = {"workspace": str(workspace), "commit": commit,
-                 "sha256": hashlib.sha256(source).hexdigest(), "record": record,
+                 "sha256": self.campaign.candidate_workspace.source_identity(source), "record": record,
                  "trajectory": trajectory, "episode": episode,
                  "latency_us_geomean": record["performance"]["latency_us_geomean"]}
         latency(value)
         # Keep selected historical candidates reachable after Episode worktree cleanup.
-        git(workspace, "update-ref", f"refs/atrex-search/kernels/{value['sha256']}/{commit}", commit)
+        self.campaign.candidate_workspace.retain_revision(workspace, commit,
+            retention_key=f"search-{value['sha256'][:32]}-{commit}")
         return value
 
     def source(self, kernel):
@@ -75,31 +73,29 @@ class EpisodeSearchDriver:
         allowed = {self.campaign.workspace.resolve(), *(child.workspace.resolve() for child in self.children.values())}
         if workspace.resolve() not in allowed:
             raise ValueError("Search Kernel belongs to an unknown controller workspace")
-        source = from_git(workspace, kernel["commit"])
-        if hashlib.sha256(source).hexdigest() != kernel["sha256"]:
+        source = self.campaign.candidate_workspace.read_source(workspace, revision=kernel["commit"])
+        if self.campaign.candidate_workspace.source_identity(source) != kernel["sha256"]:
             raise RuntimeError("Search Kernel bytes differ from the sealed checkpoint")
         return source
 
     def initialize(self, bootstrap, trajectories):
         for number in range(1, trajectories + 1):
             workspace = self.root / "trajectories" / f"t{number:04d}"
-            marker = workspace / ".git/atrex-search-origin.json"
+            marker = self.root / "trajectory-origins" / f"t{number:04d}.json"
             expected = {"bootstrap": bootstrap["commit"], "trajectory": number,
                         "campaign": str(self.campaign.workspace)}
-            if not workspace.exists():
-                workspace.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                with tempfile.TemporaryDirectory(prefix=".preparing-", dir=workspace.parent) as temporary:
-                    staged = Path(temporary) / "repository"
-                    git(workspace.parent, "clone", "--quiet", "--no-hardlinks", "--no-checkout",
-                        str(self.campaign.workspace), str(staged))
-                    git(staged, "checkout", "--quiet", "--detach", bootstrap["commit"])
-                    git(staged, "remote", "remove", "origin")
-                    git(staged, "config", "user.name", "GPU Kernel Optimizer")
-                    git(staged, "config", "user.email", "gpu-kernel-optimizer@local")
-                    durable_write_json(staged / ".git/atrex-search-origin.json", expected)
-                    durable_replace(staged, workspace)
-            if read_state(marker) != expected:
+            try:
+                origin = read_state(marker)
+            except FileNotFoundError:
+                if workspace.exists():
+                    raise RuntimeError("Existing trajectory has no frozen Workflow origin")
+                durable_write_json(marker, expected)
+                origin = expected
+            if origin != expected:
                 raise RuntimeError("Trajectory workspace does not match its frozen Bootstrap identity")
+            if not workspace.exists():
+                self.campaign.candidate_workspace.fork_revision(self.campaign.workspace,
+                    bootstrap["commit"], workspace)
             child = copy.copy(self.campaign)
             child.request = replace(self.campaign.request, workspace=workspace)
             child._supervisor_runtime = None
@@ -113,13 +109,8 @@ class EpisodeSearchDriver:
 
     def _publish(self, workspace, epoch, kernel, label):
         source = self.source(kernel)
-        if workspace.resolve() != Path(kernel["workspace"]).resolve():
-            # Keep the provenance commit named in version facts locally readable,
-            # without merging the other trajectory's tree or controller history.
-            git(workspace, "fetch", "--quiet", "--no-tags", "--no-write-fetch-head",
-                kernel["workspace"], kernel["commit"])
-        git(workspace, "update-ref",
-            f"refs/atrex-search/kernels/{kernel['sha256']}/{kernel['commit']}", kernel["commit"])
+        self.campaign.candidate_workspace.import_revision(workspace, Path(kernel["workspace"]),
+            kernel["commit"], retention_key=f"search-{kernel['sha256'][:32]}-{kernel['commit']}")
         receipt_path = self.root / "publications" / f"e{epoch:08d}-{label}.json"
         # Pin version and full publication content before the Git transaction so
         # a committed-but-unacknowledged publication does not allocate a new vN.
@@ -131,8 +122,8 @@ class EpisodeSearchDriver:
             record.update(version=f"v{version}", git_commit_hash=kernel["commit"],
                           long_horizon={"status": "search_broadcast", "search_epoch": epoch,
                                         "trajectory": kernel["trajectory"], "episode": kernel["episode"]})
-            _, next_files = unpack(source)
-            _, previous_files = unpack(source_snapshot(workspace))
+            next_files = source.files
+            previous_files = self.campaign.candidate_workspace.read_source(workspace).files
             plan = {"version": version, "sha256": kernel["sha256"], "record": record,
                     "removed_sources": sorted(previous_files.keys() - next_files.keys())}
             durable_write_json(receipt_path, plan)
@@ -140,13 +131,14 @@ class EpisodeSearchDriver:
             raise RuntimeError("Epoch broadcast winner changed during recovery")
         private_name = f".atrex_versions/v{plan['version']}.json"
         record = (json.dumps(plan["record"], sort_keys=True) + "\n").encode()
-        _, files = unpack(source)
+        files = dict(source.files)
         files.update({name: None for name in plan.get("removed_sources", [])})
         files[private_name] = record
         if self.campaign.generate_memory:
             files[f"memory/v{plan['version']}.json"] = record
         return commit_files(workspace, receipt_path.with_suffix(".git.json"), files,
-                            f"search epoch {epoch}: {label} Kernel {kernel['sha256'][:16]}")
+                            f"search epoch {epoch}: {label} Kernel {kernel['sha256'][:16]}",
+                            workspace_provider=self.campaign.candidate_workspace)
 
     def prepare_epoch(self, epoch, kernel):
         for number, child in self.children.items():
@@ -188,7 +180,8 @@ class EpisodeSearchDriver:
             child.start_runtime()
             from aka.light.long_horizon.session import LongSessionRunner
             runner = LongSessionRunner(agent=child.agent, agent_cli=child.agent_cli,
-                usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0)
+                usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0,
+                source_inventory=lambda workspace: tuple(child.candidate_workspace.read_source(workspace).files))
             runner.cancel_event = self.cancel_event
             verifier = child.acceptance_verifier(
                 execute=child.measure_for_acceptance, hardware=child.sandbox_hardware,
@@ -211,11 +204,13 @@ class EpisodeSearchDriver:
                 raise RuntimeError("Accepted Episode lacks a passing authoritative comparison")
             commit = attempt["promotion_commit"]
             record_path = version_record_path(child.workspace, attempt["version"])
-            record = json.loads(git_blob(child.workspace, commit, record_path.relative_to(child.workspace).as_posix()))
+            record_name = record_path.relative_to(child.workspace).as_posix()
+            record = json.loads(self.campaign.candidate_workspace.read_revision(
+                child.workspace, commit, [record_name]).files[record_name])
             if record.get("quality_gate", {}).get("result") != "PASS":
                 raise RuntimeError("Accepted Episode lacks a passing sealed version record")
-            if (attempt.get("candidate_commit") and from_git(child.workspace, commit)
-                    != from_git(child.workspace, attempt["candidate_commit"])):
+            if (attempt.get("candidate_commit") and self.campaign.candidate_workspace.read_source(child.workspace, revision=commit).files
+                    != self.campaign.candidate_workspace.read_source(child.workspace, revision=attempt["candidate_commit"]).files):
                 raise RuntimeError("Promoted search Kernel differs from the accepted Episode candidate")
             retained = self._kernel(child.workspace, commit, record, trajectory, episode)
         return {"epoch": epoch, "trajectory": trajectory, "episode": episode,

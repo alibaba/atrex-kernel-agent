@@ -9,7 +9,7 @@ from pathlib import Path
 from aka.evaluation.resources import profile_driver_script
 from aka.task.problem.resources import native_harness_script
 
-from . import agent_runtime as _agent_runtime
+from aka.agent import SUPPORTED_RUNTIME_IDS
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
@@ -64,7 +64,7 @@ IMMUTABLE_BASELINE_PATHS = (
     ".atrex_versions/v0.json",
 )
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
-AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
+AGENT_CLI_CHOICES = SUPPORTED_RUNTIME_IDS
 NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda", "TileLang")
 AMD_FRAMEWORKS = ("Triton", "FlyDSL", "TileLang")
 # CuteDSL is omitted: that path has never been validated on PPU silicon.

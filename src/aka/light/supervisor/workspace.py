@@ -6,8 +6,8 @@ import stat
 import uuid
 from pathlib import Path
 
-from aka.light.orchestrator.agent_home import open_private_directory
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.filesystem import open_private_directory
+from aka.filesystem import read_regular_bytes
 
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024
@@ -43,7 +43,7 @@ def read_input(workspace: Path, value: str, *, limit: int = MAX_FILE_BYTES) -> b
     return data
 
 
-def snapshot(source: Path, destination: Path, *, custom_tools: bool = False) -> None:
+def snapshot(source: Path, destination: Path, *, custom_tools: bool = False, filesystem_access=None) -> None:
     """Copy regular candidate files only; no links to arbitrary host paths."""
     count = total = 0
     skipped = SKIP - {"tools"} if custom_tools else SKIP
@@ -64,6 +64,14 @@ def snapshot(source: Path, destination: Path, *, custom_tools: bool = False) -> 
                 continue
             if not stat.S_ISREG(path.lstat().st_mode):
                 continue
+            if filesystem_access is not None:
+                from aka.contracts.filesystem_access import require_path_access
+                try:
+                    authorized = require_path_access(filesystem_access, path.absolute())
+                except PermissionError:
+                    continue
+                if authorized != path.absolute():
+                    raise ValueError("Input snapshot requires its original physical workspace binding")
             data = read_input(source, relative.as_posix())
             count, total = count + 1, total + len(data)
             if count > 4096 or total > MAX_TOTAL_BYTES:

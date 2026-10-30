@@ -7,9 +7,10 @@ import subprocess
 from typing import Any
 
 from aka.light.supervisor.errors import error_response
-from aka.light.supervisor.gateway_jobs import submission_rejection
-from aka.light.evaluation.evaluation_feedback import project_feedback, merge_feedback, bound_feedback
-from aka.light.evaluation.public_result import correctness_summary
+from dataclasses import dataclass
+from aka.contracts.execution import JobResult
+from aka.evaluation.feedback import project_feedback, merge_feedback, bound_feedback
+from aka.evaluation.tool_results import correctness_summary
 
 MAX_AGENT_PROFILE_KERNELS = 32
 MAX_AGENT_EVALUATION_SHAPES = 4096
@@ -61,40 +62,33 @@ def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
     )
 
 
+@dataclass(frozen=True)
+class _SubmissionRejection:
+    status: int
+
+
+def submission_rejection(process):
+    """Consume original public admission facts; streams do not prove dispatch safety."""
+    result = getattr(process, "execution_result", None)
+    if not isinstance(result, JobResult) or result.facts.disposition != "not_submitted" or result.job_references:
+        return None
+    for diagnostic in result.diagnostics:
+        status = diagnostic.details.get("http_status")
+        if type(status) is int and 400 <= status < 600:
+            return _SubmissionRejection(status)
+    return None
+
+
 def candidate_source_rejection(process: subprocess.CompletedProcess) -> dict[str, Any] | None:
-    """Recognize a confirmed HTTP 400 candidate-source rejection, not an unknown outcome."""
+    """Only Evaluation/Execution's confirmed candidate-specific public admission facts."""
     rejection = submission_rejection(process)
     if rejection is None or rejection.status != 400:
         return None
-    text = (process.stderr or "") + "\n" + (process.stdout or "")
-    # Direct HTTP errors preserve a JSON envelope, unlike the CLI's plain text.
-    try:
-        payload = json.loads(process.stdout or "")
-        error = payload.get("error", payload.get("detail")) if isinstance(payload, dict) else None
-        message = error.get("message") if isinstance(error, dict) else error
-        if isinstance(message, str):
-            text += "\n" + message
-    except (ValueError, TypeError):
-        pass
-    if "source validation failed" not in text.lower():
+    result = process.execution_result
+    if not any(diagnostic.details.get("source_validation_failed") and diagnostic.details.get("candidate_rejected")
+               and not diagnostic.details.get("reference_rejected") for diagnostic in result.diagnostics):
         return None
-    candidate_lines = re.findall(r"(?m)^\s*-\s*candidate:\s*([^\n]+)", text)
-    if not candidate_lines:
-        return None  # Reference/input validation can contain private information.
-    violations = []
-    for line in candidate_lines:
-        match = re.match(r"(Blocked import|Forbidden attribute access):\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", line)
-        if match:
-            violations.append(f"{match[1]}: {match[2]}")
-            continue
-        match = re.match(r"Forbidden string literal matching ['\"]([A-Za-z_]\w*)['\"]:", line)
-        if match:
-            # Do not expose the matched literal, which may contain paths/data.
-            violations.append(f"Forbidden string literal matching: {match[1]}")
-    result = source_error_result({"error": {
-        "code": "candidate_source_rejected", "job_submitted": False, "violations": violations,
-    }})
-    return result
+    return source_error_result({"error": {"code": "candidate_source_rejected", "job_submitted": False, "violations": []}})
 
 
 def source_error_from_stdout(stdout: str) -> dict[str, Any] | None:

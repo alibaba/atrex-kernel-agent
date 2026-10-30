@@ -1,62 +1,31 @@
-"""Coding-agent session execution and sandbox I/O.
-
-Owns session spawning and accounting, the independent production-candidate review, sandbox command
-construction, and evaluator result parsing.
-"""
+"""Coding-agent sessions, independent production review and Workflow result projection."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import os
 import re
-import signal
 import subprocess
-import sys
-import tempfile
-import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from . import agent_runtime as _agent_runtime
+from aka.contracts.agent import AgentRunRequest, AgentRuntimeCapabilities, NormalizedAgentEvent, TokenUsage
 from .constants import (
     DEFAULT_SANDBOX_TIMEOUT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
     REPO_ROOT,
     SANDBOX_FULL_WORKFLOW_PROMPT,
     SANDBOX_SAFETY_BOUNDARY_PROMPT,
-    SANDBOX_TOOL,
     TEST_RESULT_PREFIX,
 )
 from .environment_recovery import (
-    environment_state_file,
     raise_if_environment_blocked,
 )
 from .hardware import hardware_vendor
-from .recovery_processes import spawn_owned_session
-from .sandbox_config import queue_wait_grace
 from .workspace_state import speedup_vs_reference
-
-
-def _status_is(value: object, expected: str) -> bool:
-    """Accept a status even when a CLI accidentally stored it as a JSON-quoted string."""
-    current = value
-    for _ in range(2):
-        if current == expected:
-            return True
-        if not isinstance(current, str):
-            return False
-        try:
-            decoded = json.loads(current)
-        except json.JSONDecodeError:
-            return current.strip() == expected
-        if decoded == current:
-            return False
-        current = decoded
-    return current == expected
 
 
 @dataclass
@@ -67,9 +36,9 @@ class SessionResult:
     stdout_tail: str
     stderr_tail: str
     session_id: str = ""
-    terminal_usage: _agent_runtime.TokenUsage | None = None
-    events: tuple[_agent_runtime.NormalizedAgentEvent, ...] = ()
-    capabilities: _agent_runtime.AgentRuntimeCapabilities | None = None
+    terminal_usage: TokenUsage | None = None
+    events: tuple[NormalizedAgentEvent, ...] = ()
+    capabilities: AgentRuntimeCapabilities | None = None
     observation_errors: tuple[str, ...] = ()
 
 
@@ -154,39 +123,32 @@ def run_session(
     sandbox_ssh: str = "",
     sandbox_ssh_init: str = "",
     sandbox_health_command: str = "",
+    *, agent=None, access=None,
 ) -> SessionResult:
     """Run one clean coding-agent session with no conversational memory from prior iterations."""
     # Kept for the dependency-review call contract. Runtime plan generation is now a
     # workspace-local skill rather than a process-level plugin.
-    del agent_plugins
+    del agent_plugins, sandbox_hardware, sandbox_profile, sandbox_url, sandbox_timeout
+    del sandbox_ssh, sandbox_ssh_init, sandbox_health_command
+    if agent is None:
+        raise ValueError("Coding sessions require the selected Agent")
     session_id = str(uuid.uuid4())
-    runtime = _agent_runtime.build_agent_runtime(
-        agent_cli,
-        process_runner=_agent_runtime.run_bounded,
-    )
-    result = runtime.run(
-        _agent_runtime.AgentRunRequest(
+    result = agent.runtime(agent_cli).run(
+        AgentRunRequest(
             workspace=workspace,
             prompt=prompt,
             timeout_s=timeout,
             reasoning_effort=reasoning_effort,
-            sandbox_hardware=sandbox_hardware,
-            sandbox_profile=sandbox_profile,
-            sandbox_url=sandbox_url,
-            sandbox_ssh=sandbox_ssh,
-            sandbox_ssh_init=sandbox_ssh_init,
-            sandbox_health_command=sandbox_health_command,
-            sandbox_timeout_s=sandbox_timeout,
-            environment_state_file=str(environment_state_file() or ""),
             session_id=session_id,
-            extra_environment=extra_environment,
+            environment=extra_environment,
+            access=access,
         )
     )
     raise_if_environment_blocked()
     return SessionResult(
         exit_status=result.exit_status,
         timed_out=result.timed_out,
-        tokens=result.tokens,
+        tokens=result.terminal_usage.total_tokens or 0,
         stdout_tail=result.stdout_tail,
         stderr_tail=result.stderr_tail,
         session_id=result.session_id,
@@ -240,29 +202,28 @@ _PRODUCTION_REVIEW_CHECK_CATEGORIES = {
 }
 
 
-def _production_review_candidate_paths(workspace: Path) -> list[Path]:
-    """Return the complete, bounded source set shown to the production reviewer."""
-    from aka.light.workspace.sources import policy_at, collect, POLICY
-    policy = policy_at(workspace)
-    if policy is not None:
-        return [workspace / name for name in sorted(collect(workspace, policy))] + [workspace / POLICY]
-    paths = [
-        workspace / "kernel.py",
-        workspace / "solution.json",
-    ]
-    return [path for path in paths if path.is_file()]
+def _production_review_candidate_paths(workspace: Path, *, workspace_provider) -> list[Path]:
+    """Read the complete owner-validated source set shown to the reviewer."""
+    source = workspace_provider.read_source(workspace)
+    names = [name for name, content in source.files.items() if content is not None]
+    if set(names) == {"kernel.py"}:
+        manifest = workspace_provider.read_working(workspace, ("solution.json",)).files["solution.json"]
+        if manifest is not None:
+            names.append("solution.json")
+    return [workspace / name for name in sorted(names)]
 
 
 def _production_review_digest(
     workspace: Path,
     framework: str,
     require_gluon: bool,
+    *, workspace_provider,
 ) -> str:
     digest = hashlib.sha256()
     digest.update(f"production-review-v{DEPENDENCY_REVIEW_SCHEMA_VERSION}\0".encode())
     digest.update(framework.encode("utf-8", errors="replace"))
     digest.update(b"\0gluon-required\0" if require_gluon else b"\0selected-framework\0")
-    for path in _production_review_candidate_paths(workspace):
+    for path in _production_review_candidate_paths(workspace, workspace_provider=workspace_provider):
         relative = path.relative_to(workspace).as_posix()
         contents = path.read_bytes()
         digest.update(relative.encode("utf-8"))
@@ -450,154 +411,6 @@ def sandbox_boundary_directive(hardware: str, profile: str = "", url: str = "", 
                    ENDPOINT=_sandbox_endpoint(profile, url, ssh))
 
 
-def _sandbox_command(
-    workspace: Path,
-    hardware: str,
-    profile: str,
-    url: str,
-    timeout: int,
-    command: list[str],
-    *,
-    ssh: str = "",
-    ssh_init: str = "",
-    health_command: str = "",
-    sync: tuple[str, ...] = (),
-    wall_timeout: Optional[int] = None,
-    gateway_kind: str = "auto",
-    private_reference_dir: Path | None = None,
-    preflight: bool = False,
-) -> subprocess.CompletedProcess[str]:
-    """Run the private GPU executor for trusted Supervisor verification."""
-    if sum(bool(value) for value in (ssh, url, profile)) > 1:
-        raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
-    cmd = [
-        sys.executable,
-        str(SANDBOX_TOOL),
-        "--kind",
-        gateway_kind,
-        "--hardware",
-        hardware,
-        "--workspace",
-        str(workspace),
-        "--timeout",
-        str(timeout),
-    ]
-    if url:
-        cmd += ["--url", url]
-    elif profile:
-        cmd += ["--gateway-profile", profile]
-    elif ssh:
-        cmd += ["--ssh", ssh]
-    if ssh_init:
-        cmd += ["--ssh-init", ssh_init]
-    if health_command:
-        cmd += ["--health-command", health_command]
-    if sync:
-        for path in sync:
-            cmd += ["--sync", path]
-    else:
-        cmd.append("--no-sync")
-    if preflight:
-        cmd.append("--preflight")
-    else:
-        cmd += ["--", *command]
-    environment = os.environ.copy()
-    from aka.light.runtime.paths import supervisor_campaign_root
-    from aka.light.supervisor.measurement_records import JOB_ROOT_ENV
-    # Bootstrap runs before the HTTP Runtime exists. Keep accepted IDs and the
-    # exact uploaded wire request outside the workspace so recovery polls/replays
-    # that same submission instead of creating an untracked replacement.
-    environment[JOB_ROOT_ENV] = str(supervisor_campaign_root(workspace) / "trusted-jobs")
-    environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
-    if private_reference_dir is not None:
-        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
-    # The gateway wait includes GPU queueing; --timeout bounds remote execution.
-    # Keep the outer process alive for the same queue grace used by sandbox.py.
-    if wall_timeout is not None:
-        effective_timeout = wall_timeout
-    else:
-        uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
-        grace = 0 if uses_ssh else queue_wait_grace(environment)
-        effective_timeout = timeout + grace + 240
-    raise_if_environment_blocked()
-    process = spawn_owned_session(
-        cmd,
-        role="sandbox",
-        environment=environment,
-        cwd=str(workspace),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-
-    def stop_process_group() -> tuple[str, str]:
-        if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
-        try:
-            # The private executor handles SIGTERM with bounded SSH cleanup;
-            # allow that 15-second cleanup window to persist a retry marker.
-            return process.communicate(timeout=20)
-        except subprocess.TimeoutExpired:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            return process.communicate()
-
-    deadline = time.monotonic() + effective_timeout
-    try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                stdout, stderr = stop_process_group()
-                raise subprocess.TimeoutExpired(
-                    cmd, effective_timeout, output=stdout, stderr=stderr
-                )
-            try:
-                stdout, stderr = process.communicate(timeout=min(0.25, remaining))
-            except subprocess.TimeoutExpired:
-                raise_if_environment_blocked()
-                continue
-            break
-    except BaseException:
-        # A first-run sandbox has its own session and no recovery guardian.
-        # Reap it on Ctrl-C and every exceptional exit, not just wall timeout.
-        try:
-            stop_process_group()
-        except BaseException:
-            # A second interrupt must not abandon the independently owned group
-            # or replace the original error. The normal path allows SSH cleanup.
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            process.wait()
-        raise
-    result = subprocess.CompletedProcess(
-        args=cmd,
-        returncode=process.returncode,
-        stdout=stdout,
-        stderr=stderr,
-    )
-    raise_if_environment_blocked()
-    return result
-
-
-def check_ssh_environment(
-    workspace: Path, hardware: str, ssh: str, ssh_init: str, health_command: str
-) -> None:
-    """Fail into durable recovery before seeding, even when --arch was given."""
-    result = _sandbox_command(
-        workspace, hardware, "", "", 60, [], ssh=ssh, ssh_init=ssh_init,
-        health_command=health_command, preflight=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(f"SSH preflight failed: {result.stderr or result.stdout}")
-
-
 def _test_result_from_stdout(stdout: str) -> dict:
     """Read the structured result emitted by the active sandbox harness."""
     for line in reversed(stdout.splitlines()):
@@ -660,72 +473,3 @@ def _record_local_test_result(workspace: Path, version: str, result: dict, *, ge
     failures = result.get("failures") or []
     gate["failure_reason"] = None if all_pass else "; ".join(map(str, failures))[:2000]
     return save_version_record(workspace, number, data, generate_memory=generate_memory)
-
-
-def detect_arch(
-    sandbox_hardware: str = "",
-    sandbox_profile: str = "",
-    sandbox_url: str = "",
-    sandbox_ssh: str = "",
-    sandbox_ssh_init: str = "",
-    sandbox_health_command: str = "",
-) -> str:
-    """Return the real runtime GPU architecture token (vendor-neutral), or '' if undetectable.
-
-    NVIDIA/CUDA -> 'sm_<cap>' (e.g. 'sm_103'); AMD/ROCm -> the gfx arch (e.g. 'gfx942').
-    Uses torch (get_device_capability / gcnArchName) — the AUTHORITATIVE source, which stays
-    correct even when the GPU name / vendor SMI is DESENSITIZED (e.g. a target GPU reporting a
-    generic compatibility alias).
-    """
-    code = (
-        "import torch\n"
-        "p=torch.cuda.get_device_properties(0)\n"
-        "if getattr(torch.version,'hip',None):\n"
-        "    print(getattr(p,'gcnArchName','').split(':')[0])\n"
-        "else:\n"
-        "    c=torch.cuda.get_device_capability(0); print('sm_%d%d'%(c[0],c[1]))\n"
-    )
-    if sandbox_hardware:
-        try:
-            with tempfile.TemporaryDirectory(prefix="atrex-arch-") as temp_dir:
-                result = _sandbox_command(
-                    Path(temp_dir),
-                    sandbox_hardware,
-                    sandbox_profile,
-                    sandbox_url,
-                    120,
-                    ["python", "-c", code],
-                    ssh=sandbox_ssh,
-                    ssh_init=sandbox_ssh_init,
-                    health_command=sandbox_health_command,
-                )
-            if result.returncode == 0:
-                for line in reversed(result.stdout.splitlines()):
-                    value = line.strip()
-                    if re.fullmatch(r"sm_\d+|gfx[0-9a-fA-F]+", value):
-                        return value
-            print(
-                f"[orchestrator] WARNING: sandbox arch detection failed on {sandbox_hardware}: "
-                f"{result.stderr[-1000:]}",
-                file=sys.stderr,
-                flush=True,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            print(
-                f"[orchestrator] WARNING: sandbox arch detection failed: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
-        return ""
-
-    for py in ("python", "python3", sys.executable):
-        try:
-            out = subprocess.run(
-                [py, "-c", code], capture_output=True, text=True, timeout=120
-            )
-            s = out.stdout.strip()
-            if s:
-                return s
-        except (OSError, subprocess.SubprocessError):
-            continue
-    return ""

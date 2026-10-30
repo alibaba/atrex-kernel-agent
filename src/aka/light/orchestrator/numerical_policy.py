@@ -21,10 +21,10 @@ from concurrent.futures import CancelledError
 
 from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.task.problem.resources import native_harness_script
-from aka.light.evaluation.policy import CANDIDATE_TIMEOUT
+from aka.light.workflow.measurement_policy import CANDIDATE_TIMEOUT
 from aka.light.supervisor.workspace import read_input, publish
 from aka.light.supervisor.projection import bounded_text, credential_values, redact_diagnostics
-from .session_tail import read_regular_bytes
+from aka.filesystem import read_regular_bytes
 
 from aka.light.long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
 from .constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
@@ -103,20 +103,21 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
         state_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         with tempfile.TemporaryDirectory(prefix="candidate-", dir=state_root) as temporary:
             frozen = Path(temporary)
-            from aka.light.workspace.sources import install, snapshot as source_snapshot
-            install(frozen, source if source is not None else source_snapshot(workspace))
+            owner = campaign.candidate_workspace
+            owner.install_source(frozen, source if source is not None else owner.read_source(workspace))
             private = Path(campaign.private_reference_dir) if campaign.private_reference_dir else None
-            for name in ("input.py", "reference.py", "shapes.json", "metadata.json", "agent_problem.json",
-                         "solution.json", "config.json", "definition.json", "workload.jsonl"):
+            names = ("input.py", "reference.py", "shapes.json", "metadata.json", "agent_problem.json",
+                     "solution.json", "config.json", "definition.json", "workload.jsonl")
+            revision = owner.current_revision(workspace)
+            committed = owner.read_revision(workspace, revision, list(names)).files if revision else {}
+            for name in names:
                 if private is not None and name != "solution.json" and (private / name).is_file():
                     data = read_input(private, name)
                 else:
                     # Do not trust mutable native-workspace evaluator inputs.
-                    result = subprocess.run(["git", "show", f"HEAD:{name}"], cwd=workspace,
-                                            capture_output=True, check=False)
-                    if result.returncode:
+                    data = committed.get(name)
+                    if data is None:
                         continue
-                    data = result.stdout
                 publish(frozen, name, data)
             if not all((frozen / name).is_file() for name in ("input.py", "shapes.json", "reference.py")):
                 # The declarative probes require the native input ABI. SOL's
@@ -144,7 +145,7 @@ def _sources(campaign, workspace):
     from .session_io import _production_review_candidate_paths
 
     files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": HARNESS}
-    for source in _production_review_candidate_paths(workspace):
+    for source in _production_review_candidate_paths(workspace, workspace_provider=campaign.candidate_workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     # Metadata/configuration are part of the pinned public input contract and
     # must be visible as evidence if the reviewer reasons about their values.
@@ -158,9 +159,9 @@ def _sources(campaign, workspace):
 
 
 def _world_size(workspace):
-    from aka.light.supervisor.gateway import _distributed_evaluation_world_size
+    from aka.evaluation.metadata import distributed_evaluation_world_size
     path = workspace / "metadata.json"
-    return _distributed_evaluation_world_size(json.loads(read_input(workspace, path.name)) if path.is_file() else {})
+    return distributed_evaluation_world_size(json.loads(read_input(workspace, path.name)) if path.is_file() else {})
 
 
 def _validate_review(value, digest):
@@ -313,8 +314,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         # pipeline. Stable filenames preserve exact-request reuse across restarts.
         with tempfile.TemporaryDirectory(prefix="probe-", dir=directory) as temporary:
             probe = Path(temporary)
-            from aka.light.workspace.sources import install, snapshot as source_snapshot
-            install(probe, source_snapshot(workspace))
+            campaign.candidate_workspace.install_source(probe, campaign.candidate_workspace.read_source(workspace))
             for name in ("kernel.py", "solution.json", "input.py", "reference.py", "shapes.json",
                          "metadata.json", "agent_problem.json", "config.json", "definition.json", "workload.jsonl"):
                 if (workspace / name).is_file():

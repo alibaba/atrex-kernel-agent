@@ -20,17 +20,31 @@ class WorkflowOptions:
     output_limit_recovery_retries: int = 2
     episode_timeout_seconds: float = 28800
     search: SearchOptions | dict | None = None
-    source_tree: dict | None = None
+    wiki: bool = False
+    wiki_options: dict | None = None
+    research_records: bool = False
+    inherit_state: bool = True
+    request_timeout: float | None = None
+    queue_timeout: float = 60
 
     def __post_init__(self):
+        import math
+        for name in ("wiki", "research_records", "inherit_state"):
+            if type(getattr(self, name)) is not bool:
+                raise ValueError(f"{name} must be boolean")
+        for name in ("request_timeout", "queue_timeout"):
+            value = getattr(self, name)
+            if value is None and name == "request_timeout":
+                continue
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+                raise ValueError(f"{name} must be positive finite seconds")
+        from aka.light.wiki.config import WikiConfig
+        WikiConfig(**(self.wiki_options or {}))
         from .deadline import episode_timeout
         episode_timeout(self.episode_timeout_seconds)
         if (type(self.output_limit_recovery_retries) is not int
                 or not 0 <= self.output_limit_recovery_retries <= 10):
             raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")
-        if self.source_tree is not None:
-            from aka.light.workspace.sources import validate_import_options
-            validate_import_options(self.source_tree)
         if isinstance(self.search, dict):
             object.__setattr__(self, "search", SearchOptions(**self.search) if self.search else None)
         if self.search is not None and not isinstance(self.search, SearchOptions):
@@ -38,15 +52,23 @@ class WorkflowOptions:
 
 
 class LightWorkflow:
-    def __init__(self, agent, problem, source, candidate, tool_runtime,
-                 *, workflow_observer=None, options=WorkflowOptions()):
+    def __init__(self, agent, problem, source, candidate, *, executor, execution_context,
+                 experiment_factory, evaluator_factory, evaluation_defaults,
+                 measurement_parallelism=4, workflow_observer=None, options=WorkflowOptions()):
         if not agent.capabilities.tool_runtime:
-            raise ValueError("light Workflow requires aka.light.agent.plugin (sandbox may remain none)")
-        if not getattr(candidate, "managed_drafts", False):
-            raise ValueError("light Workflow requires aka.light.workspace.plugin for sealed candidates")
+            raise ValueError("light Workflow requires an Agent with scoped tool sessions")
+        if any(not callable(getattr(candidate, method, None)) for method in (
+                "read_source", "record", "restore_sealed_candidate",
+                "snapshot_files", "restore_files", "clear_paths")):
+            raise ValueError("light Workflow requires public source, sealed-candidate and file transactions")
         self.agent, self.problem, self.source, self.candidate = agent, problem, source, candidate
         self.options = options
-        self.tool_runtime = tool_runtime
+        if not callable(getattr(evaluator_factory, "create_command", None)):
+            raise TypeError("Selected Evaluation does not provide command preparation")
+        self.executor, self.execution_context = executor, execution_context
+        self.experiment_factory, self.evaluator_factory = experiment_factory, evaluator_factory
+        self.evaluation_defaults = evaluation_defaults
+        self.measurement_parallelism = measurement_parallelism
         self.workflow_observer = workflow_observer
         self._closed = False
         self._campaigns = WeakSet()
@@ -57,10 +79,18 @@ class LightWorkflow:
 
     def _load_problem(self, request: CampaignRequest) -> LoadedProblem:
         self._check_open()
+        snapshot = request.problem.snapshot_directory
+        if snapshot is None:
+            import hashlib
+            identity = hashlib.sha256((str(request.workspace.absolute()) + "\0" +
+                str(request.problem.directory.absolute())).encode()).hexdigest()
+            snapshot = request.workspace.parent / ".aka-problems" / identity
+        if not snapshot.exists() and self.candidate.current_revision(request.workspace):
+            raise ValueError("An existing campaign requires its retained Task inputs; use a new workspace")
         problem = self.problem.load(
             request.problem.directory,
             optimization_mode=request.settings.optimization_mode,
-            snapshot_directory=request.problem.snapshot_directory,
+            snapshot_directory=snapshot,
         )
         if not isinstance(problem, LoadedProblem):
             raise TypeError("ProblemProvider.load must return LoadedProblem")

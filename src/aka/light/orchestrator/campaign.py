@@ -92,15 +92,14 @@ from .session_io import (
     _production_review_digest,
     _record_local_test_result,
     _render,
-    _sandbox_command,
     _test_result_from_stdout,
     _validate_production_review,
     run_session,
     sandbox_directive,
 )
-from .workspace_runtime import (
-    _agent_runtime_directive,
-    link_runtime,
+from aka.light.workflow.runtime_resources import (
+    agent_runtime_directive as _agent_runtime_directive,
+    install_runtime_resources,
 )
 from .workspace_state import (
     git_head,
@@ -448,7 +447,8 @@ class Campaign:
         service = runtime.journal_factory.open(
             workspace=worktree, git_workspace=worktree,
             campaign_root=runtime.journals_root, evidence_root=path.parent,
-            supervisor_git=True,
+            supervisor_git=True, workspace_provider=self.candidate_workspace,
+            evidence_reader=runtime.measurements.evidence,
         )
         service._publish_report(private)
         return True
@@ -465,7 +465,7 @@ class Campaign:
 
     def acceptance_verifier(self, **options):
         self.start_runtime()
-        return self._supervisor_runtime.acceptance.verifier(**options)
+        return self._supervisor_runtime.acceptance.verifier(workspace_provider=self.candidate_workspace, **options)
 
     def selected_episode_evaluation(self, episode: int, source: bytes) -> dict:
         from aka.light.supervisor.journal import selected_evaluation
@@ -473,6 +473,8 @@ class Campaign:
         path = self._supervisor_runtime.episode_journal_path(episode)
         return selected_evaluation(
             path, journals_root=self._supervisor_runtime.journals_root, source=source,
+            workspace_provider=self.candidate_workspace,
+            evidence_reader=self._supervisor_runtime.measurements.evidence,
         )
 
     def register_runtime_episode(
@@ -704,7 +706,7 @@ class Campaign:
             review_workspace = Path(directory)
             candidate_root = review_workspace / "candidate"
             source_hashes: dict[str, str] = {}
-            for source in _production_review_candidate_paths(workspace):
+            for source in _production_review_candidate_paths(workspace, workspace_provider=self.candidate_workspace):
                 relative = source.relative_to(workspace)
                 destination = candidate_root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -783,7 +785,7 @@ class Campaign:
 
         try:
             reviewed_digest = _production_review_digest(
-                workspace, framework, require_gluon
+                workspace, framework, require_gluon, workspace_provider=self.candidate_workspace
             )
         except OSError as exc:
             errors = [
@@ -822,7 +824,7 @@ class Campaign:
         """Bound timeout retries across sessions and supervisor restarts."""
         from .infrastructure_retry import retry_review
 
-        digest = _production_review_digest(workspace, framework, require_gluon)
+        digest = _production_review_digest(workspace, framework, require_gluon, workspace_provider=self.candidate_workspace)
         stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
         try:
             return retry_review(
@@ -848,6 +850,7 @@ class Campaign:
             self.framework,
             require_gluon=require_gluon,
             production_reviewer=self._review_production_candidate,
+            workspace_provider=self.candidate_workspace,
         )
 
     @cached_property
@@ -866,20 +869,14 @@ class Campaign:
         from aka.light.long_horizon.store import CampaignStore
 
         self._assert_generalized_inputs_are_private()
-        CampaignStore.ensure_excluded(self.workspace, wiki_trace_only=True)
-        native_root = Path(self.atrex_bench_root) if self.atrex_bench_root else None
-        self.candidate_workspace.install_runtime(
-            self.workspace,
-            native_root,
-            plugin_registry=self.plugin_registry,
-            research_records=self.research_records,
-            is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-        )
+        CampaignStore.ensure_excluded(self.workspace, candidate_workspace=self.candidate_workspace, wiki_trace_only=True)
+        install_runtime_resources(self, self.workspace)
         install_workspace_policy(
             self.workspace,
             self.optimization_mode,
             self.framework,
             agent_runtime=self.agent_cli,
+            update_tracked_files=False,
             source_checks_enabled=self.source_checks_enabled,
         )
 
@@ -1068,22 +1065,17 @@ class Campaign:
         return bool(getattr(getattr(self, "module_options", None), "generate_memory", False))
 
     def _run_v0_evaluator(self) -> dict:
-        """Run the sole V0 evaluator and persist its local transport record."""
+        """Run V0 through selected modules and preserve its canonical Workflow facts."""
         failed_memory_path = self.workspace / STATE_DIRECTORY / "v0.failed.json"
         failed_memory_path.unlink(missing_ok=True)
-        test = _sandbox_command(
-            self.workspace,
-            self.sandbox_hardware,
-            self.sandbox_profile,
-            self.sandbox_url,
-            self.sandbox_timeout,
-            ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
-            ssh=self.sandbox_ssh,
-            ssh_init=self.sandbox_ssh_init,
-            health_command=self.sandbox_health_command,
-            gateway_kind="run",
-            private_reference_dir=self.private_reference_dir,
-        )
+        command = ["--kind", "run", "--no-sync"]
+        if self.atrex_bench_root:
+            # Preserve the old native Gateway's implicit six-case/100-iteration
+            # request. V0's source-only correctness prefetch remains separate.
+            command += ["--mode", "full", "--version", "v0", "--multi-seed", "5", "--timed-runs", "100"]
+        response = self.measure_for_acceptance(self.workspace, command,
+            execution_timeout=self.sandbox_timeout)
+        test = subprocess.CompletedProcess(command, response["exit_code"], response["stdout"], response["stderr"])
         self._print_v0_evaluator_output(test)
         if test.returncode == ENVIRONMENT_TEMPFAIL:
             raise EnvironmentUnavailable("V0 evaluation infrastructure is unavailable; retain its job evidence for recovery")
@@ -1140,136 +1132,6 @@ class Campaign:
                         flush=True,
                     )
 
-
-    def _finalize_v0_measurement(
-        self,
-        result: dict,
-        source_commit: str,
-        *,
-        extra_paths: tuple[str, ...] = (),
-    ) -> None:
-        """Commit V0 measurement metadata without rewriting its source commit SHA."""
-        memory_path = version_record_path(self.workspace, 0, prefer_summary=self.generate_memory)
-        memory = json.loads(memory_path.read_text(encoding="utf-8"))
-        memory["git_commit_hash"] = source_commit
-        optimization = memory.setdefault("optimization", {})
-        optimization["action_category"] = "baseline"
-        optimization["action_description"] = (
-            "selected initial implementation measured by the official full-workload evaluator"
-        )
-        optimization["expected_impact"] = "correctness and latency reference for later versions"
-        optimization["risks_and_rollback"] = "none; immutable V0 reference baseline"
-        memory_path = save_version_record(self.workspace, 0, memory, generate_memory=self.generate_memory)
-        coverage_problem = self._generalized_memory_coverage_problem(memory)
-        if coverage_problem:
-            raise RuntimeError(f"invalid native V0 measurement: {coverage_problem}")
-
-        staged = version_commit_paths(self.workspace, 0, generate_memory=self.generate_memory)
-        staged.extend(
-            path for path in extra_paths if (self.workspace / path).is_file()
-        )
-        subprocess.run(
-            ["git", "add", *staged], cwd=str(self.workspace), check=True
-        )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            == 0
-        ):
-            raise RuntimeError("V0 evaluator produced no measurement metadata to commit")
-        subprocess.run(
-            ["git", "commit", "-m", "V0: record baseline measurement"],
-            cwd=str(self.workspace),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        recorded = read_memory(self.workspace, 0) or {}
-        if recorded.get("git_commit_hash") != source_commit:
-            raise RuntimeError("V0 measurement record does not point to the V0 source commit")
-        from aka.light.workspace.sources import from_git, snapshot as source_snapshot
-        if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
-            raise RuntimeError("V0 candidate source differs from its recorded source commit")
-
-    def _setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
-        """Seed native Atrex-Bench V0 without launching a coding Agent."""
-        kernel_path = self.workspace / "kernel.py"
-        reference_path = self.workspace / "reference.py"
-        if not kernel_path.is_file() or not reference_path.is_file():
-            raise RuntimeError("native V0 requires workspace kernel.py and reference.py")
-        selected = getattr(self, "_selected_initial_kernel", reference_path.read_bytes())
-        if kernel_path.read_bytes() != selected:
-            raise RuntimeError(
-                "native V0 kernel.py does not match the selected initial source; refusing "
-                "mechanical baseline generation"
-            )
-        (self.workspace / "README.md").write_text(
-            self._native_v0_readme(generalized=generalized), encoding="utf-8"
-        )
-        source_paths = [
-            ".gitignore",
-            "CLAUDE.md",
-            "README.md",
-            "kernel.py",
-            "test_kernel.py",
-            "profile_driver.py",
-            *agent_visible_operator_files(op_dir, generalized=generalized),
-        ]
-        from aka.light.workspace.sources import snapshot as source_snapshot, unpack, POLICY
-        policy, files = unpack(source_snapshot(self.workspace))
-        if policy is not None:
-            source_paths += [POLICY, *files]
-        source_paths = list(
-            dict.fromkeys(
-                path for path in source_paths if (self.workspace / path).is_file()
-            )
-        )
-        subprocess.run(
-            ["git", "add", *source_paths], cwd=str(self.workspace), check=True
-        )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            != 0
-        ):
-            subprocess.run(
-                ["git", "commit", "-m", "V0: baseline kernel"],
-                cwd=str(self.workspace),
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
-        source_commit = v0_baseline_commit(self.workspace)
-        if not source_commit:
-            raise RuntimeError("native V0 has no committed kernel.py")
-        from aka.light.workspace.sources import from_git
-        if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
-            raise RuntimeError("native V0 source history does not match the selected source")
-
-        result = self._run_v0_evaluator_with_correctness_prefetch()
-        self._finalize_v0_measurement(result, source_commit)
-        self._assert_generalized_inputs_are_private()
-        contract_problem = self._generalized_contract_commit_problem()
-        if contract_problem:
-            raise RuntimeError(f"invalid native V0 source commit: {contract_problem}")
-        status = subprocess.run(
-            ["git", "status", "--porcelain", "--untracked-files=all"],
-            cwd=str(self.workspace),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        if status:
-            print(
-                "[orchestrator] WARNING: native V0 is continuing with a dirty "
-                f"workspace:\n{status}",
-                file=sys.stderr,
-                flush=True,
-            )
 
     def _setup_baseline_sol(self, op_dir: Path) -> None:
         if not SOL_SEED.exists():
@@ -1464,7 +1326,7 @@ class Campaign:
             from aka.light.long_horizon.journal import sync_live_memory
             from aka.light.long_horizon.store import CampaignStore
 
-            store = CampaignStore(self.workspace)
+            store = CampaignStore(self.workspace, candidate_workspace=self.candidate_workspace)
             created_at = datetime.now(timezone.utc).isoformat()
             try:
                 existing = json.loads(
@@ -1503,7 +1365,6 @@ class Campaign:
 
     def _framework_baseline_decision(self) -> tuple[str, str]:
         """Resolve what the stage should do: skip | pin | run | adopt, with the reason."""
-        from aka.light.workspace.sources import policy_at
         if self.framework_baseline == "never":
             return "skip", ""
         if latest_version(self.workspace) < 0 or not git_head(self.workspace):
@@ -1517,7 +1378,8 @@ class Campaign:
         if pinned_commit:
             return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
 
-        if policy_at(self.workspace, committed=True) is not None:
+        if set(self.candidate_workspace.read_source(self.workspace,
+                revision=self.candidate_workspace.current_revision(self.workspace)).files) != {"kernel.py"}:
             return "pin", "source-tree task keeps the pinned package/adapter as its Framework baseline"
 
         progressed = not head_kernel_is_initial_baseline(self.workspace)
@@ -1541,7 +1403,7 @@ class Campaign:
             if not self.source_checks_enabled:
                 return "pin", "multi-GPU Agate source checks are disabled; retain the validated V0"
             structural = production_structure_violations(
-                self.workspace, self.framework
+                self.workspace, self.framework, workspace_provider=self.candidate_workspace
             )
             if any(
                 value.startswith("unsupported production framework")
@@ -2323,7 +2185,7 @@ class Campaign:
         violations = [] if not self.source_checks_enabled else (
             self._production_kernel_violations()
             if include_policy_review
-            else production_structure_violations(self.workspace, self.framework)
+            else production_structure_violations(self.workspace, self.framework, workspace_provider=self.candidate_workspace)
         )
         if violations:
             return (
@@ -2387,33 +2249,15 @@ class Campaign:
         """Validate V1 once: base-seed performance plus five extra correctness cases."""
         # V1 does not gate on speedup, but its full measurement uses the same
         # sampling policy as Bootstrap and ordinary Evaluate.
-        command = [
-            "python",
-            "test_kernel.py",
-            "--version",
-            f"v{n}",
-            "--multi-seed",
-            "4" if self.atrex_bench_root else "5",
-        ]
-        # --timed-runs belongs to the native Atrex-Bench adapter. SOL and
-        # derived legacy harnesses retain their own pinned benchmark settings.
-        if self.atrex_bench_root:
-            command += ["--timed-runs", "100"]
-        command.append("--no-memory")
+        # Native keeps its explicit seed/timing selection. SOL's selected
+        # evaluator owns the complete workload policy and canonical command.
         try:
-            test = _sandbox_command(
-                self.workspace,
-                self.sandbox_hardware,
-                self.sandbox_profile,
-                self.sandbox_url,
-                self.sandbox_timeout,
-                command,
-                ssh=self.sandbox_ssh,
-                ssh_init=self.sandbox_ssh_init,
-                health_command=self.sandbox_health_command,
-                gateway_kind="run",
-                private_reference_dir=self.private_reference_dir,
-            )
+            argv = ["--kind", "run", "--no-sync"]
+            if self.atrex_bench_root:
+                argv += ["--mode", "full", "--version", f"v{n}", "--multi-seed", "4", "--timed-runs", "100"]
+            response = self.measure_for_acceptance(self.workspace, argv,
+                execution_timeout=self.sandbox_timeout)
+            test = subprocess.CompletedProcess(argv, response["exit_code"], response["stdout"], response["stderr"])
         except (OSError, subprocess.SubprocessError) as exc:
             return None, f"combined validation failed to run: {exc}"
         self._print_v0_evaluator_output(test)
@@ -2702,7 +2546,8 @@ class Campaign:
             max_stall=self.max_stall,
             verifier=verifier,
             session_runner=LongSessionRunner(agent=self.agent, agent_cli=self.agent_cli,
-                usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0),
+                usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0,
+                source_inventory=lambda workspace: tuple(self.candidate_workspace.read_source(workspace).files)),
         )
         return self._finish(engine.run())
 

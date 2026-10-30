@@ -8,6 +8,7 @@ import re
 import subprocess
 from pathlib import Path
 from typing import Callable
+from aka.task.source.inspection import framework_key as _framework_key, source_uses_gluon
 
 
 OPTIMIZATION_MODE_CHOICES = ("leaderboard", "production")
@@ -17,53 +18,6 @@ POLICY_END = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_END -->"
 
 
 ProductionReviewer = Callable[[Path, str, bool], list[str]]
-
-
-def _framework_key(framework: str) -> str:
-    token = re.sub(r"[^a-z0-9]+", "", framework.strip().lower())
-    aliases = {
-        "triton": "triton",
-        "gluon": "gluon",
-        "tritongluon": "gluon",
-        "cutedsl": "cutedsl",
-        "cute": "cutedsl",
-        "cuda": "cuda",
-        "cudac": "cuda",
-        "flydsl": "flydsl",
-        "fly": "flydsl",
-    }
-    return aliases.get(token, token)
-
-
-def source_uses_gluon(source: str) -> bool:
-    """Return whether Python source imports the Triton experimental Gluon DSL.
-
-    Parse imports instead of searching for the word ``gluon`` so comments, strings,
-    and failure notes cannot accidentally satisfy the mandatory conversion gate.
-    """
-    try:
-        tree = ast.parse(source)
-    except SyntaxError:
-        return False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            if any(
-                alias.name == "triton.experimental.gluon"
-                or alias.name.startswith("triton.experimental.gluon.")
-                for alias in node.names
-            ):
-                return True
-        elif isinstance(node, ast.ImportFrom):
-            module = node.module or ""
-            if module == "triton.experimental" and any(
-                alias.name == "gluon" for alias in node.names
-            ):
-                return True
-            if module == "triton.experimental.gluon" or module.startswith(
-                "triton.experimental.gluon."
-            ):
-                return True
-    return False
 
 
 def optimization_mode_directive(
@@ -291,6 +245,7 @@ def production_structure_violations(
     framework: str,
     *,
     require_gluon: bool = False,
+    workspace_provider,
 ) -> list[str]:
     """Return only mechanically certain production-candidate violations.
 
@@ -311,18 +266,16 @@ def production_structure_violations(
         return [f"kernel.py is not valid Python: {exc.msg} (line {exc.lineno})"]
 
     errors: list[str] = []
-    from aka.light.workspace.sources import policy_at, collect
-    policy = policy_at(workspace)
-    if policy is not None:
-        try:
-            collect(workspace, policy)
-        except (OSError, ValueError) as exc:
-            return [f"Invalid candidate source tree: {exc}"]
-    if policy is None and _has_relative_import(tree):
+    try:
+        content = workspace_provider.read_source(workspace)
+    except (OSError, ValueError) as exc:
+        return [f"Invalid candidate source tree: {exc}"]
+    single_file = set(content.files) == {"kernel.py"}
+    if single_file and _has_relative_import(tree):
         errors.append("relative/local-module imports are not self-contained")
     if require_gluon and not source_uses_gluon(source):
         errors.append("switching back from the accepted Gluon phase to Triton is forbidden")
-    if policy is None:
+    if single_file:
         errors.extend(_solution_structure_violations(workspace))
     return list(dict.fromkeys(errors))
 
@@ -333,6 +286,7 @@ def production_kernel_violations(
     *,
     require_gluon: bool = False,
     production_reviewer: ProductionReviewer | None = None,
+    workspace_provider,
 ) -> list[str]:
     """Return production-policy violations for the current candidate.
 
@@ -344,6 +298,7 @@ def production_kernel_violations(
         workspace,
         framework,
         require_gluon=require_gluon,
+        workspace_provider=workspace_provider,
     )
     if errors:
         return errors

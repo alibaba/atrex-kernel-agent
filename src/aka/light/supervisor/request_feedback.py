@@ -24,8 +24,9 @@ def _text():
 
 
 def _ids(prefix, *, minimum=0, maximum=64):
+    length = 64 if prefix in {"gateway-", "kernel-"} else 32
     return {"type": "array", "minItems": minimum, "maxItems": maximum, "uniqueItems": True,
-            "items": {"type": "string", "pattern": f"^{prefix}[0-9a-f]{{32}}$"}}
+            "items": {"type": "string", "pattern": f"^{prefix}[0-9a-f]{{{length}}}$"}}
 
 
 def _object(properties, required):

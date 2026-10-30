@@ -11,7 +11,7 @@ from aka.evaluation.abba import (
     verification_schedule, _geomean, _merge_batch_results,
     _result_latency, _result_performance_score,
 )
-from aka.light.evaluation.policy import SHAPE_BATCH_SIZE, BATCH_WORKERS, validate_abba_repeats
+from aka.light.workflow.measurement_policy import SHAPE_BATCH_SIZE, BATCH_WORKERS, validate_abba_repeats
 
 from .models import VerificationResult, VerificationRun
 
@@ -144,7 +144,7 @@ def merge_abba_batch_payloads(
         # requires complete measured Shapes, not optional reference metadata.
         result["all_pass"] = (set(result["latency_us_by_shape"]) == set(shape_ids)
                               and all(row["result"].get("all_pass") is True for row in rows))
-        from aka.light.evaluation.evaluation_feedback import merge_feedback
+        from aka.evaluation.feedback import merge_feedback
         result.update(merge_feedback(row["result"] for row in rows))
         runs.append(
             {

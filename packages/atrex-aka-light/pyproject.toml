@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "atrex-aka-light"
 version = "0.2.0"
-description = "Optional managed AKA Workflow, Agent isolation, observation and reliable execution"
+description = "Optional managed AKA workflows using the common module interfaces"
 requires-python = ">=3.10"
 dependencies = ["atrex-aka-legacy==0.2.0"]
 

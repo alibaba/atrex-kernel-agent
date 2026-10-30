@@ -4,7 +4,6 @@ from pathlib import Path
 
 from aka.light.orchestrator import constants as _constants
 from aka.light.orchestrator import workspace_state as _workspace_state
-from aka.light.orchestrator.agent_runtime import process as _agent_process
 from aka.light.orchestrator.campaign import Campaign
 from aka.light.orchestrator.constants import DEFAULT_CONVERT_AFTER
 from aka.light.orchestrator.hardware import (
@@ -14,9 +13,9 @@ from aka.light.orchestrator.hardware import (
     should_convert_to_gluon,
 )
 from aka.light.orchestrator.optimization_policy import install_workspace_policy
-from aka.light.orchestrator.session_io import _sandbox_command
-from aka.light.orchestrator.workspace_runtime import (
-    _agent_runtime_directive,
+from aka.light.workflow.runtime_resources import (
+    agent_runtime_directive as _agent_runtime_directive,
+    install_runtime_resources,
 )
 from aka.light.orchestrator.workspace_state import (
     git_head,
@@ -62,14 +61,7 @@ def prepare_campaign(campaign: Campaign) -> None:
 
 
 def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
-    native = Path(campaign.atrex_bench_root) if campaign.atrex_bench_root else None
-    campaign.candidate_workspace.install_runtime(
-        workspace,
-        native,
-        plugin_registry=campaign.plugin_registry,
-        research_records=campaign.research_records,
-        is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
-    )
+    install_runtime_resources(campaign, workspace)
     install_workspace_policy(
         workspace, campaign.optimization_mode, campaign.framework,
         update_tracked_files=False,
@@ -90,40 +82,6 @@ def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
             wiki=campaign.tool_runtime.wiki,
         ),
     }
-
-
-def run_sandbox(
-    workspace: Path,
-    hardware: str,
-    profile: str,
-    url: str,
-    timeout: int,
-    command: list[str],
-    *,
-    ssh: str = "",
-    ssh_init: str = "",
-    health_command: str = "",
-    sync: tuple[str, ...] = (),
-    wall_timeout: int | None = None,
-    gateway_kind: str = "auto",
-    private_reference_dir: Path | None = None,
-):
-    """Use main's sandbox command builder and queue/timeout semantics verbatim."""
-    return _sandbox_command(
-        workspace,
-        hardware,
-        profile,
-        url,
-        timeout,
-        command,
-        ssh=ssh,
-        ssh_init=ssh_init,
-        health_command=health_command,
-        sync=sync,
-        wall_timeout=wall_timeout,
-        gateway_kind=gateway_kind,
-        private_reference_dir=private_reference_dir,
-    )
 
 
 def candidate_policy_violations(
@@ -165,7 +123,6 @@ def save_stall(workspace: Path, value: int) -> None:
 
 
 # Re-exported for the rest of long_horizon, which reaches orchestrator only through this adapter.
-run_bounded = _agent_process.run_bounded
 peak_util = _workspace_state.peak_util
 read_memory = _workspace_state.read_memory
 speedup_vs_reference = _workspace_state.speedup_vs_reference

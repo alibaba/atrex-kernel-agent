@@ -5,12 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
 from aka.light.orchestrator.durable_state import durable_write_text
-from aka.light.orchestrator.session_tail import read_regular_bytes
+from aka.filesystem import read_regular_bytes
 
 AUDIT_TRAILER = "AKA-Promotion-Audit: "
 
@@ -29,13 +28,6 @@ def promotion_audit_path(workspace: Path, episode: int) -> Path:
     if isinstance(episode, bool) or not isinstance(episode, int) or episode < 1:
         raise ValueError("promotion audit requires a positive Episode number")
     return supervisor_campaign_root(workspace) / "promotions" / f"long_horizon_e{episode:04d}.json"
-
-
-def promotion_git(workspace: Path, *args: str) -> str:
-    result = subprocess.run(["git", *args], cwd=workspace, capture_output=True, text=True)
-    if result.returncode:
-        raise RuntimeError(f"Cannot read promotion Git evidence: {result.stderr.strip()}")
-    return result.stdout
 
 
 def write_promotion_audit(workspace: Path, episode: int, evidence: dict[str, Any]) -> str:
@@ -57,19 +49,24 @@ def promotion_binding(
     base_commit: str,
     branch: str,
     version: int,
+    candidate_workspace,
 ) -> dict[str, Any] | None:
     """Bind recovery to the current promotion commit and its Episode checkpoint."""
-    message = promotion_git(workspace, "log", "-1", "--format=%B")
-    if message.splitlines()[0] != f"episode {episode}: promote verified long-horizon candidate":
+    history = candidate_workspace.revision_history(workspace)
+    if not history:
         return None
-    if promotion_git(workspace, "rev-parse", "HEAD^").strip() != base_commit:
+    current = history[0]
+    message = current.message
+    if (message.splitlines() or [""])[0] != f"episode {episode}: promote verified long-horizon candidate":
+        return None
+    if not current.parents or current.parents[0] != base_commit:
         return None
     return {
         "episode": episode,
         "version": version,
         "base_commit": base_commit,
         "episode_branch": branch,
-        "promotion_commit": promotion_git(workspace, "rev-parse", "HEAD").strip(),
+        "promotion_commit": current.revision,
         "audit_digests": [
             line.removeprefix(AUDIT_TRAILER)
             for line in message.splitlines()
@@ -106,10 +103,12 @@ def committed_promotion_audit(
     base_commit: str,
     branch: str,
     version: int,
+    candidate_workspace,
 ) -> dict[str, Any] | None:
     """Recover only an exact committed promotion, never an uncommitted workspace file."""
     binding = promotion_binding(
         workspace, episode=episode, base_commit=base_commit, branch=branch, version=version,
+        candidate_workspace=candidate_workspace,
     )
     if binding is None:
         return None
@@ -130,8 +129,12 @@ def committed_promotion_audit(
     else:
         # Older commits sealed the audit inside memory/. Read Git, not the mutable checkout.
         try:
-            raw_text = promotion_git(workspace, "show", f"HEAD:memory/long_horizon_e{episode:04d}.json")
-            record = json.loads(raw_text)
+            relative = f"memory/long_horizon_e{episode:04d}.json"
+            content = candidate_workspace.read_revision(workspace, binding["promotion_commit"], (relative,))
+            raw = content.files.get(relative)
+            if raw is None:
+                raise RuntimeError("Committed promotion audit is absent")
+            record = json.loads(raw)
         except (ValueError, RuntimeError) as error:
             raise PromotionAuditUnverifiable("legacy_unavailable", str(error)) from error
         record = validate_audit_record(record, binding)

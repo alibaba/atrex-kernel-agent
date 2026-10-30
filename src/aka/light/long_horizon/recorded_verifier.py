@@ -4,15 +4,16 @@ from __future__ import annotations
 import shlex
 import tempfile
 from pathlib import Path
+import logging
+from aka.contracts.content import WorkspaceFile
+from aka.contracts.experiment import ExperimentRecordError
 
-from aka.light.supervisor.measurements import result_from_response
-from aka.light.supervisor.measurement_records import EvidenceUnavailable
+from aka.evaluation.tool_results import result_from_response
 from aka.light.supervisor.workspace import read_input, publish
 from aka.light.orchestrator.episode_workspace import PUBLIC_FILES
 from aka.light.orchestrator.infrastructure_retry import InfrastructureUnavailable
 from aka.light.runtime.errors import GatewayExecutionUnavailable, RequestDispatchTimeout
 
-from .git_episode import git_blob, warn_kernel_mismatch
 from .models import VerificationResult
 from .verifier import GatewayABBAValidator, score_verification_payload, verification_schedule
 
@@ -20,9 +21,10 @@ from .verifier import GatewayABBAValidator, score_verification_payload, verifica
 class RecordedABBAValidator(GatewayABBAValidator):
     BASELINE_PATH = "scratch/incumbent.py"
 
-    def __init__(self, *, execute, **kwargs):
+    def __init__(self, *, execute, workspace_provider, **kwargs):
         super().__init__(**kwargs)
         self.execute = execute
+        self.workspace_provider = workspace_provider
 
     def request_argv(self) -> list[str]:
         """One canonical request for trusted acceptance and the Agent prompt."""
@@ -76,13 +78,19 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
     def verify(self, workspace: Path, *, base_commit: str, candidate_commit: str,
                changed_paths: list[str]) -> VerificationResult:
         try:
-            from aka.light.workspace.sources import from_git, unpack, allowed_changes, install
-            candidate = from_git(workspace, candidate_commit)
-            baseline = from_git(workspace, base_commit)
-            policy, _ = unpack(baseline)
-            if (not allowed_changes(changed_paths, policy) if policy else changed_paths != ["kernel.py"]):
+            owner = self.workspace_provider
+            candidate = owner.read_source(workspace, revision=candidate_commit)
+            baseline = owner.read_source(workspace, revision=base_commit)
+            single_file = set(baseline.files) == {"kernel.py"}
+            if (changed_paths != ["kernel.py"] if single_file else
+                    not set(changed_paths) <= candidate.files.keys() | baseline.files.keys()):
                 raise ValueError("Recorded acceptance requires a kernel-only candidate")
-            warn_kernel_mismatch(workspace, candidate)
+            try:
+                mismatch = owner.read_source(workspace).files != candidate.files
+            except (OSError, ValueError, RuntimeError):
+                mismatch = True
+            if mismatch:
+                logging.getLogger(__name__).warning("Candidate working source differs from sealed revision; acceptance uses committed bytes")
             with tempfile.TemporaryDirectory(prefix="aka-acceptance-") as temporary:
                 staged = Path(temporary).resolve()
                 for name in PUBLIC_FILES:
@@ -91,11 +99,11 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
                     except FileNotFoundError:
                         continue
                     publish(staged, name, content)
-                install(staged, candidate)
-                if policy:
-                    install(staged / self.BASELINE_PATH, baseline)
+                owner.install_source(staged, candidate)
+                if not single_file:
+                    owner.install_source(staged / self.BASELINE_PATH, baseline)
                 else:
-                    publish(staged, self.BASELINE_PATH, baseline)
+                    owner.install_files(staged, (WorkspaceFile(self.BASELINE_PATH, text=baseline.files["kernel.py"].decode("utf-8")),))
                 response = self.execute(staged, self.request_argv())
             result = result_from_response(response, "same_allocation_abba")
             if not result or not result.get("gateway_record_id"):
@@ -121,7 +129,7 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
             raise
         except (GatewayExecutionUnavailable, RequestDispatchTimeout) as error:
             raise InfrastructureUnavailable(str(error)) from error
-        except EvidenceUnavailable as error:
+        except ExperimentRecordError as error:
             raise InfrastructureUnavailable(str(error)) from error
         except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
             return VerificationResult("ERROR", None, None, None, error=f"Recorded ABBA verification failed: {error}")

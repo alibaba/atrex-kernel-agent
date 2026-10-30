@@ -37,7 +37,8 @@ class ManagedCampaign(Campaign):
         campaign.source_provider = workflow.source
         campaign.candidate_workspace = workflow.candidate
         campaign.module_options = workflow.options
-        campaign.tool_runtime = workflow.tool_runtime
+        from .runtime import ManagedRuntimeFactory
+        campaign.tool_runtime = ManagedRuntimeFactory(workflow, campaign)
         from aka.resources.plugins import PluginRegistry
         campaign._module_resources = PluginRegistry()
         return campaign
@@ -91,35 +92,73 @@ class ManagedCampaign(Campaign):
 
             raise EnvironmentUnavailable(str(exc)) from exc
 
+    def agent_environment(self):
+        # Evaluation/Execution credentials and routing remain in the host.
+        from aka.light.orchestrator.environment_recovery import environment_state_file
+        state = environment_state_file()
+        return {"ATREX_ENVIRONMENT_STATE_FILE": str(state)} if state is not None else {}
+
+    def agent_access(self, workspace, *, role="optimizer"):
+        from pathlib import Path
+        from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
+        workspace = Path(workspace).resolve(strict=True)
+        if role != "optimizer":
+            from aka.light.orchestrator.agent_workspace import WORKSPACE_LAYOUTS
+            if role not in WORKSPACE_LAYOUTS:
+                raise ValueError("Unknown auxiliary session role")
+            inputs, _ = WORKSPACE_LAYOUTS[role]
+            return FilesystemAccess((FilesystemMount(workspace, workspace, True),), hidden_paths=(workspace / ".git",),
+                read_only_paths=tuple(workspace / name for name in inputs if (workspace / name).exists()))
+        view = getattr(self, "_supervisor_runtime", None)
+        binding = view.journals.get(workspace) if view is not None else None
+        authority = binding.view.worktree if binding and binding.view else workspace
+        facts = self.candidate_workspace.filesystem_access(authority)
+        resources = self._module_resources.filesystem_access(workspace)
+        hidden = [workspace / name for name in (".git", ".atrex_long_horizon", ".atrex_versions", ".aka-agent-observations")]
+        hidden.extend(resources.hidden_paths)
+        private = self.private_reference_dir
+        if private is not None and private.is_relative_to(workspace):
+            hidden.append(private)
+        protected = [workspace / path.relative_to(authority) for path in facts.read_only_paths
+            if path.is_relative_to(authority) and (workspace / path.relative_to(authority)).exists()]
+        protected.extend(resources.read_only_paths)
+        for path in self.agent_read_only_paths:
+            candidate = Path(path).expanduser()
+            if not candidate.is_absolute():
+                candidate = workspace / candidate
+            if candidate.exists():
+                protected.append(candidate)
+        return FilesystemAccess((FilesystemMount(workspace, workspace, True), *resources.mounts), tuple(dict.fromkeys(hidden)), tuple(dict.fromkeys(protected)))
+
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude",
                      reasoning_effort="max", extra_environment=None, **legacy):
+        import time
         environment = dict(extra_environment or {})
-        # Keep remote credentials/authority out of the selected Agent; its
-        # session boundary obtains only a scoped ToolHost capability.
-        result = self.agent.runtime(agent_cli).run(AgentRunRequest(
-            workspace, prompt, timeout, reasoning_effort=reasoning_effort,
-            environment=environment))
-        return SessionResult(result.exit_status, result.timed_out,
-            result.terminal_usage.total_tokens or 0, result.stdout_tail, result.stderr_tail,
-            result.session_id, result.terminal_usage, result.events, result.capabilities,
-            result.observation_errors)
+        role = environment.pop("ATREX_AGENT_WORKSPACE_ROLE", "optimizer")
+        for key in tuple(environment):
+            if key.startswith(("ATREX_SANDBOX_", "ATREX_AGENT_")) or key in {"ATREX_BWRAP_EXECUTABLE", "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_AKA_RUNTIME_OWNER"}:
+                environment.pop(key, None)
+        access = self.agent_access(workspace, role=role)
+        def invoke(values, selected_access):
+            result = self.agent.runtime(agent_cli).run(AgentRunRequest(
+                workspace, prompt, timeout, reasoning_effort=reasoning_effort,
+                environment=values, access=selected_access))
+            return SessionResult(result.exit_status, result.timed_out,
+                result.terminal_usage.total_tokens or 0, result.stdout_tail, result.stderr_tail,
+                result.session_id, result.terminal_usage, result.events, result.capabilities,
+                result.observation_errors)
+        if role == "optimizer":
+            self.start_runtime()
+            with self._supervisor_runtime.session(workspace, environment, access=access,
+                    deadline=time.monotonic() + timeout) as grant:
+                return invoke(grant.environment, grant.filesystem_access)
+        return invoke(environment, access)
 
     def setup_baseline(self):
         initial = self.problem.initial_source
-        if self.module_options.source_tree:
-            if initial.kind == "sol" or not self.atrex_bench_root or self.sandbox_ssh:
-                raise ValueError("Source trees require native Atrex-Bench Eval, not SOL/SSH")
-            from aka.contracts.content import SourceContent, WorkspaceFile
-            from aka.light.workspace.sources import initial_snapshot, unpack, POLICY
-            import json
-            source = initial_snapshot(self.workspace, self.module_options.source_tree)
-            policy, files = unpack(source)
-            content = SourceContent(tuple(WorkspaceFile(name, text=data.decode()) for name, data in files.items()) +
-                                    (WorkspaceFile(POLICY, text=json.dumps(policy)),))
-        else:
-            content = self.source_provider.prepare(SourceRequest(
-                initial=initial, name=self.campaign_name, framework=self.framework,
-                platform=self.platform))
+        content = self.source_provider.prepare(SourceRequest(
+            initial=initial, name=self.campaign_name, framework=self.framework,
+            platform=self.platform))
         self._selected_initial_kernel = next(
             (entry.source.read_bytes() if entry.source is not None else entry.text.encode()
              for entry in content.files if entry.path == "kernel.py"), None)

@@ -3,24 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-try:
-    from ..agent_runtime.model import (
-        AgentRuntimeCapabilities,
-        NormalizedAgentEvent,
-        TokenUsage,
-        subtract_token_usage,
-        sum_token_usages,
-        token_usage_exceeds,
-    )
-except ImportError:  # direct script execution: python orchestrator/optimize.py
-    from agent_runtime.model import (  # type: ignore[no-redef]
-        AgentRuntimeCapabilities,
-        NormalizedAgentEvent,
-        TokenUsage,
-        subtract_token_usage,
-        sum_token_usages,
-        token_usage_exceeds,
-    )
+from aka.contracts.agent import (
+    AgentRuntimeCapabilities,
+    NormalizedAgentEvent,
+    TokenUsage,
+    subtract_token_usage,
+    sum_token_usages,
+    token_usage_exceeds,
+)
 
 
 PHASES = (

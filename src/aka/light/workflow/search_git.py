@@ -1,92 +1,56 @@
-"""Recoverable, controller-only publication of a selected search checkpoint."""
-from __future__ import annotations
-
+"""Workflow replay receipts around selected Workspace file transactions."""
 import hashlib
-import os
 from pathlib import Path
-import subprocess
 import tempfile
 
+from aka.contracts.content import WorkspaceFile
 from aka.light.orchestrator.durable_state import durable_write_json
-from aka.light.supervisor.workspace import publish
-from aka.light.orchestrator.session_tail import read_regular_bytes
-from aka.light.long_horizon.git_episode import git_blob, git_head
 from .search import read_state
 
 
-def git(workspace: Path, *args, data=None, environment=None) -> bytes:
-    result = subprocess.run(["git", *args], cwd=workspace, input=data,
-                            capture_output=True, env=environment)
-    if result.returncode:
-        raise RuntimeError(f"Search Git operation failed: {result.stderr.decode(errors='replace')[-1200:]}")
-    return result.stdout
-
-
-def dirty_paths(workspace):
-    # NUL delimiting avoids treating spaces/quotes as pathname syntax.
-    values = git(workspace, "diff", "--name-only", "-z") + git(workspace, "diff", "--cached", "--name-only", "-z")
-    return {value.decode() for value in values.split(b"\0") if value}
-
-
-def commit_files(workspace: Path, transaction: Path, files: dict[str, bytes | None], message: str) -> str:
-    """No reset/cherry-pick and no hooks. Never overwrite unrelated dirty files.
-
-    Prepare the complete immutable Git commit before changing HEAD or working files.
-    The durable receipt makes a crash between publication, ref update and index
-    refresh replayable. This runs only while no Episode uses this controller copy.
-    """
-    checksums = {name: hashlib.sha256(data).hexdigest() if data is not None else None for name, data in files.items()}
+def commit_files(workspace, transaction, files, message, *, workspace_provider):
+    checksums = {name: hashlib.sha256(data).hexdigest() if data is not None else None
+                 for name, data in files.items()}
     try:
         receipt = read_state(transaction)
     except FileNotFoundError:
-        if dirty_paths(workspace):
-            raise RuntimeError("Search publication requires a clean controller index and tracked workspace")
-        base = git_head(workspace)
-        with tempfile.TemporaryDirectory(prefix="aka-search-index-") as temporary:
-            environment = dict(os.environ, GIT_INDEX_FILE=str(Path(temporary) / "index"))
-            git(workspace, "read-tree", base, environment=environment)
-            for name, data in files.items():
-                if data is None:
-                    git(workspace, "update-index", "--force-remove", "--", name, environment=environment)
-                    continue
-                blob = git(workspace, "hash-object", "-w", "--stdin", data=data).decode().strip()
-                git(workspace, "update-index", "--add", "--cacheinfo", "100644", blob, name,
-                    environment=environment)
-            tree = git(workspace, "write-tree", environment=environment).decode().strip()
-            target = git(workspace, "-c", "commit.gpgSign=false", "commit-tree", tree,
-                         "-p", base, "-m", message).decode().strip()
-        receipt = {"base": base, "target": target, "files": checksums, "message": message}
+        if workspace_provider.working_facts(workspace, include_untracked=False).changed_paths:
+            raise RuntimeError("Search publication requires a clean controller workspace")
+        receipt = {'schema_version':2, 'base':workspace_provider.current_revision(workspace),
+                   'target':None, 'files':checksums, 'message':message}
         durable_write_json(transaction, receipt)
-    if receipt["files"] != checksums or receipt["message"] != message:
-        raise RuntimeError("Search publication replay differs from its sealed transaction")
-    if git_head(workspace) not in {receipt["base"], receipt["target"]}:
-        raise RuntimeError("Controller HEAD changed outside its pending search publication")
-    if not dirty_paths(workspace) <= files.keys():
+    if receipt.get('schema_version') != 2 or receipt['files'] != checksums or receipt['message'] != message:
+        raise RuntimeError("Search publication replay differs from its pending transaction")
+    current = workspace_provider.current_revision(workspace)
+    if receipt['target'] is not None and current != receipt['target']:
+        raise RuntimeError("Controller revision changed after search publication")
+    if current != receipt['base']:
+        facts = workspace_provider.revision_history(workspace, revision=current)[0]
+        if (facts.parents != (receipt['base'],) or facts.message != message
+                or not set(workspace_provider.revision_changes(workspace, receipt['base'], current)) <= files.keys()
+                or dict(workspace_provider.read_revision(workspace,current,list(files)).files) != files):
+            raise RuntimeError("Controller revision changed outside search publication")
+        if receipt['target'] is not None and receipt['target'] != current:
+            raise RuntimeError("Confirmed search revision differs from its receipt")
+        receipt['target'] = current
+        durable_write_json(transaction,receipt)
+        return current
+    if not set(workspace_provider.working_facts(workspace, include_untracked=False).changed_paths) <= files.keys():
         raise RuntimeError("Unrelated tracked changes block search publication recovery")
-    for name, data in files.items():
-        target = subprocess.run(["git", "show", f"{receipt['target']}:{name}"], cwd=workspace, capture_output=True)
-        if (target.stdout if target.returncode == 0 else None) != data:
-            raise RuntimeError("Search publication commit failed integrity verification")
-        try:
-            current = read_regular_bytes(workspace / name, limit=16 * 1024 * 1024 + 1)
-        except FileNotFoundError:
-            current = None
-        old = subprocess.run(["git", "show", f"{receipt['base']}:{name}"],
-                             cwd=workspace, capture_output=True)
-        previous = old.stdout if old.returncode == 0 else None
-        if current not in (previous, data):
-            raise RuntimeError(f"Refusing to replace unexpected content during search publication: {name}")
-    for name, data in files.items():
-        if data is None:
-            from aka.light.orchestrator.agent_home import open_private_directory
-            with open_private_directory((workspace / name).parent) as parent:
-                try:
-                    os.unlink(Path(name).name, dir_fd=parent)
-                except FileNotFoundError:
-                    pass
-        else:
-            publish(workspace, name, data)
-    if git_head(workspace) == receipt["base"]:
-        git(workspace, "update-ref", "HEAD", receipt["target"], receipt["base"])
-    git(workspace, "read-tree", receipt["target"])  # Index only; no broad worktree reset.
-    return receipt["target"]
+    prior = workspace_provider.read_revision(workspace, receipt['base'], list(files)).files
+    working = workspace_provider.read_working(workspace, tuple(files)).files
+    if any(working[name] not in (prior[name], data) for name,data in files.items()):
+        raise RuntimeError("Unexpected working content blocks search publication recovery")
+    with tempfile.TemporaryDirectory(prefix='aka-search-source-') as temporary:
+        contributions,deleted=[],[]
+        for number,(name,data) in enumerate(files.items()):
+            if data is None:
+                deleted.append(name)
+            else:
+                retained=Path(temporary)/str(number);retained.write_bytes(data)
+                contributions.append(WorkspaceFile(name,source=retained))
+        target=workspace_provider.record(workspace,expected_revision=receipt['base'],
+            files=tuple(contributions),deleted_paths=tuple(deleted),message=message)
+    receipt['target']=target
+    durable_write_json(transaction,receipt)
+    return target

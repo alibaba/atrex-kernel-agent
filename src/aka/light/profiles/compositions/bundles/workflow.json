@@ -48,8 +48,28 @@
       "required": true
     },
     {
+      "id": "canonical-reader",
+      "name": "aka.legacy.workflow.canonical_reader_plugin",
+      "required": true
+    },
+    {
+      "id": "experiment",
+      "name": "aka.experiment.plugin",
+      "required": true
+    },
+    {
       "id": "workflow-observer",
       "name": "aka.legacy.workflow.observer",
+      "required": true
+    },
+    {
+      "id": "experiment-episode-evidence",
+      "name": "aka.experiment.episode_evidence_plugin",
+      "required": true
+    },
+    {
+      "id": "evaluation-episode-interpreter",
+      "name": "aka.evaluation.episode_evidence_plugin",
       "required": true
     },
     {

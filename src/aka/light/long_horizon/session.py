@@ -5,6 +5,7 @@ import signal
 import time
 import uuid
 from collections.abc import Mapping
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 
@@ -14,7 +15,6 @@ from aka.contracts.agent import Agent, NativeInvocation
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
 from .protocol import handoff_diagnosis, read_handoff
 from .output_limit import recovery_prompt
-from aka.light.orchestrator.agent_runtime.adapter import ClaudeAdapter
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
@@ -58,6 +58,35 @@ def _claude_transient_api_error(stdout: str) -> str:
     return ""
 
 
+def _claude_terminal_failure(stdout, session_id):
+    """Workflow recovery policy for the root session's terminal provider error."""
+    if not session_id:
+        return None, None
+    last_assistant = None
+    failure = (None, None)
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except (ValueError, TypeError):
+            continue
+        if (not isinstance(event, dict) or event.get("session_id") != session_id
+                or event.get("parent_tool_use_id") is not None):
+            continue
+        if event.get("type") == "assistant":
+            last_assistant, failure = event, (None, None)
+        elif event.get("type") == "result":
+            failure = (None, None)
+            assistant, last_assistant = last_assistant, None
+            if (event.get("is_error") is not True or event.get("terminal_reason") != "api_error"
+                    or assistant is None or assistant.get("is_api_error_message") is not True):
+                continue
+            codes = {assistant.get(key) for key in ("error", "api_error")
+                     if isinstance(assistant.get(key), str)}
+            if codes == {"max_output_tokens"}:
+                failure = ("output_limit", "max_output_tokens")
+    return failure
+
+
 class LongSessionRunner:
     def __init__(
         self,
@@ -65,10 +94,12 @@ class LongSessionRunner:
         agent: Agent,
         usage_policy: Callable[[NativeInvocation], int],
         agent_cli: str = "claude",
+        source_inventory=None,
     ):
         self.agent_cli = agent_cli
         self.agent = agent
         self.usage_policy = usage_policy
+        self.source_inventory = source_inventory
 
     def run(self, *args, episode_timeout_seconds=28800, **kwargs) -> SessionResult:
         from aka.light.workflow.deadline import episode_timeout
@@ -87,6 +118,8 @@ class LongSessionRunner:
         reasoning_effort: str = "max",
         session_id: str = "",
         telemetry_environment: Mapping[str, str] | None = None,
+        access=None,
+        tool_session_factory=None,
         record_usage: Callable[[int], None] | None = None,
         output_limit_recovery_retries: int = 2,
         remaining_token_budget: int | None = None,
@@ -99,13 +132,29 @@ class LongSessionRunner:
         active_session_id = "" if is_codex else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
-        native = self.agent.open_session(
-            self.agent_cli,
-            workspace,
-            session_id=session_id,
-            environment=telemetry_environment,
-        )
+        owned = ExitStack()
+
+        def open_native(identity):
+            environment = dict(telemetry_environment or {})
+            selected_access = access
+            if tool_session_factory is not None:
+                grant = owned.enter_context(
+                    tool_session_factory(workspace, access=access, deadline=deadline)
+                )
+                environment.update(grant.environment)
+                selected_access = grant.filesystem_access
+            native = self.agent.open_session(
+                self.agent_cli,
+                workspace,
+                session_id=identity,
+                environment=environment,
+                access=selected_access,
+            )
+            owned.callback(native.close)
+            return native
+
         try:
+            native = open_native(session_id)
             telemetry_attempt_prefix = native.environment.get(
                 "ATREX_TELEMETRY_ATTEMPT_ID"
             )
@@ -185,7 +234,7 @@ class LongSessionRunner:
                 stderr_parts.append(stderr)
                 active_session_id = turn.session_id or active_session_id
                 failure_kind, provider_error_code = (
-                    ClaudeAdapter().classify_terminal_failure(stdout, active_session_id)
+                    _claude_terminal_failure(stdout, active_session_id)
                     if self.agent_cli == "claude" else (None, None)
                 )
                 if failure_kind:
@@ -261,18 +310,21 @@ class LongSessionRunner:
                             completion_diagnosis += "; Episode token budget exhausted"
                             break
                         recoveries += 1
+                        source_paths = ("kernel.py",)
+                        if self.source_inventory is not None:
+                            try:
+                                source_paths = self.source_inventory(workspace)
+                            except (OSError, ValueError, RuntimeError, TypeError):
+                                pass  # Inventory is an explicit partial hint, never a gate.
                         next_prompt = recovery_prompt(
                             workspace, prompt, stdout, active_session_id,
-                            recoveries, output_limit_recovery_retries,
+                            recoveries, output_limit_recovery_retries, source_paths=source_paths,
                         )
                         # Unlike a report-format repair, this starts a fresh
                         # model context without resetting the Episode/draft.
-                        native.close()
+                        owned.close()
                         active_session_id = str(uuid.uuid4())
-                        native = self.agent.open_session(
-                            self.agent_cli, workspace, session_id=active_session_id,
-                            environment=telemetry_environment,
-                        )
+                        native = open_native(active_session_id)
                         purpose = "output_limit_recovery"
                         print(f"[long-horizon] max_output_tokens; preserving Episode draft; "
                               f"fresh-session recovery {recoveries}/{output_limit_recovery_retries}",
@@ -316,4 +368,4 @@ class LongSessionRunner:
                 output_limit_recoveries=recoveries,
             )
         finally:
-            native.close()
+            owned.close()

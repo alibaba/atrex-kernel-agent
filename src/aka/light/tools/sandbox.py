@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Session-scoped HTTP client; GPU/Wiki authority stays in the Supervisor.
+"""Session-scoped Agent tool client; GPU/Wiki authority stays in the Supervisor.
 
 Existing GPU command syntax is preserved, for example:
   python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --no-memory
@@ -23,13 +23,8 @@ import json
 import argparse
 import os
 import sys
-import urllib.error
-import urllib.parse
-import urllib.request
 from pathlib import Path
 
-RUNTIME_URL_ENV = "ATREX_AKA_RUNTIME_URL"
-RUNTIME_TOKEN_ENV = "ATREX_AKA_RUNTIME_TOKEN"
 # Wire contract with the Supervisor; keep this client independent of its modules.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
@@ -41,7 +36,7 @@ LOAD_KINDS = {"load-direction": ("direction_load", "direction_id"), "load-experi
 
 
 def client_error(code: str, message: str, instruction: str, *, repairable=False, path="$", **details) -> None:
-    """Keep the standalone HTTP client independent of private Supervisor modules."""
+    """Keep the standalone tool client independent of private Supervisor modules."""
     print(json.dumps({
         "ok": False, "repairable": repairable, "detail": message,
         "error": {"code": code, "message": message, "next_action": instruction, **details},
@@ -98,69 +93,43 @@ def journal_request(kind: str, argv: list[str]) -> dict:
     return {"operation": operation, field: args.record_id}
 
 
-class _NoRedirect(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        return None
-
-
 def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
-    url, token = os.environ.get(RUNTIME_URL_ENV, ""), os.environ.get(RUNTIME_TOKEN_ENV, "")
-    if not url or not token:
-        client_error("session_unavailable", "This tool requires a live Supervisor Session.",
-                     "Ask the operator to launch or resume the Session. Do not invent credentials or bypass the Runtime.")
-        return 75
-    # Never send the Session bearer to an overridden remote URL, URL userinfo,
-    # path or query. A Supervisor always advertises this exact loopback origin.
-    try:
-        address = urllib.parse.urlsplit(url)
-        if (address.scheme != "http" or address.hostname != "127.0.0.1"
-                or address.port is None or address.port == 0
-                or address.username is not None or address.password is not None
-                or address.path not in {"", "/"} or address.query or address.fragment):
-            raise ValueError("invalid Runtime origin")
-    except ValueError:
-        client_error("runtime_configuration_invalid", "Runtime URL must be an HTTP 127.0.0.1 origin with an explicit port.",
-                     "Ask the operator to restore the Session configuration; do not override the Runtime endpoint.")
-        return 75
-    # File size alone cannot bound JSON re-encoding (e.g. Unicode escapes).
-    # Check exactly the bytes sent, including the operation/request envelope.
+    client_path = os.environ.get("AKA_AGENT_TOOL_CLIENT_PATH")
+    if client_path:
+        sys.path.insert(0, client_path)
+        from tools.client import call_tool, ToolSessionError
+    else:
+        from aka.agent.tools.client import call_tool, ToolSessionError
+    names = {"/v1/gateway/execute": "workflow.gateway", "/v1/journal/execute": "workflow.journal",
+             "/v1/wiki/query": "workflow.wiki", "/v1/plugins/execute": "workflow.plugins"}
     body = json.dumps(payload).encode()
     if len(body) > MAX_REQUEST_BYTES:
-        client_error("request_too_large", f"Encoded HTTP request exceeds {MAX_REQUEST_BYTES} bytes (2 MiB).",
-                     "Shorten request text or lists including envelope/encoding overhead, then retry; no request was sent.",
-                     repairable=True)
+        client_error("request_too_large", "Encoded request exceeds 2 MiB.",
+                     "Shorten the request; no operation was sent.", repairable=True)
         return 2
-    request = urllib.request.Request(
-        url.rstrip("/") + path, data=body,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        method="POST",
-    )
-    # Loopback traffic must not traverse an operator's HTTP proxy or follow a
-    # redirect with the bearer token. No automatic retry of a possibly-run job.
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
-        with opener.open(request, timeout=None) as response:
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
-            execution_exit_code = response.headers.get("X-Atrex-Execution-Exit-Code")
-    except urllib.error.HTTPError as error:
-        with error:
-            raw = error.read(MAX_RESPONSE_BYTES + 1)
-        try:
-            value = json.loads(raw) if len(raw) <= MAX_RESPONSE_BYTES else None
-        except (ValueError, UnicodeError):
-            value = None
-        if isinstance(value, dict):
-            print(json.dumps(value), file=sys.stderr)
-        else:
-            client_error("invalid_runtime_response", f"Runtime returned HTTP {error.code} without a valid error response.",
-                         "The outcome cannot be confirmed. Inspect saved records and ask the operator; do not resubmit blindly.")
-        # A confirmed pre-dispatch 429 and an unknown-outcome 503 both use
-        # temporary-failure exit 75. The JSON repairable/code/next_action fields
-        # distinguish safe backoff from escalation; never auto-resubmit here.
-        return 2 if error.code in {400, 404, 413, 422} else 75
-    except (OSError, urllib.error.URLError):
-        client_error("outcome_unknown", "Runtime connection failed; the operation outcome could not be confirmed.",
-                     "Inspect saved records and ask the operator to reconcile the request. Do not resubmit blindly.")
+        raw = call_tool(names[path], body, workspace=Path.cwd())
+    except ToolSessionError as error:
+        if error.payload is None:
+            client_error(error.code, "The tool session or operation outcome could not be confirmed.",
+                         "Inspect saved records and ask the operator; do not resubmit blindly.")
+            return 75
+        raw = error.payload
+    try:
+        envelope = json.loads(raw)
+        if (not isinstance(envelope, dict) or type(envelope.get("status")) is not int
+                or not isinstance(envelope.get("result"), dict)):
+            raise ValueError("invalid tool reply")
+        execution_exit_code = envelope.get("execution_exit_code")
+        status = envelope["status"]
+        result = envelope["result"]
+        if status >= 400:
+            print(json.dumps(result), file=sys.stderr)
+            return 2 if status in {400, 404, 413, 422} else 75
+        raw = json.dumps(result).encode()
+    except (ValueError, UnicodeError):
+        client_error("invalid_runtime_response", "The operation reply is invalid.",
+                     "Inspect saved records; do not resubmit blindly.")
         return 75
     try:
         if len(raw) > MAX_RESPONSE_BYTES:
