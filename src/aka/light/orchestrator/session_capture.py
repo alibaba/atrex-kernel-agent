@@ -15,9 +15,11 @@ import time
 import uuid
 from contextvars import ContextVar
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
+
+UTC = timezone.utc
 
 from .session_tail import CaptureBudget, CaptureLimits, TranscriptTail
 from .session_transcript import (

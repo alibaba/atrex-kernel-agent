@@ -20,9 +20,11 @@ from collections.abc import Callable, Mapping, MutableMapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+UTC = timezone.utc
 
 from aka.light.orchestrator.agent_home import open_private_directory
 
