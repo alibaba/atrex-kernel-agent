@@ -7,7 +7,7 @@ from aka.legacy.workflow.process_environment import invocation_environment, use_
 from aka.execution.recovery import ENVIRONMENT_TEMPFAIL, EnvironmentUnavailable, current_recovery_context, environment_is_blocked
 from .recovery_runtime import launch_recovery_monitor, signal_restart_ready
 from aka.legacy.workflow.trace_retention import write_trace_retention_manifest
-from .invocation import decode_launch
+from aka.contracts.workflow_launch import decode_launch
 from .preparation import prepare_request
 
 
@@ -53,9 +53,9 @@ class WorkflowStartup:
             getattr(original, name) != getattr(settings, name)
             for name in ("optimization_mode", "framework", "platform")
         ):
-            from .cli_problem import problem_request
+            from .requests import problem_source
             def generated(setting):
-                return problem_request(problem.directory, setting.optimization_mode,
+                return problem_source(problem.directory, setting.optimization_mode,
                     workspace=launch.workspace_base,
                     suffix=launch.workspace_suffix or f"{setting.framework}_{setting.platform}")
             if problem.snapshot_directory == generated(original).snapshot_directory:
@@ -65,8 +65,11 @@ class WorkflowStartup:
 
     def run(self, invocation):
         launch = decode_launch(invocation.argv)
+        from .process_environment import pending_recovery_directory, requires_default_recovery
+        if pending_recovery_directory() is not None or requires_default_recovery():
+            raise RuntimeError("retired script recovery metadata; use the installed profile continuation")
         from dataclasses import replace
-        from .invocation import encode_launch
+        from aka.contracts.workflow_launch import encode_launch
         launch = self._effective_launch(launch)
         values = dict(invocation.environment)
         # External recovery replays the effective request, never profile defaults.

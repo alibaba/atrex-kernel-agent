@@ -53,22 +53,6 @@ def legacy_settings(environment=None):
     return SimpleNamespace(**values)
 
 
-def configure_legacy_arguments(values):
-    """Translate retained CLI knobs once, before selection is frozen."""
-    import os
-    mapping = {"sandbox_profile": "ATREX_SANDBOX_PROFILE", "sandbox_url": "ATREX_SANDBOX_URL",
-               "sandbox_ssh": "ATREX_SANDBOX_SSH", "sandbox_ssh_init": "ATREX_SANDBOX_SSH_INIT",
-               "sandbox_ssh_gpu": "ATREX_SANDBOX_SSH_GPU", "sandbox_health_command": "ATREX_SANDBOX_HEALTH_COMMAND",
-               "environment_poll_interval": "ATREX_ENVIRONMENT_POLL_INTERVAL"}
-    for key, env in mapping.items():
-        if key in values:
-            value = values.pop(key)
-            if value is not None:
-                os.environ[env] = str(value)
-    if "sandbox_ssh_runtime_bind" in values:
-        os.environ["ATREX_SANDBOX_SSH_RUNTIME_BINDS"] = json.dumps(values.pop("sandbox_ssh_runtime_bind") or [])
-
-
 def selected_ssh():
     """Expose the execution mode needed by immutable policy and recovery coordination."""
     from .selection import selected_execution
