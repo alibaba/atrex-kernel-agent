@@ -939,6 +939,7 @@ class LocalScheduler:
         jobs_dir: Path,
         workers: int,
         max_output_bytes: int,
+        uploads: local_eval.UploadStore,
         atrex_bench_root: Path | None = None,
     ) -> None:
         self.store = store
@@ -946,6 +947,7 @@ class LocalScheduler:
         self.jobs_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.workers = workers
         self.max_output_bytes = max_output_bytes
+        self.uploads = uploads
         self.atrex_bench_root = atrex_bench_root
         self._condition = threading.Condition()
         self._stop = threading.Event()
@@ -1197,15 +1199,14 @@ class LocalScheduler:
 
     def _materialize_typed_bundle(self, request: dict[str, Any], workdir: Path) -> None:
         reference = request["reference"]
-        uploads = local_eval.UploadStore(self.jobs_dir.parent / "uploads")
         candidate = local_eval.materialize_source(
-            request["candidate"], workdir / "candidate", request, uploads, request.get("_local_kind", "eval")
+            request["candidate"], workdir / "candidate", request, self.uploads, request.get("_local_kind", "eval")
         )
         # The wrapper keeps sibling imports beside the original entry point.
         self._write_text(workdir, "candidate.py", self._source_wrapper(candidate))
         if request.get("abba"):
             baseline = local_eval.materialize_source(
-                request["abba"]["baseline"], workdir / "baseline", request, uploads, "eval"
+                request["abba"]["baseline"], workdir / "baseline", request, self.uploads, "eval"
             )
             self._write_text(workdir, "baseline.py", self._source_wrapper(baseline))
         self._write_text(workdir, "reference/reference.py", reference["reference_py"])
@@ -1517,17 +1518,16 @@ class LocalScheduler:
 
     @staticmethod
     def _terminate(process: subprocess.Popen[bytes]) -> None:
-        if process.poll() is not None:
-            return
         try:
             os.killpg(process.pid, signal.SIGTERM)
         except ProcessLookupError:
             return
         try:
             process.wait(timeout=2)
-            return
         except subprocess.TimeoutExpired:
             pass
+        # The wrapper can exit on TERM while an evaluator descendant ignores
+        # it. Always kill the remaining process group, even after leader exit.
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -1566,6 +1566,7 @@ class LocalGateway:
             self.state_dir / "jobs",
             workers=workers,
             max_output_bytes=max_output_bytes,
+            uploads=self.uploads,
             atrex_bench_root=atrex_bench_root,
         )
         self._env_lock = threading.Lock()

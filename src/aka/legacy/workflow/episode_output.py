@@ -89,12 +89,16 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
             row = json.loads(line)
             if not isinstance(row,dict) or type(row.get('schema_version')) is not int:
                 raise ValueError('episode evaluation receipt is corrupt')
-            if row['schema_version'] < 3:
-                continue  # Historical receipts cannot certify both candidate files.
+            # Light v2 binds the entire source snapshot, but not a separate
+            # solution manifest. Legacy v3 binds kernel and manifest separately.
+            tree_receipt = (row['schema_version'] == 2 and source_digest is not None
+                            and 'solution.json' not in files)
+            if row['schema_version'] < 3 and not tree_receipt:
+                continue
             if (not isinstance(row.get('kernel_sha256'), str)
                     or not re.fullmatch('[0-9a-f]{64}', row['kernel_sha256'])
-                    or 'solution_sha256' not in row
-                    or (row['solution_sha256'] is not None and (not isinstance(row['solution_sha256'],str)
+                    or (not tree_receipt and 'solution_sha256' not in row)
+                    or (row.get('solution_sha256') is not None and (not isinstance(row['solution_sha256'],str)
                         or not re.fullmatch('[0-9a-f]{64}',row['solution_sha256'])))
                     or not isinstance(row.get('result'),dict)):
                 raise ValueError('episode evaluation receipt has invalid content identity')
@@ -118,6 +122,18 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
         'files':{name:{'sha256':digests[name],'content_base64':base64.b64encode(content).decode('ascii')}
                  for name,content in files.items()} if not unavailable else {},
         'evaluations':evaluations}
+    _write(episode_dir, value)
+
+
+def unavailable(episode_dir, *, episode, version, base_revision, head_revision, reason):
+    """Keep a terminal record without claiming source or measurement evidence."""
+    _write(episode_dir, {'schema': 1, 'episode': episode, 'version': version,
+        'base_revision': base_revision, 'head_revision': head_revision,
+        'revision': None, 'unavailable': reason, 'files': {}, 'evaluations': []})
+
+
+def _write(episode_dir, value):
+    episode_dir = Path(episode_dir)
     episode_dir.mkdir(parents=True,exist_ok=True)
     path = episode_dir/FILENAME
     temporary = path.with_suffix('.tmp')
@@ -171,7 +187,8 @@ def _read(episode_dir, *, episode, version, expected_case_ids, attempt):
         identifier = f'e{episode}_final_{name.replace(".","_")}'
         role = 'episode-candidate-manifest' if name=='solution.json' else 'episode-candidate-source'
         artifacts.append(_artifact(identifier,f'episodes/e{episode:04d}/final/{name}',role,content,
-                                   'text/x-python' if name=='kernel.py' else 'application/json'))
+                                   {'.py': 'text/x-python', '.json': 'application/json'}.get(
+                                       Path(name).suffix, 'text/plain')))
         handles[name] = identifier; digests[name] = row['sha256']
     evaluations = []
     if not isinstance(value['evaluations'],list):
