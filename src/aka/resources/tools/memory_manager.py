@@ -53,8 +53,6 @@ import json
 import os
 import re
 import sys
-from contextlib import contextmanager
-from contextvars import ContextVar
 
 # Module entrypoints normally run with -m; this also supports direct resource paths.
 if not __package__:
@@ -110,19 +108,6 @@ SCHEMA_TEMPLATE = {
 }
 
 
-_record_io = ContextVar("resource_memory_record_io", default=None)
-
-
-@contextmanager
-def record_io(reader, writer):
-    """Borrow the selected owner's record format without importing its implementation."""
-    token = _record_io.set((reader, writer))
-    try:
-        yield
-    finally:
-        _record_io.reset(token)
-
-
 def get_memory_dir(workspace: str) -> Path:
     return Path(workspace) / "memory"
 
@@ -132,21 +117,20 @@ def get_iteration_path(workspace: str, version: str) -> Path:
 
 
 def read_json(filepath: Path) -> dict:
-    selected = _record_io.get()
-    if selected is not None:
-        return selected[0](filepath)
-    with open(filepath, "r", encoding="utf-8") as fh:
-        return json.load(fh)
+    value = json.loads(filepath.read_text(encoding="utf-8"))
+    if not isinstance(value, dict):
+        raise ValueError("memory record must be a JSON object")
+    return value
 
 
 def write_json(filepath: Path, data: dict) -> None:
-    selected = _record_io.get()
-    if selected is not None:
-        selected[1](filepath, data)
-        return
-    with open(filepath, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, indent=2, ensure_ascii=False)
-        fh.write("\n")
+    if not isinstance(data, dict):
+        raise ValueError("memory record must be a JSON object")
+    text = json.dumps(data, indent=2, ensure_ascii=False) + "\n"
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+    temporary = filepath.with_name(filepath.name + ".tmp")
+    temporary.write_text(text, encoding="utf-8")
+    os.replace(temporary, filepath)
 
 
 def parse_version_number(version_str: str) -> int:

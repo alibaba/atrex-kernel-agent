@@ -16,7 +16,6 @@ def initial_files(registry, *, sol=False, policy=None):
     text = instructions.read_text(encoding="utf-8")
     if policy is not None:
         text = policy(text)
-    text += "\n\nSelected memory command: `python -m aka.legacy.workflow.memory_manager`.\n"
     result = [WorkspaceFile("CLAUDE.md", text=text)]
     try:
         driver = installation.resource('execution-profile-driver')

@@ -87,7 +87,6 @@ procedure and does not submit an Episode report.
 
 ## Memory command
 
-Use the memory command explicitly declared by the host in workspace `CLAUDE.md`.
-If the host has not declared one, use `python -m aka.resources.tools.memory_manager`.
-Replace `<memory-command>` in resource examples with that complete invocation and
-keep the example's command arguments unchanged. The host's explicit selection takes precedence.
+Use `python -m aka.resources.tools.memory_manager` for iteration memory commands.
+Records must be JSON objects. Writes use a temporary file and atomic replacement.
+The selected Workflow decides what to record and when to advance the iteration.

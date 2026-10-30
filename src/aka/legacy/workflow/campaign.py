@@ -2265,7 +2265,7 @@ class Campaign:
             subprocess.run(
                 [
                     sys.executable,
-                    "-m", "aka.legacy.workflow.memory_manager",
+                    "-m", "aka.resources.tools.memory_manager",
                     "summary",
                     "--workspace",
                     str(self.workspace),

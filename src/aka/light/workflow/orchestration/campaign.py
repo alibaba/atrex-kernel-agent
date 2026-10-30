@@ -2556,7 +2556,7 @@ class Campaign:
         if self.generate_memory:
             try:
                 subprocess.run(
-                    [sys.executable, str(REPO_ROOT / "tools" / "memory_manager.py"),
+                    [sys.executable, "-m", "aka.resources.tools.memory_manager",
                      "summary", "--workspace", str(self.workspace)],
                     check=False,
                 )
