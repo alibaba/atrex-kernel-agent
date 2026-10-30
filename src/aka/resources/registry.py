@@ -196,6 +196,22 @@ class AgentSkillsRegistryMixin:
             return self._resource_result()
         return self._installation or self._resource_result()
 
+    def refresh_custom_skills(self, workspace, *, directory="skills"):
+        from .custom_skills import refresh_custom_skills
+        return refresh_custom_skills(self, workspace, directory=directory)
+
+    def installed_paths(self, workspace):
+        """Return the verified immutable destinations of the selected installation."""
+        from .plugin_runtime.registry import STATE_DIR
+        workspace = Path(workspace).resolve(strict=True)
+        self.filesystem_access(workspace)  # Recheck locks and each mounted link.
+        names = tuple(self.mounts())
+        if (workspace / STATE_DIR).exists():
+            names = (*names, STATE_DIR)
+        return tuple(name for name in dict.fromkeys(names)
+                     if not any(other != name and Path(name).is_relative_to(Path(other))
+                                for other in names))
+
     def filesystem_access(self, workspace):
         """Describe and revalidate Agent-visible links from the selected installation."""
         from aka.contracts.filesystem import FilesystemAccess, FilesystemMount

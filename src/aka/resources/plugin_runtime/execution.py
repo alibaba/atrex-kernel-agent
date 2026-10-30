@@ -7,6 +7,8 @@ import shutil
 import signal
 import subprocess
 import sys
+import time
+import math
 from pathlib import Path
 
 from aka.core.plugin_runtime.schema import PluginError, decode_json
@@ -52,7 +54,14 @@ def execute_json(
     environment: dict[str, str],
     timeout: int,
     tool_name: str,
+    deadline: float | None = None,
+    cancel_event=None,
 ) -> object:
+    if deadline is not None and (not math.isfinite(deadline) or deadline <= time.monotonic()):
+        raise PluginError("tool_timeout", f"{tool_name} has no remaining caller budget")
+    if cancel_event is not None and cancel_event.is_set():
+        raise PluginError("tool_cancelled", f"{tool_name} caller was cancelled")
+    effective_deadline = min(time.monotonic() + timeout, deadline or float("inf"))
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -64,7 +73,18 @@ def execute_json(
         start_new_session=True,
     )
     try:
-        stdout, stderr = process.communicate(request_json, timeout=timeout)
+        pending = request_json
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PluginError("tool_cancelled", f"{tool_name} caller was cancelled")
+            remaining = effective_deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
+            try:
+                stdout, stderr = process.communicate(pending, timeout=min(0.1, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                pending = None
     except BaseException as exc:
         try:
             os.killpg(process.pid, signal.SIGKILL)

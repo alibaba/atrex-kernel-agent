@@ -409,7 +409,8 @@ class PluginRegistry:
         return dict(os.environ, PLUGIN_ROOT=str(plugin.root))
 
     def call(
-        self, name: str, request: object, workspace: Path, *, cwd: Path | None = None
+        self, name: str, request: object, workspace: Path, *, cwd: Path | None = None,
+        deadline: float | None = None, cancel_event=None
     ) -> object:
         self.check_lock(workspace)
         plugin_id, _, tool_name = name.partition(".")
@@ -436,6 +437,8 @@ class PluginRegistry:
                 environment=environment,
                 timeout=tool["timeout_seconds"],
                 tool_name=name,
+                deadline=deadline,
+                cancel_event=cancel_event,
             )
             try:
                 validate_schema(tool["output_schema"], result, "output")
