@@ -85,10 +85,10 @@ class LegacyRuleSet:
         from .composition import compose_workflow
         return compose_workflow(rule_set=self, **dependencies)
 
-    def create_acceptance(self, **dependencies):
-        from aka.legacy.acceptance.policy import LegacyAcceptancePolicy
-        return LegacyAcceptancePolicy(
-            conversion_tolerance=self.conversion_tolerance, **dependencies
+    def create_acceptance(self):
+        from aka.acceptance.policy import PerformanceScorePolicy
+        return PerformanceScorePolicy(
+            conversion_tolerance=self.conversion_tolerance
         )
 
     def promotion_directive(self, min_improvement_pct):
@@ -122,10 +122,10 @@ class LegacyRuleSet:
 
 @dataclass(frozen=True)
 class GeoMeanLatencyRuleSet(LegacyRuleSet):
-    def create_acceptance(self, **dependencies):
-        from aka.legacy.acceptance.policy import GeoMeanLatencyAcceptancePolicy
-        return GeoMeanLatencyAcceptancePolicy(
-            conversion_tolerance=self.conversion_tolerance, **dependencies
+    def create_acceptance(self):
+        from aka.acceptance.policy import GeoMeanLatencyPolicy
+        return GeoMeanLatencyPolicy(
+            conversion_tolerance=self.conversion_tolerance
         )
 
     def promotion_directive(self, min_improvement_pct):

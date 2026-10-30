@@ -4,30 +4,24 @@ from __future__ import annotations
 
 from dataclasses import replace
 import math
-from typing import Callable, Sequence
 from aka.contracts.acceptance import (
     AcceptanceDecision,
     AcceptanceRequirements,
     FrameworkCandidateRequest,
 )
 from aka.contracts.evaluation import VerificationResult
-from aka.contracts.workspace import CandidateWorkspace
 
 
 CONVERT_PERF_TOL = 0.05
 
 
-class LegacyAcceptancePolicy:
+class PerformanceScorePolicy:
     def __init__(
         self,
         *,
         conversion_tolerance: float = CONVERT_PERF_TOL,
-        candidate_workspace: CandidateWorkspace | None = None,
-        production_policy: Callable[[], Sequence[str]] | None = None,
     ):
         self.conversion_tolerance = conversion_tolerance
-        self.candidate_workspace = candidate_workspace
-        self.production_policy = production_policy
 
     def conversion_parity_passes(self, verification: VerificationResult) -> bool:
         candidate = verification.candidate_latency_us
@@ -105,7 +99,7 @@ class LegacyAcceptancePolicy:
         return ""
 
 
-class GeoMeanLatencyAcceptancePolicy(LegacyAcceptancePolicy):
+class GeoMeanLatencyPolicy(PerformanceScorePolicy):
     """Promote from the evaluator's public GeoMean latency facts."""
 
     @staticmethod

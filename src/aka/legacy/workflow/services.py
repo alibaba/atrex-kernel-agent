@@ -104,10 +104,7 @@ class WorkflowServices:
             except Exception as error:
                 import sys
                 print(f"[workflow] auxiliary observer failed: {type(error).__name__}", file=sys.stderr)
-        self.acceptance = self.rule_set.create_acceptance(
-            candidate_workspace=campaign.candidate_workspace,
-            production_policy=campaign._production_kernel_violations,
-        )
+        self.acceptance = self.rule_set.create_acceptance()
         self._evaluation_input = self.problem_provider.content(
             self.campaign.problem, self.campaign.workspace
         ).evaluation

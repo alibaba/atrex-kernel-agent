@@ -4,7 +4,7 @@ from __future__ import annotations
 from aka.agent.adapter import DEFAULT_BACKEND_REGISTRY
 
 
-from aka.legacy.acceptance.policy import CONVERT_PERF_TOL
+from aka.acceptance.policy import CONVERT_PERF_TOL
 
 
 DEFAULT_CONVERT_AFTER = (
