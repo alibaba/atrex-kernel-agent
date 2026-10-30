@@ -3,8 +3,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import ContextManager, Literal, Protocol
 from .filesystem import FilesystemAccess as AgentAccess, FilesystemMount as AgentMount
+from .execution import Cancellation
 
 UsageMeasurement = Literal["exact", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
@@ -147,6 +148,30 @@ class AgentCapabilities:
 
 
 @dataclass(frozen=True)
+class AgentToolContext:
+    workspace: Path
+    filesystem_access: AgentAccess
+    cancel_event: Cancellation
+    deadline: float | None
+
+
+class AgentToolHandler(Protocol):
+    def handle(self, payload: bytes, context: AgentToolContext) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class AgentToolBinding:
+    name: str
+    handler: AgentToolHandler
+
+
+class AgentToolSession(Protocol):
+    """Borrowed transport grant; implementations redact environment in representations."""
+    environment: Mapping[str, str]
+    filesystem_access: AgentAccess
+
+
+@dataclass(frozen=True)
 class AgentObservation:
     session_id: str
     runtime: str
@@ -204,6 +229,11 @@ class Agent(Protocol):
         """Opaque identity of the frozen selection; contains no configuration values."""
         ...
     def close(self) -> None: ...
+    def tool_session(self, workspace: Path, *, access: AgentAccess,
+                     bindings: tuple[AgentToolBinding, ...],
+                     deadline: float | None = None) -> ContextManager[AgentToolSession]:
+        """Bind selected handlers to the caller's scope; revoke and cancel on exit."""
+        ...
     def export_observations(self, workspace: Path, destination: Path) -> Path:
         """Export normalized invocation records to a new caller-owned directory."""
         ...

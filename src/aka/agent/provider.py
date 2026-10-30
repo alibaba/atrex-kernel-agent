@@ -90,6 +90,7 @@ class Agent:
         self._sessions = set()
         self._invocations = {}
         self._processes = set()
+        self._tool_host = None
         self._closed = False
         self._lock = RLock()
         self._idle = Condition(self._lock)
@@ -104,7 +105,7 @@ class Agent:
 
     @property
     def capabilities(self):
-        return AgentCapabilities(filesystem_isolation=self.options.sandbox == "bwrap")
+        return AgentCapabilities(filesystem_isolation=self.options.sandbox == "bwrap", tool_runtime=True)
 
     @property
     def configuration_identity(self):
@@ -158,6 +159,11 @@ class Agent:
         guard = self._guard_path()
         mounts = list(access.mounts)
         authority = {}
+        from .tools.protocol import ENDPOINT_ENV, TOKEN_ENV
+        if ENDPOINT_ENV in values or TOKEN_ENV in values:
+            if self._tool_host is None:
+                raise PermissionError("Agent tool session is unavailable")
+            authority.update(self._tool_host.validate_environment(workspace, values))
         if guard is not None:
             values["BASH_ENV"] = authority["BASH_ENV"] = str(guard)
         if self.options.sandbox == "bwrap":
@@ -297,6 +303,10 @@ class Agent:
                 return
             context.cancelled = True
             processes = tuple(context.processes)
+            from .tools.protocol import TOKEN_ENV
+            token = context.authority.get(TOKEN_ENV)
+        if token and self._tool_host is not None:
+            self._tool_host.revoke(token)
         for process in processes:
             signal_process_groups(
                 {process.pid} | descendant_process_groups(process.pid), signal.SIGKILL
@@ -442,16 +452,27 @@ class Agent:
 
         return restore_checkpoint(snapshot)
 
+    def tool_session(self, workspace, *, access, bindings, deadline=None):
+        with self._lock:
+            self._check_open()
+            if self._tool_host is None:
+                from .tools.host import ToolHost
+                self._tool_host = ToolHost()
+            return self._tool_host.session(workspace, access=access, bindings=bindings, deadline=deadline)
+
     def close(self):
         with self._lock:
             if self._closed:
                 return
             self._closed = True
             processes = tuple(self._processes)
+            tool_host = self._tool_host
         for process in processes:
             signal_process_groups(
                 {process.pid} | descendant_process_groups(process.pid), signal.SIGKILL
             )
+        if tool_host is not None:
+            tool_host.close()
         with self._idle:
             self._idle.wait_for(lambda: not self._running, timeout=10)
         for session in tuple(self._sessions):
