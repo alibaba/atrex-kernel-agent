@@ -26,7 +26,7 @@ Config = {"type": "object", "properties": {
         "max_parallel_episodes": {"type": "integer", "minimum": 1, "maximum": 64},
     }, "additionalProperties": False},
 }, "additionalProperties": False}
-Defaults = {"startup": False, "numerical_validation": True, "goal_episodes": False, "generate_memory": False,
+Defaults = {"startup": False, "numerical_validation": False, "goal_episodes": False, "generate_memory": False,
             "output_limit_recovery_retries": 2, "episode_timeout_seconds": 14400, "search": {}}
 
 

@@ -1,6 +1,6 @@
 # Supplemental numerical validation
 
-Production candidates retain ordinary full-contract correctness, dependency/framework review and ABBA promotion gates. The Supervisor additionally asks a numerical planner for bounded, executable risk probes. Planner opinions never reject a Kernel; measured candidate failures do. Leaderboard mode is unchanged. There is one Episode workflow, not Fast/Full modes.
+Production candidates retain ordinary full-contract correctness, dependency/framework review and ABBA promotion gates. Supplemental numerical validation is disabled by default in Light. Set the Workflow option `numerical_validation: true` through a [composition patch](optional-light-modules.md#other-module-options) to enable it. When enabled, the Supervisor additionally asks a numerical planner for bounded, executable risk probes. Planner opinions never reject a Kernel; measured candidate failures do. Leaderboard mode is unchanged. There is one Episode workflow, not Fast/Full modes.
 
 ```mermaid
 flowchart TD
