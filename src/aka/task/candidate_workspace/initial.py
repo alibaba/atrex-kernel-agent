@@ -5,7 +5,7 @@ import subprocess
 from pathlib import Path
 from aka.contracts.content import WorkspaceFile
 from .content import install_files, selected_file_bytes
-from .context import begin_context, context_changes, install_context, register_context_directories, uses_context
+from .context import begin_context, context_changes, install_context, load_context, register_context_directories, uses_context
 
 GITIGNORE = '__pycache__/\n*.pyc\ntraces.jsonl\n.finalize_traces.jsonl\nsubmission.json\n*.ncu-rep\nprofiles/*/att/*.att\nprofiles/*/att/*.out\nprofiles/*/att/*.pftrace\nprofiles/*/att/*.otf2\n# orchestrator runtime symlinks (not part of the workspace)\n/tools\n/reference\n/skills\n/reference-projects\n/gpu-wiki\n'
 SOL_CONFIG = json.dumps(
@@ -14,8 +14,9 @@ SOL_CONFIG = json.dumps(
 ) + "\n"
 
 
-def _validate_initial_files(workspace, source_commit, selected):
-    if subprocess.run(["git", "diff", "--cached", "--quiet"], cwd=workspace).returncode:
+def _validate_initial_files(workspace, source_commit, selected, *, retain_unrelated=False):
+    paths = ("--", *selected) if retain_unrelated else ()
+    if subprocess.run(["git", "diff", "--cached", "--quiet", *paths], cwd=workspace).returncode:
         raise ValueError("refusing to reseed V0 with staged changes")
     for name, expected in selected.items():
         original = subprocess.check_output(["git", "show", f"{source_commit}:{name}"], cwd=workspace)
@@ -28,8 +29,7 @@ def _validate_initial_files(workspace, source_commit, selected):
 
 
 def _legacy_initialize_kernel(workspace, content, *, runtime_files):
-    if len(content.files) != 1 or content.files[0].path != "kernel.py" or content.files[0].source is None:
-        raise ValueError("kernel initialization requires one kernel.py copy contribution")
+    _require_kernel(content)
     root = Path(workspace)
     selected = selected_file_bytes(root, (*content.files, *runtime_files),
                                 reserved=(".gitignore", "memory", "plans", "profiles"))
@@ -130,7 +130,9 @@ def _initialize_git(workspace):
 
 def _retry_context(workspace, source_commit, source_files, groups):
     selected = selected_file_bytes(workspace, source_files)
-    _validate_initial_files(workspace, source_commit, selected)
+    if set(load_context(workspace)["source_paths"]) != set(selected):
+        raise ValueError("V0 selected source membership changed")
+    _validate_initial_files(workspace, source_commit, selected, retain_unrelated=True)
     if subprocess.run(["git", "diff", "--quiet", "--", *selected], cwd=workspace).returncode:
         raise ValueError("refusing to reseed changed V0 source modes or bytes")
     changed = context_changes(workspace, "HEAD")
@@ -138,6 +140,21 @@ def _retry_context(workspace, source_commit, source_files, groups):
         raise ValueError("refusing to reseed changed V0 context: " + ", ".join(changed))
     for role, files in groups:
         install_context(workspace, files, role=role)
+
+
+def _require_kernel(content):
+    if not any(item.path == "kernel.py" for item in content.files):
+        raise ValueError("kernel initialization requires an explicit kernel.py contribution")
+
+
+def _validate_uncommitted_source(workspace, source_files, selected):
+    """Do not replace exploratory source left by an interrupted preparation."""
+    for item in source_files:
+        target = workspace / item.path
+        if target.exists() and (target.read_bytes() != selected[item.path]
+                or (item.source is not None and item.copy == "copy2"
+                    and target.stat().st_mode & 0o777 != item.source.stat().st_mode & 0o777)):
+            raise ValueError(f"refusing to initialize changed existing source: {item.path}")
 
 
 def initialize_kernel(workspace, content, *, runtime_files, context_directories=()):
@@ -148,8 +165,7 @@ def initialize_kernel(workspace, content, *, runtime_files, context_directories=
         if context_directories:
             raise ValueError("existing tracked workspaces cannot acquire new context directory namespaces")
         return _legacy_initialize_kernel(workspace, content, runtime_files=runtime_files)
-    if len(content.files) != 1 or content.files[0].path != "kernel.py" or content.files[0].source is None:
-        raise ValueError("kernel initialization requires one kernel.py copy contribution")
+    _require_kernel(content)
     readme = (WorkspaceFile("README.md", text=content.readme),) if content.readme is not None else ()
     selected = selected_file_bytes(workspace, (*content.files, *runtime_files, *readme),
                                    reserved=(".atrex_context.json", ".gitignore", "memory", "plans", "profiles"))
@@ -159,8 +175,9 @@ def initialize_kernel(workspace, content, *, runtime_files, context_directories=
         register_context_directories(workspace, context_directories)
         _retry_context(workspace, history[0], content.files, (("runtime", runtime_files), ("readme", readme)))
         return 0
-    if (workspace / "kernel.py").exists() and (workspace / "kernel.py").read_bytes() != selected["kernel.py"]:
-        raise ValueError("refusing to initialize a changed existing kernel")
+    _validate_uncommitted_source(workspace, content.files, selected)
+    if uses_context(workspace) and set(load_context(workspace)["source_paths"]) != {item.path for item in content.files}:
+        raise ValueError("V0 selected source membership changed")
     _initialize_git(workspace)
     if not uses_context(workspace):
         begin_context(workspace, (item.path for item in content.files), context_directories=context_directories)

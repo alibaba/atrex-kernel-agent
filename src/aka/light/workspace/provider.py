@@ -1,11 +1,8 @@
 """Task provider owns draft reset, snapshots and sealed Git promotion."""
 from pathlib import Path
-import subprocess
 
 from aka.task.candidate_workspace.provider import GitCandidateWorkspace
-from aka.evaluation.resources import profile_driver_script
 from aka.contracts.workspace import CandidateHandle
-from aka.light.supervisor.workspace import publish
 
 
 class ManagedCandidateWorkspace(GitCandidateWorkspace):
@@ -26,37 +23,6 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
         if type(inherit_state) is not bool:
             raise ValueError("inherit_state must be boolean")
         self.inherit_state = inherit_state
-
-    def prepare_sol(self, workspace, content, *, problem_files, reference_dir):
-        super().prepare_sol(workspace, content, problem_files=problem_files,
-                            reference_dir=reference_dir, profile_driver=profile_driver_script())
-        # SourceProvider owns implementation bytes, not the selected Workflow's
-        # tool/Git instructions. Do not inherit the legacy direct-run README.
-        publish(workspace, "README.md", (
-            "# Managed SOL optimization workspace\n\n"
-            "Optimize `kernel.py` while preserving the definition's destination-passing "
-            "interface. Maximize the arithmetic mean of workload speedups against the "
-            "reference while every workload passes its correctness checks.\n\n"
-            "Use `python3 tools/sandbox.py --kind run --no-sync`. The Supervisor owns "
-            "the evaluator, its configuration, solution metadata and Git. Do not run "
-            "the evaluator locally or edit those files. Submit `episode-report` through "
-            "the Runtime; read the installed gpu-measurement and runtime-records Skills "
-            "for request examples. Put temporary probes and requests under `scratch/`.\n"
-        ).encode())
-
-    def initialize_at(self, workspace, content, reference_dir):
-        workspace.mkdir(parents=True, exist_ok=True)
-        self.install_files(workspace, content.files)
-        for name in ("CLAUDE.md", "test_kernel.py"):
-            publish(workspace, name, (reference_dir / name).read_bytes())
-        publish(workspace, "profile_driver.py", profile_driver_script().read_bytes())
-        publish(workspace, "README.md", b"# Kernel optimization workspace\n")
-        publish(workspace, ".gitignore", b"__pycache__/\n*.pyc\n/scratch\n")
-        (workspace / "memory").mkdir(exist_ok=True)
-        if not (workspace / ".git").exists():
-            subprocess.run(["git", "init", "-q", str(workspace)], check=True)
-            subprocess.run(["git", "-C", str(workspace), "config", "user.name", "GPU Kernel Optimizer"], check=True)
-            subprocess.run(["git", "-C", str(workspace), "config", "user.email", "gpu-kernel-optimizer@local"], check=True)
 
     def install_runtime(self, workspace, atrex_bench_root=None, **options):
         from aka.light.orchestrator.workspace_runtime import link_runtime
