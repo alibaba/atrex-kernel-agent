@@ -142,16 +142,19 @@ def legacy_identities(prepared, configuration, evaluation_input=None):
     return tuple(result)
 
 
-def gateway_identity(request, reference_files, kind="run", *, full_request=None, method_inputs=None, workload_scope="unknown"):
+def gateway_identity(request, reference_files, kind="run", *, full_request=None, method_inputs=None, workload_scope="unknown", source_parameters=None):
     # The human job name and local sidecar paths are not measurement inputs.
     frozen = {key: value for key, value in request.items() if key not in {"name", "idempotency_key"}}
-    input_digest = _digest({"request": frozen, "reference_files": reference_files})
-    shapes = tuple(str(value) for value in request["reference"]["shapes"])
-    candidate = "sha256:" + _bytes(request["candidate"].encode())
+    source_parameters = dict(source_parameters or {})
+    candidate_checksum = source_parameters.get("candidate_source_sha256") or _bytes(request["candidate"].encode())
+    input_digest = _digest({"request": frozen, "reference_files": reference_files,
+        **({"sources": source_parameters} if source_parameters else {})})
+    shapes = tuple(str(value) for value in request.get("reference", {}).get("shapes", {})) or (None,)
+    candidate = "sha256:" + candidate_checksum
     abba = request.get("abba")
     if abba:
         from .abba import verification_schedule
-        baseline = "sha256:" + _bytes(abba["baseline"].encode())
+        baseline = "sha256:" + (source_parameters.get("baseline_source_sha256") or _bytes(abba["baseline"].encode()))
         points = tuple(MeasurementPoint(str(step["revision"]), baseline if step["revision"] == "incumbent" else candidate,
             int(step["repeat"]), shape) for step in verification_schedule(int(abba["repeats"]) * 2) for shape in shapes)
     else:
@@ -178,9 +181,10 @@ def gateway_identity(request, reference_files, kind="run", *, full_request=None,
     if full.get("env_vars"):
         workload["worker_environment_digest"] = _digest(full["env_vars"])
     parameters["workload_digest"] = _digest(workload)
-    parameters["candidate_source_sha256"] = _bytes(full["candidate"].encode())
+    parameters["candidate_source_sha256"] = candidate_checksum
     parameters["candidate_source_artifact_sha256"] = parameters["candidate_source_sha256"]
     parameters["candidate_source_format"] = "raw-kernel/1"
+    parameters.update(source_parameters)
     parameters["workload_scope"] = workload_scope
     # Six complete typed correctness cases are the proved full/untimed
     # equivalence. Other seed policies keep their identities but cannot reuse it.
@@ -192,7 +196,7 @@ def gateway_identity(request, reference_files, kind="run", *, full_request=None,
         and type(options.get("num_correctness_cases")) is int and options["num_correctness_cases"] == 6) else "none"
     requirements = tuple(request.get("requirements", ()))
     policy = str(request.get("deps_mode") or ("explicit-requirements" if requirements else "unknown"))
-    method = "atrex-bench/profile" if kind == "profile" else "atrex-bench/abba" if abba else "atrex-bench/eval"
+    method = "atrex-bench/" + kind if kind in {"profile", "check", "disassemble"} else "atrex-bench/abba" if abba else "atrex-bench/eval"
     return MeasurementIdentity(method, points,
         input_digest, parameters, requirements, policy)
 

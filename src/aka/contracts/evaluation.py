@@ -407,3 +407,7 @@ class EvaluatorFactory(Protocol):
     def create(self, configuration: EvaluationConfiguration, *,
                candidate_workspace: CandidateWorkspace,
                evaluation_input: EvaluationInput) -> Evaluator: ...
+    def create_command(self, configuration: EvaluationConfiguration, *,
+                       evaluation_input: EvaluationInput) -> CommandEvaluator:
+        """Optional command-preparation capability using this selected method/configuration."""
+        ...

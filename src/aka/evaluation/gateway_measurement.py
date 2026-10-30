@@ -40,9 +40,14 @@ class GatewayMeasurement:
         results = [_optimizer_result_from_eval(job["result"], shapes, metadata,
             require_performance=performance, hardware=self.hardware)
             for job, shapes in zip(jobs, self.batches)]
+        from .feedback import evaluation_feedback, merge_feedback
+        results = [{**result, **evaluation_feedback(job["result"], shapes)}
+            for result, job, shapes in zip(results, jobs, self.batches)]
         result = (_merge_optimizer_results(results, self.shape_ids, metadata,
             require_performance=performance, hardware=self.hardware)
             if len(results) > 1 else results[0])
+        if len(results) > 1:
+            result.update(merge_feedback(results))
         result = _mask_generalized_result(self.workspace, result, private=self.private, baseline=self.baseline)
         return result
 

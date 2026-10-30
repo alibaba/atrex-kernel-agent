@@ -31,29 +31,45 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
         raise UnsupportedExecution("native ABBA requires selected Workspace and Execution capabilities")
     if type(configuration.repeats) is not int or configuration.repeats < 2 or configuration.repeats % 2:
         raise ValueError("native ABBA requires an even per-side repeat count")
-    if (request.workspace / "workload.jsonl").is_file() or set(request.changed_paths) - {"kernel.py", "solution.json"}:
-        raise UnsupportedExecution("native ABBA cannot represent auxiliary/SOL candidate sources")
+    if (request.workspace / "workload.jsonl").is_file():
+        raise UnsupportedExecution("native ABBA does not replace SOL's full workload evaluator")
+    from .source_archives import prepare_source, source_parameters
     paths = ["kernel.py"]
-    if "solution.json" in request.changed_paths or (request.workspace / "solution.json").is_file():
+    has_solution = "solution.json" in request.changed_paths or (request.workspace / "solution.json").is_file()
+    if has_solution:
         paths.append("solution.json")
     revisions = []
     for revision in (request.base_commit, request.candidate_commit):
-        frozen = workspace.read_revision(request.workspace, revision, paths)
+        reader = getattr(workspace, "read_source", None)
+        if callable(reader):
+            frozen = reader(request.workspace, revision=revision)
+            solution_content = workspace.read_revision(request.workspace, revision, ("solution.json",)) if has_solution else None
+            solution_bytes = solution_content.files.get("solution.json") if solution_content is not None else None
+        else:
+            # Older injected test/embedding providers can still supply the
+            # existing read_revision capability for a single-file source.
+            frozen = workspace.read_revision(request.workspace, revision, paths)
+            solution_bytes = frozen.files.get("solution.json")
+            from aka.contracts.workspace import RevisionContent
+            frozen = RevisionContent({"kernel.py": frozen.files.get("kernel.py")})
         source = frozen.files.get("kernel.py")
         if not isinstance(source, bytes) or not source.strip():
             raise ValueError("native ABBA requires two nonempty frozen kernel.py revisions")
-        solution = json.loads(frozen.files["solution.json"]) if frozen.files.get("solution.json") else {}
-        if not isinstance(solution, dict) or any(isinstance(item, dict) and item.get("path") not in {None, "kernel.py"}
-                for item in solution.get("sources", [])):
-            raise UnsupportedExecution("native ABBA cannot represent auxiliary candidate sources")
+        solution = json.loads(solution_bytes) if solution_bytes else {}
+        if not isinstance(solution, dict):
+            raise ValueError("native ABBA source metadata must be an object")
+        descriptor, archive, artifact, format_name = prepare_source(frozen,
+            role="baseline" if revision == request.base_commit and not revisions else "candidate")
         text = source.decode("utf-8")
-        try:
-            tree = ast.parse(text)
-        except SyntaxError:
-            tree = None  # A candidate syntax defect remains an evaluator verdict.
-        if tree is not None:
+        if archive is None:
+            if any(isinstance(item, dict) and item.get("path") not in {None, "kernel.py"} for item in solution.get("sources", [])):
+                raise UnsupportedExecution("auxiliary sources require a complete declared source snapshot")
+            try:
+                tree = ast.parse(text)
+            except SyntaxError:
+                tree = None
             imports = set()
-            for node in ast.walk(tree):
+            for node in ast.walk(tree) if tree is not None else ():
                 if isinstance(node, ast.Import):
                     imports.update(alias.name.split(".", 1)[0] for alias in node.names)
                 elif isinstance(node, ast.ImportFrom) and node.module:
@@ -61,8 +77,21 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
             if any(root not in {"input", "reference", "kernel"} and (
                     (request.workspace / (root + ".py")).is_file() or (request.workspace / root / "__init__.py").is_file()) for root in imports):
                 raise UnsupportedExecution("native ABBA cannot omit imported local candidate sources")
-        revisions.append((text, solution))
+        identity_reader = getattr(workspace, "source_identity", None)
+        facts = source_parameters(frozen, identity=identity_reader(frozen) if callable(identity_reader) else None)
+        revisions.append((text, solution, frozen, descriptor, archive, artifact, facts))
     baseline, candidate = revisions
+    declared = set(baseline[2].files) | set(candidate[2].files) | {"solution.json"}
+    if set(request.changed_paths) - declared:
+        raise UnsupportedExecution("native ABBA cannot omit changed undeclared sources")
+    archives = tuple(value[4] for value in (baseline, candidate) if value[4] is not None)
+    source_facts = {**candidate[6], "baseline_source_sha256": baseline[6]["candidate_source_sha256"]}
+    if candidate[4] is not None:
+        import hashlib
+        source_facts["candidate_source_archive_sha256"] = hashlib.sha256(candidate[4].content).hexdigest()
+    if baseline[4] is not None:
+        import hashlib
+        source_facts["baseline_source_archive_sha256"] = hashlib.sha256(baseline[4].content).hexdigest()
     content = selected_content(evaluation_input)
     references = {name: item.content for name, item in content.items()}
     reference = evaluation_input.directory if evaluation_input is not None else configuration.private_reference_dir or request.workspace
@@ -87,7 +116,8 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
         reference_dir=reference, reference_content=references, requirements=requirements,
         runtime_version=configuration.environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", ""),
         candidate_source=candidate[0], candidate_solution=candidate[1])
-    payload["abba"] = {"baseline": baseline[0], "repeats": configuration.repeats // 2}
+    payload["candidate"] = candidate[3]
+    payload["abba"] = {"baseline": baseline[3], "repeats": configuration.repeats // 2}
     payload["spec"]["languages"] = _candidate_languages(candidate[1], candidate_sources=(baseline[0], candidate[0]))
     payload["runner_overrides"]["perf_timeout_s"] = configuration.per_run_timeout
     shapes = list(payload["reference"]["shapes"])
@@ -101,11 +131,11 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
         for ids in batches:
             batch = shape_batch_request(payload, ids)
             files = {name: value.decode("utf-8") for name, value in _shape_batch_reference(batch["reference"]).items()}
-            step = replace(command, requirements=requirements, num_gpus=payload["spec"].get("num_gpus", 1),
+            step = replace(command, requirements=requirements, source_archives=archives, num_gpus=payload["spec"].get("num_gpus", 1),
                 submission=json.dumps({"schema_version": 1, "kind": "run", "request": batch,
                     "reference_files": files}, ensure_ascii=False, allow_nan=False).encode())
             capabilities.require(step)
-            identity = gateway_identity(batch, files)
+            identity = gateway_identity(batch, files, source_parameters=source_facts)
             identity = replace(identity, points=tuple(MeasurementPoint(point.side,
                 request.base_commit if point.side == "incumbent" else request.candidate_commit,
                 point.repeat + outer * configuration.repeats, point.shape_id) for point in identity.points),
@@ -115,7 +145,7 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
             identities.append(identity)
     return PreparedEvaluation(tuple(steps), max(1, min(configuration.max_parallelism, len(steps))),
         replace(context, schedule=tuple(verification_schedule(configuration.repeats)), shape_ids=tuple(shapes), native=True,
-            candidate_source=MeasurementArtifact("candidate.py", candidate[0].encode(), "candidate-source", "text/x-python")),
+            candidate_source=candidate[5]),
         measurement_identities=tuple(identities))
 
 
@@ -179,6 +209,8 @@ def summarize(raw: dict, shapes: list[str]) -> dict:
               "latency_us_geomean": math.exp(statistics.mean(math.log(value) for value in latencies.values())) if correct else None,
               "error": None if correct else "compile, correctness, or performance did not pass"}
     result["correctness"] = correctness_summary(raw, passed=correct)
+    from .feedback import evaluation_feedback
+    result.update(evaluation_feedback(raw, shapes))
     return result
 
 

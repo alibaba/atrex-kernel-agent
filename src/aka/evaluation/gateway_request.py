@@ -154,7 +154,7 @@ def prepare_request(
     candidate = candidate_source if candidate_source is not None else (workspace / "kernel.py").read_text(encoding="utf-8")
     languages = _candidate_languages(solution, candidate_sources=(candidate,))
     reference: dict[str, Any] = {
-        "operator": workspace.name,
+        "operator": reference_dir.name,
         "reference_py": reference_text("reference.py"),
         "input_py": reference_text("input.py"),
         "shapes": shapes,
@@ -184,7 +184,7 @@ def prepare_request(
     if num_gpus > 1:
         spec["num_gpus"] = num_gpus
     request: dict[str, Any] = {
-        "name": f"{workspace.name}_{kind}",
+        "name": f"{reference_dir.name}_{kind}",
         "spec": spec,
         "candidate": candidate,
         "reference": reference,

@@ -24,6 +24,12 @@ class LegacyEvaluatorFactory:
     def create(self, configuration, *, candidate_workspace, evaluation_input):
         return LegacyEvaluator(configuration, candidate_workspace=candidate_workspace,
                                evaluation_input=evaluation_input)
+    def create_command(self, configuration, *, evaluation_input):
+        from .gateway_command import GatewayCommandEvaluator
+        return GatewayCommandEvaluator(measurement_reader=configuration.measurement_reader,
+            execution_capabilities=configuration.execution_capabilities,
+            evaluation_input=evaluation_input, shape_batch_size=configuration.shape_batch_size,
+            measurement_repetitions=configuration.measurement_repetitions)
 
 
 def apply(ctx, config):
