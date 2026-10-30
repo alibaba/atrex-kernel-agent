@@ -35,7 +35,7 @@ harness needs the adapter, header, decoder, and possibly ACU extraction:
 
 ```bash
 ATTEMPT=profiles/episode_N/timeline/attempt-N
-python -m aka.legacy.workflow.measurement_cli --kind profile --hardware <PPU_HARDWARE> \
+python -m aka.bootstrap.measurement_cli --kind profile --hardware <PPU_HARDWARE> \
   --input .claude/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
@@ -56,7 +56,7 @@ instrumented commands before returning:
 
 ```bash
 ATTEMPT=profiles/episode_N/timeline/attempt-N
-python -m aka.legacy.workflow.measurement_cli --kind profile --hardware <PPU_HARDWARE> \
+python -m aka.bootstrap.measurement_cli --kind profile --hardware <PPU_HARDWARE> \
   --input .claude/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
@@ -72,7 +72,7 @@ python -m aka.legacy.workflow.measurement_cli --kind profile --hardware <PPU_HAR
 and launch path. It must execute the equivalent of `capture_ppu.py`, fail if decode is rejected, and
 then call `scripts/timeline.py measure` in the same parent process/allocation. The helper still starts
 a fresh child process per A/B sample; physical device identity must remain identical across all
-samples. Two separate `python -m aka.legacy.workflow.measurement_cli` invocations do not establish same-allocation evidence.
+samples. Two separate `python -m aka.bootstrap.measurement_cli` invocations do not establish same-allocation evidence.
 
 ## Harness responsibilities
 

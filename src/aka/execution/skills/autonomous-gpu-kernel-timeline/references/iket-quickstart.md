@@ -70,7 +70,7 @@ python .claude/skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile
 For a remote campaign command, pass the skill as an explicit sandbox input and sync only the attempt:
 
 ```bash
-python -m aka.legacy.workflow.measurement_cli --kind profile \
+python -m aka.bootstrap.measurement_cli --kind profile \
   --input .claude/skills/autonomous-gpu-kernel-timeline \
   --sync profiles/episode_N/timeline/attempt-N -- \
   python .claude/skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \

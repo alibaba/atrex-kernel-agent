@@ -257,7 +257,7 @@ probes, so this needs no code change and no gateway restart. After that, profile
 normal route:
 
 ```bash
-python -m aka.legacy.workflow.measurement_cli --kind profile --hardware local --url http://127.0.0.1:<port> \
+python -m aka.bootstrap.measurement_cli --kind profile --hardware local --url http://127.0.0.1:<port> \
     --profiler ncu --profile-level sol -- python profile_driver.py
 ```
 
