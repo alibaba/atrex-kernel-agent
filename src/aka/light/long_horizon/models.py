@@ -1,6 +1,14 @@
 from __future__ import annotations
 
-from aka.evaluation.models import VerificationRun, VerificationResult as SharedVerificationResult
+from aka.contracts.evaluation import (
+    EpisodeEvaluationContent,
+    EvaluationFailure,
+    MeasurementArtifact,
+    VerificationRun,
+    VerificationResult as SharedVerificationResult,
+)
+from aka.contracts.experiment_identity import ExperimentRef
+from aka.contracts.measurement import MeasurementAssessment
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
@@ -54,6 +62,13 @@ class SessionResult:
 
 @dataclass
 class VerificationResult(SharedVerificationResult):
+    # Keep the Workflow's original positional receipt fields. Public evidence
+    # additions stay keyword-only so they cannot shift those receipt fields.
+    failure: EvaluationFailure | None = field(default=None, kw_only=True)
+    experiment_ref: ExperimentRef | None = field(default=None, kw_only=True)
+    artifacts: tuple[MeasurementArtifact, ...] = field(default=(), repr=False, kw_only=True)
+    measurements: tuple[MeasurementAssessment, ...] = field(default=(), kw_only=True)
+    episode_evaluations: tuple[EpisodeEvaluationContent, ...] = field(default=(), repr=False, kw_only=True)
     gateway_record_id: str = ""
     reused: bool = False
 
