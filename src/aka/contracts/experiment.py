@@ -6,7 +6,7 @@ binding already established. Evaluation owns measurement plans and interpretatio
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any, ContextManager, Iterator, Literal, Protocol
 from pathlib import Path
@@ -17,7 +17,7 @@ from .evaluation import EvaluationFailure, EvaluationRequest, Evaluator, Verific
 from .experiment_identity import ExperimentRef
 from .measurement import MeasurementAssessment, MeasurementIdentity
 from .problem import EvaluationInput
-from .workspace import CandidateWorkspace
+from .workspace import CandidateWorkspace, RevisionContent
 from aka.core.keys import ServiceKey
 
 
@@ -209,8 +209,15 @@ class ExperimentEvaluation:
     failure: EvaluationFailure | None = None
     experiment_ref: ExperimentRef | None = None
     measurements: tuple[MeasurementAssessment, ...] = ()
+    candidate_latency_us_by_shape: Mapping[str, float] = field(default_factory=dict, kw_only=True)
+    incumbent_latency_us_by_shape: Mapping[str, float] = field(default_factory=dict, kw_only=True)
 
     def __post_init__(self):
+        for name in ("candidate_latency_us_by_shape", "incumbent_latency_us_by_shape"):
+            values = _freeze(getattr(self, name))
+            if any(type(value) not in (int, float) or value <= 0 for value in values.values()):
+                raise ValueError("stored shape latency facts require positive finite values")
+            object.__setattr__(self, name, values)
         object.__setattr__(self, "runs", tuple(_freeze(item) for item in self.runs))
         object.__setattr__(self, "measurements", tuple(self.measurements))
 
@@ -227,6 +234,10 @@ class ExperimentEvaluation:
             value["measurements"] = [item.as_dict() for item in self.measurements]
         if self.experiment_ref is not None:
             value["experiment_ref"] = self.experiment_ref.as_dict()
+        if self.candidate_latency_us_by_shape:
+            value["candidate_latency_us_by_shape"] = dict(self.candidate_latency_us_by_shape)
+        if self.incumbent_latency_us_by_shape:
+            value["incumbent_latency_us_by_shape"] = dict(self.incumbent_latency_us_by_shape)
         return value
 
 
@@ -300,10 +311,37 @@ class ExperimentRecords(Protocol):
     def get(self, ref: ExperimentRef) -> ExperimentRecord: ...
     def find(self, request_id: str) -> ExperimentRecord: ...
     def unresolved(self) -> tuple[ExperimentRef, ...]: ...
+    def iter_records(self) -> Iterator[ExperimentRecord]:
+        """Enumerate validated records in stable creation/id order, without execution.
+
+        Storage errors and corruption remain record errors, never an empty
+        result that authorizes dispatch.
+        """
+        ...
     def read_artifact(self, artifact: ExperimentArtifact) -> bytes: ...
+    def read_source(self, artifact: ExperimentArtifact) -> RevisionContent:
+        """Read validated candidate-source content without exposing its artifact codec."""
+        ...
+
+
+@dataclass(frozen=True)
+class ShapeMinimum:
+    """One saved full-workload Eval's minimum; rows do not form a measured composite."""
+    shape_id: str
+    latency_us: float
+    source: ExperimentArtifact
+    experiment: ExperimentRef
 
 
 class RecordedExperiment(ExperimentRecords, Protocol):
+    def shape_minima(self, identities: tuple[MeasurementIdentity, ...], *,
+                     environment_identity: str) -> tuple[ShapeMinimum, ...]:
+        """Summarize complete, valid, comparable ordinary Task Evals without dispatch."""
+        ...
+    def correctness_reuse(self, identities: tuple[MeasurementIdentity, ...], *,
+                          environment_identity: str) -> ExperimentRecord | None:
+        """Qualify retained candidate correctness against frozen inputs and confirmed environment."""
+        ...
     def run_recorded(
         self, request: EvaluationRequest | CommandSpec, *, request_id: str
     ) -> ExperimentRecord:

@@ -73,6 +73,20 @@ class LegacyExperiment:
     def read_artifact(self, artifact):
         return self._records().read_artifact(artifact)
 
+    def iter_records(self):
+        yield from self._records().iter_records()
+
+    def read_source(self, artifact):
+        return self._records().read_source(artifact)
+
+    def shape_minima(self, identities, *, environment_identity):
+        from .queries import shape_minima
+        return shape_minima(self._records(), identities, environment_identity)
+
+    def correctness_reuse(self, identities, *, environment_identity):
+        from .queries import correctness_reuse
+        return correctness_reuse(self._records(), identities, environment_identity)
+
     def _records(self):
         if self.records is None:
             raise ExperimentRecordError("recording_not_configured")

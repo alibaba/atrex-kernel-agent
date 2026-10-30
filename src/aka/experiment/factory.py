@@ -8,9 +8,13 @@ from .runner import LegacyExperiment, evaluation_stage
 
 
 class LegacyExperimentFactory:
-    def __init__(self, *, measurement_reader=None, records_root=None):
+    def __init__(self, *, measurement_reader=None, records_root=None, command_evaluator=None):
         self.measurement_reader = measurement_reader
         self.records_root = Path(records_root).expanduser().resolve() if records_root is not None else None
+        if command_evaluator is not None and any(not callable(getattr(command_evaluator, method, None))
+                for method in ("prepare", "observe_step", "fallback", "interpret")):
+            raise TypeError("provider does not implement CommandEvaluator")
+        self.command_evaluator = command_evaluator
         self._closed = False
 
     def close(self):
@@ -34,7 +38,8 @@ class LegacyExperimentFactory:
         # carries the separate actual operation workspace without moving records.
         records = FileExperimentRecords(self.records_root or workspace.parent / ".aka-experiments", str(workspace))
         yield LegacyExperiment(executor, evaluator, records=records, purpose=purpose,
-            command_evaluator=GatewayCommandEvaluator(measurement_reader=self.measurement_reader,
-                execution_capabilities=executor.capabilities, evaluation_input=evaluation_input),
+            command_evaluator=self.command_evaluator if self.command_evaluator is not None else
+                GatewayCommandEvaluator(measurement_reader=self.measurement_reader,
+                    execution_capabilities=executor.capabilities, evaluation_input=evaluation_input),
             episode_evidence=episode_evidence,
             retry=retry_infrastructure if purpose == "formal" else None, stage=evaluation_stage)

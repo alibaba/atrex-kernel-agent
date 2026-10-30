@@ -230,6 +230,31 @@ class FileExperimentRecords:
         return tuple(record.ref for record in sorted(records, key=lambda item: item.created_at)
                      if record.lifecycle != "terminal")
 
+    def iter_records(self):
+        """Enumerate validated committed records in this selected namespace only."""
+        records = []
+        try:
+            directories = tuple(self.root.iterdir())
+        except OSError as error:
+            raise ExperimentRecordError("storage_unavailable") from error
+        for directory in directories:
+            if not re.fullmatch(r"[0-9a-f]{64}", directory.name):
+                continue
+            ref = ExperimentRef(self.run_id, directory.name)
+            if directory.is_symlink() or not directory.is_dir():
+                raise ExperimentRecordError("record_corrupt", ref)
+            path = directory / "record.json"
+            if not path.exists() and not path.is_symlink():
+                continue  # An unpublished private staging directory is not a record.
+            try:
+                record = self.get(ref)
+            except LookupError as error:
+                raise ExperimentRecordError("record_unavailable", ref) from error
+            if not isinstance(record.created_at, str):
+                raise ExperimentRecordError("record_corrupt", ref)
+            records.append(record)
+        yield from sorted(records, key=lambda record: (record.created_at, record.ref.experiment_id))
+
     def read_artifact(self, artifact):
         record = self.get(artifact.experiment)
         if artifact not in record.artifacts or not re.fullmatch(r"[0-9a-f]{32}", artifact.artifact_id):
@@ -242,6 +267,10 @@ class FileExperimentRecords:
             return read_artifact_content(path, artifact.sha256, artifact.size_bytes)
         except (OSError, ValueError) as error:
             raise ExperimentRecordError("artifact_corrupt", record.ref) from error
+
+    def read_source(self, artifact):
+        from .source_artifacts import read_source
+        return read_source(self, artifact)
 
     @contextmanager
     def operation(self, request_id):
