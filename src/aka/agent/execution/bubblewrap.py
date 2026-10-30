@@ -139,6 +139,7 @@ def validate_access(workspace, home, host_home, access, *, home_exists=True):
             raise ValueError("Read-only Agent paths must be visible workspace children")
     mounts = []
     targets = []
+    workspace_declared = False
     for mount in access.mounts:
         if type(mount.writable) is not bool:
             raise TypeError("Agent mount writable flag must be boolean")
@@ -150,6 +151,13 @@ def validate_access(workspace, home, host_home, access, *, home_exists=True):
         if not source.is_dir() and not source.is_file():
             raise ValueError("Agent grants require regular files or directories")
         target = local_path(mount.target, must_exist=False)
+        if source == target == workspace and mount.writable:
+            if workspace_declared:
+                raise ValueError("Agent workspace grant is duplicated")
+            # The common scope explicitly authorizes the default workspace view.
+            # Its hidden and read-only overlays still apply to the default bind.
+            workspace_declared = True
+            continue
         if not mount.writable and source == target and runtime_visible(source):
             continue
         if system_visible(source) or system_visible(target):
