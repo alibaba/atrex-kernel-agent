@@ -58,6 +58,8 @@ from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
+from aka.legacy.execution.runtime_tools import local_eval
+
 
 TERMINAL_STATUSES = frozenset({"succeeded", "failed", "cancelled"})
 VALID_STATUSES = frozenset({"queued", "running", *TERMINAL_STATUSES})
@@ -67,7 +69,7 @@ ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_BODY_LIMIT = 32 * 1024 * 1024
 DEFAULT_OUTPUT_LIMIT = 32 * 1024 * 1024
 DEFAULT_JOB_TIMEOUT = 600
-MAX_JOB_TIMEOUT = 600
+MAX_JOB_TIMEOUT = 10800
 MAX_SOURCE_BYTES = 24 * 1024 * 1024
 MAX_PROFILE_COUNTERS = 256
 PROFILE_LEVELS = frozenset({"survey", "sol", "deep"})
@@ -439,9 +441,7 @@ def _validate_typed_request(payload: Any, kind: str) -> dict[str, Any]:
     payload = _validate_payload_object(payload)
     _validate_target(payload)
 
-    candidate = payload.get("candidate")
-    if not isinstance(candidate, str) or not candidate.strip():
-        raise ValueError("candidate must be a non-empty Python source string")
+    candidate_bytes = local_eval.validate_source(payload.get("candidate"))
 
     reference = payload.get("reference")
     if not isinstance(reference, dict):
@@ -460,9 +460,9 @@ def _validate_typed_request(payload: Any, kind: str) -> dict[str, Any]:
         if field in reference and not isinstance(reference[field], dict):
             raise ValueError(f"reference.{field} must be an object")
 
-    source_bytes = sum(
+    source_bytes = candidate_bytes + sum(
         len(value.encode("utf-8"))
-        for value in (candidate, reference["reference_py"], reference["input_py"])
+        for value in (reference["reference_py"], reference["input_py"])
     )
     source_bytes += len(_json_dumps(shapes).encode("utf-8"))
     source_bytes += len(_json_dumps(reference.get("metadata", {})).encode("utf-8"))
@@ -496,6 +496,15 @@ def _validate_typed_request(payload: Any, kind: str) -> dict[str, Any]:
         mode = payload.get("mode", "full")
         if mode not in {"full", "correctness_only"}:
             raise ValueError("mode must be 'full' or 'correctness_only'")
+        abba = payload.get("abba")
+        if abba is not None:
+            if (not isinstance(abba, dict) or mode != "full"
+                    or type(abba.get("repeats")) is not int or not 1 <= abba["repeats"] <= 8):
+                raise ValueError("ABBA requires full mode and 1..8 complete blocks")
+            if source_bytes + local_eval.validate_source(abba.get("baseline")) > MAX_SOURCE_BYTES:
+                raise ValueError("ABBA sources exceed the 24 MiB limit")
+        if not isinstance(payload.get("runner_overrides", {}), dict):
+            raise ValueError("runner_overrides must be an object")
     elif kind == "profile":
         level = payload.get("level", "sol")
         if level not in PROFILE_LEVELS:
@@ -1187,7 +1196,17 @@ class LocalScheduler:
 
     def _materialize_typed_bundle(self, request: dict[str, Any], workdir: Path) -> None:
         reference = request["reference"]
-        self._write_text(workdir, "candidate.py", request["candidate"])
+        uploads = local_eval.UploadStore(self.jobs_dir.parent / "uploads")
+        candidate = local_eval.materialize_source(
+            request["candidate"], workdir / "candidate", request, uploads, request.get("_local_kind", "eval")
+        )
+        # The wrapper keeps sibling imports beside the original entry point.
+        self._write_text(workdir, "candidate.py", self._source_wrapper(candidate))
+        if request.get("abba"):
+            baseline = local_eval.materialize_source(
+                request["abba"]["baseline"], workdir / "baseline", request, uploads, "eval"
+            )
+            self._write_text(workdir, "baseline.py", self._source_wrapper(baseline))
         self._write_text(workdir, "reference/reference.py", reference["reference_py"])
         self._write_text(workdir, "reference/input.py", reference["input_py"])
         self._write_text(workdir, "reference/shapes.json", _json_dumps(reference["shapes"]))
@@ -1199,9 +1218,32 @@ class LocalScheduler:
                 workdir, "reference/roofline.json", _json_dumps(reference["roofline"])
             )
 
+    @staticmethod
+    def _source_wrapper(path: Path) -> str:
+        return ("import runpy, sys\n"
+                f"sys.path.insert(0, {str(path.parent)!r})\n"
+                f"Model = runpy.run_path({str(path)!r})['Model']\n")
+
     def _eval_argv(self, request: dict[str, Any], workdir: Path, timeout_s: int) -> list[str]:
         runner = _find_atrex_bench_runner(self.atrex_bench_root)
         options = request.get("options") or {}
+        if request.get("abba") or request.get("runner_overrides"):
+            config = dict(request.get("runner_overrides", {}),
+                          input=str(workdir / "candidate.py"),
+                          reference_dir=str(workdir / "reference"),
+                          local_output=str(workdir / "eval_output"),
+                          atol=options.get("atol", 1e-2), rtol=options.get("rtol", 0.05),
+                          num_correctness_cases=options.get("num_correctness_cases", 1),
+                          bench_iters=options.get("bench_iters", 100),
+                          clock_locked=request.get("lock_clocks", False),
+                          validation_mode=request.get("mode", "full"))
+            if "correctness_max_rel_l2" in options:
+                config["correctness_max_rel_l2"] = options["correctness_max_rel_l2"]
+            if request.get("abba"):
+                config.update(eval_mode="abba", baseline_input=str(workdir / "baseline.py"),
+                              local_abba_repeats=request["abba"]["repeats"])
+            config_path = self._write_text(workdir, "native-eval.json", _json_dumps(config))
+            return [sys.executable, "-m", local_eval.__name__, str(config_path), str(runner)]
         common = [
             "--input", str(workdir / "candidate.py"),
             "--reference-dir", str(workdir / "reference"),
@@ -1411,7 +1453,9 @@ class LocalScheduler:
             return
 
         if kind == "eval":
-            result_paths = sorted((workdir / "eval_output").rglob("eval_result.json"))
+            native = workdir / "eval_output" / "local-result.json"
+            result_paths = ([native] if native.is_file() else [] if request.get("abba") or request.get("runner_overrides")
+                            else sorted((workdir / "eval_output").rglob("eval_result.json")))
             if result_paths:
                 try:
                     result = json.loads(result_paths[-1].read_text(encoding="utf-8"))
@@ -1516,6 +1560,7 @@ class LocalGateway:
             self._state_lock.close()
             raise RuntimeError(f"state directory is already in use: {self.state_dir}") from exc
         self.store = JobStore(self.state_dir / "jobs.db")
+        self.uploads = local_eval.UploadStore(self.state_dir / "uploads")
         self.gpu_aliases = frozenset(("local", *gpu_aliases))
         self.scheduler = LocalScheduler(
             self.store,
@@ -1550,6 +1595,7 @@ class LocalGateway:
             raise ValueError(
                 f"localhost scheduler accepts target_hardware aliases: {accepted}"
             )
+        request = dict(request, _local_kind=kind)
         job, created = self.store.create(kind, request, trace_id)
         if created:
             self.scheduler.notify()
@@ -1719,6 +1765,24 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
         parsed = urlsplit(self.path)
         path = parsed.path.rstrip("/") or "/"
         trace_id = self._trace_id()
+        if path == "/v1/uploads":
+            try:
+                payload = _validate_payload_object(self._read_json())
+                _validate_target(payload)
+                if not any(target in self.gateway.gpu_aliases for target in payload["spec"]["target_hardware"]):
+                    raise ValueError("upload hardware is not a local alias")
+                reservation = self.gateway.uploads.reserve(payload)
+                # Use the actual listener address; never reflect an arbitrary Host header.
+                host, port = self.connection.getsockname()[:2]
+                host = f"[{host}]" if ":" in host else host
+                for item in reservation["uploads"]:
+                    item["put_url"] = f"http://{host}:{port}/v1/uploads/{item['upload_ref']}"
+                self._send_json(HTTPStatus.OK, reservation)
+            except RequestError as exc:
+                self._send_json(exc.status, _error(exc.reason, str(exc), trace_id))
+            except (ValueError, KeyError, TypeError) as exc:
+                self._bad_request("invalid_upload", str(exc), trace_id)
+            return
         cancel_match = re.fullmatch(r"/v1/jobs/([^/]+)/cancel", path)
         if cancel_match:
             job_id = unquote(cancel_match.group(1))
@@ -1756,6 +1820,23 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             )
             return
         self._not_found("route_not_found", f"route {path!r} not found", trace_id)
+
+    def do_PUT(self) -> None:  # noqa: N802 - stdlib handler API
+        match = re.fullmatch(r"/v1/uploads/(lu_[0-9a-f]{32})", urlsplit(self.path).path)
+        trace_id = self._trace_id()
+        if not match:
+            self._not_found("route_not_found", "unknown upload route", trace_id)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+            if not 0 < length <= min(self.body_limit, local_eval.MAX_BYTES):
+                raise ValueError("invalid upload Content-Length")
+            self.gateway.uploads.put(match[1], self.rfile.read(length))
+            self._send_json(HTTPStatus.OK, {"uploaded": True})
+        except FileNotFoundError:
+            self._not_found("upload_not_found", "upload reservation not found", trace_id)
+        except ValueError as exc:
+            self._bad_request("invalid_upload", str(exc), trace_id)
 
     def log_message(self, fmt: str, *args: Any) -> None:
         print(f"[local-gateway] {self.address_string()} {fmt % args}", file=sys.stderr)
