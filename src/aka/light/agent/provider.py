@@ -22,10 +22,12 @@ class AgentOptions:
     timeout_seconds: float = 28800
 
     def __post_init__(self):
-        from .execution_clock import validate_timeout
+        from aka.agent.provider import validate_timeout
         if self.sandbox not in {"none", "bwrap"} or self.proc_mode not in {"private", "projected"}:
             raise ValueError("Invalid Agent sandbox or proc mode")
-        validate_timeout(self.timeout_seconds, "timeout_seconds")
+        validate_timeout(self.timeout_seconds)
+        if self.timeout_seconds is None:
+            raise ValueError("timeout_seconds must be positive")
 
     def environment(self):
         return {
@@ -121,11 +123,19 @@ class LightAgent:
 
     def _execute(self, command, cwd, timeout, env=None, *, access=None):
         environment = dict(env or {})
+        requested_timeout = environment.get("ATREX_AGENT_TIMEOUT_SECONDS")
         environment.update(self.options.environment())
-        from .execution_clock import SessionControl
+        if timeout is None and requested_timeout is not None:
+            from aka.agent.provider import validate_timeout
+            requested_timeout = float(requested_timeout)
+            validate_timeout(requested_timeout)
+            environment["ATREX_AGENT_TIMEOUT_SECONDS"] = str(min(
+                self.options.timeout_seconds, requested_timeout,
+            ))
+        from aka.agent.execution.control import ProcessControl
         with self._lock:
             self.check_open()
-            control = SessionControl() if self._process is run_bounded else None
+            control = ProcessControl() if self._process is run_bounded else None
             if control is not None:
                 self._controls[control] = environment.get("ATREX_AGENT_PREPARED_HOME")
         if control is None:

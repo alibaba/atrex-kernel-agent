@@ -30,8 +30,8 @@ Run one command in the foreground. Follow the waiting rules in `CLAUDE.md`: do n
 shell timeout or `&`, and use the backend's wait/output facility if it backgrounds the call.
 Do not change the measured source or launch unrelated work while waiting.
 `--no-sync` disables output-file synchronization; it does **not** make execution asynchronous.
-Managed Runtime waits pause the Agent/subagents and do not consume the Agent active-time
-budget, but remain subject to the request's own deadline. A quiet CLI is not a failure.
+Runtime waits count toward the configured Episode deadline and remain subject to the
+request's own deadline. A quiet CLI is not a failure.
 
 Save JSON stdout and stderr separately if needed:
 

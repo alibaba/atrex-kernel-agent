@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import signal
+import time
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -70,9 +71,9 @@ class LongSessionRunner:
         self.usage_policy = usage_policy
 
     def run(self, *args, episode_timeout_seconds=28800, **kwargs) -> SessionResult:
-        from aka.light.agent.execution_clock import episode_budget
-        with episode_budget(episode_timeout_seconds):
-            return self._run(*args, **kwargs)
+        from aka.light.workflow.deadline import episode_timeout
+        seconds = episode_timeout(episode_timeout_seconds)
+        return self._run(*args, deadline=time.monotonic() + seconds, **kwargs)
 
     def _run(
         self,
@@ -82,6 +83,7 @@ class LongSessionRunner:
         handoff_path: Path,
         handoff_resumes: int,
         completion_check: CompletionCheck,
+        deadline: float,
         reasoning_effort: str = "max",
         session_id: str = "",
         telemetry_environment: Mapping[str, str] | None = None,
@@ -122,11 +124,11 @@ class LongSessionRunner:
             attempt = 0
 
             while True:
-                from aka.light.agent.execution_clock import current_budget
-                if current_budget().remaining <= 0:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
                     timed_out = True
                     exit_status = exit_status or -signal.SIGKILL
-                    completion_diagnosis = "Episode active-time budget exhausted; no continuation started"
+                    completion_diagnosis = "Episode deadline exhausted; no continuation started"
                     break
                 cancel = getattr(self, "cancel_event", None)
                 if cancel is not None and cancel.is_set():
@@ -166,13 +168,9 @@ class LongSessionRunner:
                         "Correct the report fields indicated by Runtime feedback and resubmit "
                         "episode-report. Do not create Git commits or hand-write a handoff."
                     )
-                environment = (
-                    {
-                        "ATREX_TELEMETRY_ATTEMPT_ID": f"{telemetry_attempt_prefix}-{attempt + 1}"
-                    }
-                    if telemetry_attempt_prefix
-                    else None
-                )
+                environment = {"ATREX_AGENT_TIMEOUT_SECONDS": str(remaining)}
+                if telemetry_attempt_prefix:
+                    environment["ATREX_TELEMETRY_ATTEMPT_ID"] = f"{telemetry_attempt_prefix}-{attempt + 1}"
                 turn = native.invoke(
                     turn_prompt,
                     resume=resume,
@@ -225,8 +223,8 @@ class LongSessionRunner:
                 else:
                     completion_diagnosis = handoff_diagnosis(handoff_path)
                 if timed_out:
-                    if current_budget().remaining <= 0:
-                        completion_diagnosis = "Episode active-time budget exhausted; no continuation started"
+                    if time.monotonic() >= deadline:
+                        completion_diagnosis = "Episode deadline exhausted; no continuation started"
                         break
                     can_resume = (
                         bool(active_session_id)

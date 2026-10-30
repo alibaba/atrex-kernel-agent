@@ -18,7 +18,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
-from contextlib import contextmanager, nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -242,7 +242,7 @@ class Capability:
     request_id: str = ""
     journal: JournalBinding | None = None
     parent: Capability | None = field(default=None, repr=False)
-    # In-memory controller object, never a token, PID or clock supplied by Agent.
+    # In-memory controller object, never a token or PID supplied by Agent.
     session_control: object | None = field(default=None, repr=False)
 
 
@@ -330,20 +330,14 @@ class _Handler(BaseHTTPRequestHandler):
                 if not isinstance(request, dict):
                     raise ValueError("Request must be a JSON object")
                 self.decoded_request = request
-            # A complete authenticated request pauses only its Provider tree.
-            # This handler/executor is outside that tree. Release before reply:
-            # the stopped CLI cannot drain a large response. Disconnection does
-            # not release this scope early or cancel an already submitted job.
-            wait = capability.session_control.request() if capability.session_control else nullcontext()
-            with wait:
-                if owner.is_wiki_request(self.path, request):
+            if owner.is_wiki_request(self.path, request):
+                result = owner.execute(capability, self.path, request)
+            else:
+                with owner.request_lock(capability, deadline, self.request_id):
+                    with owner.lock:
+                        if owner.closed or owner.capabilities.get(token) is not capability:
+                            raise SessionRevokedError("Session capability revoked")
                     result = owner.execute(capability, self.path, request)
-                else:
-                    with owner.request_lock(capability, deadline, self.request_id):
-                        with owner.lock:
-                            if owner.closed or owner.capabilities.get(token) is not capability:
-                                raise SessionRevokedError("Session capability revoked")
-                        result = owner.execute(capability, self.path, request)
             execution_exit_code = None
             if self.path == "/v1/gateway/execute" and isinstance(result.get("agent_result"), dict):
                 # Never expose the private compatibility streams alongside the

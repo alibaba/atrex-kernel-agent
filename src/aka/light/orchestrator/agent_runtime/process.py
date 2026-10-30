@@ -9,7 +9,9 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from aka.agent.process import ProcessRunner
+from aka.agent.execution.process import (
+    ProcessRunner, descendant_process_commands, descendant_process_groups, signal_process_groups,
+)
 
 DEFAULT_PROTECTED_GATEWAY_SCREEN = "atrex-local-gateway"
 DEFAULT_PROTECTED_GATEWAY_STATE_NAME = "atrex-local-gateway"
@@ -361,60 +363,6 @@ def dependency_process_violation(
     return None
 
 
-def descendant_process_commands(root_pid: int) -> list[tuple[int, list[str]]]:
-    """Return live descendants and argv using Linux procfs, tolerating races."""
-    pending = [root_pid]
-    seen = {root_pid}
-    descendants: list[tuple[int, list[str]]] = []
-    while pending:
-        parent = pending.pop()
-        task_dir = Path(f"/proc/{parent}/task")
-        try:
-            thread_dirs = list(task_dir.iterdir())
-        except (FileNotFoundError, PermissionError, ProcessLookupError):
-            continue
-        children: set[int] = set()
-        for thread_dir in thread_dirs:
-            try:
-                children.update(
-                    int(value)
-                    for value in (thread_dir / "children").read_text().split()
-                )
-            except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError):
-                continue
-        for pid in children:
-            if pid in seen:
-                continue
-            seen.add(pid)
-            pending.append(pid)
-            try:
-                raw = Path(f"/proc/{pid}/cmdline").read_bytes()
-            except (FileNotFoundError, PermissionError, ProcessLookupError):
-                continue
-            argv = [part.decode(errors="replace") for part in raw.split(b"\0") if part]
-            descendants.append((pid, argv))
-    return descendants
-
-
-def descendant_process_groups(root_pid: int) -> set[int]:
-    """Capture every process group in a coding session's live process tree."""
-    process_groups: set[int] = set()
-    for pid in [root_pid, *[pid for pid, _argv in descendant_process_commands(root_pid)]]:
-        try:
-            process_groups.add(os.getpgid(pid))
-        except ProcessLookupError:
-            pass
-    return process_groups
-
-
-def signal_process_groups(process_groups: set[int], sig: signal.Signals) -> None:
-    for process_group in process_groups:
-        try:
-            os.killpg(process_group, sig)
-        except ProcessLookupError:
-            pass
-
-
 def dependency_guard(
     proc: subprocess.Popen[str],
     stop: threading.Event,
@@ -422,9 +370,12 @@ def dependency_guard(
     environment_state_file: str = "",
     environment_failures: list[str] | None = None,
     trusted_sandbox_entrypoints: frozenset[Path] | None = None,
+    control=None,
 ) -> None:
     """Kill a coding session on a policy violation or environment failure."""
     while not stop.wait(DEPENDENCY_GUARD_POLL_SECONDS):
+        if control is not None:
+            control.poll()
         if proc.poll() is not None:
             return
         if environment_state_file and Path(environment_state_file).is_file():
@@ -472,9 +423,9 @@ def run_bounded(
     env: dict | None = None,
     *, auxiliary_input_files: dict[str, Path] | None = None, session_control=None, agent_access=None,
 ) -> tuple[str, str, int, bool]:
-    from aka.light.agent.execution_clock import SessionControl
+    from aka.agent.execution.control import ProcessControl
     environment = dict(os.environ if env is None else env)
-    control = session_control or SessionControl()
+    control = session_control or ProcessControl()
     if not environment.get("ATREX_AKA_RUNTIME_OWNER"):
         return _run_bounded(command, cwd, timeout, environment,
                             auxiliary_input_files=auxiliary_input_files, session_control=control, agent_access=agent_access)
@@ -492,24 +443,21 @@ def _run_bounded(
     *, auxiliary_input_files: dict[str, Path] | None = None,
     session_control=None, agent_access=None,
 ) -> tuple[str, str, int, bool]:
-    """Run with an active-time deadline excluding authenticated Runtime waits."""
-    from aka.light.agent.execution_clock import (
-        ActiveCommunication, DEFAULT_TIMEOUT_SECONDS, SessionControl, current_budget, validate_timeout,
-    )
+    """Run with an explicit wall-clock deadline, including Runtime waits."""
+    from aka.agent.execution.control import ProcessControl
+    from aka.agent.provider import validate_timeout
     from ..agent_home import prepare_agent_environment
     from ..agent_sandbox import wrap_agent_command
     from ..session_capture import clear_capture, finish_session_capture, start_session_capture
 
     clear_capture()
-    control = session_control or SessionControl()
-    budget = current_budget()
-    default_timeout = float((env or {}).get("ATREX_AGENT_TIMEOUT_SECONDS", DEFAULT_TIMEOUT_SECONDS))
-    limit = validate_timeout(timeout if timeout is not None else default_timeout, "Agent timeout_seconds")
-    if budget is not None:
-        limit = min(limit, budget.remaining)
-    if limit <= 0:
-        control.close()
-        return "", "Agent active-time budget exhausted", -signal.SIGKILL, True
+    control = session_control or ProcessControl()
+    default_timeout = (env or {}).get("ATREX_AGENT_TIMEOUT_SECONDS")
+    limit = timeout
+    if limit is None and default_timeout is not None:
+        limit = float(default_timeout)
+    validate_timeout(limit)
+    deadline = time.monotonic() + limit if limit is not None else None
     environment_values = prepare_agent_environment(
         cwd, dict(os.environ if env is None else env),
         (env or {}).get("ATREX_TELEMETRY_ATTEMPT_ID") or "\0".join(command),
@@ -525,9 +473,9 @@ def _run_bounded(
         trusted_sandbox_entrypoints |= TRUSTED_SANDBOX_ENTRYPOINTS
     else:
         from aka.light.agent.claude_tools import foreground_command
-        # Like Runtime, keep these calls foreground; the authenticated server
-        # suspension remains authoritative if a shell backgrounds/disconnects.
-        command = foreground_command(command, cwd, max(default_timeout, DEFAULT_TIMEOUT_SECONDS))
+        # Tool calls share the invocation's configured deadline.
+        if limit is not None:
+            command = foreground_command(command, cwd, limit)
     launch, view = wrap_agent_command(
         command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files, agent_access=agent_access,
     )
@@ -547,7 +495,7 @@ def _run_bounded(
             text=True,
             errors="replace",
         )
-        control.attach(proc.pid)
+        control.attach(proc)
     except BaseException:
         control.close()
         if proc is not None:
@@ -575,6 +523,7 @@ def _run_bounded(
             environment_state_file,
             environment_failures,
             trusted_sandbox_entrypoints,
+            control,
         ),
         name=f"dependency-guard-{proc.pid}",
         daemon=True,
@@ -587,10 +536,18 @@ def _run_bounded(
         (lambda timeout=None: capture.communicate(proc, timeout))
         if capture is not None else proc.communicate
     )
-    communicate = ActiveCommunication(raw_communicate, proc, control)
+    communicate = raw_communicate
     try:
-        stdout, stderr = communicate(timeout=limit)
-        completed = True
+        while True:
+            control.poll()
+            remaining = None if deadline is None else max(0.0, deadline - time.monotonic())
+            try:
+                stdout, stderr = communicate(timeout=.05 if remaining is None else min(.05, remaining))
+                completed = True
+                break
+            except subprocess.TimeoutExpired:
+                if deadline is not None and time.monotonic() >= deadline:
+                    raise
     except subprocess.TimeoutExpired:
         timed_out = True
         # spawn_owned_session creates this PGID. Keep it even if the group
@@ -599,16 +556,14 @@ def _run_bounded(
         stdout, stderr = communicate()
     except BaseException:
         interrupted = True
-        # SIGTERM alone cannot terminate a SIGSTOP'ed Provider. Cancellation
-        # kills the owned tree and never briefly resumes it into more work.
+        # Cancellation kills only the invocation's owned process groups.
         control.kill()
         communicate()
         raise
     finally:
         try:
+            control.kill()
             control.close()
-            if budget is not None:
-                budget.used += control.active_seconds()
             guard_stop.set()
             guard.join(timeout=1)
             finish_session_capture(
@@ -645,8 +600,7 @@ def _run_bounded(
     returncode = proc.returncode
     if timed_out:
         stderr = (stderr or "") + (
-            f"\n[orchestrator] Agent active-time limit exceeded ({limit:g}s); "
-            f"{control.wait_seconds:.3f}s of Runtime tool waiting excluded.\n"
+            f"\n[orchestrator] Agent deadline exceeded ({limit:g}s).\n"
         )
     if dependency_violations:
         policy_message = (

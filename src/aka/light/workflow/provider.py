@@ -23,8 +23,8 @@ class WorkflowOptions:
     source_tree: dict | None = None
 
     def __post_init__(self):
-        from aka.light.agent.execution_clock import validate_timeout
-        validate_timeout(self.episode_timeout_seconds)
+        from .deadline import episode_timeout
+        episode_timeout(self.episode_timeout_seconds)
         if (type(self.output_limit_recovery_retries) is not int
                 or not 0 <= self.output_limit_recovery_retries <= 10):
             raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")

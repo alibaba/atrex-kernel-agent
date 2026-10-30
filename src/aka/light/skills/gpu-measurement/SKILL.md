@@ -28,8 +28,8 @@ For each call, identify the uncertainty it will resolve and the observation that
 support or contradict your hypothesis. Do not promote a plausible explanation to a fact
 because one aggregate metric looks consistent with it. No separate plan document is needed.
 
-Follow `CLAUDE.md`'s foreground/wait rules: Runtime requests block, managed Agent trees pause
-while they run, and waiting does not consume the Agent active-time budget. Do not wrap
+Follow `CLAUDE.md`'s foreground/wait rules: Runtime requests block, and their waiting
+time counts toward the configured Episode deadline. Do not wrap
 commands in shell timeouts, background them, or edit the candidate while a call is pending.
 After completion, inspect the JSON result before choosing the next action.
 
