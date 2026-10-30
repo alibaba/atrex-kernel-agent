@@ -294,13 +294,15 @@ def snapshot_from_document(value: dict) -> WorkflowExportSnapshot:
                 if final['revision'] is not None and final['revision']!=final['head_revision']:
                     raise ValueError('episode source revision differs from captured HEAD')
                 handles=final['artifacts']
-                if not isinstance(handles,dict) or 'kernel.py' not in handles or set(handles)-{'kernel.py','solution.json'}:
+                if (not isinstance(handles,dict) or 'kernel.py' not in handles or any(
+                        not isinstance(name,str) or not name or '\\' in name or Path(name).is_absolute()
+                        or any(part in {'', '.', '..'} for part in name.split('/')) for name in handles)):
                     raise ValueError('invalid final episode source handles')
                 by_id={artifact.id:artifact for artifact in artifacts}
                 digests={}
                 for name,handle in handles.items():
                     artifact=by_id.get(handle)
-                    role='episode-candidate-source' if name=='kernel.py' else 'episode-candidate-manifest'
+                    role='episode-candidate-manifest' if name=='solution.json' else 'episode-candidate-source'
                     if (artifact is None or artifact.role!=role or
                             artifact.filename!=f"episodes/e{row['episode']:04d}/final/{name}"):
                         raise ValueError('final episode artifact differs from its source handle')

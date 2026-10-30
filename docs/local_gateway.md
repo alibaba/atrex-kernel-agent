@@ -58,6 +58,7 @@ The community scheduler implements:
 
 - `GET /healthz`
 - `GET /v1/env` and `GET /v1/env/local`
+- `POST /v1/uploads` and `PUT /v1/uploads/<upload_ref>` for candidate and baseline source archives, stored locally with size and SHA-256 verification
 - `POST /v1/jobs/eval` for native Atrex-Bench evaluation
 - `POST /v1/jobs/profile` for supported `ncu`/`rocprofv3` profiling requests
 - `POST /v1/jobs/dev`, including uploaded text files, environment variables, timeouts, and idempotency keys
@@ -70,6 +71,25 @@ The community scheduler implements:
 contract, and falls back to a self-contained `dev` request for SOL, aggregate, custom-input, or otherwise
 unrepresentable commands. `disassemble` remains unsupported and returns a structured HTTP 501
 `kind_not_supported` response.
+
+Eval accepts Python source strings and `{archive, entry_point}` source bundles.
+Archive entries must be regular files with relative paths. Uploads and queued
+job references persist in the state directory across restarts. Source uploads
+do not require OSS credentials or an external storage service.
+
+An `abba` request runs every requested A/B/B/A block through Atrex-Bench's
+native evaluation mode in the same local GPU allocation. The result retains
+each complete SDK block under `abba.sdk_results`, including failed candidate
+verdicts. Missing or incomplete evaluator evidence fails the job. Runner
+overrides preserve the requested warmup and per-run timing budgets; allocation
+timeouts may be up to 10800 seconds. The installed Atrex-Bench must support
+native ABBA and the JSON runner configuration contract.
+
+Clock requests are reported separately from applied locks in the Eval result's
+`clock_lock` field. The local adapter currently manages NVIDIA clocks; on AMD it
+runs with `clock_locked=false`, matching the remote gateway's unsupported-device
+behavior. It does not equate a ROCm performance level with a fixed clock or report
+an unapplied lock as successful. Correctness checks and every ABBA leg still run.
 
 ## Security Boundary
 

@@ -1133,6 +1133,30 @@ class LongHorizonCampaign:
             state.tokens += max(0, int(tokens))
 
         episode_dir = store.episode_dir(episode)
+        from aka.legacy.workflow.episode_output import capture as capture_episode_output
+        from aka.legacy.workflow.episode_output import unavailable as unavailable_episode_output
+        from aka.light.workspace.sources import read as read_source
+        baseline = main_adapter.read_memory(self.workspace, 0) or {}
+        expected_cases = self._expected_shape_ids()
+        if expected_cases is None:
+            expected_cases = (baseline.get("performance") or {}).get("latency_us_by_shape") or {}
+        capture_error = None
+        try:
+            source = read_source(worktree.path)
+            files = source.materialized_files
+            if (worktree.path / "solution.json").is_file():
+                files["solution.json"] = (worktree.path / "solution.json").read_bytes()
+            capture_episode_output(worktree.path, episode_dir, episode=episode,
+                version=memory_version, base_revision=base_commit,
+                expected_case_ids=tuple(sorted(expected_cases)),
+                source_files=files, source_digest=source.digest)
+        except (OSError, ValueError) as exc:
+            capture_error = f"{type(exc).__name__}: {exc}"
+            unavailable_episode_output(episode_dir, episode=episode, version=memory_version,
+                base_revision=base_commit, head_revision=git_head(worktree.path), reason=capture_error)
+            if accepted:
+                accepted = False
+                violation = "terminal candidate output unavailable: " + capture_error
         self.base_campaign.candidate_workspace.archive(worktree, episode_dir / "archive", "HEAD")
         self._copy_runtime_artifacts(worktree, episode_dir)
         journal = load_journal(journal_path)
@@ -1165,6 +1189,8 @@ class LongHorizonCampaign:
             else None,
             "verification": verification.as_dict() if verification else None,
         }
+        if capture_error:
+            attempt["candidate_output_unavailable"] = capture_error
         if getattr(self.base_campaign, "search_coordinate", None) is not None:
             attempt["search"] = dict(self.base_campaign.search_coordinate)
         if recovered_after_supervisor_interruption:
