@@ -21,7 +21,8 @@ class LegacyExperimentFactory:
         self._closed = True
 
     @contextmanager
-    def open(self, *, workspace, purpose, executor, evaluator, evaluation_input=None, episode_evidence=None):
+    def open(self, *, workspace, purpose, executor, evaluator, evaluation_input=None, episode_evidence=None,
+             command_evaluator=None):
         if self._closed:
             raise RuntimeError("Experiment selection has been closed")
         if purpose not in {"development", "formal"}:
@@ -37,8 +38,12 @@ class LegacyExperimentFactory:
         # The workspace identifies the retained record namespace. Episode evidence
         # carries the separate actual operation workspace without moving records.
         records = FileExperimentRecords(self.records_root or workspace.parent / ".aka-experiments", str(workspace))
+        selected_command = command_evaluator if command_evaluator is not None else self.command_evaluator
+        if selected_command is not None and any(not callable(getattr(selected_command, method, None))
+                for method in ("prepare", "observe_step", "fallback", "interpret")):
+            raise TypeError("provider does not implement CommandEvaluator")
         yield LegacyExperiment(executor, evaluator, records=records, purpose=purpose,
-            command_evaluator=self.command_evaluator if self.command_evaluator is not None else
+            command_evaluator=selected_command if selected_command is not None else
                 GatewayCommandEvaluator(measurement_reader=self.measurement_reader,
                     execution_capabilities=executor.capabilities, evaluation_input=evaluation_input),
             episode_evidence=episode_evidence,

@@ -6,7 +6,7 @@ import math
 from aka.contracts.experiment import ExperimentRecordError, ShapeMinimum
 
 
-_SOURCE_KEYS = {"candidate_source_sha256", "candidate_source_artifact_sha256", "candidate_source_format", "candidate_source_identity"}
+_SOURCE_KEYS = {"candidate_source_sha256", "candidate_source_artifact_sha256", "candidate_source_format", "candidate_source_identity", "candidate_source_archive_sha256"}
 
 
 def _sha256(value):

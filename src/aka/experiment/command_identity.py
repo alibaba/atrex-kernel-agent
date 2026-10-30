@@ -27,6 +27,11 @@ def handoff_identity(command, *, prepared_path_identities=None):
              "sha256": hashlib.sha256(item.content).hexdigest()}
             for item in command.input_files
         ]
+    if command.source_archives:
+        result["source_archives"] = [{"role": item.role, "path": item.path, "entry_point": item.entry_point,
+            "sha256": hashlib.sha256(item.content).hexdigest(), "size_bytes": len(item.content)} for item in command.source_archives]
+    if command.idempotency_key is not None:
+        result["idempotency_key"] = command.idempotency_key
     if command.prepared_inputs is not None:
         result["prepared_inputs"] = {
             name: [{"path": path_identities.get(item.path, item.path), "mode": item.mode, "size_bytes": len(item.content),

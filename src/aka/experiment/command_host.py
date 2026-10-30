@@ -144,19 +144,7 @@ class ExperimentCommandHost:
 
     @staticmethod
     def _completed_result(experiment, record):
-        artifact = next((artifact for artifact in reversed(record.artifacts) if artifact.role == "command_result"), None)
-        if artifact is None:
-            raise LookupError("command final receipt is not recorded")
-        result = _job(json.loads(experiment.read_artifact(artifact)))
-        if result is None:
-            raise ValueError("command receipt is invalid")
-        files = []
-        for receipt in result.file_receipts:
-            content = next((artifact for artifact in record.artifacts if artifact.sha256 == receipt.sha256 and artifact.size_bytes == receipt.size_bytes), None)
-            if content is None:
-                raise ValueError("command output artifact is unavailable")
-            files.append(ExecutionFile(receipt.path, experiment.read_artifact(content), receipt.mode))
-        return replace(result, files=tuple(files))
+        return experiment.command_result(record.ref)
 
     def _command(self, session, value, inputs):
         allowed = {"command", "timeout", "hardware", "operation", "artifacts", "num_gpus", "languages",

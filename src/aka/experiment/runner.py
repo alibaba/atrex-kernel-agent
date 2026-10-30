@@ -73,6 +73,9 @@ class LegacyExperiment:
     def read_artifact(self, artifact):
         return self._records().read_artifact(artifact)
 
+    def command_result(self, ref):
+        return self._records().command_result(ref)
+
     def iter_records(self):
         yield from self._records().iter_records()
 
@@ -290,7 +293,12 @@ class LegacyExperiment:
             records.observed(ref, attempt_id, result=value)
             if command.on_observation is not None:
                 command.on_observation(value)
-        return replace(command, on_observation=observe)
+        key = command.idempotency_key
+        if command.source_archives and key is None:
+            import hashlib
+            key = "experiment:" + hashlib.sha256(json.dumps([ref.as_dict(), attempt_id],
+                sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        return replace(command, on_observation=observe, idempotency_key=key)
 
     def _run_command(self, command, *, records=None, ref=None, resume=None):
         evaluator = self.command_evaluator
@@ -309,6 +317,8 @@ class LegacyExperiment:
                 if step.submission is not None:
                     records.publish_content(ref, step.submission, "evaluation_input")
                 for item in step.input_files:
+                    records.publish_content(ref, item.content, "execution_input")
+                for item in step.source_archives:
                     records.publish_content(ref, item.content, "execution_input")
                 if step.prepared_inputs is not None:
                     for item in (*step.prepared_inputs.files, *step.prepared_inputs.runtime_files):
@@ -410,6 +420,8 @@ class LegacyExperiment:
             for command in steps:
                 if command.submission is not None:
                     records.publish_content(ref, command.submission, "evaluation_input")
+                for item in command.source_archives:
+                    records.publish_content(ref, item.content, "execution_input")
                 if command.prepared_inputs is not None:
                     for item in (*command.prepared_inputs.files, *command.prepared_inputs.runtime_files):
                         records.publish_content(ref, item.content, "execution_input")
@@ -433,8 +445,9 @@ class LegacyExperiment:
                 self._write_outputs(request, prepared, observed.artifacts, ref)
                 return result
 
+            archive_intent = records.intent(ref, index) if records is not None and command.source_archives else None
             def attempt():
-                attempt_id = records.intent(ref, index) if records is not None else None
+                attempt_id = archive_intent or (records.intent(ref, index) if records is not None else None)
                 try:
                     observed_command = self._observed_command(command, records, ref, attempt_id)
                     result = self.executor.run(observed_command)

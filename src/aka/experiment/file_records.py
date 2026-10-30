@@ -268,6 +268,10 @@ class FileExperimentRecords:
         except (OSError, ValueError) as error:
             raise ExperimentRecordError("artifact_corrupt", record.ref) from error
 
+    def command_result(self, ref):
+        from .command_results import completed_result
+        return completed_result(self, self.get(ref))
+
     def read_source(self, artifact):
         from .source_artifacts import read_source
         return read_source(self, artifact)

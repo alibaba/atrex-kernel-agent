@@ -13,7 +13,7 @@ from pathlib import Path
 import math
 
 from .execution import CommandSpec, Executor, JobResult
-from .evaluation import EvaluationFailure, EvaluationRequest, Evaluator, VerificationResult
+from .evaluation import CommandEvaluator, EvaluationFailure, EvaluationRequest, Evaluator, VerificationResult
 from .experiment_identity import ExperimentRef
 from .measurement import MeasurementAssessment, MeasurementIdentity
 from .problem import EvaluationInput
@@ -94,7 +94,8 @@ class ExperimentFactory(Protocol):
     def open(self, *, workspace: Path, purpose: Literal["development", "formal"],
              executor: Executor, evaluator: Evaluator,
              evaluation_input: EvaluationInput | None = None,
-             episode_evidence: EpisodeEvidenceScope | None = None) -> ContextManager[Experiment]: ...
+             episode_evidence: EpisodeEvidenceScope | None = None,
+             command_evaluator: CommandEvaluator | None = None) -> ContextManager[Experiment]: ...
 
 
 class ExperimentExecutionError(RuntimeError):
@@ -319,6 +320,12 @@ class ExperimentRecords(Protocol):
         """
         ...
     def read_artifact(self, artifact: ExperimentArtifact) -> bytes: ...
+    def command_result(self, ref: ExperimentRef) -> JobResult:
+        """Read the retained Evaluation-interpreted command receipt and owned output bytes.
+
+        Missing or corrupt evidence raises; the query never dispatches or retries.
+        """
+        ...
     def read_source(self, artifact: ExperimentArtifact) -> RevisionContent:
         """Read validated candidate-source content without exposing its artifact codec."""
         ...
