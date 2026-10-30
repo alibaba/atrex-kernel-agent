@@ -63,6 +63,8 @@ class _Plan:
     shape_ids: tuple[str, ...] = ()
     error: str = ""
     gateway: object = None
+    native: bool = False
+    baseline: object = None
 
 
 class LegacyEvaluator:
@@ -83,10 +85,13 @@ class LegacyEvaluator:
         from .gateway_command import GatewayCommandEvaluator
         return GatewayCommandEvaluator(measurement_reader=self.configuration.measurement_reader,
             execution_capabilities=self.configuration.execution_capabilities,
-            evaluation_input=self.evaluation_input, shape_batch_size=self.configuration.shape_batch_size)
+            evaluation_input=self.evaluation_input, shape_batch_size=self.configuration.shape_batch_size,
+            measurement_repetitions=self.configuration.measurement_repetitions)
 
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         prepared = self._prepare(request)
+        if getattr(prepared.context, "native", False):
+            return prepared
         if request.mode in {"v0", "framework"} and self.configuration.hardware:
             command = replace(prepared.steps[0], hardware=self.configuration.hardware,
                               environment=self.configuration.environment)
@@ -115,6 +120,8 @@ class LegacyEvaluator:
                 inject_private=request.mode != "numerical", prepared_files=prepared.inputs) for step in prepared.steps))
         if request.mode == "numerical":
             return prepared
+        if request.mode in {"v0", "framework"} and getattr(prepared.context, "gateway", None) is None:
+            prepared = replace(prepared, steps=prepared.steps * self.configuration.measurement_repetitions)
         if request.mode == "abba":
             config = self.configuration
             prepared = replace(prepared, retry_keys=tuple(
@@ -155,10 +162,14 @@ class LegacyEvaluator:
                     ),
                 ),
                 1,
-                _Plan(request),
+                _Plan(request, baseline=(config.measurement_reader.baseline(request.workspace)
+                    if not config.hardware and config.measurement_repetitions > 1 and config.measurement_reader is not None else None)),
             )
         if request.mode != "abba":
             raise ValueError(f"unsupported evaluation mode: {request.mode}")
+        if config.comparison_method == "native-abba":
+            from .native_abba import prepare_comparison
+            return prepare_comparison(request, config, self.candidate_workspace, self.evaluation_input, _Plan(request))
         from .metadata import distributed_evaluation_world_size
         metadata_path = (config.private_reference_dir or request.workspace) / "metadata.json"
         metadata = json.loads(metadata_path.read_text()) if metadata_path.is_file() else None
@@ -248,6 +259,9 @@ class LegacyEvaluator:
         if getattr(plan, "gateway", None) is not None:
             return self._command_evaluator().observe_step(plan.gateway, index, result)
         assessment = self.diagnose_step(prepared, index, result)
+        if plan.native:
+            return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"),),
+                assessment, workspace_files=result.files)
         if plan.request.mode in {"v0", "framework"}:
             from .baseline import BaselinePreparation
             BaselinePreparation.print_v0_evaluator_output(result)
@@ -275,13 +289,19 @@ class LegacyEvaluator:
         identity = prepared.measurement_identities[index]
         payload = None
         try:
-            if prepared.context.request.mode == "abba":
+            if prepared.context.native:
+                from .native_abba import parse_native_abba
+                shapes = list(dict.fromkeys(point.shape_id for point in identity.points))
+                payload = parse_native_abba(json.loads(result.stdout), self.configuration.repeats, shapes)
+                offset = min(point.repeat for point in identity.points)
+                payload["runs"] = [{**row, "repeat": row["repeat"] + offset} for row in payload["runs"]]
+            elif prepared.context.request.mode == "abba":
                 payload = _payload_from_stdout(self._dev_stdout(prepared.context.request, result.stdout))
             else:
                 measured = result_from_stdout(result.stdout)
-                payload = {"runs": [{"revision": "candidate", "repeat": 0,
+                payload = {"runs": [{"revision": "candidate", "repeat": identity.points[0].repeat,
                     "exit_code": result.returncode, "result": measured}]}
-        except (ValueError, RuntimeError, json.JSONDecodeError):
+        except (ValueError, RuntimeError, TypeError, KeyError, AttributeError):
             pass  # The absence of evidence remains explicit in the assessment.
         return assess_payload(identity, result, payload)
 
@@ -299,6 +319,24 @@ class LegacyEvaluator:
             raise ValueError("evaluation requires one result per planned step")
         if request.mode == "fast":
             return self._fast_result(request)
+        if plan.native:
+            from .native_abba import parse_native_abba, interpret_payloads
+            payloads = []
+            assessments = tuple(self.diagnose_step(prepared, index, result) for index, result in enumerate(results))
+            try:
+                for index, result in enumerate(results):
+                    if result.returncode:
+                        raise ValueError("native ABBA execution did not produce a complete receipt")
+                    shapes = list(dict.fromkeys(point.shape_id for point in prepared.measurement_identities[index].points))
+                    payloads.append(parse_native_abba(json.loads(result.stdout), self.configuration.repeats, shapes))
+                verification = interpret_payloads(payloads, list(plan.shape_ids), self.configuration.repeats,
+                    self.configuration.measurement_repetitions)
+            except (ValueError, TypeError, KeyError, AttributeError) as error:
+                verification = VerificationResult("ERROR", None, None, None, error=str(error),
+                    failure=EvaluationFailure("incomplete", "native-abba-incomplete", "Native ABBA evidence is incomplete; candidate invalidity is not established"))
+            return replace(verification, measurements=assessments,
+                artifacts=tuple(MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch")
+                    for index, result in enumerate(results)))
         if request.mode in {"v0", "framework"}:
             if getattr(plan, "gateway", None) is not None:
                 result = self._command_evaluator().interpret(plan.gateway, results).result
@@ -306,6 +344,16 @@ class LegacyEvaluator:
                 from .gateway_measurement import prepare_dev_output
                 result = replace(results[0], stdout=prepare_dev_output(request.workspace, results[0].stdout,
                     evaluator=True, private=False))
+                if self.configuration.measurement_repetitions > 1:
+                    from .aggregation import aggregate
+                    from .transport_results import _with_workspace_performance_score
+                    samples = [result_from_stdout(prepare_dev_output(request.workspace, item.stdout,
+                        evaluator=True, private=False)) for item in results]
+                    measured = aggregate(samples, "evaluate")
+                    measured.pop("performance_objective", None)
+                    measured = _with_workspace_performance_score(request.workspace, measured, baseline=plan.baseline)
+                    result = replace(results[-1], transport_returncode=0 if all(item.returncode == 0 for item in results) else 1,
+                        exit_code=None, stdout=RESULT_PREFIX + json.dumps(measured) + "\n")
             from .baseline import BaselinePreparation
             if getattr(plan, "gateway", None) is not None:
                 BaselinePreparation.print_v0_evaluator_output(result)

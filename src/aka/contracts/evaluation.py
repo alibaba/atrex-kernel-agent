@@ -6,7 +6,7 @@ from .workflow_records import CanonicalMeasurementReader
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any, Iterable, Mapping, Protocol, Sequence, TYPE_CHECKING
+from typing import Any, Iterable, Literal, Mapping, Protocol, Sequence, TYPE_CHECKING
 from aka.core.keys import ServiceKey
 
 from .execution import BackendCapabilities, CommandSpec, ExecutionFile, JobResult
@@ -367,8 +367,14 @@ class EvaluationConfiguration:
     environment: Mapping[str, str] = field(default_factory=dict)
     measurement_reader: CanonicalMeasurementReader | None = field(default=None, repr=False, compare=False)
     execution_capabilities: BackendCapabilities | None = None
+    comparison_method: Literal["legacy-abba", "native-abba"] = "legacy-abba"
+    measurement_repetitions: int = 1
 
     def __post_init__(self):
+        if self.comparison_method not in {"legacy-abba", "native-abba"}:
+            raise ValueError("unsupported comparison method")
+        if type(self.measurement_repetitions) is not int or self.measurement_repetitions not in {1, 3}:
+            raise ValueError("measurement repetitions must be 1 or 3")
         object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
         if self.execution_capabilities is not None and not isinstance(self.execution_capabilities, BackendCapabilities):
             raise TypeError("evaluation preparation requires bound BackendCapabilities")

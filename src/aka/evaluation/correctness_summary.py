@@ -33,4 +33,3 @@ def correctness_summary(value, *, passed: bool) -> dict:
         elif isinstance(item, (list, tuple)):
             pending.extend(item)
     return {"status": "PASS" if passed else "FAIL", **metrics}
-

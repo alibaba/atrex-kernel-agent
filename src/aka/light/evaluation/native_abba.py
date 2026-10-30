@@ -2,76 +2,26 @@
 from __future__ import annotations
 
 import json
-import math
 import os
-import statistics
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from aka.evaluation.abba import verification_schedule
-from aka.light.evaluation.result_conversion import compile_failures
 from aka.evaluation.shapes import batch_shape_ids, shape_batch_request
 from aka.light.evaluation.evaluation_feedback import evaluation_feedback
 from aka.light.evaluation.policy import BATCH_WORKERS, validate_abba_repeats
-from aka.light.evaluation.public_result import correctness_summary
 from aka.light.supervisor.abba_checkpoints import AbbaBatchStore, validate_batch
 from aka.light.supervisor.measurement_records import JOB_ROOT_ENV, EvidenceUnavailable
 
 
-def _summarize(raw: dict, shapes: list[str]) -> dict:
-    """Same per-Shape median (ms -> us) and GeoMean as Runtime's ABBA ledger."""
-    from aka.light.supervisor.gateway_jobs import complete_evaluation
-    if not complete_evaluation(raw, {"reference": {"shapes": dict.fromkeys(shapes)}}):
-        raise ValueError("Native ABBA run has incomplete evaluator evidence")
-    passed = raw.get("passed") or {}
-    correctness = raw.get("correctness") or {}
-    shape_results = correctness.get("shapes") or {}
-    statuses = passed.get("correctness") or {}
-    correct = (not raw.get("error") and not compile_failures(passed.get("compile"), shapes)
-               and all(statuses.get(sid, {}).get("status") == "passed" and sid in shape_results for sid in shapes))
-    latencies = {}
-    performance = (raw.get("performance") or {}).get("shapes") or {}
-    for sid in shapes:
-        shape = performance.get(sid) or {}
-        values = [sample["end_to_end_time_ms"] for sample in shape.get("samples", [])
-                  if isinstance(sample, dict) and type(sample.get("end_to_end_time_ms")) in (int, float)
-                  and math.isfinite(sample["end_to_end_time_ms"]) and sample["end_to_end_time_ms"] > 0]
-        if values and not shape.get("error"):
-            latencies[sid] = statistics.median(values) * 1000
-    correct = bool(correct and len(latencies) == len(shapes) and shapes)
-    result = {"all_pass": correct, "latency_us_by_shape": latencies,
-              "latency_us_geomean": math.exp(statistics.mean(math.log(v) for v in latencies.values())) if correct else None,
-              "error": None if correct else "compile, correctness, or performance did not pass"}
-    result["correctness"] = correctness_summary(raw, passed=correct)
-    result.update(evaluation_feedback(raw, shapes))
-    return result
-
-
 def parse_native_abba(job: dict, repeats: int, shapes: list[str]) -> dict:
-    validate_abba_repeats(repeats)
-    if not shapes or job.get("status") != "succeeded" or job.get("error"):
-        raise ValueError("Native ABBA job did not complete")
-    result = job.get("result") or {}
-    blocks = (result.get("abba") or {}).get("sdk_results")
-    if not isinstance(blocks, list) or len(blocks) != repeats // 2:
-        raise ValueError("Native ABBA result lacks complete SDK blocks")
-    expected = [("baseline", "A", 0), ("candidate", "B", 0),
-                ("candidate", "B", 1), ("baseline", "A", 1)]
-    runs = []
-    for block_index, block in enumerate(blocks):
-        rows = (block.get("abba") or {}).get("runs") if isinstance(block, dict) else None
-        if not isinstance(rows, list) or len(rows) != 4:
-            raise ValueError("Native ABBA block lacks four runs")
-        for index, (row, (revision, label, repeat)) in enumerate(zip(rows, expected, strict=True)):
-            if (not isinstance(row, dict) or any(row.get(k) != v for k, v in {
-                    "index": index, "revision": revision, "label": label, "repeat": repeat}.items())
-                    or not isinstance(row.get("result"), dict)):
-                raise ValueError("Native ABBA run order or evaluator evidence differs from the request")
-            runs.append({"revision": "incumbent" if revision == "baseline" else "candidate",
-                         "repeat": block_index * 2 + repeat, "exit_code": 0,
-                         "result": _summarize(row["result"], shapes)})
-    payload = {"schema_version": 1, "transport": "agate_native_eval_abba", "runs": runs, "error": None}
+    from aka.evaluation.native_abba import parse_native_abba as parse_receipt
+    payload = parse_receipt(job, repeats, shapes)
+    raw_runs = [row for block in job["result"]["abba"]["sdk_results"]
+                for row in block["abba"]["runs"]]
+    for run, raw in zip(payload["runs"], raw_runs):
+        run["result"].update(evaluation_feedback(raw["result"], shapes))
     return validate_batch(payload, verification_schedule(repeats), shapes)
 
 

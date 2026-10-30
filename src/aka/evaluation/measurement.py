@@ -99,6 +99,7 @@ def legacy_identities(prepared, configuration, evaluation_input=None):
                   "per_run_timeout": configuration.per_run_timeout,
                   "command_timeout": configuration.timeout,
                   "runtime_configuration": _environment_parameters(configuration.environment)}
+    parameters["measurement_repetitions"] = configuration.measurement_repetitions if request.mode in {"v0", "framework"} else 1
     result = []
     shape_path = reference / "shapes.json"
     full_shapes = tuple(str(value) for value in json.loads(shape_path.read_text())) if shape_path.is_file() else ()
@@ -124,7 +125,7 @@ def legacy_identities(prepared, configuration, evaluation_input=None):
             method = "legacy-abba/1"
         else:
             shapes = tuple(sorted(request.expected_shape_ids)) if request.expected_shape_ids is not None else full_shapes or (None,)
-            points = tuple(MeasurementPoint("candidate", request.candidate_commit or "sha256:" + input_digest, 0, shape) for shape in shapes)
+            points = tuple(MeasurementPoint("candidate", request.candidate_commit or "sha256:" + input_digest, index, shape) for shape in shapes)
             method = "legacy-eval/1"
         result.append(MeasurementIdentity(method, points, input_digest,
             {**parameters, "num_gpus": command.num_gpus}, requirements, policy))
@@ -142,10 +143,13 @@ def gateway_identity(request, reference_files, kind="run"):
         from .abba import verification_schedule
         baseline = "sha256:" + _bytes(abba["baseline"].encode())
         points = tuple(MeasurementPoint(str(step["revision"]), baseline if step["revision"] == "incumbent" else candidate,
-            int(step["repeat"]), shape) for step in verification_schedule(int(abba["repeats"])) for shape in shapes)
+            int(step["repeat"]), shape) for step in verification_schedule(int(abba["repeats"]) * 2) for shape in shapes)
     else:
         points = tuple(MeasurementPoint("candidate", candidate, 0, shape) for shape in shapes)
     parameters = {key: value for key, value in frozen.items() if key not in {"candidate", "reference", "requirements", "env_vars", "abba"}}
+    if abba:
+        parameters["abba_sdk_blocks"] = abba["repeats"]
+        parameters["comparison_method"] = "native-abba"
     if request.get("env_vars"):
         parameters["worker_environment_digest"] = _digest(request["env_vars"])
     requirements = tuple(request.get("requirements", ()))
@@ -227,7 +231,8 @@ def assess_payload(identity, result, payload=None):
         if correctness_only and passed:
             observed.extend(point for point in points if point not in observed)
             valid_rows.append(True)
-        elif passed and numeric and shape_numeric and _result_latency(measured) is not None and _result_performance_score(measured) is not None:
+        elif passed and numeric and shape_numeric and _result_latency(measured) is not None and (
+                identity.parameters.get("comparison_method") == "native-abba" or _result_performance_score(measured) is not None):
             valid_rows.append(True)
         elif measured.get("all_pass") is False:
             invalid = True

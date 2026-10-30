@@ -48,4 +48,3 @@ def aggregate(results: list[dict], operation: str) -> dict:
     value["improvement_pct"] = (value["speedup"] - 1.0) * 100
     value.pop("measurements", None)
     return value
-

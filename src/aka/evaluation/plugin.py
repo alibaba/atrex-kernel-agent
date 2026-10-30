@@ -9,8 +9,12 @@ EVALUATION_DEFAULTS = ServiceKey("evaluation_defaults", "EvaluationConfiguration
 name = "evaluation"
 provide = ("evaluator_factory", "evaluation_defaults")
 identity_packages = ("aka.evaluation", "aka.contracts.evaluation")
-Config = {"type": "object", "properties": {"shape_batch_size":{"type":"integer","minimum":1}}, "additionalProperties": False}
-Defaults = {"shape_batch_size":4}
+Config = {"type": "object", "properties": {
+    "shape_batch_size": {"type": "integer", "minimum": 1},
+    "comparison_method": {"type": "string", "enum": ["legacy-abba", "native-abba"]},
+    "measurement_repetitions": {"type": "integer", "enum": [1, 3]},
+}, "additionalProperties": False}
+Defaults = {"shape_batch_size": 4, "comparison_method": "legacy-abba", "measurement_repetitions": 1}
 
 
 class LegacyEvaluatorFactory:
@@ -26,4 +30,4 @@ def apply(ctx, config):
     from .resources import contribute_resources
     contribute_resources(ctx)
     ctx.provide(EVALUATOR_FACTORY, LegacyEvaluatorFactory(shape_batch_size=config["shape_batch_size"]))
-    ctx.provide(EVALUATION_DEFAULTS, EvaluationConfiguration(shape_batch_size=config["shape_batch_size"]))
+    ctx.provide(EVALUATION_DEFAULTS, EvaluationConfiguration(**config))

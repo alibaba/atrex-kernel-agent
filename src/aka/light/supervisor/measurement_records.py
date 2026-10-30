@@ -234,7 +234,7 @@ class MeasurementStore:
                 record = self.read(record_id)
                 if record.get("task_digest") != task_digest or record.get("cacheable") is not True:
                     return None
-                from aka.light.evaluation.evaluation_failures import embedded_device_failure
+                from aka.evaluation.device_failures import embedded_device_failure
                 negative = False
                 for line in record["response"].get("stdout", "").splitlines():
                     for prefix in ("[test_kernel] RESULT_JSON=", "[sandbox] ABBA_JSON="):

@@ -17,16 +17,37 @@ from .command_inputs import (validate_command, workload_environment,
 
 class GatewayCommandEvaluator:
     def __init__(self, *, measurement_reader=None, execution_capabilities=None,
-                 evaluation_input=None, shape_batch_size=4):
+                 evaluation_input=None, shape_batch_size=4, measurement_repetitions=1):
         self.measurement_reader = measurement_reader
         self.execution_capabilities = execution_capabilities
         self.evaluation_input = evaluation_input
         if type(shape_batch_size) is not int or shape_batch_size < 1:
             raise ValueError("shape batch size must be positive")
         self.shape_batch_size = shape_batch_size
+        if type(measurement_repetitions) is not int or measurement_repetitions not in {1, 3}:
+            raise ValueError("measurement repetitions must be 1 or 3")
+        self.measurement_repetitions = measurement_repetitions
 
 
     def prepare(self, command):
+        prepared = self._prepare(command)
+        context = prepared.context
+        kind = context["kind"]
+        request = (json.loads(command.submission)["request"] if command.submission is not None else
+                   context["measurement"].request if context["measurement"] is not None else {})
+        count = self.measurement_repetitions if kind in {"run", "same_allocation_abba"} and request.get("mode") != "correctness_only" else 1
+        context["repetitions"] = count
+        context["batch_count"] = len(prepared.steps)
+        from aka.contracts.measurement import MeasurementPoint
+        identities = tuple(replace(identity,
+            points=tuple(MeasurementPoint(point.side, point.revision, point.repeat + outer * (
+                int(identity.parameters.get("abba_sdk_blocks", 0)) * 2 or 1), point.shape_id) for point in identity.points),
+            parameters={**identity.parameters, "measurement_repetitions": count, "measurement_repetition": outer})
+            for outer in range(count) for identity in prepared.measurement_identities)
+        return replace(prepared, steps=prepared.steps * count, measurement_identities=identities,
+                       fallback_steps=() if count > 1 else prepared.fallback_steps)
+
+    def _prepare(self, command):
         validate_command(command)
         if command.operation == "preflight" or command.submission is not None:
             identities = ()
@@ -38,11 +59,22 @@ class GatewayCommandEvaluator:
                 if not isinstance(prepared, dict) or prepared.get("schema_version") != 1:
                     raise ValueError("unsupported prepared gateway request")
                 kind = prepared.get("kind")
-                if kind not in {"run", "profile", "check", "disassemble"} or command.operation not in {"auto", kind}:
+                native = command.operation == "same_allocation_abba"
+                if kind not in {"run", "profile", "check", "disassemble"} or (command.operation not in {"auto", kind} and not (native and kind == "run")):
                     raise ValueError("prepared request differs from the command operation")
                 request = prepared.get("request")
                 if not isinstance(request, dict):
                     raise ValueError("prepared request must be an object")
+                if request.get("abba") and not native:
+                    raise ValueError("native ABBA requires the same_allocation_abba operation")
+                if native:
+                    abba = request.get("abba")
+                    if (not isinstance(abba, dict) or not isinstance(abba.get("baseline"), str) or not abba["baseline"].strip()
+                            or type(abba.get("repeats")) is not int or abba["repeats"] < 1):
+                        raise ValueError("native ABBA requires baseline source and SDK block count")
+                    if self.execution_capabilities is None:
+                        raise UnsupportedExecution("native ABBA requires bound execution capabilities")
+                    self.execution_capabilities.require(command)
                 references = prepared.get("reference_files", {})
                 if not isinstance(references, dict) or any(not isinstance(name, str)
                         or name in {"", ".", ".."} or Path(name).name != name or not isinstance(content, str)
@@ -61,6 +93,8 @@ class GatewayCommandEvaluator:
                             or not isinstance(request["reference"].get("shapes"), dict) or not request["reference"]["shapes"]):
                         raise ValueError("prepared measurement requires candidate source and shapes")
                     from .measurement import gateway_identity
+                    if native and not request["candidate"].strip():
+                        raise ValueError("native ABBA requires nonempty candidate source")
                     identities = (gateway_identity(request, references, kind),)
                 if kind == "profile":
                     if private:
@@ -72,9 +106,13 @@ class GatewayCommandEvaluator:
                         hardware=command.hardware, private=private, batch_size=1, profiling=True)
                     if not measurement.shape_ids:
                         raise ValueError("profile measurement requires at least one shape")
+                elif kind == "run" and not native:
+                    measurement = GatewayMeasurement(request, workspace=command.workspace,
+                        hardware=command.hardware, private=private,
+                        batch_size=len(request["reference"]["shapes"]))
             step = replace(command, profile_options=None) if command.profile_options is not None else command
             return PreparedEvaluation((step,), 1, {"command": command, "measurement": measurement,
-                "kind": kind, "private": private, "evaluator": False},
+                "kind": "same_allocation_abba" if command.operation == "same_allocation_abba" else kind, "private": private, "evaluator": False},
                 measurement_identities=identities)
         baseline = (self.measurement_reader.baseline(command.workspace)
                     if self.measurement_reader is not None else None)
@@ -206,7 +244,7 @@ class GatewayCommandEvaluator:
 
     def observe_step(self, prepared, index, result):
         assessment = self.diagnose_step(prepared, index, result)
-        if prepared.context["measurement"] is None:
+        if prepared.context["measurement"] is None and prepared.context["kind"] != "same_allocation_abba":
             return StepEvaluation(assessment=assessment, workspace_files=result.files)
         return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"),), assessment,
             workspace_files=() if prepared.context["kind"] == "profile" and index < len(prepared.steps) else result.files)
@@ -223,15 +261,21 @@ class GatewayCommandEvaluator:
             try:
                 context = prepared.context
                 measurement = context["measurement"]
-                request = measurement.request_for(index) if measurement is not None else json.loads(context["command"].submission)["request"]
+                request = measurement.request_for(index % context["batch_count"]) if measurement is not None else json.loads(context["command"].submission)["request"]
                 job = _job_response(result.stdout)
                 if job and isinstance(job.get("result"), dict):
-                    measured = _optimizer_result_from_eval(job["result"],
-                        [point.shape_id for point in identity.points if point.shape_id is not None],
-                        request["reference"].get("metadata"),
-                        require_performance=request.get("mode") != "correctness_only", hardware=context["command"].hardware)
-                    payload = {"runs": [{"revision": "candidate", "repeat": 0,
-                        "exit_code": result.returncode, "result": measured}]}
+                    shapes = list(dict.fromkeys(point.shape_id for point in identity.points if point.shape_id is not None))
+                    if context["kind"] == "same_allocation_abba":
+                        from .native_abba import parse_native_abba
+                        payload = parse_native_abba(job, request["abba"]["repeats"] * 2, shapes)
+                        offset = min(point.repeat for point in identity.points)
+                        payload["runs"] = [{**row, "repeat": row["repeat"] + offset} for row in payload["runs"]]
+                    else:
+                        measured = _optimizer_result_from_eval(job["result"], shapes,
+                            request["reference"].get("metadata"),
+                            require_performance=request.get("mode") != "correctness_only", hardware=context["command"].hardware)
+                        payload = {"runs": [{"revision": "candidate", "repeat": identity.points[0].repeat,
+                            "exit_code": result.returncode, "result": measured}]}
             except (TypeError, ValueError, KeyError, json.JSONDecodeError):
                 pass
         return assess_payload(identity, result, payload)
@@ -240,10 +284,31 @@ class GatewayCommandEvaluator:
         context = prepared.context
         command = context["command"]
         measurement = context["measurement"]
+        if context["kind"] == "same_allocation_abba":
+            from .native_abba import parse_native_abba, interpret_payloads
+            request = json.loads(command.submission)["request"]
+            shapes = list(request["reference"]["shapes"])
+            payloads = [parse_native_abba(_job_response(result.stdout) or {}, request["abba"]["repeats"] * 2, shapes) for result in results]
+            verification = interpret_payloads(payloads, shapes, request["abba"]["repeats"] * 2, context["repetitions"])
+            verification.measurements = tuple(self.diagnose_step(prepared, index, result) for index, result in enumerate(results))
+            content = json.dumps(verification.as_dict(), ensure_ascii=False, allow_nan=False).encode()
+            return CommandEvaluation(results[-1], verification,
+                (MeasurementArtifact("evaluation.json", content, "evaluation"),))
         if measurement is None or (len(results) == 1 and any(line.startswith(TEST_RESULT_PREFIX) for line in results[0].stdout.splitlines())):
             result = results[0]
             stdout = prepare_dev_output(command.workspace, result.stdout,
                 evaluator=context["evaluator"], private=context["private"], baseline=context.get("baseline"))
+            if context["repetitions"] > 1:
+                from .evaluator import result_from_stdout
+                from .aggregation import aggregate
+                from .transport_results import _with_workspace_performance_score
+                payload = aggregate([result_from_stdout(prepare_dev_output(command.workspace, item.stdout,
+                    evaluator=context["evaluator"], private=context["private"], baseline=context.get("baseline"))) for item in results], "evaluate")
+                payload.pop("performance_objective", None)
+                payload = _with_workspace_performance_score(command.workspace, payload, baseline=context.get("baseline"))
+                stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
+                result = replace(results[-1], transport_returncode=0 if all(item.returncode == 0 for item in results) else 1,
+                    exit_code=None)
             return self._command_evaluation(replace(result, stdout=stdout), context, results)
         jobs = []
         for result in results:
@@ -256,7 +321,17 @@ class GatewayCommandEvaluator:
             jobs.append(job)
         files = []
         if context["kind"] == "run":
-            payload = measurement.interpret(jobs)
+            batch_count = context["batch_count"]
+            samples = [measurement.interpret(jobs[offset:offset + batch_count]) for offset in range(0, len(jobs), batch_count)]
+            from .aggregation import aggregate
+            payload = aggregate(samples, "evaluate")
+            if len(samples) > 1:
+                from .transport_results import _metadata_speedup_mean
+                score, failures = _metadata_speedup_mean(measurement.request["reference"].get("metadata"),
+                    measurement.shape_ids, payload["latency_us_by_shape"], command.hardware)
+                payload.update(performance_score=score, speedup_vs_ref_mean=score)
+                if failures:
+                    payload.update(all_pass=False, failures=failures)
             stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
             stdout = with_measurement_conditions(stdout, gateway_warmup_iters=command.environment.get("AKA_GATEWAY_WARMUP_ITERS", "5"))
             code = 0 if payload["all_pass"] else 1

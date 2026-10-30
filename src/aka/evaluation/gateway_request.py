@@ -108,6 +108,8 @@ def prepare_request(
     counters: Iterable[str] = (),
     kernel_regex: str | None = None,
     top_kernels: int | None = None,
+    candidate_source: str | None = None,
+    candidate_solution: dict | None = None,
 ) -> dict[str, Any]:
     """Build the public run/profile request without importing the agate package."""
     content = reference_content or {}
@@ -148,8 +150,8 @@ def prepare_request(
             "--multi-seed must be non-negative and --timed-runs must be positive"
         )
 
-    solution = _json_object(workspace / "solution.json") or {}
-    candidate = (workspace / "kernel.py").read_text(encoding="utf-8")
+    solution = candidate_solution if candidate_solution is not None else (_json_object(workspace / "solution.json") or {})
+    candidate = candidate_source if candidate_source is not None else (workspace / "kernel.py").read_text(encoding="utf-8")
     languages = _candidate_languages(solution, candidate_sources=(candidate,))
     reference: dict[str, Any] = {
         "operator": workspace.name,

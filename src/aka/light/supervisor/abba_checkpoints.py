@@ -17,7 +17,7 @@ from typing import Any
 
 from aka.light.orchestrator.durable_state import durable_write_json, ensure_private_directory
 from aka.light.supervisor.measurement_records import read_json
-from aka.light.evaluation.evaluation_failures import embedded_device_failure
+from aka.evaluation.device_failures import embedded_device_failure
 
 MAX_CHECKPOINT_BYTES = 32 * 1024 * 1024
 

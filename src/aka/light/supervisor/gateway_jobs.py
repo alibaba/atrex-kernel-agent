@@ -17,7 +17,7 @@ import uuid
 from pathlib import Path
 
 from aka.light.supervisor.measurement_records import JOB_ROOT_ENV, EvidenceUnavailable, digest, private_write, read_json
-from aka.light.evaluation.evaluation_failures import embedded_device_failure
+from aka.evaluation.device_failures import embedded_device_failure
 
 
 def retry_delay(count: int) -> float:
@@ -136,34 +136,9 @@ def complete_evaluation(result: dict, request: dict) -> bool:
             return True
         except (ValueError, TypeError, KeyError, AttributeError):
             return False
-    shapes = request["reference"].get("shapes", {})
-    passed = result.get("passed")
-    if not shapes or not isinstance(passed, dict):
-        return False
-    compile_result = passed.get("compile")
-    if not isinstance(compile_result, dict):
-        return False
-    correctness = passed.get("correctness") or {}
-    performance = (result.get("performance") or {}).get("shapes", {})
-    for shape in shapes:
-        compilation = compile_result if "status" in compile_result else compile_result.get(shape, {})
-        if compilation.get("status") == "failed":
-            continue
-        if compilation.get("status") != "passed":
-            return False
-        status = correctness.get(shape, {}).get("status")
-        if status == "failed":
-            continue
-        if status != "passed":
-            return False
-        if request.get("mode") == "correctness_only":
-            continue
-        samples = performance.get(shape, {}).get("samples", [])
-        values = [row.get("end_to_end_time_ms") for row in samples if isinstance(row, dict)]
-        if not values or any(isinstance(value, bool) or not isinstance(value, (int, float))
-                             or not math.isfinite(value) or value <= 0 for value in values):
-            return False
-    return True
+    from aka.evaluation.native_abba import complete_evaluation as complete_result
+    return complete_result(result, list(request["reference"].get("shapes", {})),
+                           correctness_only=request.get("mode") == "correctness_only")
 
 
 def job_from_process(process: subprocess.CompletedProcess) -> dict | None:
