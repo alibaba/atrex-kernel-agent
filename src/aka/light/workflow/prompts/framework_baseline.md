@@ -62,8 +62,8 @@ completed task. Runtime handles infrastructure retries; follow its error guidanc
 
 ## Finish
 
-The Supervisor performs full correctness, policy and (in production) supplemental numerical
-validation after smoke. If it returns a measured counterexample, repair the implementation using
+The Supervisor performs full correctness and policy validation after smoke, plus supplemental
+numerical validation when enabled in production. If it returns a measured counterexample, repair the implementation using
 the supplied distributions and metrics; do not change evaluator inputs, probes or thresholds.
 
 After smoke passes, leave those exact candidate files and manifest on disk, print
