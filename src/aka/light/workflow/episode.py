@@ -1133,6 +1133,20 @@ class LongHorizonCampaign:
             state.tokens += max(0, int(tokens))
 
         episode_dir = store.episode_dir(episode)
+        from aka.legacy.workflow.episode_output import capture as capture_episode_output
+        from aka.light.workspace.sources import read as read_source
+        source = read_source(worktree.path)
+        files = source.materialized_files
+        if (worktree.path / "solution.json").is_file():
+            files["solution.json"] = (worktree.path / "solution.json").read_bytes()
+        baseline = main_adapter.read_memory(self.workspace, 0) or {}
+        expected_cases = self._expected_shape_ids()
+        if expected_cases is None:
+            expected_cases = (baseline.get("performance") or {}).get("latency_us_by_shape") or {}
+        capture_episode_output(worktree.path, episode_dir, episode=episode,
+            version=memory_version, base_revision=base_commit,
+            expected_case_ids=tuple(sorted(expected_cases)),
+            source_files=files, source_digest=source.digest)
         self.base_campaign.candidate_workspace.archive(worktree, episode_dir / "archive", "HEAD")
         self._copy_runtime_artifacts(worktree, episode_dir)
         journal = load_journal(journal_path)

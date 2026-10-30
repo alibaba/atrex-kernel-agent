@@ -49,19 +49,24 @@ def _result(result, expected):
         _number(result.get('performance_score')), metrics, True)
 
 
-def capture(workspace, episode_dir, *, episode, version, base_revision, expected_case_ids):
+def capture(workspace, episode_dir, *, episode, version, base_revision, expected_case_ids,
+            source_files=None, source_digest=None):
     from .episode_evidence import capture as capture_evidence
     capture_evidence(workspace, episode_dir, episode=episode)
     workspace, episode_dir = Path(workspace), Path(episode_dir)
     files = {}
     unavailable = None
-    for name in ('kernel.py', 'solution.json'):
+    for name in (source_files if source_files is not None else ('kernel.py', 'solution.json')):
         path = workspace/name
         if path.is_symlink() or (path.exists() and not path.is_file()):
             unavailable = 'candidate source is not a regular workspace file'
             break
         if path.is_file():
             files[name] = path.read_bytes()
+            if source_files is not None and files[name] != source_files[name]:
+                raise ValueError('episode source changed before output capture')
+        elif source_files is not None:
+            raise ValueError('episode source file disappeared before output capture')
     if 'kernel.py' not in files:
         unavailable = unavailable or 'candidate kernel is missing'
     head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=workspace, text=True).strip()
@@ -93,7 +98,7 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
                         or not re.fullmatch('[0-9a-f]{64}',row['solution_sha256'])))
                     or not isinstance(row.get('result'),dict)):
                 raise ValueError('episode evaluation receipt has invalid content identity')
-            if (row.get('kernel_sha256') != digests['kernel.py'] or
+            if (row.get('kernel_sha256') != (source_digest or digests['kernel.py']) or
                     row.get('solution_sha256') != digests.get('solution.json')):
                 continue
             evaluation = EvaluationFact(str(row.get('gateway_kind') or 'run'), row.get('timestamp'),
@@ -153,7 +158,10 @@ def _read(episode_dir, *, episode, version, expected_case_ids, attempt):
             raise ValueError('invalid captured episode revision')
     if value['revision'] is not None and value['revision'] != value['head_revision']:
         raise ValueError('captured source revision differs from final HEAD')
-    if 'kernel.py' not in value['files'] or set(value['files'])-{'kernel.py','solution.json'}:
+    if 'kernel.py' not in value['files'] or any(
+            not isinstance(name, str) or not name or '\\' in name
+            or Path(name).is_absolute() or any(part in {'.', '..'} for part in name.split('/'))
+            or any(not part for part in name.split('/')) for name in value['files']):
         raise ValueError('invalid captured episode source files')
     artifacts = []; handles = {}; digests = {}
     for name, row in value['files'].items():
@@ -161,7 +169,7 @@ def _read(episode_dir, *, episode, version, expected_case_ids, attempt):
         if _digest(content) != row['sha256']:
             raise ValueError('captured episode source digest changed')
         identifier = f'e{episode}_final_{name.replace(".","_")}'
-        role = 'episode-candidate-source' if name=='kernel.py' else 'episode-candidate-manifest'
+        role = 'episode-candidate-manifest' if name=='solution.json' else 'episode-candidate-source'
         artifacts.append(_artifact(identifier,f'episodes/e{episode:04d}/final/{name}',role,content,
                                    'text/x-python' if name=='kernel.py' else 'application/json'))
         handles[name] = identifier; digests[name] = row['sha256']
