@@ -15,7 +15,7 @@ import sys
 import time
 
 from aka.resources.publication import publish
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import read_regular_bytes
 from aka.resources.wiki.config import WikiConfig
 
 MODEL_ENV = ("ANTHROPIC_MODEL", "ANTHROPIC_DEFAULT_HAIKU_MODEL", "ANTHROPIC_DEFAULT_SONNET_MODEL",

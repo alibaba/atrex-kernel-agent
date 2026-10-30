@@ -26,7 +26,7 @@ from typing import Any
 
 UTC = timezone.utc
 
-from aka.filesystem import open_private_directory
+from aka.core.filesystem import open_private_directory
 from aka.contracts.workspace import CandidateHandle, RevisionContent
 
 from aka.light.workflow.host.direction_genealogy import (
@@ -1056,7 +1056,7 @@ class SupervisorJournalService:
         raise ValueError(f"unsupported Journal operation: {operation}")
 
     def _check_legacy_journal(self) -> None:
-        from aka.filesystem import read_regular_bytes
+        from aka.core.filesystem import read_regular_bytes
 
         try:
             raw = read_regular_bytes(

@@ -24,7 +24,7 @@ from aka.task.problem.resources import native_harness_script
 from aka.light.workflow.measurement_policy import CANDIDATE_TIMEOUT
 from aka.light.workflow.host.workspace import read_input, publish
 from aka.light.workflow.host.projection import bounded_text, credential_values, redact_diagnostics
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import read_regular_bytes
 
 from aka.light.workflow.long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
 from .constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX

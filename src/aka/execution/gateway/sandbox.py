@@ -80,7 +80,7 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
-from aka.core._filesystem import durable_write_json  # noqa: E402
+from aka.core.filesystem import durable_write_json  # noqa: E402
 from aka.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
 from aka.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
 

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from .runtime_paths import VERIFY_DIR
-from aka.core._filesystem import durable_write_json
+from aka.core.filesystem import durable_write_json
 
 
 REVIEW_TRACE_MODES = frozenset({"off", "errors", "all"})

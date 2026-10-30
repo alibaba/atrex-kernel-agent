@@ -289,7 +289,7 @@ class SupervisorRuntime:
         if config.workspace:
             workspace = config.workspace.resolve()
             self.audit_root = supervisor_campaign_root(workspace)
-            from aka.filesystem import open_private_directory
+            from aka.core.filesystem import open_private_directory
             with open_private_directory(self.audit_root):
                 pass
         from aka.light.workflow.measurements import SharedMeasurements
@@ -509,7 +509,7 @@ class SupervisorRuntime:
         """Retain host-prepared inputs at a stable physical path, without Job state."""
         from dataclasses import replace
         from aka.contracts.content import WorkspaceFile
-        from aka.filesystem import open_private_directory
+        from aka.core.filesystem import open_private_directory
         files = []
         for path in sorted(command.workspace.rglob("*")):
             if path.is_symlink():
@@ -877,7 +877,7 @@ class SupervisorRuntime:
         # log, but their partial profiles/scratch files do not belong in outputs.
         log = staged / EPISODE_EVALUATIONS_PATH
         if log.is_file():
-            from aka.filesystem import read_regular_bytes
+            from aka.core.filesystem import read_regular_bytes
             data = read_regular_bytes(log, limit=MAX_FILE_BYTES + 1)
             if len(data) > MAX_FILE_BYTES:
                 raise ValueError("Evaluation log exceeds the size limit")

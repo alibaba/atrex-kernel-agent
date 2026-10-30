@@ -2,8 +2,8 @@
 import json
 from pathlib import Path
 
-from aka.core._filesystem import durable_write_json
-from aka.filesystem import open_private_directory, read_regular_bytes
+from aka.core.filesystem import durable_write_json
+from aka.core.filesystem import open_private_directory, read_regular_bytes
 
 MAX_RECORD_BYTES = 32 * 1024 * 1024
 

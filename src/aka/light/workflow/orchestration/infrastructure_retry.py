@@ -11,7 +11,7 @@ from pathlib import Path
 from threading import Event
 
 from .durable_state import durable_write_json
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import read_regular_bytes
 
 POLL_SECONDS = 60
 MAX_STATE_BYTES = 64 * 1024

@@ -5,7 +5,7 @@ from pathlib import Path
 from dataclasses import asdict
 
 from aka.contracts.agent_resources import AgentSkill, AgentResourceInstallation, WorkspaceResourceContribution
-from aka.core._filesystem import durable_write_json
+from aka.core.filesystem import durable_write_json
 from .skills import fingerprint as _fingerprint
 from .skills import describe_skill, describe_resource
 

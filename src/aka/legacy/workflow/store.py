@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from aka.core._filesystem import durable_write_json
+from aka.core.filesystem import durable_write_json
 
 from .runtime_paths import (
     RUNTIME_DIR,

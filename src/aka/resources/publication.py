@@ -3,7 +3,7 @@ from pathlib import Path
 import os
 import uuid
 
-from aka.filesystem import open_private_directory
+from aka.core.filesystem import open_private_directory
 
 
 def publish(workspace: Path, relative: str, data: bytes, *, append: bool = False) -> None:

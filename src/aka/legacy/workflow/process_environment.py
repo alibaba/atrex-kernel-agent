@@ -92,7 +92,7 @@ def recovery_environment(directory: Path, *, persist=True):
         if path.read_text(encoding="utf-8") != payload:
             raise RuntimeError("refusing to replace recovery launch selection with a different composition")
     elif persist:
-        from aka.core._filesystem import durable_write_text
+        from aka.core.filesystem import durable_write_text
         durable_write_text(path, payload)
     return {**environment, SELECTION_ENV: str(path), DIGEST_ENV: digest(payload)}
 

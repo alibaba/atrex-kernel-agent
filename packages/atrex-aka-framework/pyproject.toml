@@ -41,7 +41,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*", "aka.resources", "aka.resources.*", "aka.evaluation", "aka.evaluation.*", "aka.experiment", "aka.experiment.*", "aka.acceptance", "aka.acceptance.*", "aka.filesystem", "aka.filesystem.*"]
+include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*", "aka.resources", "aka.resources.*", "aka.evaluation", "aka.evaluation.*", "aka.experiment", "aka.experiment.*", "aka.acceptance", "aka.acceptance.*"]
 
 [tool.setuptools.package-data]
 "aka.agent" = ["*", "**/*"]

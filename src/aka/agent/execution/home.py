@@ -5,7 +5,7 @@ import hashlib
 import os
 import stat
 from pathlib import Path
-from aka.filesystem import open_private_directory
+from aka.core.filesystem import open_private_directory
 
 PREPARED_ENV = "ATREX_AGENT_PREPARED_HOME"
 

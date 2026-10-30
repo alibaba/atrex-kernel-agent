@@ -12,7 +12,7 @@ import math
 from pathlib import Path
 from aka.contracts.execution import JobResult
 from aka.contracts.execution_recovery import InfrastructureRetryPolicy
-from aka.core._filesystem import durable_write_json, ensure_private_directory
+from aka.core.filesystem import durable_write_json, ensure_private_directory
 
 
 def _wait_until(deadline: float, cancel: Event) -> None:

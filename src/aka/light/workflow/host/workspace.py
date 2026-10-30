@@ -6,7 +6,7 @@ import stat
 from pathlib import Path
 
 from aka.resources.publication import publish
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import read_regular_bytes
 
 MAX_FILE_BYTES = 16 * 1024 * 1024
 MAX_TOTAL_BYTES = 64 * 1024 * 1024

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import stat
 
-from aka.filesystem import open_private_directory, read_regular_bytes
+from aka.core.filesystem import open_private_directory, read_regular_bytes
 from .plugin_runtime.registry import SKILL_ROOTS
 
 MAX_ENTRIES = 4096

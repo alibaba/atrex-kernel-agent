@@ -18,7 +18,7 @@ import uuid
 
 from aka.legacy.workflow.store import VERIFY_DIR
 from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
-from aka.core._filesystem import durable_write_json, durable_write_text
+from aka.core.filesystem import durable_write_json, durable_write_text
 from aka.agent.availability import check_review_service
 from aka.experiment.retry import retry_infrastructure
 from aka.contracts.execution import ExecutionPending

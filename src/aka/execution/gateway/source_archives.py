@@ -16,7 +16,7 @@ from urllib.parse import urlsplit
 import uuid
 
 from aka.contracts.execution import PreparedSourceArchive, UnsupportedExecution
-from aka.filesystem import open_private_directory
+from aka.core.filesystem import open_private_directory
 
 ARCHIVES = "__aka_source_archives"
 

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from aka.light.workflow.orchestration.durable_state import durable_write_json, durable_write_text
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import read_regular_bytes
 from aka.light.workflow.orchestration.version_records import version_record_path
 
 from .promotion_audit import (

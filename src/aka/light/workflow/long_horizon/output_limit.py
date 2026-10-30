@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import stat
 
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import read_regular_bytes
 
 
 def _inventory(workspace: Path, source_paths=("kernel.py",)) -> dict:

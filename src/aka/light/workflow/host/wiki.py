@@ -17,8 +17,8 @@ import uuid
 from aka.light.workflow.support.errors import GatewayExecutionUnavailable, SessionRevokedError
 from aka.light.workflow.host.errors import RuntimeStateError
 from aka.resources.publication import publish
-from aka.filesystem import open_private_directory
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import open_private_directory
+from aka.core.filesystem import read_regular_bytes
 
 
 def digest(value):

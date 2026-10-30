@@ -6,7 +6,7 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from aka.core._filesystem import durable_write_json
+from aka.core.filesystem import durable_write_json
 
 
 def retry_review(workspace: Path, stage: str, operation):

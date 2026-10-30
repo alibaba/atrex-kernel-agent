@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from aka.light.workflow.orchestration.durable_state import durable_write_text
-from aka.filesystem import read_regular_bytes
+from aka.core.filesystem import read_regular_bytes
 
 AUDIT_TRAILER = "AKA-Promotion-Audit: "
 

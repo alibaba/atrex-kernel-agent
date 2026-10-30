@@ -7,7 +7,7 @@ import logging
 import os
 from pathlib import Path
 
-from aka.filesystem import open_private_directory, read_regular_bytes
+from aka.core.filesystem import open_private_directory, read_regular_bytes
 from .durable_state import durable_write_json
 from aka.contracts.content import WorkspaceFile
 from aka.contracts.workspace import RevisionContent
