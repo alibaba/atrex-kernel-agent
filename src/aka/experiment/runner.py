@@ -176,6 +176,8 @@ class LegacyExperiment:
                             # the business interpretation through verification.
                             json.dumps(json.loads(output.content), allow_nan=False)
                         records.publish_content(ref, output.content, output.role)
+                    records.publish_content(ref, json.dumps(result.as_dict(),
+                        ensure_ascii=False, allow_nan=False).encode(), "command_result")
                     record = records.completed(ref, evaluation)
                     return record, result
                 if request.experiment_ref is not None and request.experiment_ref != ref:

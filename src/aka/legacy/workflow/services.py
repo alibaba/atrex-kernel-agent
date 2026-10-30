@@ -238,7 +238,7 @@ class WorkflowServices:
             yield experiment
 
     @contextmanager
-    def command_session(self, workspace, access):
+    def command_session(self, workspace, access, *, deadline=None):
         """Register command authorization for one Agent session and revoke it on return."""
         with self._command_lock:
             if self._closed:
@@ -248,8 +248,11 @@ class WorkflowServices:
                 self._command_host = ExperimentCommandHost(self.agent_experiment,
                     self.executor.capabilities, hardware=self.settings.hardware)
             host = self._command_host
-        with host.session(workspace, access) as registration:
-            yield registration
+        from aka.contracts.agent import AgentToolBinding
+        with self.campaign.agent.tool_session(workspace, access=access,
+                bindings=(AgentToolBinding("experiment.command", host),),
+                deadline=deadline) as session:
+            yield session.environment, session.filesystem_access
 
     def sandbox_command(self, command):
         import shlex

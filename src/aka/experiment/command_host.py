@@ -1,237 +1,162 @@
-"""Forward one Agent session's commands to its already selected Experiment."""
-from contextlib import contextmanager
+"""Scoped Experiment operations borrowed by the common Agent tool transport."""
 from dataclasses import dataclass, field, replace
-import os
+import json
 from pathlib import Path
-import secrets
-import socket
-import socketserver
-import stat
-import tempfile
-from threading import Event, Lock, Thread
+from threading import Condition, Event, Lock
 
 from aka.contracts.execution import CommandSpec, ExecutionFile, JobResult, OutputOptions, ProfileOptions
-from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
+from aka.contracts.filesystem import FilesystemAccess
 from aka.contracts.filesystem_access import require_path_access
 from aka.execution.configuration import transport_environment_key, validate_workload_environment
-from .command_access import access_data, client_access, pinned, read_input
-from .command_protocol import ENDPOINT_ENV, TOKEN_ENV, receive_json, receive, send, send_json
+from .command_access import access_data, client_access, read_input
+from .command_protocol import decode_request, encode_response
+from .file_records import _job
 from .scoped_publication import validate_target
 
-ADMISSION_READ_TIMEOUT = 30
+TOOL_NAME = "experiment.command"
 
 
 @dataclass
-class _Session:
+class _Operation:
     workspace: Path
-    source: Path
-    descriptor: int
-    identity: tuple
-    access: FilesystemAccess
-    operations: dict = field(default_factory=dict)
-    connections: set = field(default_factory=set)
+    cancel: object
+    condition: object = field(default_factory=Condition)
+    observations: list = field(default_factory=list)
+    done: bool = False
 
 
 class ExperimentCommandHost:
+    """Operation handler only; Agent owns endpoint, tokens, admission and revocation."""
     def __init__(self, open_experiment, capabilities, *, hardware=""):
         if not callable(open_experiment):
-            raise TypeError("command host requires an Experiment context opener")
+            raise TypeError("command handler requires an Experiment context opener")
         self.open_experiment, self.capabilities, self.hardware = open_experiment, capabilities, hardware
-        self._temporary = tempfile.TemporaryDirectory(prefix="ax-")
-        self.directory = Path(self._temporary.name).resolve()
-        self.endpoint = self.directory / "s"
-        os.chmod(self.directory, 0o700)
-        self._lock = Lock()
-        self._sessions, self._connections = {}, set()
-        self._closed = False
-        owner = self
+        self._lock, self._operations, self._closed = Lock(), {}, False
 
-        class Handler(socketserver.StreamRequestHandler):
-            def handle(self):
-                session = None
-                result = None
-                cancel, done, send_lock = Event(), Event(), Lock()
-                monitor = None
-
-                def reply(channel, value):
-                    with send_lock:
-                        try:
-                            send_json(self.wfile, channel, value)
-                        except OSError:
-                            pass  # Lost replies never authorize resubmission.
-
-                def observe(result):
-                    data = result.as_dict()
-                    data["stdout"] = data["stderr"] = ""
-                    reply("observation", data)
-
-                try:
-                    with owner._lock:
-                        if owner._closed:
-                            raise RuntimeError("command host is closed")
-                        owner._connections.add(self.request)
-                    self.request.settimeout(ADMISSION_READ_TIMEOUT)
-                    hello = receive_json(self.rfile, "session")
-                    token, session = owner._authenticate(hello)
-                    with owner._lock:
-                        owner._check(token, session)
-                        session.connections.add(self.request)
-                    reply("access", access_data(client_access(session.access)))
-                    value = receive_json(self.rfile, "command")
-                    inputs = []
-                    for item in value.get("input_files", ()):
-                        channel, content = receive(self.rfile)
-                        if channel != "input" or not isinstance(item, dict) or set(item) != {"path", "mode"}:
-                            raise ValueError("invalid command input stream")
-                        inputs.append(ExecutionFile(item["path"], content, item["mode"]))
-                    command = owner._command(session, value, tuple(inputs))
-                    with owner._lock:
-                        owner._check(token, session)
-                        session.operations[cancel] = done
-                    self.request.settimeout(None)
-                    if owner.capabilities.cancellation:
-                        command = replace(command, cancel_event=cancel)
-                    command = replace(command, on_observation=observe)
-
-                    def controls():
-                        try:
-                            while not done.is_set():
-                                value = receive_json(self.rfile, "cancel")
-                                if value != {}:
-                                    raise ValueError("invalid cancellation control")
-                                if owner.capabilities.cancellation:
-                                    cancel.set()
-                                else:
-                                    reply("cancel_refused", {"code": "unsupported"})
-                        except (OSError, ValueError, ConnectionError):
-                            pass  # Passive EOF does not cancel an admitted Job.
-
-                    monitor = Thread(target=controls, daemon=True)
-                    monitor.start()
-                    with owner.open_experiment(session.workspace, session.access) as experiment:
-                        result = experiment.run_command(command)
-                    if not isinstance(result, JobResult):
-                        raise TypeError("Experiment.run_command must return JobResult")
-                    owner._result_files(session, command, result)
-                    with send_lock:
-                        try:
-                            data = result.as_dict()
-                            data["stdout"] = data["stderr"] = ""
-                            send_json(self.wfile, "result", {"result": data, "error": None,
-                                "files": [{"path": f.path, "mode": f.mode} for f in result.files]})
-                            send(self.wfile, "stdout", result.stdout.encode())
-                            send(self.wfile, "stderr", result.stderr.encode())
-                            for output in result.files:
-                                send(self.wfile, "output", output.content)
-                            send_json(self.wfile, "complete", {})
-                        except OSError:
-                            pass
-                except BaseException as error:
-                    outcome = getattr(error, "outcome", None) or getattr(error, "execution_outcome", None) or result
-                    data = outcome.as_dict() if isinstance(outcome, JobResult) else None
-                    if data is not None:
-                        data["stdout"] = data["stderr"] = ""
-                    reply("result", {"result": data, "error": owner._error(error), "files": []})
-                    # Error receipts contain original facts, never raw private output.
-                    try:
-                        with send_lock:
-                            send(self.wfile, "stdout", b"")
-                            send(self.wfile, "stderr", b"")
-                            send_json(self.wfile, "complete", {})
-                    except OSError:
-                        pass
-                finally:
-                    done.set()
-                    try:
-                        self.request.shutdown(socket.SHUT_RD)
-                    except OSError:
-                        pass
-                    if monitor is not None:
-                        monitor.join()
-                    with owner._lock:
-                        owner._connections.discard(self.request)
-                        if session is not None:
-                            session.connections.discard(self.request)
-                            session.operations.pop(cancel, None)
-
-        class Server(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
-            daemon_threads = False
-            block_on_close = True
-
+    def handle(self, payload, context):
         try:
-            self._server = Server(str(self.endpoint), Handler)
-            os.chmod(self.endpoint, 0o600)
-            self._thread = Thread(target=self._server.serve_forever,
-                                  kwargs={"poll_interval": 0.1}, daemon=True)
-            self._thread.start()
-        except BaseException:
-            self._temporary.cleanup()
-            raise
+            message, inputs = decode_request(payload)
+            if not isinstance(context.filesystem_access, FilesystemAccess):
+                raise PermissionError("command tool requires the original filesystem scope")
+            require_path_access(context.filesystem_access, context.workspace)
+            action = message.get("action")
+            with self._lock:
+                if self._closed:
+                    raise PermissionError("command handler is closed")
+            if action == "access" and set(message) == {"action"}:
+                return encode_response({"access": access_data(client_access(context.filesystem_access))})
+            if action not in {"run", "find"} or not isinstance(message.get("request_id"), str) or not message["request_id"]:
+                raise ValueError("invalid command operation identity")
+            request_id = message["request_id"]
+            if action == "find":
+                if (set(message) != {"action", "request_id", "after_observation", "wait"} or type(message["after_observation"]) is not int
+                        or message["after_observation"] < 0 or type(message["wait"]) is not bool):
+                    raise ValueError("invalid observation request")
+                return self._find(context, request_id, message["after_observation"], message["wait"])
+            if set(message) != {"action", "request_id", "command"}:
+                raise ValueError("invalid command request")
+            command = self._command(context, message["command"], inputs)
+            operation = _Operation(context.workspace, context.cancel_event)
+            with self._lock:
+                if self._closed:
+                    raise PermissionError("command handler is closed")
+                if request_id in self._operations:
+                    raise ValueError("command request was already admitted; query its original record")
+                self._operations[request_id] = operation
+            def observe(result):
+                data = result.as_dict()
+                data["stdout"] = data["stderr"] = ""
+                with operation.condition:
+                    operation.observations.append(data)
+                    operation.condition.notify_all()
+            if self.capabilities.cancellation:
+                command = replace(command, cancel_event=context.cancel_event)
+            command = replace(command, on_observation=observe)
+            try:
+                with self.open_experiment(context.workspace, context.filesystem_access) as experiment:
+                    if not callable(getattr(experiment, "run_recorded", None)) or not callable(getattr(experiment, "find", None)):
+                        raise TypeError("command tools require the existing RecordedExperiment capability")
+                    record = experiment.run_recorded(command, request_id=request_id)
+                    result = self._completed_result(experiment, record)
+                self._result_files(context, command, result)
+                return encode_response({"error": None}, result)
+            except BaseException as error:
+                outcome = getattr(error, "outcome", None) or getattr(error, "execution_outcome", None)
+                if not isinstance(outcome, JobResult):
+                    with operation.condition:
+                        outcome = _job(operation.observations[-1]) if operation.observations else None
+                if outcome is not None:
+                    outcome = replace(outcome, stdout="", stderr="", files=())
+                return encode_response({"error": self._error(error)}, outcome)
+            finally:
+                with operation.condition:
+                    operation.done = True
+                    operation.condition.notify_all()
+        except Exception as error:
+            return encode_response({"error": self._error(error)})
 
-    @contextmanager
-    def session(self, workspace, access):
-        if not isinstance(access, FilesystemAccess):
-            raise TypeError("Agent command session requires an explicit filesystem scope")
-        workspace = Path(workspace).absolute()
-        source = require_path_access(access, workspace)
-        with pinned(source) as original:
-            identity = os.fstat(original)
-            if not stat.S_ISDIR(identity.st_mode):
-                raise ValueError("command workspace must be a directory")
-            descriptor = os.dup(original)
-        registration = _Session(workspace, source, descriptor, (identity.st_dev, identity.st_ino), access)
-        token = secrets.token_hex(32)
+    @staticmethod
+    def _record_scope(record, context):
+        if record.kind != "command" or Path(record.request["workspace"]) != context.workspace.resolve():
+            raise PermissionError("command record belongs to a different workspace")
+
+    def _find(self, context, request_id, after, wait):
         with self._lock:
-            if self._closed:
-                os.close(descriptor)
-                raise RuntimeError("command host is closed")
-            self._sessions[token] = registration
-        try:
-            yield ({ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token},
-                   FilesystemAccess((FilesystemMount(self.directory, self.directory, False),)))
-        finally:
-            self._revoke(token, registration)
-            os.close(descriptor)
+            operation = self._operations.get(request_id)
+        if operation is not None:
+            if operation.workspace != context.workspace:
+                raise PermissionError("command request belongs to a different workspace")
+            with operation.condition:
+                while wait and not operation.done and len(operation.observations) <= after and not context.cancel_event.is_set():
+                    operation.condition.wait(0.05)
+                observations = operation.observations[after:]
+                cursor, done = len(operation.observations), operation.done
+            if done:
+                with self._lock:
+                    if self._operations.get(request_id) is operation:
+                        self._operations.pop(request_id, None)
+            if observations or not done:
+                return encode_response({"observations": observations, "after_observation": cursor, "pending": True, "error": None})
+        with self.open_experiment(context.workspace, context.filesystem_access) as experiment:
+            try:
+                record = experiment.find(request_id)
+            except LookupError:
+                return encode_response({"observations": [], "after_observation": after, "pending": True, "error": None})
+            self._record_scope(record, context)
+            try:
+                result = self._completed_result(experiment, record)
+            except LookupError:
+                latest = next((attempt.result for attempt in reversed(record.attempts) if attempt.result is not None), None)
+                if record.failure is not None:
+                    names = {"ExecutionPending": ("execution", "pending"), "ExecutionUnavailable": ("execution", "unavailable"),
+                        "UnsupportedExecution": ("execution", "unsupported"), "EvaluationUnavailable": ("evaluation", "unavailable"),
+                        "ExperimentRecordError": ("record", "unavailable"), "PermissionError": ("request", "unauthorized"),
+                        "ValueError": ("request", "invalid_request"), "TypeError": ("request", "invalid_request")}
+                    category, code = names.get(record.failure.exception_type, ("experiment", "operation_failed"))
+                    latest = replace(latest, stdout="", stderr="", files=()) if latest is not None else None
+                    return encode_response({"observations": [], "after_observation": after, "pending": True,
+                        "error": {"category": category, "code": code}}, latest)
+                if operation is None and latest is not None:
+                    data = latest.as_dict(); data["stdout"] = data["stderr"] = ""
+                    return encode_response({"observations": [data], "after_observation": after + 1, "pending": True, "error": None})
+                return encode_response({"observations": [], "after_observation": after, "pending": True, "error": None})
+            return encode_response({"observations": [], "after_observation": after, "pending": record.phase != "complete", "error": None}, result)
 
-    def _revoke(self, token, session):
-        with self._lock:
-            self._sessions.pop(token, None)
-            operations = tuple(session.operations.items())
-            for cancel, _ in operations:
-                if self.capabilities.cancellation:
-                    cancel.set()
-            for connection in tuple(session.connections):
-                try:
-                    connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-        for _, done in operations:
-            done.wait()
-
-    def _check(self, token, session):
-        if self._closed or self._sessions.get(token) is not session:
-            raise PermissionError("command session is unavailable")
-        with pinned(session.source) as descriptor:
-            current = os.fstat(descriptor)
-            original = os.fstat(session.descriptor)
-            if ((current.st_dev, current.st_ino) != session.identity
-                    or (original.st_dev, original.st_ino) != session.identity):
-                raise PermissionError("registered command workspace was replaced")
-
-    def _authenticate(self, value):
-        if not isinstance(value, dict) or set(value) != {"version", "token", "workspace"} or value["version"] != 1:
-            raise ValueError("invalid command session envelope")
-        if not isinstance(value["token"], str) or not isinstance(value["workspace"], str):
-            raise ValueError("invalid command session identity")
-        token = value["token"]
-        with self._lock:
-            session = self._sessions.get(token)
-            if session is None:
-                raise PermissionError("command session is unavailable")
-            if Path(value["workspace"]) != session.workspace:
-                raise PermissionError("command workspace differs from its session")
-            self._check(token, session)
-        return token, session
+    @staticmethod
+    def _completed_result(experiment, record):
+        artifact = next((artifact for artifact in reversed(record.artifacts) if artifact.role == "command_result"), None)
+        if artifact is None:
+            raise LookupError("command final receipt is not recorded")
+        result = _job(json.loads(experiment.read_artifact(artifact)))
+        if result is None:
+            raise ValueError("command receipt is invalid")
+        files = []
+        for receipt in result.file_receipts:
+            content = next((artifact for artifact in record.artifacts if artifact.sha256 == receipt.sha256 and artifact.size_bytes == receipt.size_bytes), None)
+            if content is None:
+                raise ValueError("command output artifact is unavailable")
+            files.append(ExecutionFile(receipt.path, experiment.read_artifact(content), receipt.mode))
+        return replace(result, files=tuple(files))
 
     def _command(self, session, value, inputs):
         allowed = {"command", "timeout", "hardware", "operation", "artifacts", "num_gpus", "languages",
@@ -253,20 +178,20 @@ class ExperimentCommandHost:
             timeout=value.get("timeout", 600), hardware=self.hardware, operation=value.get("operation", "run"),
             artifacts=tuple(value.get("artifacts", ())), environment=environment,
             num_gpus=value.get("num_gpus", 1), languages=tuple(value.get("languages", ())),
-            filesystem_access=session.access, input_files=inputs,
+            filesystem_access=session.filesystem_access, input_files=inputs,
             profile_options=ProfileOptions(**value["profile_options"]) if value.get("profile_options") is not None else None,
             output_options=OutputOptions(**value["output_options"]) if value.get("output_options") is not None else None)
         validate_workload_environment(command.environment)
         self.capabilities.require(command)
         for item in inputs:
-            frozen = read_input(session.access, session.workspace / item.path)
+            frozen = read_input(session.filesystem_access, session.workspace / item.path)
             if frozen != (item.content, item.mode):
                 raise PermissionError("input differs from its authorized snapshot")
         for name in command.artifacts:
             relative = Path(name)
             if relative.is_absolute() or ".." in relative.parts or relative == Path("."):
                 raise ValueError("command output must be workspace-relative")
-            target = require_path_access(session.access, session.workspace / relative, write=True)
+            target = require_path_access(session.filesystem_access, session.workspace / relative, write=True)
             validate_target(target / ".command-output" if target.is_dir() else target)
         return command
 
@@ -276,7 +201,7 @@ class ExperimentCommandHost:
             relative = Path(item.path)
             if not any(relative == Path(name) or relative.is_relative_to(Path(name)) for name in command.artifacts):
                 raise PermissionError("result file is outside requested output paths")
-            require_path_access(session.access, session.workspace / relative)
+            require_path_access(session.filesystem_access, session.workspace / relative)
 
     @staticmethod
     def _error(error):
@@ -301,19 +226,10 @@ class ExperimentCommandHost:
 
     def close(self):
         with self._lock:
-            if self._closed:
-                return
             self._closed = True
-            registrations = tuple(self._sessions.items())
-        for token, session in registrations:
-            self._revoke(token, session)
-        with self._lock:
-            for connection in tuple(self._connections):
-                try:
-                    connection.shutdown(socket.SHUT_RDWR)
-                except OSError:
-                    pass
-        self._server.shutdown()
-        self._server.server_close()
-        self._thread.join()
-        self._temporary.cleanup()
+            operations = tuple(self._operations.values())
+        for operation in operations:
+            if self.capabilities.cancellation:
+                operation.cancel.set()
+            with operation.condition:
+                operation.condition.notify_all()

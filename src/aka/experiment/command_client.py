@@ -1,194 +1,156 @@
-"""Call an explicit Experiment session endpoint without selecting dependencies."""
+"""Call the selected Agent tool; execution and records remain Experiment-owned."""
 from dataclasses import asdict, replace
-from contextlib import contextmanager
-import codecs
 import hashlib
-import json
 import os
 from pathlib import Path
-import socket
+from threading import Event, Thread
 import sys
-from threading import Event, Lock, Thread
+import uuid
 
-from aka.contracts.execution import CommandSpec, ExecutionFile, OutputOptions, ProfileOptions
+from aka.agent.tools.client import call_tool, ToolSessionError
+from aka.agent.tools.protocol import ENDPOINT_ENV, TOKEN_ENV
+from aka.contracts.execution import CommandSpec, OutputOptions, ProfileOptions
 from aka.contracts.filesystem_access import require_path_access
 from aka.execution.configuration import validate_workload_environment
 from .command_access import decode_access, read_input, snapshot_inputs
-from .command_protocol import ENDPOINT_ENV, TOKEN_ENV, receive, receive_json, send, send_json
+from .command_host import TOOL_NAME
+from .command_protocol import encode_request, decode_response
 from .file_records import _job
 from .scoped_publication import publish, validate_target
 
 
 class CommandEndpointError(RuntimeError):
-    def __init__(self, category, code, outcome=None):
+    def __init__(self, category, code, outcome=None, request_id=None):
         super().__init__("Experiment command " + category + "/" + code + "; do not resubmit")
-        self.category, self.code, self.outcome = category, code, outcome
+        self.category, self.code, self.outcome, self.request_id = category, code, outcome, request_id
+
+
+class _Cancellation:
+    def __init__(self, inherited):
+        self.inherited, self.requested = inherited, Event()
+
+    def is_set(self):
+        return self.requested.is_set() or self.inherited is not None and self.inherited.is_set()
+
+    def set(self):
+        self.requested.set()
 
 
 def execute(command, *, endpoint, token, input_paths=(), max_input_file_bytes=None,
             stdout_sink=None, stderr_sink=None, on_skipped=None):
-    """Make one submission; a lost reply is surfaced without retry or fallback."""
-    confirmed = None
-    def receipt(result):
-        nonlocal confirmed
-        confirmed = result
-    def observe(result):
-        receipt(result)
-        if command.on_observation is not None:
-            command.on_observation(result)
-    try:
-        return _execute(replace(command, on_observation=observe), endpoint=endpoint, token=token,
-            input_paths=input_paths, max_input_file_bytes=max_input_file_bytes,
-            stdout_sink=stdout_sink, stderr_sink=stderr_sink, on_skipped=on_skipped, on_receipt=receipt)
-    except CommandEndpointError:
-        raise
-    except (OSError, ValueError, TypeError, KeyError) as error:
-        if confirmed is None and not isinstance(error, ConnectionError):
-            raise
-        category = "request" if isinstance(error, PermissionError) else "transport"
-        code = "unauthorized" if isinstance(error, PermissionError) else "reply_unavailable"
-        raise CommandEndpointError(category, code, confirmed) from None
-
-
-@contextmanager
-def _controls(writer, cancellation):
-    stopped, lock = Event(), Lock()
-    def cancel():
-        with lock:
-            send_json(writer, "cancel", {})
-    def monitor():
-        while not stopped.wait(0.05):
-            if cancellation is not None and cancellation.is_set():
-                try:
-                    cancel()
-                except OSError:
-                    pass
-                return
-    worker = Thread(target=monitor, daemon=True) if cancellation is not None else None
-    if worker is not None:
-        worker.start()
-    try:
-        yield cancel
-    finally:
-        stopped.set()
-        if worker is not None:
-            worker.join()
-
-
-def _execute(command, *, endpoint, token, input_paths, max_input_file_bytes,
-             stdout_sink, stderr_sink, on_skipped, on_receipt):
+    """Submit once; observe only the same request and retain confirmed receipts on loss."""
     if not endpoint or not token:
         raise CommandEndpointError("request", "missing_session")
-    workspace = command.workspace.absolute()
     if command.prepared_inputs is not None or command.submission is not None:
         raise ValueError("host-only prepared inputs cannot enter Agent command transport")
     validate_workload_environment(command.environment)
-    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
-        connection.connect(endpoint)
-        with connection.makefile("rb") as reader, connection.makefile("wb", buffering=0) as writer:
-            send_json(writer, "session", {"version": 1, "token": token, "workspace": str(workspace)})
-            channel, data = receive(reader)
-            if channel == "result":
-                reply = json.loads(data)
-                raise CommandEndpointError(**reply["error"], outcome=_job(reply["result"]))
-            if channel != "access":
-                raise ValueError("invalid Experiment session reply")
-            access = decode_access(json.loads(data))
-            files, skipped = snapshot_inputs(workspace, access, input_paths,
-                                             max_file_bytes=max_input_file_bytes)
-            if skipped and on_skipped is not None:
-                on_skipped(skipped)
-            files = (*command.input_files, *files)
-            paths = [f.path for f in files]
-            if len(paths) != len(set(paths)):
-                raise ValueError("execution input paths must be unique")
-            for item in files:
-                if read_input(access, workspace / item.path) != (item.content, item.mode):
-                    raise PermissionError("input differs from its authorized snapshot")
-            value = {"command": list(command.command), "timeout": command.timeout,
-                "hardware": command.hardware, "operation": command.operation, "artifacts": list(command.artifacts),
-                "num_gpus": command.num_gpus, "languages": list(command.languages), "requirements": list(command.requirements),
-                "environment": dict(command.environment), "profile_options": asdict(command.profile_options) if command.profile_options else None,
-                "output_options": asdict(command.output_options) if command.output_options else None,
-                "input_files": [{"path": f.path, "mode": f.mode} for f in files]}
-            send_json(writer, "command", value)
-            for item in files:
-                send(writer, "input", item.content)
-            with _controls(writer, command.cancel_event) as cancel:
-                try:
-                    while True:
-                        channel, data = receive(reader)
-                        if channel == "observation":
-                            if command.on_observation is not None:
-                                command.on_observation(_job(json.loads(data)))
-                            continue
-                        if channel == "cancel_refused":
-                            continue
-                        if channel != "result":
-                            raise ValueError("invalid Experiment command reply")
-                        reply = json.loads(data)
-                        break
-                except KeyboardInterrupt:
-                    cancel()
-                    # Cancellation requested does not imply remote termination.
-                    while True:
-                        channel, data = receive(reader)
-                        if channel == "observation" and command.on_observation is not None:
-                            command.on_observation(_job(json.loads(data)))
-                        if channel == "result":
-                            reply = json.loads(data)
-                            break
-            result = _job(reply["result"])
-            if result is not None:
-                on_receipt(result)
-
-            def text_output(expected, sink):
-                collected = bytearray()
-                decoder = codecs.getincrementaldecoder("utf-8")()
-                def consume(channel, data):
-                    if channel != expected:
-                        raise ValueError("invalid Experiment output stream")
-                    if sink is None:
-                        collected.extend(data)
-                    else:
-                        sink(decoder.decode(data))
-                channel, _ = receive(reader, consume=consume)
-                if channel != expected:
-                    raise ValueError("invalid Experiment output stream")
-                if sink is not None:
-                    sink(decoder.decode(b"", final=True))
-                return collected.decode()
-
-            stdout = text_output("stdout", stdout_sink)
-            stderr = text_output("stderr", stderr_sink)
-            outputs, targets = [], []
-            for item in reply["files"]:
-                channel, content = receive(reader)
-                if channel != "output":
-                    raise ValueError("invalid Experiment file stream")
-                output = ExecutionFile(item["path"], content, item["mode"])
-                if not any(Path(output.path) == Path(name) or Path(output.path).is_relative_to(Path(name))
-                           for name in command.artifacts):
-                    raise PermissionError("result file is outside requested output paths")
-                target = require_path_access(access, workspace / output.path, write=True)
-                validate_target(target)
-                receipts = [r for r in result.file_receipts if r.path == output.path] if result else []
-                if len(receipts) != 1 or (receipts[0].mode, receipts[0].size_bytes, receipts[0].sha256) != (
-                        output.mode, len(content), hashlib.sha256(content).hexdigest()):
-                    raise ValueError("Experiment output integrity mismatch")
-                outputs.append(output)
-                targets.append(target)
-            if receive_json(reader, "complete") != {}:
-                raise ValueError("invalid Experiment completion receipt")
-            for output, target in zip(outputs, targets):
-                publish(target, output.content, mode=output.mode)
-            if result is not None:
-                result = replace(result, stdout=stdout, stderr=stderr, files=tuple(outputs))
-            if reply["error"] is not None:
-                raise CommandEndpointError(**reply["error"], outcome=result)
-            if result is None:
-                raise ValueError("Experiment command lacks a result")
-            return result
+    environment = {ENDPOINT_ENV: endpoint, TOKEN_ENV: token}
+    workspace = command.workspace.absolute()
+    def invoke(message, inputs=(), cancel_event=None):
+        return call_tool(TOOL_NAME, encode_request(message, inputs), workspace=workspace,
+                         environment=environment, cancel_event=cancel_event)
+    try:
+        access_message, _, _, _, _ = decode_response(invoke({"action": "access"}))
+    except ToolSessionError:
+        raise CommandEndpointError("request", "session_unavailable") from None
+    if access_message.get("error"):
+        raise CommandEndpointError(**access_message["error"])
+    access = decode_access(access_message["access"])
+    files, skipped = snapshot_inputs(workspace, access, input_paths, max_file_bytes=max_input_file_bytes)
+    if skipped and on_skipped is not None:
+        on_skipped(skipped)
+    files = (*command.input_files, *files)
+    if len({item.path for item in files}) != len(files):
+        raise ValueError("execution input paths must be unique")
+    for item in files:
+        if read_input(access, workspace / item.path) != (item.content, item.mode):
+            raise PermissionError("input differs from its authorized snapshot")
+    value = {"command": list(command.command), "timeout": command.timeout,
+        "hardware": command.hardware, "operation": command.operation, "artifacts": list(command.artifacts),
+        "num_gpus": command.num_gpus, "languages": list(command.languages), "requirements": list(command.requirements),
+        "environment": dict(command.environment), "profile_options": asdict(command.profile_options) if command.profile_options else None,
+        "output_options": asdict(command.output_options) if command.output_options else None,
+        "input_files": [{"path": item.path, "mode": item.mode} for item in files]}
+    request_id = uuid.uuid4().hex
+    cancellation = _Cancellation(command.cancel_event)
+    done, returned = Event(), {}
+    confirmed, cursor = None, 0
+    def run():
+        try:
+            returned["payload"] = invoke({"action": "run", "request_id": request_id, "command": value}, files, cancellation)
+        except BaseException as error:
+            returned["error"] = error
+        finally:
+            done.set()
+    worker = Thread(target=run, daemon=True)
+    worker.start()
+    try:
+        while True:
+            try:
+                message, observed, _, _, _ = decode_response(invoke({"action": "find", "request_id": request_id, "after_observation": cursor, "wait": True}))
+                cursor = message.get("after_observation", cursor)
+                for data in message.get("observations", ()):
+                    confirmed = _job(data)
+                    if command.on_observation is not None:
+                        command.on_observation(confirmed)
+                if observed is not None:
+                    confirmed = observed
+                if message.get("error"):
+                    raise CommandEndpointError(**message["error"], outcome=confirmed, request_id=request_id)
+                if done.is_set():
+                    break
+                if not message.get("observations"):
+                    done.wait(0.05)
+            except KeyboardInterrupt:
+                cancellation.set()  # Explicit intent only; keep waiting for the original receipt.
+        worker.join()
+        if "error" in returned:
+            error = returned["error"]
+            opaque = getattr(error, "payload", None)
+            if opaque is not None:
+                _, received, captured_stdout, captured_stderr, _ = decode_response(opaque)
+                if received is not None:
+                    confirmed = replace(received, stdout=captured_stdout, stderr=captured_stderr)
+            # Read-only reconciliation; never invoke run/resume after a lost reply.
+            try:
+                recovered, received, captured_stdout, captured_stderr, _ = decode_response(invoke({"action": "find", "request_id": request_id, "after_observation": cursor, "wait": False}))
+                if recovered.get("observations"):
+                    confirmed = _job(recovered["observations"][-1])
+                if received is not None:
+                    confirmed = replace(received, stdout=captured_stdout, stderr=captured_stderr)
+            except (OSError, ValueError, ToolSessionError):
+                pass
+            raise CommandEndpointError("transport", "reply_unavailable", confirmed, request_id) from None
+        message, result, stdout, stderr, outputs = decode_response(returned["payload"])
+        if result is not None:
+            confirmed = result
+        if message.get("error"):
+            raise CommandEndpointError(**message["error"], outcome=confirmed, request_id=request_id)
+        if result is None:
+            raise ValueError("Experiment command lacks a result")
+        targets = []
+        for output in outputs:
+            if not any(Path(output.path) == Path(name) or Path(output.path).is_relative_to(Path(name)) for name in command.artifacts):
+                raise PermissionError("result file is outside requested output paths")
+            target = require_path_access(access, workspace / output.path, write=True)
+            validate_target(target)
+            receipts = [receipt for receipt in result.file_receipts if receipt.path == output.path]
+            if len(receipts) != 1 or (receipts[0].mode, receipts[0].size_bytes, receipts[0].sha256) != (output.mode, len(output.content), hashlib.sha256(output.content).hexdigest()):
+                raise ValueError("Experiment output integrity mismatch")
+            targets.append(target)
+        for output, target in zip(outputs, targets):
+            publish(target, output.content, mode=output.mode)
+        if stdout_sink is not None: stdout_sink(stdout)
+        if stderr_sink is not None: stderr_sink(stderr)
+        return replace(result, stdout=stdout if stdout_sink is None else "", stderr=stderr if stderr_sink is None else "", files=outputs)
+    except CommandEndpointError:
+        raise
+    except (OSError, ValueError, TypeError, KeyError, ToolSessionError) as error:
+        if confirmed is None and not isinstance(error, (ConnectionError, ToolSessionError)):
+            raise
+        category = "request" if isinstance(error, PermissionError) else "transport"
+        code = "unauthorized" if isinstance(error, PermissionError) else "reply_unavailable"
+        raise CommandEndpointError(category, code, confirmed, request_id) from None
 
 
 def main(argv=None):

@@ -2210,7 +2210,9 @@ class Campaign:
         root = Path(workspace).resolve(strict=True)
         if not any(m.source == root and m.target == root for m in access.mounts):
             command_access = replace(access, mounts=(FilesystemMount(root, root, True), *access.mounts))
-        registration = self.services.command_session(workspace, command_access) if plugins else nullcontext(({}, None))
+        import time
+        registration = self.services.command_session(workspace, command_access,
+            deadline=time.monotonic() + timeout if timeout is not None else None) if plugins else nullcontext(({}, None))
         runtime = (
             self.agent_runtime
             if agent_cli == self.agent_cli
@@ -2218,7 +2220,8 @@ class Campaign:
         )
         with registration as (command_environment, operation_access):
             environment = dict(options.get("environment") or {})
-            for name in ("AKA_EXPERIMENT_COMMAND_ENDPOINT", "AKA_EXPERIMENT_COMMAND_TOKEN"):
+            for name in ("AKA_EXPERIMENT_COMMAND_ENDPOINT", "AKA_EXPERIMENT_COMMAND_TOKEN",
+                         "AKA_AGENT_TOOL_ENDPOINT", "AKA_AGENT_TOOL_TOKEN"):
                 environment.pop(name, None)
             environment.update(command_environment)
             options["environment"] = environment
