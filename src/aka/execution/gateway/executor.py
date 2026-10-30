@@ -17,7 +17,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
         recovery_policy(self.configuration)
         if "requirements_file" in self.configuration:
             raise ValueError("worker requirements belong to Task, not gateway provider configuration")
-    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile", "check", "disassemble")), True, True,
+    capabilities = BackendCapabilities(frozenset(("auto", "run", "dev", "profile", "check", "disassemble", "same_allocation_abba")), True, True,
                                        input_files=True, output_options=True, prepared_inputs=True)
     resource_identity = ResourceIdentity("gateway")
 
@@ -55,6 +55,13 @@ class GatewayExecutor(GatewayRecoveryMixin):
 
     def _run(self, command):
         self.capabilities.require(command)
+        from .requests import NATIVE_ABBA, prepared_operation
+        if command.operation == NATIVE_ABBA:
+            if command.submission is None:
+                from aka.contracts.execution import UnsupportedExecution
+                raise UnsupportedExecution("same-allocation ABBA requires an immutable prepared request")
+            import json
+            prepared_operation(json.loads(command.submission), command.operation)
         unsupported = ("ATREX_SANDBOX_SSH", "ATREX_SANDBOX_SSH_INIT", "ATREX_SANDBOX_HEALTH_COMMAND",
                        "ATREX_SANDBOX_SSH_GPU")
         if any(command.environment.get(key) for key in unsupported):
@@ -71,7 +78,7 @@ class GatewayExecutor(GatewayRecoveryMixin):
                     self._selected_job_transport = bound._selected_job_transport
         from aka.execution.environment_query import command_query, require_supported
         support = self._environment_backend(command.environment).check(command_query(command), discover=False)
-        require_supported(support)
+        require_supported(support, require_known=command.operation == NATIVE_ABBA)
         if type(command.timeout) is not int or command.timeout <= 0:
             raise ValueError("execution timeout must be a positive integer")
         argv = [sys.executable, "-m", "aka.execution.gateway.entrypoint",

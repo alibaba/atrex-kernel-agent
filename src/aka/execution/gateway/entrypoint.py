@@ -31,7 +31,7 @@ def run_transport(argv, *, launcher=None):
 
 def main(argv=None, *, runner=run_transport, decorate_stdout=lambda value: value):
     arguments = list(sys.argv[1:] if argv is None else argv)
-    if _kind(arguments) in {"run", "dev"}:
+    if _kind(arguments) in {"run", "dev", "same_allocation_abba"}:
         result = run_with_recovery(arguments, runner=runner)
     else:
         result = runner(arguments)

@@ -7,7 +7,7 @@ import tempfile
 from . import sandbox as transport
 from .returned_files import emit
 from aka.execution.outcomes import emit_fact, emit_diagnostic
-from .requests import operation_request, effective_budget, hard_limit
+from .requests import NATIVE_ABBA, operation_request, prepared_operation, effective_budget, hard_limit
 
 
 def run_prepared(args, workspace, sync_paths, grace):
@@ -19,11 +19,7 @@ def run_prepared(args, workspace, sync_paths, grace):
 
 
 def submit_prepared(args, workspace, grace, prepared):
-    if prepared.get("schema_version") != 1 or prepared.get("kind") not in {"run", "profile", "check", "disassemble"}:
-        raise ValueError("unsupported prepared gateway request")
-    kind = prepared["kind"]
-    if args.kind not in {"auto", kind}:
-        raise ValueError("prepared request operation differs from selected operation")
+    kind = prepared_operation(prepared, args.kind)
     request = operation_request(prepared["request"], kind)
     effective_budget(args.timeout + grace, scope="wait")
     if kind in {"run", "profile"}:
@@ -74,6 +70,13 @@ def submit_prepared(args, workspace, grace, prepared):
         print(f"HTTP {error.status}", file=sys.stderr)
         return 2
     job = transport._job_response(process.stdout or "")
+    # Partial native measurement evidence belongs to Evaluation even when the
+    # transport classifies cancellation or infrastructure failure below.
+    if args.kind == NATIVE_ABBA:
+        if process.stdout:
+            print(process.stdout.rstrip())
+        if process.stderr:
+            print(process.stderr.rstrip(), file=sys.stderr)
     if process.returncode:
         from .diagnostics import report_typed_limitation
         report_typed_limitation((process.stdout or "") + "\n" + (process.stderr or ""))
@@ -103,9 +106,9 @@ def submit_prepared(args, workspace, grace, prepared):
                         continue
                     files.append((name, target.read_bytes(), 0o600))
             emit(files)
-    if process.stdout:
+    if process.stdout and args.kind != NATIVE_ABBA:
         print(process.stdout.rstrip())
-    if process.stderr:
+    if process.stderr and args.kind != NATIVE_ABBA:
         print(process.stderr.rstrip(), file=sys.stderr)
     return process.returncode or (0 if job and job.get("status") == "succeeded" else 1)
 

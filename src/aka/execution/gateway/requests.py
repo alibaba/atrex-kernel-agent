@@ -9,11 +9,47 @@ from aka.contracts.execution_environment import environment_document
 from aka.execution.outcomes import emit_fact
 
 LIMITS_ENV = "AKA_EXECUTION_ENVIRONMENT_LIMITS"
+NATIVE_ABBA = "same_allocation_abba"
+
+
+def validate_native_abba(request):
+    """Validate the typed Eval extension without interpreting measurement output."""
+    abba = request.get("abba") if isinstance(request, dict) else None
+    if not isinstance(abba, dict) or set(abba) != {"baseline", "repeats"}:
+        raise ValueError("same-allocation ABBA requires baseline and SDK block repetitions")
+    if not isinstance(abba["baseline"], str) or not abba["baseline"].strip():
+        raise ValueError("same-allocation ABBA baseline must be nonempty source")
+    if type(abba["repeats"]) is not int or abba["repeats"] < 1:
+        raise ValueError("same-allocation ABBA SDK block repetitions must be positive")
+
+
+def prepared_operation(prepared, selected):
+    """Bind a logical operation to its immutable typed envelope."""
+    if (not isinstance(prepared, dict) or prepared.get("schema_version") != 1
+            or prepared.get("kind") not in {"run", "profile", "check", "disassemble"}):
+        raise ValueError("unsupported prepared gateway request")
+    kind = prepared["kind"]
+    request = prepared.get("request")
+    if not isinstance(request, dict):
+        raise ValueError("prepared gateway request must contain a request object")
+    if selected == NATIVE_ABBA:
+        if kind != "run":
+            raise ValueError("same-allocation ABBA requires a typed Eval request")
+        validate_native_abba(request)
+    else:
+        if selected not in {"auto", kind}:
+            raise ValueError("prepared request operation differs from selected operation")
+        if "abba" in request:
+            raise ValueError("ABBA requests require the same_allocation_abba operation")
+    return kind
 
 
 def operation_request(request, kind):
     """Return an independent wire request; Eval-only controls stay on Eval."""
     value = json.loads(json.dumps(request))
+    if kind == NATIVE_ABBA:
+        validate_native_abba(value)
+        return value
     if kind == "run":
         return value
     common = {"name", "spec", "candidate", "env_vars", "requirements", "deps_mode"}

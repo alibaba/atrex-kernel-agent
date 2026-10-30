@@ -2202,6 +2202,12 @@ def _typed_agate_command(
         warmup = os.environ.get("AKA_GATEWAY_WARMUP_ITERS", "5")
         if warmup != "default":
             command += ["--set", "warmup_iters=" + warmup]
+        if "abba" in request:
+            from .requests import validate_native_abba
+            validate_native_abba(request)
+            baseline = workspace / "baseline.py"
+            baseline.write_text(request["abba"]["baseline"], encoding="utf-8")
+            command += ["--baseline", str(baseline), "--abba-repeats", str(request["abba"]["repeats"])]
     elif kind == "profile" and "bench_iters" in options:
         command += ["--bench-iters", str(options["bench_iters"])]
     command += ["--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
@@ -2279,6 +2285,9 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                 "sandbox: ATREX_SANDBOX_SSH, ATREX_SANDBOX_URL, and "
                 "ATREX_SANDBOX_PROFILE are mutually exclusive"
             )
+    if args.kind == "same_allocation_abba" and (
+            args.prepared_request_fd is None or args.ssh or args.preflight or args.check_health):
+        raise SystemExit("sandbox: same-allocation ABBA requires a prepared typed gateway request")
     if args.prepared_inputs_fd is not None and (
             args.ssh or args.prepared_request_fd is not None or args.kind in {"check", "disassemble"}
             or args.preflight or args.check_health):

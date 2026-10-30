@@ -19,7 +19,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
     sandbox_cli_options = True
     sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
-        operations=frozenset(("auto", "run", "profile", "dev", "preflight", "check", "disassemble")), cancellation=True, prepared_requests=True,
+        operations=frozenset(("auto", "run", "profile", "dev", "preflight", "check", "disassemble", "same_allocation_abba")), cancellation=True, prepared_requests=True,
         input_files=True, output_options=True, prepared_inputs=True,
     )
     resource_identity = ResourceIdentity("legacy")
@@ -29,7 +29,8 @@ class LegacyExecutor(GatewayRecoveryMixin):
         self.hooks = hooks
         self.configuration = dict(configuration or {})
         if request is not None and request.ssh:
-            self.capabilities = replace(type(self).capabilities, prepared_requests=False, prepared_inputs=False)
+            self.capabilities = replace(type(self).capabilities, prepared_requests=False, prepared_inputs=False,
+                operations=type(self).capabilities.operations - {"same_allocation_abba"})
         recovery_policy(self.configuration)
 
     def bind(self, context):
@@ -69,13 +70,20 @@ class LegacyExecutor(GatewayRecoveryMixin):
 
     def _run(self, command: CommandSpec) -> JobResult:
         self.capabilities.require(command)
+        from aka.execution.gateway.requests import NATIVE_ABBA, prepared_operation
+        if command.operation == NATIVE_ABBA:
+            if command.submission is None:
+                from aka.contracts.execution import UnsupportedExecution
+                raise UnsupportedExecution("same-allocation ABBA requires an immutable prepared request")
+            import json
+            prepared_operation(json.loads(command.submission), command.operation)
         if self.request is None:
             from aka.contracts.execution import ExecutionContext
             return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout,
                 filesystem_access=command.filesystem_access))._run(command)
         from aka.execution.environment_query import command_query, require_supported
         support = self._environment_backend().check(command_query(command), discover=False)
-        require_supported(support)
+        require_supported(support, require_known=command.operation == NATIVE_ABBA)
         from aka.execution.gateway.requests import bound_limits
         def observed(result):
             if command.on_observation is not None:

@@ -299,7 +299,9 @@ class GatewayJobs:
         kind = prepared.get("kind")
         if prepared.get("schema_version") != 1 or kind not in {"run", "profile", "check", "disassemble"}:
             raise UnsupportedExecution("unsupported prepared replay operation")
-        from .requests import operation_request, effective_budget, hard_limit
+        from .requests import operation_request, prepared_operation, effective_budget, hard_limit
+        if command.operation == "same_allocation_abba" or "abba" in prepared.get("request", {}):
+            prepared_operation(prepared, command.operation)
         payload = operation_request(prepared["request"], kind)
         if prepared["request"].get("idempotency_key") not in (None, idempotency_key):
             raise ValueError("replay cannot change the prepared idempotency key")

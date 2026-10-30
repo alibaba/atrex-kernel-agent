@@ -51,6 +51,11 @@ def _cache_key(backend, endpoint, hardware):
 
 def _snapshot(backend, endpoint, query, detail, capabilities, errors, operations):
     declarations = {"operations": sorted(operations)}
+    # Adapter operations describe local transport, not remote allocation semantics.
+    # Retain the backend's separate declaration for operations requiring proof.
+    for source in (detail, capabilities):
+        if isinstance(source.get("operations"), (list, tuple)):
+            declarations["backend_operations"] = source["operations"]
     for key in ("operations", "supported_languages", "aliases", "limits", "max_gpus",
                 "requirements_supported", "dependency_catalog", "dependency_policy"):
         if key in capabilities:
@@ -202,7 +207,7 @@ def match_environment(query, snapshot):
         _hardware(query.hardware) in {_hardware(value) for value in (known_hardware, *aliases)} else
         "unsupported" if query.hardware and known_hardware else "unknown")
     operation = {"eval": "run", "compile": "check"}.get(query.operation, query.operation)
-    operations = declarations.get("operations")
+    operations = declarations.get("backend_operations") if operation == "same_allocation_abba" else declarations.get("operations")
     dimensions["operation"] = ("supported" if operations is not None and operation in operations else
                                 "unsupported" if operations is not None else "unknown")
     max_gpus = declarations.get("max_gpus")
@@ -309,8 +314,12 @@ def select_requirements(contents, languages=()):
     return tuple(line.strip() for line in contents.splitlines() if line.strip() and not line.lstrip().startswith("#"))
 
 
-def require_supported(support):
-    if support.support == "unsupported":
-        error = UnsupportedExecution("selected environment rejects request: " + ", ".join(support.reasons))
+def require_supported(support, *, require_known=False):
+    if support.support == "unsupported" or require_known and support.support != "supported":
+        reasons = support.reasons
+        if support.support == "unknown":
+            reasons += tuple("unknown:" + dimension for dimension, status in support.dimensions.items()
+                             if status == "unknown")
+        error = UnsupportedExecution("selected environment rejects request: " + ", ".join(reasons))
         error.environment_support = support
         raise error

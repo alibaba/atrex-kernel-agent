@@ -13,7 +13,7 @@ def register_transport_options(parser):
     )
     parser.add_argument(
         "--kind",
-        choices=("auto", "run", "profile", "dev", "check", "disassemble"),
+        choices=("auto", "run", "profile", "dev", "check", "disassemble", "same_allocation_abba"),
         default="auto",
         help=(
             "Gateway interface to use. auto routes test_kernel.py to run, profiler "
