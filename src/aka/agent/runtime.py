@@ -108,12 +108,14 @@ class CliAgentRuntime:
         check_open=None,
         session_name="",
         prepare_environment=None,
+        prepared_home=False,
         release_environment=None,
         environment=None,
     ) -> None:
         self._environment = dict(os.environ if environment is None else environment)
         self._release_environment = release_environment
         self._prepare_environment = prepare_environment
+        self._prepared_home = prepared_home
         self._session_name = session_name
         self._adapter = adapter
         self._process_runner = process_runner
@@ -165,7 +167,7 @@ class CliAgentRuntime:
         environment["ATREX_AGENT_CLI"] = self.id
         environment = self._adapter.configure_environment(environment)
         command = self.build_command(request.prompt, session_id, request.reasoning_effort, environment=environment)
-        if self._prepare_environment is not None:
+        if self._prepare_environment is not None and (self.id != "codex" or self._prepared_home):
             environment = self._prepare_environment(
                 request.workspace,
                 session_id,
@@ -204,6 +206,22 @@ class CliAgentRuntime:
                     command.insert(command.index("--json") + 1, "--ephemeral")
                 except ValueError:
                     pass
+        # Native one-shot Codex owns its temporary observation home. Prepare only
+        # after that choice so the Agent freezes the actual launch identity.
+        if self.id == "codex" and self._prepare_environment is not None and not self._prepared_home:
+            try:
+                environment = self._prepare_environment(
+                    request.workspace,
+                    session_id,
+                    self._adapter,
+                    environment,
+                    request.access,
+                    explicit_environment=request.environment or {},
+                )
+            except BaseException:
+                if codex_temporary_home is not None:
+                    codex_temporary_home.close()
+                raise
         if self.id == "codex" and environment.get("ATREX_AGENT_PREPARED_HOME"):
             try:
                 codex_observer = CodexSessionLedgerObserver(codex_home(environment))
@@ -344,6 +362,7 @@ def build_agent_runtime(
     check_open=None,
     session_name="",
     prepare_environment=None,
+    prepared_home=False,
     release_environment=None,
     environment=None,
 ) -> AgentRuntime:
@@ -354,6 +373,7 @@ def build_agent_runtime(
         check_open=check_open,
         session_name=session_name,
         prepare_environment=prepare_environment,
+        prepared_home=prepared_home,
         release_environment=release_environment,
         environment=environment,
     )

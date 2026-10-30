@@ -395,6 +395,7 @@ class Agent:
                     check_open=self._check_open,
                     session_name=self._session_name,
                     prepare_environment=self._prepare,
+                    prepared_home=self.options.sandbox == "bwrap",
                     release_environment=self._release,
                     environment=self._environment,
                 )
