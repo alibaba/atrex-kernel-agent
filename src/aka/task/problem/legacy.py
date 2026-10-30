@@ -104,6 +104,23 @@ class LegacyProblemProvider:
                 from aka.task.source.tree_provider import TreeSourceProvider
                 import tempfile
                 content = TreeSourceProvider(self.source_tree).prepare()
+                from aka.task.source.tree import POLICY, validate_policy
+                import json
+                declaration = next(item for item in content.files if item.path == POLICY)
+                raw = declaration.source.read_bytes() if declaration.source is not None else declaration.text.encode()
+                policy = validate_policy(json.loads(raw))
+                additional = tuple(item["distribution"] + item.get("version", "")
+                                   for item in policy["runtime_requirements"])
+                if additional:
+                    selected_requirements = problem.evaluation.worker_requirements
+                    existing = (selected_requirements.source.read_text() if selected_requirements.source is not None
+                                else selected_requirements.text)
+                    lines = existing.splitlines()
+                    added = tuple(value for value in additional if value not in lines)
+                    if added:
+                        problem = replace(problem, evaluation=replace(problem.evaluation,
+                            worker_requirements=WorkspaceFile(selected_requirements.path,
+                                text=existing.rstrip() + "\n" + "\n".join(added) + "\n")))
                 # Retain pure source content through the existing path-based
                 # snapshot roles, without changing the semantic reference.
                 with tempfile.TemporaryDirectory(prefix="aka-task-source-") as raw:
