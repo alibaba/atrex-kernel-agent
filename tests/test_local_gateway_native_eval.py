@@ -9,6 +9,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 from aka.legacy.execution.runtime_tools import local_eval, local_gateway
 from aka.light.evaluation.source_transport import ARCHIVES, uploaded_request, upload_bytes
@@ -115,6 +116,28 @@ class LocalNativeEvalTests(unittest.TestCase):
         self.assertEqual(job['status'], 'failed', job)
         self.assertEqual(job['error']['reason'], 'evaluator_failed')
         self.assertIn('incomplete native ABBA evidence', job['result']['stderr'])
+
+    def test_amd_clock_request_does_not_mutate_performance_levels_or_claim_a_lock(self):
+        request = self.request()
+        request['lock_clocks'] = True
+        with mock.patch.object(local_gateway.shutil, 'which', return_value=None), \
+                mock.patch.object(local_gateway.LocalScheduler, '_reset_clocks') as reset:
+            _, job = self.evaluate(request, 'amd-clock')
+        self.assertEqual(job['status'], 'succeeded', job)
+        self.assertFalse(job['result']['observed']['clock_locked'])
+        self.assertEqual(job['result']['clock_lock'], {'requested': True, 'applied': False})
+        reset.assert_not_called()
+
+    def test_applied_clock_is_reported_and_reset_after_evaluation(self):
+        request = self.request()
+        request['lock_clocks'] = True
+        with mock.patch.object(local_gateway.LocalScheduler, '_lock_clocks', return_value=['reset-clock']), \
+                mock.patch.object(local_gateway.LocalScheduler, '_reset_clocks') as reset:
+            _, job = self.evaluate(request, 'locked-clock')
+        self.assertEqual(job['status'], 'succeeded', job)
+        self.assertTrue(job['result']['observed']['clock_locked'])
+        self.assertEqual(job['result']['clock_lock'], {'requested': True, 'applied': True})
+        reset.assert_called_once()
 
     def test_upload_digest_mismatch_is_rejected_before_eval(self):
         data = b'original'

@@ -1066,11 +1066,12 @@ class LocalScheduler:
                 torch_extensions.mkdir(mode=0o700)
                 env["TORCH_EXTENSIONS_DIR"] = str(torch_extensions)
             env["ATREX_LOCAL_JOB_ID"] = job_id
-            argv, timeout_s = self._prepare_job(kind, request, workdir, env)
-            argv = self._install_requirements_argv(argv, request, workdir, env)
             if kind in {"eval", "profile"} and request.get("lock_clocks", False):
                 clock_reset = self._lock_clocks(env)
                 clock_env = env
+            request = dict(request, _local_clock_locked=clock_reset is not None)
+            argv, timeout_s = self._prepare_job(kind, request, workdir, env)
+            argv = self._install_requirements_argv(argv, request, workdir, env)
             current = self.store.get(job_id)
             if self._stop.is_set():
                 self.store.complete(
@@ -1235,7 +1236,7 @@ class LocalScheduler:
                           atol=options.get("atol", 1e-2), rtol=options.get("rtol", 0.05),
                           num_correctness_cases=options.get("num_correctness_cases", 1),
                           bench_iters=options.get("bench_iters", 100),
-                          clock_locked=request.get("lock_clocks", False),
+                          clock_locked=request.get("_local_clock_locked", False),
                           validation_mode=request.get("mode", "full"))
             if "correctness_max_rel_l2" in options:
                 config["correctness_max_rel_l2"] = options["correctness_max_rel_l2"]
@@ -1276,7 +1277,7 @@ class LocalScheduler:
                 argv.extend(
                     ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]
                 )
-            if request.get("lock_clocks", False):
+            if request.get("_local_clock_locked", False):
                 argv.append("--clock-locked")
             return argv
 
@@ -1287,7 +1288,7 @@ class LocalScheduler:
             "--output", str(workdir / "eval_output"),
             "--bench-iters", str(options.get("bench_iters", 100)),
         ]
-        if request.get("lock_clocks", False):
+        if request.get("_local_clock_locked", False):
             argv.append("--clock-locked")
         return argv
 
@@ -1372,7 +1373,7 @@ class LocalScheduler:
         return ["bash", "-c", f"{shlex.join(install)} && exec {shlex.join(argv)}"]
 
     @staticmethod
-    def _lock_clocks(env: dict[str, str]) -> list[str]:
+    def _lock_clocks(env: dict[str, str]) -> list[str] | None:
         nvidia_smi = shutil.which("nvidia-smi", path=env.get("PATH"))
         if nvidia_smi:
             query = subprocess.run(
@@ -1405,18 +1406,12 @@ class LocalScheduler:
             )
             return [nvidia_smi, "--reset-gpu-clocks"]
 
-        rocm_smi = shutil.which("rocm-smi", path=env.get("PATH"))
-        if rocm_smi:
-            subprocess.run(
-                [rocm_smi, "--setperflevel", "high"],
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=20,
-                check=True,
-            )
-            return [rocm_smi, "--setperflevel", "auto"]
-        raise FileNotFoundError("lock_clocks requires nvidia-smi or rocm-smi in PATH")
+        # AMD performance levels do not establish a fixed graphics clock.
+        # Match the gateway's unsupported-device behavior and keep the actual
+        # lock state false in evaluator inputs and returned evidence.
+        print("[local-gateway] clock lock not applied: NVIDIA clock control unavailable",
+              file=sys.stderr, flush=True)
+        return None
 
     @staticmethod
     def _reset_clocks(argv: list[str], env: dict[str, str] | None) -> None:
@@ -1468,6 +1463,10 @@ class LocalScheduler:
                     )
                     return
                 if isinstance(result, dict):
+                    result["clock_lock"] = {
+                        "requested": request.get("lock_clocks", False),
+                        "applied": request.get("_local_clock_locked", False),
+                    }
                     # Candidate compile/correctness failure is an evaluation outcome, not
                     # gateway infrastructure failure. run_eval intentionally exits nonzero
                     # in that case, while the public job still completes successfully.
