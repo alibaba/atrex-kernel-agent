@@ -22,6 +22,45 @@ from .execution.process import (
 from .resources import shell_guard_path
 
 
+_STANDARD_ENVIRONMENT = {
+    "PATH", "PYTHONPATH", "HOME", "TERM", "LANG", "LANGUAGE", "TZ",
+    "IS_SANDBOX", "ATREX_AGENT_CLI", "ATREX_AGENT_TIMEOUT_SECONDS", "ATREX_SESSION_SETTINGS",
+    "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY",
+    "http_proxy", "https_proxy", "all_proxy", "no_proxy",
+    "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE",
+    "GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL",
+    "PIP_ONLY_BINARY", "PIP_INDEX_URL", "PIP_DISABLE_PIP_VERSION_CHECK",
+}
+_BACKEND_ENVIRONMENT = frozenset(
+    name for runtime_id in DEFAULT_BACKEND_REGISTRY.ids
+    for name in DEFAULT_BACKEND_REGISTRY.create(runtime_id).environment_variables
+)
+_HOST_TRANSPORT_PREFIXES = (
+    "AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_",
+    "ATREX_GPU_WIKI_", "AKA_EXECUTION_", "AKA_GATEWAY_",
+)
+
+
+def _validate_environment(values):
+    if any(
+        not isinstance(k, str) or not k or "=" in k or "\0" in k
+        or not isinstance(v, str) or "\0" in v
+        for k, v in values.items()
+    ):
+        raise ValueError("Agent environment names and values must be valid strings")
+
+
+def _validate_scoped_environment(values, permitted, authority):
+    _validate_environment(values)
+    if any(key.startswith(_HOST_TRANSPORT_PREFIXES) for key in values):
+        raise PermissionError("Scoped Agent cannot receive host transport environment")
+    if any(key not in permitted for key in values):
+        raise PermissionError("Scoped Agent environment exceeds authorized variables")
+    for name, expected in authority.items():
+        if values.get(name) != expected:
+            raise ValueError(f"Agent invocation cannot override owned {name}")
+
+
 def validate_timeout(value):
     if value is not None and (
         isinstance(value, bool)
@@ -55,6 +94,7 @@ class _Invocation:
     access: AgentAccess
     workspace: Path
     authority: dict[str, str | None]
+    permitted_environment: frozenset[str] | None = None
     active: int = 0
     processes: set = field(default_factory=set)
     cancelled: bool = False
@@ -140,16 +180,7 @@ class Agent:
         self._check_open()
         workspace = Path(workspace).absolute()
         values = dict(environment)
-        if any(
-            not isinstance(k, str)
-            or not k
-            or "=" in k
-            or "\0" in k
-            or not isinstance(v, str)
-            or "\0" in v
-            for k, v in values.items()
-        ):
-            raise ValueError("Agent environment names and values must be valid strings")
+        _validate_environment(values)
         # Internal markers are created here, never accepted from caller environments.
         values.pop(PREPARED_ENV, None)
         values.pop("AKA_AGENT_INVOCATION", None)
@@ -166,44 +197,36 @@ class Agent:
             authority.update(self._tool_host.validate_environment(workspace, values))
         if guard is not None:
             values["BASH_ENV"] = authority["BASH_ENV"] = str(guard)
-        if self.options.sandbox == "bwrap":
-            standard = {
-                "PATH",
-                "PYTHONPATH",
-                "HOME",
-                "TERM",
-                "LANG",
-                "LANGUAGE",
-                "TZ",
-                "IS_SANDBOX",
-                "ATREX_AGENT_CLI",
-                "HTTP_PROXY",
-                "HTTPS_PROXY",
-                "ALL_PROXY",
-                "NO_PROXY",
-                "http_proxy",
-                "https_proxy",
-                "all_proxy",
-                "no_proxy",
-                "SSL_CERT_FILE",
-                "SSL_CERT_DIR",
-                "REQUESTS_CA_BUNDLE",
-                "GIT_AUTHOR_NAME",
-                "GIT_AUTHOR_EMAIL",
-                "GIT_COMMITTER_NAME",
-                "GIT_COMMITTER_EMAIL",
-                "PIP_ONLY_BINARY",
-                "PIP_INDEX_URL",
-                "PIP_DISABLE_PIP_VERSION_CHECK",
-            }
+        scoped = ENDPOINT_ENV in authority
+        backend_environment = set(getattr(backend, "environment_variables", ()))
+        if getattr(backend, "settings_variable", ""):
+            backend_environment.add(backend.settings_variable)
+        if getattr(backend, "id", "") == "claude":
+            backend_environment.add("ATREX_CLAUDE_SESSION_NAME")
+        permitted = None
+        if scoped:
+            unselected = _BACKEND_ENVIRONMENT - backend_environment
+            if any(key in unselected for key in explicit_environment):
+                raise PermissionError("Scoped Agent cannot receive unselected backend environment")
+            if any(key.startswith(_HOST_TRANSPORT_PREFIXES) for key in explicit_environment):
+                raise PermissionError("Scoped Agent cannot receive host transport environment")
+            if any(key.startswith("AKA_AGENT_TOOL_") and key not in authority
+                   for key in explicit_environment):
+                raise PermissionError("Agent tool authority is host-owned")
+        if self.options.sandbox == "bwrap" or scoped:
             permitted = (
-                standard
-                | set(backend.environment_variables)
+                _STANDARD_ENVIRONMENT
+                | backend_environment
                 | set(explicit_environment)
                 | set(authority)
             )
             permitted.update(key for key in values if key.startswith("LC_"))
+            if scoped:
+                permitted = {key for key in permitted
+                             if not key.startswith(_HOST_TRANSPORT_PREFIXES)
+                             and (not key.startswith("AKA_AGENT_TOOL_") or key in authority)}
             values = {key: value for key, value in values.items() if key in permitted}
+        if self.options.sandbox == "bwrap":
             from .execution.bubblewrap import local_path, overlap, system_visible
 
             workspace = local_path(workspace)
@@ -271,6 +294,9 @@ class Agent:
             authority.update((name, values.get(name)) for name in state_names)
         if self._host_environment is not None:
             values = self._host_environment(values, explicit_environment)
+        if scoped:
+            permitted.update(authority)
+            _validate_scoped_environment(values, permitted, authority)
         key = uuid.uuid4().hex
         values["AKA_AGENT_INVOCATION"] = key
         with self._lock:
@@ -281,6 +307,7 @@ class Agent:
                 AgentAccess(tuple(mounts), access.hidden_paths, access.read_only_paths),
                 workspace,
                 authority,
+                frozenset(permitted) if scoped else None,
             )
         return values
 
@@ -325,8 +352,16 @@ class Agent:
 
     def _execute(self, command, cwd, timeout, env=None):
         limit = timeout if timeout is not None else self.options.timeout_seconds
-        validate_timeout(limit)
         values = dict(env or {})
+        remaining = values.get("ATREX_AGENT_TIMEOUT_SECONDS")
+        if timeout is None and remaining is not None:
+            try:
+                requested = float(remaining)
+            except (ValueError, TypeError):
+                raise ValueError("Agent remaining deadline must be a positive finite number") from None
+            validate_timeout(requested)
+            limit = requested if limit is None else min(limit, requested)
+        validate_timeout(limit)
         key = values.pop("AKA_AGENT_INVOCATION", "")
         with self._lock:
             self._check_open()
@@ -347,6 +382,8 @@ class Agent:
                     raise ValueError(
                         "Selected shell guard changed within an Agent session"
                     )
+            if context.permitted_environment is not None:
+                _validate_scoped_environment(values, context.permitted_environment, context.authority)
             for name, expected in context.authority.items():
                 if values.get(name) != expected:
                     raise ValueError(f"Agent invocation cannot override owned {name}")

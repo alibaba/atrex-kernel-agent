@@ -2,7 +2,7 @@
 
 from aka.core.keys import ServiceKey
 
-AGENT = ServiceKey("agent", "Agent", module="aka.contracts.agent", protocol_version=2)
+AGENT = ServiceKey("agent", "Agent", module="aka.contracts.agent", protocol_version=3)
 name = "agent"
 provide = ("agent",)
 identity_packages = (
