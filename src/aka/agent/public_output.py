@@ -35,7 +35,7 @@ def record_invocation(
     value["events"].extend(_conversation_events(runtime, stdout, len(value["events"])))
     path = root / (str(uuid.uuid4()) + ".json")
     temporary = path.with_suffix(".tmp-" + str(os.getpid()))
-    from .execution.home import open_private_directory
+    from aka.filesystem import open_private_directory
     with open_private_directory(root) as directory:
         fd = os.open(temporary.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
                      0o600, dir_fd=directory)
@@ -89,7 +89,7 @@ def read_sessions(workspace, *, direct=False):
 
 def export_observations(workspace, destination):
     """Export validated records without exposing the live storage layout."""
-    from .execution.home import open_private_directory
+    from aka.filesystem import open_private_directory
 
     destination = Path(os.path.abspath(destination))
     if destination.exists() or destination.is_symlink():

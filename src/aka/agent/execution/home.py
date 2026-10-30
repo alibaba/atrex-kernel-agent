@@ -4,28 +4,10 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
-from contextlib import contextmanager, suppress
 from pathlib import Path
+from aka.filesystem import open_private_directory
 
 PREPARED_ENV = "ATREX_AGENT_PREPARED_HOME"
-
-
-@contextmanager
-def open_private_directory(path):
-    path = Path(os.path.abspath(path))
-    descriptor = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
-    try:
-        for name in path.parts[1:]:
-            with suppress(FileExistsError):
-                os.mkdir(name, mode=0o700, dir_fd=descriptor)
-            child = os.open(
-                name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor
-            )
-            os.close(descriptor)
-            descriptor = child
-        yield descriptor
-    finally:
-        os.close(descriptor)
 
 
 def read_regular_file(path, limit=8 * 1024 * 1024):

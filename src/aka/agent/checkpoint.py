@@ -198,7 +198,8 @@ def validate_checkpoint(snapshot, *, check_destinations=False):
 
 
 def restore_checkpoint(snapshot):
-    from .execution.home import open_private_directory, read_regular_bytes
+    from aka.filesystem import open_private_directory
+    from .execution.home import read_regular_bytes
     value = validate_checkpoint(snapshot, check_destinations=True)
     for row in value["files"]:
         target = Path(row["target"])
