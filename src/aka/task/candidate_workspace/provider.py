@@ -21,6 +21,26 @@ class GitCandidateWorkspace(GitSnapshots):
         from .records import read_working
         return read_working(workspace, paths)
 
+    def read_source(self, workspace, *, revision=None):
+        from .source import read_source
+        return read_source(workspace, revision=revision)
+
+    def install_source(self, workspace, source):
+        from .source import install_source
+        return install_source(workspace, source)
+
+    def validate_candidate_source(self, handle, source):
+        from .source import validate_candidate_source
+        return validate_candidate_source(handle, source)
+
+    def seal_candidate(self, handle, source):
+        from .source import seal_candidate
+        return seal_candidate(handle, source)
+
+    def source_identity(self, source):
+        from .source import source_identity
+        return source_identity(source)
+
     def revision_history(self, workspace, *, revision=None, paths=(), changed_path=None):
         from .history import revision_history
         return revision_history(workspace, revision=revision, paths=paths, changed_path=changed_path)
@@ -34,10 +54,23 @@ class GitCandidateWorkspace(GitSnapshots):
         return restore_revision(workspace, expected_revision=expected_revision,
                                 revision=revision, retain_working_files=retain_working_files)
 
-    def record(self, workspace, *, expected_revision, files, message):
+    def record(self, workspace, *, expected_revision, files, message, deleted_paths=()):
         from .records import record
         return record(workspace, expected_revision=expected_revision,
-                      files=files, message=message)
+                      files=files, message=message, deleted_paths=deleted_paths)
+
+    def snapshot_files(self, workspace, destination, *, directories, exclude_paths=()):
+        from .files import snapshot_files
+        return snapshot_files(workspace, destination, directories=directories,
+                              exclude_paths=exclude_paths)
+
+    def restore_files(self, snapshot, workspace, *, exclude_paths=()):
+        from .files import restore_files
+        return restore_files(snapshot, workspace, exclude_paths=exclude_paths)
+
+    def clear_paths(self, workspace, paths):
+        from .files import clear_paths
+        return clear_paths(workspace, paths)
 
     def filesystem_access(self, workspace, *, include_git=False):
         from .access import filesystem_access
@@ -83,7 +116,12 @@ class GitCandidateWorkspace(GitSnapshots):
         return inspect_candidate(workspace, handle)
 
     def validate_candidate(self, handle, candidate_commit):
-        return _legacy(handle).validate_candidate(candidate_commit)
+        from .source import validate_candidate
+        return validate_candidate(handle, candidate_commit)
+
+    def restore_sealed_candidate(self, handle, candidate_commit, source):
+        from .source import restore_sealed_candidate
+        return restore_sealed_candidate(handle, candidate_commit, source)
 
     def archive(self, handle, destination, candidate_commit="HEAD"):
         return _legacy(handle).archive(destination, candidate_commit)

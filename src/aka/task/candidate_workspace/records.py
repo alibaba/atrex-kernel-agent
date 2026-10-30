@@ -101,7 +101,9 @@ def _restore_files(workspace, original, directories):
             pass
 
 
-def _stage_files(workspace, index, selected, modes):
+def _stage_files(workspace, index, selected, modes, deleted_paths=()):
+    if deleted_paths:
+        _git(workspace, "update-index", "--force-remove", "--", *deleted_paths, index=index)
     for name, content in selected.items():
         blob = _git(workspace, "hash-object", "-w", "--stdin", data=content).stdout.decode().strip()
         mode = "100755" if modes[name] is not None and modes[name] & 0o111 else "100644"
@@ -109,14 +111,21 @@ def _stage_files(workspace, index, selected, modes):
 
 
 def record(workspace: Path, *, expected_revision: str,
-           files: tuple[WorkspaceFile, ...], message: str) -> str:
+           files: tuple[WorkspaceFile, ...], message: str,
+           deleted_paths: tuple[str, ...] = ()) -> str:
     workspace = Path(workspace).absolute()
     if current_revision(workspace) != expected_revision:
         raise RuntimeError("workspace revision advanced; refusing record")
     files = tuple(files)
+    deleted_paths = tuple(deleted_paths)
+    # Combined validation rejects overlap, traversal and non-file replacements.
+    _selected(workspace, (*files, *(WorkspaceFile(name, text="") for name in deleted_paths)))
+    if deleted_paths:
+        from .source import validate_source_deletions
+        validate_source_deletions(workspace, deleted_paths)
     from .context import context_record_file, uses_context
     if uses_context(workspace):
-        anchor = context_record_file(workspace, tuple(item.path for item in files))
+        anchor = context_record_file(workspace, (*tuple(item.path for item in files), *deleted_paths))
         if anchor is not None:
             files = (*files, anchor)
     # Validate sources before loading bytes (directories/FIFOs must not be read).
@@ -126,6 +135,8 @@ def record(workspace: Path, *, expected_revision: str,
             if not stat.S_ISREG(mode) or mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX):
                 raise ValueError(f"workspace source must be a regular file with ordinary modes: {item.path}")
     selected = _selected(workspace, files)
+    from .source import validate_source_record
+    validate_source_record(workspace, selected)
     modes, original, directories = {}, {}, set()
     for item in files:
         target = workspace / item.path
@@ -142,6 +153,11 @@ def record(workspace: Path, *, expected_revision: str,
         while parent != workspace and not parent.exists():
             directories.add(parent)
             parent = parent.parent
+    for name in deleted_paths:
+        target = workspace / name
+        if target.exists() and target.stat().st_nlink != 1:
+            raise ValueError(f"workspace record target must not have hard links: {name}")
+        original[name] = (target.read_bytes(), stat.S_IMODE(target.stat().st_mode)) if target.exists() else None
     index_path = Path(_git(workspace, "rev-parse", "--git-path", "index").stdout.decode().strip())
     if not index_path.is_absolute():
         index_path = workspace / index_path
@@ -168,8 +184,8 @@ def record(workspace: Path, *, expected_revision: str,
                 shutil.copy2(index_path, prepared_index)
             else:
                 _git(workspace, "read-tree", expected_revision or "--empty", index=prepared_index)
-            _stage_files(workspace, commit_index, selected, modes)
-            _stage_files(workspace, prepared_index, selected, modes)
+            _stage_files(workspace, commit_index, selected, modes, deleted_paths)
+            _stage_files(workspace, prepared_index, selected, modes, deleted_paths)
             sources = {}
             for number, item in enumerate(files):
                 if item.source is not None:
@@ -178,18 +194,20 @@ def record(workspace: Path, *, expected_revision: str,
                     shutil.copystat(item.source, snapshot)
                     sources[item.path] = snapshot
             files_started = True
+            for name in deleted_paths:
+                (workspace / name).unlink(missing_ok=True)
             for item in files:
                 name = item.path
                 _write_file(workspace / name, selected[name], modes[name],
                             source=sources.get(name), copy=item.copy)
                 modes[name] = stat.S_IMODE((workspace / name).stat().st_mode)
             # cp/new-file umask behavior determines the actual recorded executable bit.
-            _stage_files(workspace, commit_index, selected, modes)
-            _stage_files(workspace, prepared_index, selected, modes)
+            _stage_files(workspace, commit_index, selected, modes, deleted_paths)
+            _stage_files(workspace, prepared_index, selected, modes, deleted_paths)
             tree = _git(workspace, "write-tree", index=commit_index).stdout.decode().strip()
             unchanged = expected_revision and tree == _git(
                 workspace, "rev-parse", f"{expected_revision}^{{tree}}").stdout.decode().strip()
-            if unchanged or not selected:
+            if unchanged or not (selected or deleted_paths):
                 os.replace(prepared_index, index_path)
                 return expected_revision
             parents = ("-p", expected_revision) if expected_revision else ()

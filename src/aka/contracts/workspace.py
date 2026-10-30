@@ -148,6 +148,13 @@ class CandidateWorkspaceSnapshot:
 
 
 @dataclass(frozen=True)
+class WorkspaceFilesSnapshot:
+    """Opaque, validated closure of explicitly selected mutable directories."""
+    directory: Path
+    identity: str
+
+
+@dataclass(frozen=True)
 class CandidateCheckpointState:
     workspace: Path
     revision: str
@@ -166,6 +173,19 @@ class CandidateWorkspace(Protocol):
     def read_working(self, workspace: Path, paths: tuple[str, ...]) -> RevisionContent:
         """Read selected working bytes without following links or interpreting content."""
         ...
+    def read_source(self, workspace: Path, *, revision: str | None = None) -> RevisionContent:
+        """Read complete declared source; the owner validates members and frozen constraints."""
+        ...
+    def install_source(self, workspace: Path, source: RevisionContent) -> None:
+        """Transactionally publish complete source, including deletions, without changing Git.
+
+        Validate fixed content and declaration before writing; preserve unrelated
+        exploration and immutable inputs. Ordinary install_files remains upsert.
+        """
+        ...
+    def source_identity(self, source: RevisionContent) -> str:
+        """Return Task's pure SHA256 content identity without exposing its source codec."""
+        ...
     def revision_history(self, workspace: Path, *, revision: str | None = None,
                          paths: tuple[str, ...] = (),
                          changed_path: str | None = None) -> tuple[RevisionFacts, ...]:
@@ -183,12 +203,25 @@ class CandidateWorkspace(Protocol):
         """
         ...
     def record(self, workspace: Path, *, expected_revision: str,
-               files: tuple[WorkspaceFile, ...], message: str) -> str:
+               files: tuple[WorkspaceFile, ...], message: str,
+               deleted_paths: tuple[str, ...] = ()) -> str:
         """Record explicit owner files while preserving unrelated working/index content.
 
         Precommit failure restores partial writes; a committed result survives a
         lost return and remains inspectable through the public revision methods.
         """
+        ...
+    def snapshot_files(self, workspace: Path, destination: Path, *,
+                       directories: tuple[str, ...],
+                       exclude_paths: tuple[str, ...] = ()) -> WorkspaceFilesSnapshot:
+        """Capture selected mutable closures, including modes, deletions and empty directories."""
+        ...
+    def restore_files(self, snapshot: WorkspaceFilesSnapshot, workspace: Path, *,
+                      exclude_paths: tuple[str, ...] = ()) -> None:
+        """Validate completely, then transactionally publish selected mutable closures."""
+        ...
+    def clear_paths(self, workspace: Path, paths: tuple[str, ...]) -> None:
+        """Clear explicit mutable paths without changing source, revision or index."""
         ...
     def filesystem_access(self, workspace: Path, *, include_git: bool = False) -> FilesystemAccess:
         """Describe immutable inputs; reject Git grants unsupported by this implementation."""
@@ -233,15 +266,32 @@ class CandidateWorkspace(Protocol):
         """Read actual registration, branch and revision; damaged bindings raise."""
         ...
     def validate_candidate(self, handle: CandidateHandle, candidate_commit: str) -> tuple[str, list[str]]: ...
+    def validate_candidate_source(self, handle: CandidateHandle, source: RevisionContent) -> None:
+        """Validate exact frozen source against the registered candidate without writes."""
+        ...
+    def seal_candidate(self, handle: CandidateHandle, source: RevisionContent) -> str:
+        """Revalidate and record exact measured source through the owner transaction.
+
+        Preserve unrelated exploration and staging; preparation failure changes
+        no revision. Confirmed commits remain inspectable after a lost return.
+        """
+        ...
+    def restore_sealed_candidate(self, handle: CandidateHandle, candidate_commit: str,
+                                 source: RevisionContent) -> tuple[str, list[str]]:
+        """Validate registered committed source, then restore only declared source members."""
+        ...
     def archive(self, handle: CandidateHandle, destination: Path, candidate_commit: str = "HEAD") -> Path: ...
     def remove(self, handle: CandidateHandle, workspace: Path) -> None: ...
     def promote(self, workspace: Path, *, base_commit: str, candidate_commit: str, episode: int,
                 record_files: tuple[WorkspaceFile, ...] = (),
                 evidence: dict[str, Any] | None = None, memory_version: int | None = None,
-                memory_record: dict[str, Any] | None = None) -> str:
+                memory_record: dict[str, Any] | None = None,
+                commit_message: str | None = None) -> str:
         """Commit candidate and opaque owner-prepared files in one transaction.
 
         Legacy record keywords are retained only by the compatibility adapter.
+        A selected Workflow may supply its opaque recovery message; None keeps
+        the implementation's existing English promotion message.
         """
         ...
     def read_revision(self, workspace: Path, revision: str,

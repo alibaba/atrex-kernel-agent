@@ -168,95 +168,15 @@ class EpisodeWorktree:
         )
 
 
-def promote_candidate(
-    incumbent_workspace: Path,
-    *,
-    base_commit: str,
-    candidate_commit: str,
-    episode: int,
-    record_files: tuple[WorkspaceFile, ...] = (),
-    evidence: dict[str, Any] | None = None,
-    memory_version: int | None = None,
-    memory_record: dict[str, Any] | None = None,
-) -> str:
-    if git_head(incumbent_workspace) != base_commit:
-        raise RuntimeError("incumbent advanced during episode; refusing promotion")
-    from .context import context_changes, uses_context
-    if uses_context(incumbent_workspace):
-        changed_context = context_changes(incumbent_workspace, base_commit)
-        if changed_context:
-            raise RuntimeError("incumbent frozen workspace context changed: " + ", ".join(changed_context))
-    candidate_paths = changed_paths(incumbent_workspace, base_commit, candidate_commit)
-    if "kernel.py" not in candidate_paths or not set(candidate_paths).issubset(CANDIDATE_PATHS):
-        raise RuntimeError("promotion requires kernel.py with only an optional solution.json update")
-    if _manifest_deleted(incumbent_workspace, base_commit, candidate_commit):
-        raise RuntimeError("candidate must preserve the incumbent solution.json manifest")
+def promote_candidate(incumbent_workspace, *, base_commit, candidate_commit, episode,
+                      record_files=(), evidence=None, memory_version=None, memory_record=None,
+                      commit_message=None):
     if any(value is not None for value in (evidence, memory_version, memory_record)):
         if record_files or any(value is None for value in (evidence, memory_version, memory_record)):
-            raise ValueError("promotion requires either opaque files or complete compatibility records")
+            raise ValueError("promotion requires opaque files or complete compatibility records")
         from ._compat_records import promotion_record_files
         record_files = promotion_record_files(episode=episode, evidence=evidence,
-            memory_version=memory_version, memory_record=memory_record)
-    files = tuple(record_files)
-    reserved = CANDIDATE_PATHS
-    if uses_context(incumbent_workspace):
-        from .context import MANIFEST, load_context
-        value = load_context(incumbent_workspace)
-        reserved = (*CANDIDATE_PATHS, MANIFEST, *value["context"], *value.get("namespaces", {}))
-    selected = selected_file_bytes(incumbent_workspace, files, reserved=reserved)
-    dirty = working_changes(incumbent_workspace)
-    if set(candidate_paths).intersection(dirty):
-        raise RuntimeError("incumbent candidate source has uncommitted changes")
-    index_path = Path(git_text(incumbent_workspace, "rev-parse", "--git-path", "index"))
-    if not index_path.is_absolute():
-        index_path = incumbent_workspace / index_path
-    old_index = index_path.read_bytes() if index_path.exists() else None
-    original = {}
-    new_directories = set()
-    for name in (*candidate_paths, *selected):
-        target = incumbent_workspace / name
-        original[name] = (target.read_bytes(), target.stat().st_mode) if target.is_file() else None
-        parent = target.parent
-        while parent != incumbent_workspace and not parent.exists():
-            new_directories.add(parent)
-            parent = parent.parent
-    try:
-        # Materialize only the validated candidate paths; unrelated index/worktree
-        # entries remain untouched and commit --only excludes them.
-        subprocess.run(["git", "checkout", candidate_commit, "--", *candidate_paths],
-                       cwd=incumbent_workspace, check=True, capture_output=True, text=True)
-        for item in files:
-            target = incumbent_workspace / item.path
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(selected[item.path])
-            if item.source is not None:
-                target.chmod(item.source.stat().st_mode)
-        if selected:
-            subprocess.run(["git", "add", "--", *selected], cwd=incumbent_workspace, check=True)
-        subprocess.run(["git", "-c", "user.name=atrex-long-horizon", "-c",
-            "user.email=atrex-long-horizon@local", "commit", "--only", "-m",
-            f"episode {episode}: promote verified long-horizon candidate", "--",
-            *candidate_paths, *selected], cwd=incumbent_workspace, check=True,
-            capture_output=True, text=True)
-        return git_head(incumbent_workspace)
-    except Exception:
-        if git_head(incumbent_workspace) != base_commit:
-            subprocess.run(["git", "reset", "--soft", base_commit], cwd=incumbent_workspace,
-                           check=False, capture_output=True)
-        for name, prior in original.items():
-            target = incumbent_workspace / name
-            if prior is None:
-                target.unlink(missing_ok=True)
-            else:
-                target.write_bytes(prior[0])
-                target.chmod(prior[1])
-        if old_index is None:
-            index_path.unlink(missing_ok=True)
-        else:
-            index_path.write_bytes(old_index)
-        for directory in sorted(new_directories, key=lambda path: len(path.parts), reverse=True):
-            try:
-                directory.rmdir()
-            except OSError:
-                pass
-        raise
+                                             memory_version=memory_version, memory_record=memory_record)
+    from .promotion import promote_candidate as promote
+    return promote(incumbent_workspace, base_commit=base_commit, candidate_commit=candidate_commit,
+                   episode=episode, record_files=record_files, commit_message=commit_message)
