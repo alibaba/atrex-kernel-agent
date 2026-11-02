@@ -1,206 +1,139 @@
 # Measurement records and execution recovery
 
-GPU work can finish even when the Agent connection, local publication or Supervisor process fails. Without a durable association between the exact inputs and the returned result, retrying can spend another GPU allocation, while reusing a cancelled or incomplete response can turn an infrastructure failure into permanent Candidate rejection.
-
-The Campaign Runtime retains measurement facts outside Agent workspaces and recognizes identical tasks across Sessions and Episodes. Measurement records capture execution evidence; Episode scheduling, Supervisor Git operations, Journal/report generation and acceptance decisions are separate responsibilities. [Trusted acceptance](supervisor-promotion.md) may reuse a completed exact task, while Agent duplicates still receive an error and Record ID.
+Light stores measurement facts outside Agent drafts and recognizes identical tasks across
+Sessions and Episodes. The Experiment service owns source/request identity, private records,
+deduplication, and checkpoints. Evaluation owns plan/result semantics; Execution owns physical
+jobs. Journal annotations and promotion decisions are separate responsibilities.
 
 ## Lifecycle
 
-```mermaid
-flowchart TD
-    A["Agent: tools/sandbox.py"] --> S["measurements.execute<br/>Snapshot exact inputs + compute task identity"]
-    S --> L["MeasurementStore.reserve<br/>Private per-task file lock"]
-    L -->|Verified completed record| D["duplicate_gateway_task + Gateway Record ID"]
-    D --> R["record-read<br/>Same saved public response; no GPU call"]
-    L -->|New or interrupted request| J["gateway_jobs.execute_job"]
-    J -->|Known job ID| P["Poll the existing job"]
-    J -->|New submission| N["Persist submitting; submit; persist accepted ID"]
-    N -->|Accepted job ID| P
-    N -->|Definitive submission rejection: HTTP 429/5xx| Q["Persist rejected response<br/>Backoff within request budget"]
-    Q --> N
-    N -->|Other definitive HTTP 4xx rejection| V["Persist rejected response<br/>Return error without automatic retry"]
-    P -->|Confirmed terminal infrastructure failure| B["Backoff then submit a new job"]
-    B --> N
-    P -->|Complete outcome| C["Persist raw response<br/>ABBA: checkpoint each complete batch"]
-    C --> M["measurements.aggregate<br/>One result or per-Shape median"]
-    M --> F["MeasurementTask.finish<br/>Persist and validate public result before publication"]
-    F --> A
-    P -->|Interrupted polling| I["Keep accepted ID for operator-approved recovery"]
-    N -->|Submission outcome unknown; no ID| U["Keep uncertain reservation<br/>Require operator reconciliation"]
-    F -->|Storage temporarily unreadable| U
-```
+1. Freeze the complete candidate and trusted evaluator inputs.
+2. Compute task identity and acquire its private reservation.
+3. Return an existing record reference for an Agent duplicate, or let trusted acceptance
+   reuse compatible completed evidence.
+4. Dispatch a new job or reconcile its durable accepted ID.
+5. Retain raw outcomes and complete ABBA batch checkpoints.
+6. Validate the canonical result, seal its public projection, and publish the record.
 
-These boundaries are implemented in `supervisor/measurements.py`, `measurement_records.py`, `gateway_jobs.py` and `abba_checkpoints.py`. `orchestrator/supervisor_runtime.py` owns authorization, private storage and the enclosing deadline. The Agent client does not retry HTTP requests automatically.
+Current owners are `aka.light.experiment.store`, `records`, `provider`, and
+`abba_checkpoints`; `aka.light.execution.gateway_jobs` handles durable job recovery.
+The Tool Runtime owns authorization and the enclosing deadline.
 
 ## Records and identity
 
-For a Campaign workspace configured as `/work/campaign`, storage is under `/work/.atrex-supervisor-runtime/<workspace-key>/measurements/`, not inside an Episode worktree:
+Campaign records live under
+`<workspace-parent>/.atrex-supervisor-runtime/<workspace-key>/measurements/`.
+The store includes a private identity key, Kernel snapshots, Gateway records with frozen
+inputs and repetition/job checkpoints, and task reservation indexes.
 
-```text
-measurements/
-├── identity.key                       # Private, stable key for launcher-value fingerprints
-├── kernels/kernel-<32 hex>/kernel.py
-├── records/gateway-<32 hex>/
-│   ├── request.json                  # Semantic request, input/evaluator hashes
-│   ├── inputs/                       # Exact Kernel, contract and submitted local inputs
-│   ├── repetition-1/
-│   │   ├── executor.json             # Bounded raw executor streams
-│   │   ├── jobs/<request-hash>/       # Accepted ID, raw outcomes and retry state
-│   │   └── abba-batches/             # Completed physical ABBA batch checkpoints
-│   └── record.json                   # Bound request + Kernel identities + public response
-└── tasks/<request-hash>.json          # Dedup/resume index; separate lock file
-```
+- A `kernel-...` ID binds the exact candidate artifact. For multi-file layouts this includes
+  the complete serialized source snapshot, headers, and build settings, not only `kernel.py`.
+  Historical single-file IDs retain their interpretation. A private file named `kernel.py`
+  may contain the snapshot encoding; use the artifact reader instead of assuming Python text.
+- A `gateway-...` ID identifies one logical measurement and its public result. ABBA binds
+  both candidate and incumbent artifacts.
+- Task identity additionally binds evaluator/input bytes, operation, target/transport settings,
+  options, and repetition policy. Version labels and output locations do not justify a new sample.
+- Custom launcher values use a campaign-private keyed fingerprint. Retain `identity.key`
+  during restoration. Requests using custom launcher controls are not ordinary reusable cache hits.
+- Env and Wiki queries are not Kernel measurements.
 
-The configured Campaign root, not an individual Episode path, scopes lookups and deduplication. Moving that root changes its storage key. A library-created Runtime without `RuntimeConfig.workspace` uses temporary storage and does not promise restart recovery. Bubblewrap hides Supervisor storage; native mode still has the operator user's filesystem authority. No retention cleanup is automatic. Private records can contain hidden Shapes and inputs and must not be uploaded as Agent artifacts.
-
-- `kernel-…` is deterministic from the exact `kernel.py` bytes. Identical bytes retain the same ID across Episodes and stores. The underlying SHA-256 remains an internal integrity check, not the Agent-facing ID. Auxiliary source/input files are also part of the task identity, not of this single-file Kernel ID.
-- `gateway-…` is a fresh UUID for a new logical request. It binds the Kernel IDs, operation, request digest and stored public result. ABBA records bind both candidate and baseline IDs.
-- The task identity includes source/input bytes, operation, measurement options, hardware/transport settings, evaluator code hashes and the Supervisor repetition policy. Changed source, inputs or measurement conditions create a different task. Episode version labels, workspace paths and output publication paths do not make a new measurement.
-- Custom `--env` and `--ssh-init` values are not written into request identities or task checkpoints. A Campaign-private keyed fingerprint still distinguishes their exact values across restarts; measurements using these custom launcher controls are recorded but not reused as completed-task cache hits. Preserve `identity.key` when restoring a Campaign measurement store.
-- ABBA baseline paths are normalized before input validation and recording: `./baseline.py` and `baseline.py` identify the same input and task. Absolute paths, parent traversal and workspace-root paths remain invalid.
-- The evaluator bundle materializes selected symlink/hardlink files as regular-file snapshots. Its identity hashes their contents and modes, not host link targets or archive timestamps; duplicate file names and link/special-file entries in unnormalized bundles remain invalid. This does not relax the Agent workspace's symlink restrictions.
-- Evaluate, ABBA, Profile, Dev, Check and Disassemble are recorded. `env` and Wiki remain queries with their existing diagnostics; they are not Kernel measurements. Standalone operator/verifier execution retains its existing interface and has no Campaign record-query API.
-
-Task reservations are protected by OS file locks, released on process exit. A second live owner cannot dispatch an identical request. Completed records are integrity-checked before reuse. Old/malformed IDs, missing records and identity/digest mismatches invalidate only the stale index, allowing a new reservation while retaining the old evidence. Temporary storage errors instead stop dispatch and preserve the reference; they do not justify duplicate GPU work. Supervisor request audit files (`request-*.json`) are diagnostics, not measurement records, and are not imported into this store.
+Completed evidence is integrity-checked before reuse. A temporary storage failure preserves
+the reservation and stops dispatch; it does not justify another GPU allocation.
+Moving the campaign root changes its storage scope. No automatic retention cleanup is provided.
 
 ## Agent interface
 
-Responses use operation-specific result markers and CLI exit codes. Structured result markers include `gateway_record_id` and `kernel_id`; ABBA also includes `baseline_kernel_id`. Arbitrary Dev stdout need not be evaluator output: a separate `[sandbox] RECORD_JSON=` line carries the operation, status and IDs. A Dev probe before Kernel creation has a Gateway Record but no Kernel ID. Raw Gateway envelopes and private inputs never become the record-read result.
-
-Recording preserves non-marker stdout lines already allowed by the Supervisor's result projection, including warnings, progress notes and diagnostics, in their original order. With one measurement, only the record identities are injected into result markers; stdout is not replaced by a marker-only response. Failed custom Dev probes retain their stdout/stderr. Other GPU failures preserve the original `error` through `[sandbox] GATEWAY_ERROR_JSON=` or the operation-specific result marker, with the same Record/Kernel IDs. Private evaluator logs remain filtered; credential/path redaction and output limits apply before recording. See [original GPU errors](supervisor-runtime.md#original-gpu-errors).
+Run these commands in an active managed draft, using IDs returned by the campaign:
 
 ```bash
 python3 tools/sandbox.py --kind run --no-sync
-python3 tools/sandbox.py --kind record-read --record-id gateway-0123456789abcdef0123456789abcdef
-python3 tools/sandbox.py --kind kernel-read --kernel-id kernel-0123456789abcdef0123456789abcdef --output-path scratch/previous.py
-python3 tools/sandbox.py --kind kernel-records --kernel-id kernel-0123456789abcdef0123456789abcdef
+python3 tools/sandbox.py --kind record-read --record-id gateway-11111111111111111111111111111111
+python3 tools/sandbox.py --kind kernel-records --kernel-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
+python3 tools/sandbox.py --kind kernel-read --kernel-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --output-path scratch/previous
+python3 tools/sandbox.py --kind kernel-pareto-frontier
 ```
 
-`record-read` returns exactly the saved Agent-visible `exit_code`, `stdout` and `stderr`, including a failed measurement's exit code. It does not run the GPU again or republish old Profile files. `kernel-read` writes only to a regular path inside `scratch/` and returns a success message. `kernel-records` lists Gateway Record IDs, operation and timestamp, not all result bodies. IDs in examples are placeholders; use IDs returned in the current Campaign.
+GPU calls and `record-read` return one JSON object containing `operation`, `status`,
+`result`, `gateway_record_id`, and `kernel_id` when source-bound.
+ABBA is `operation: evaluate` with a comparison and baseline Kernel ID.
+Parse the complete JSON, not private executor marker lines.
 
-`kernel-records` reads at most 16 KiB of each canonical `record.json`, decoding only the metadata preceding `request`/`response`. It skips unreadable, malformed or oversized headers and logs a skipped-record count in the Supervisor, so one damaged record cannot block other listings. A listed ID is a metadata reference, not proof that its response body is intact: `record-read` and deduplication still perform full integrity validation. No secondary index or record-format migration is required.
+A successful read exits zero even when the stored evaluator rejected the source.
+Initial failed operations retain their nonzero execution outcome. Dev preserves bounded
+probe stdout/stderr and process exit code inside `result`.
+Record reads submit no GPU work and do not recreate old profiler artifacts.
 
-An identical completed request is rejected with exit code 2:
+`kernel-read` restores a file for `single_file` and a directory for multi-file artifacts.
+Use that same layout for `--baseline-path`. `kernel-records` lists metadata; a listed
+ID still needs full integrity validation when read. The Pareto query returns observed
+per-shape minima from eligible passing full Evaluations, not a measured composite kernel.
 
-```json
-{"error":{"code":"duplicate_gateway_task","message":"Identical Gateway task is already recorded","gateway_record_id":"gateway-0123456789abcdef0123456789abcdef","next_action":"Read the recorded result: python3 tools/sandbox.py --kind record-read --record-id gateway-0123456789abcdef0123456789abcdef"}}
-```
-
-The duplicate response is not a Kernel failure. Read the result instead of changing version labels or resubmitting to obtain another random sample. Requests whose first execution is still running return a duplicate notice without a readable record ID and should wait for the original request.
+An Agent duplicate returns `duplicate_gateway_task` with an existing record reference
+and recovery guidance. In-progress duplicates instruct the caller to wait.
+Do not change labels or delete indexes to force a new random sample.
 
 ## Failure and recovery policy
 
-| Evidence | Action |
+| Evidence | Current behavior |
 | --- | --- |
-| Accepted job ID, polling interrupted | Retain the ID; recovery polls that same job before considering another submission |
-| Eval submission definitively rejected with HTTP 429/503, through direct HTTP or the Agate CLI | Persist `rejected`, then retry the same Eval route once; never fall back to Dev |
-| Submission returns any other HTTP 5xx without an accepted ID, through direct HTTP or the Agate CLI | Outcome may be unknown; retain `submitting` for operator reconciliation and do not resubmit |
-| Other operation submission explicitly rejected with HTTP 429/503 | Persist `rejected`, then retry submission with the existing bounded backoff; never leave a sticky `submitting` marker |
-| Other definitive HTTP 4xx submission rejection, or Agate CLI argument-parsing error | Persist `rejected` and return the diagnostic without automatic retries; not a Candidate-failure cache entry |
-| Eval terminal admission/transport failure (`submit_failed`, `dashboard_unreachable`, `backend_unavailable`, `deps_install_timeout`, `logs_unavailable`, queue timeout before start or empty cancellation) | At most one new Eval job after five seconds across all retry causes |
-| Other operation terminal `error_class=infra` or `failure_origin=infrastructure` | New job after 5, 10, 20, 40, then 60-second backoff, within request budgets |
-| `logs_unavailable`, including `backend_state=succeeded` | Terminal infrastructure failure: resubmit a new job within the operation-specific allowance, not repeated get on the failed ID |
-| Eval execution `command_timeout` | Do not resubmit automatically; it is not an admission/transport failure |
-| Other-operation `command_timeout`, or cancelled-before-result without an error | At most one additional submission; never a permanent Candidate-failure cache entry |
-| Explicit Candidate/compilation/correctness/validation rejection | Preserve the rejection and deduplicate; repairing inputs/source creates a new task |
-| Empty, malformed, unclassified or incomplete result | Not a reusable measurement; preserve available evidence |
-| POST interrupted before an accepted ID is durably saved | Outcome unknown; retain reservation and require operator reconciliation, never blindly resubmit |
+| Accepted job ID, collection interrupted | Poll the same accepted job; transient collection failures do not authorize duplicate submission |
+| Direct HTTP submit transport/5xx/408/429 or structured infrastructure failure | Replay with the same wire idempotency key, persisted before POST |
+| Confirmed failed infrastructure job | Persist its failure and use a replacement identity; backoff 5/10/20/40/60 seconds within the request deadline |
+| Unknown Agate CLI submission without an ID | Preserve uncertainty for reconciliation; there is no general CLI wire-idempotency replay |
+| Confirmed CLI 429/503 or structured infrastructure rejection | Retry within the defined budget; other no-ID 5xx/timeouts remain uncertain |
+| Explicit device-unavailable Eval result | Up to two replacement executions; exhaustion remains unavailable, not candidate failure |
+| Device-unavailable ABBA batch | Up to ten replacements with a durable budget and 60-second delay; keep complete sibling batches |
+| Candidate correctness/compilation failure | Preserve a completed rejection; source repair creates a different task |
+| Cancelled, unknown, malformed, contradictory, or incomplete result | Do not cache as a completed verdict or blindly replace the job |
+| Known pre-dispatch local queue timeout | Safe-to-retry HTTP 429; distinguish it from a post-dispatch uncertain outcome |
 
-Eval CLI submission timeouts persist an uncertain `submitting` checkpoint and return exit 75 (`ENVIRONMENT_TEMPFAIL`) with a fixed operator-reconciliation diagnostic. The Agent response omits the command, endpoint, sidecar paths and partial submission output; no Python traceback is emitted.
+A terminal `command_timeout` follows its explicit error class. Infrastructure-class errors
+can recover; candidate/unknown errors do not become infrastructure merely because they mention
+a timeout. OOM, illegal memory access, or numerical mismatch does not prove device unavailability.
 
-A confirmed HTTP 400 source-validation rejection that names the **candidate** returns
-`[sandbox] SOURCE_ERROR_JSON=` with `repairable: true`,
-`error.code: "candidate_source_rejected"`, `error_class: "code"` and
-`job_submitted: false`. Evaluate, Profile, Check and Disassemble use the same
-projection. It lists at most 16 forbidden candidate imports, attributes and string
-matching rules, plus the redacted original rejection in `gateway_error`.
-Private paths, credentials, full requests and evaluator logs remain hidden. For example:
+Known-not-submitted candidate source rejection produces `candidate_source_rejected` and
+repair guidance, without an Eval-to-Dev fallback. Invalid endpoint/client configuration is
+an operator failure before dispatch.
 
-```json
-{
-  "ok": false,
-  "repairable": true,
-  "error": {
-    "code": "candidate_source_rejected",
-    "message": "Agate rejected candidate source before GPU submission.",
-    "error_class": "code",
-    "reason": "source_validation_failed",
-    "job_submitted": false,
-    "violations": [
-      "Blocked import: ctypes",
-      "Forbidden attribute access: ctypes.addressof",
-      "Forbidden string literal matching: environ"
-    ],
-    "next_action": "Remove or replace the listed forbidden imports, attribute accesses or string literals in kernel.py, then retry the same operation with the repaired source. Do not bypass source validation through Dev."
-  },
-  "gateway_record_id": "gateway-0123456789abcdef0123456789abcdef",
-  "kernel_id": "kernel-0123456789abcdef0123456789abcdef"
-}
-```
-
-The private checkpoint must also confirm the rejection before trusted acceptance
-returns this as a candidate repair rather than an infrastructure exception.
-Framework-baseline recovery receives the same safe violations and repair hint.
-The rejected request is recorded but is not a reusable GPU measurement or a
-permanent candidate-failure cache entry. There is no automatic retry or Dev
-fallback; repair the source first. Accepted jobs, proxy errors, transport failures
-and unrecognized validation output do not acquire this known-not-submitted status.
-
-Local regression checks replay the archived candidate-source rejections and cover
-CLI/direct-HTTP formats, all four typed operations, private diagnostic filtering,
-bounded/malformed projections, Record readback, trusted acceptance and report
-repair hints. A local fake Gateway also exercises the real HTTP thin client,
-private Gateway subprocess and Record query end-to-end. Accepted IDs and unknown
-submission outcomes remain outside the source-repair path. These checks do not
-execute a model or GPU job; test files remain outside the repository.
-
-Typed Eval has one durable, shared five-second retry allowance across confirmed submission rejection and terminal admission/transport failure. Once consumed for a task identity, a later identical request does not create another allowance. Profile, Dev and the other operations retain the 5, 10, 20, 40, then 60-second backoff and enclosing deadline; if their request budget expires, a later identical request may continue from the saved definitive state. This classification requires an actual HTTP rejection response or its recognizable CLI representation, not merely a nonzero exit code or an `infra` label. An accepted job ID takes precedence over error status; polling failures retain that ID. Lost connections, timeouts and malformed replies without acceptance or rejection evidence still leave an uncertain submission.
-
-Retryable failures do not bypass the request deadline, revocation or process cleanup. Separately, a request rejected in the Supervisor's local queue before any dispatch returns a safe-to-retry HTTP 429. A later repetition timing out before its own dispatch is **not** a claim that the overall request submitted no job: it follows the post-dispatch 503 path. Agents should not convert transport/unknown-outcome failures into retry loops. After operator inspection, an unchanged request can recover known job IDs and completed ABBA batches. Old `submitting` checkpoints with a saved, recognizable CLI rejection can recover automatically; bare markers with no saved response still require operator reconciliation. A no-ID uncertain submission cannot be safely repaired by deleting its index blindly.
-
-Each complete ABBA batch is persisted before the next batch starts. The checkpoint requires the exact schedule, expected Shape coverage, valid latencies for successful runs and explicit correctness results for rejected runs. Incomplete runs never become checkpoints. Recovery keeps completed batches in the same logical record/repetition; it does not reconstruct an ABBA comparison from unrelated standalone Evaluate measurements.
+Cancellation, liveness, and enclosing deadlines bound every retry. Complete ABBA batches
+must have the exact schedule and coverage; unrelated standalone measurements cannot reconstruct
+a comparison. Unavailable or incomplete historical records retain raw evidence but cannot
+satisfy a new completed-result cache check; completed candidate rejections remain cacheable.
 
 ## Optional repeated measurement
 
-Atrex-Bench full and correctness-only Evaluate default to six correctness cases per Shape (base
-plus five additional seeds). Extra cases add correctness work, not performance timing runs.
-Explicit Shape smoke defaults to one case; `--multi-seed N` overrides the count. Resolved seed/mode
-policy enters task identity, so old implicit-single-seed records are not reused under the new default.
-Before sealing a report, the Supervisor may reuse a successful full or correctness-only six-case
-record when all correctness inputs/policies match; only timing iterations and performance repetitions
-may differ. This does not relax Agent-request deduplication or ABBA acceptance identity.
+The default is one measurement. Set the Tool Runtime provider option explicitly for three:
 
-SOL-ExecBench does not use this six-case equivalence. Its acceptance request is the standard full
-`workload.jsonl` evaluation with no typed mode and no additional seeds. Reuse therefore requires the
-exact saved request identity, including the trusted harness, workload contract and optional
-`config.json`.
+```json
+{"api_version":1,"patches":[{"id":"tool_runtime","config":{"measurement_repetitions":3}}]}
+```
 
-SOL Evaluate identities also bind `evaluation_contract: sol_execbench_coverage_v1` for both Agent
-requests and Supervisor acceptance. Earlier unversioned records may have discarded workload
-coverage counters during projection; they remain readable but cannot satisfy a new request.
-After upgrading, the first matching SOL task is measured again under the configured one- or
-three-repetition policy, even if the old record already contains coverage counters. The new Record
-then supports normal duplicate rejection and acceptance reuse. No record deletion or manual
-invalidation is required; acceptance still checks positive, complete coverage. Atrex-Bench and
-non-Evaluate request identities are unchanged by this SOL contract marker.
+Three repetitions apply to full Evaluate and whole ABBA comparisons. Per-shape medians are
+aggregated into summaries; ABBA sides are aggregated separately. Correctness-only Evaluate,
+Profile, Dev, Check, and Disassemble remain single-operation requests. An incomplete or
+rejected repetition cannot become a successful median.
 
-The default is **one** measurement. Operators may set `ATREX_AKA_MEASUREMENT_REPETITIONS=3` before starting the Campaign. Only `1` and `3` are accepted; the Agent cannot set this policy through request environment flags.
+This repetition count is separate from native six-case correctness and ABBA's even
+measurement count per side. Standard native Evaluate defaults to six correctness cases;
+targeted smoke tests default to one. Matching correctness evidence can be reused by trusted
+acceptance without relaxing full-measurement or ABBA identity.
 
-Three repeats apply to full Evaluate and whole ABBA comparisons. The Runtime takes each Shape's median over the three completed measurements, then recomputes geometric/arithmetic means. ABBA aggregates candidate and baseline separately and recomputes their speedup. Correctness-only Evaluate, Profile, Dev, Check and Disassemble remain single-operation requests. A rejected or incomplete repetition cannot become a successful median. Legacy evaluation logs receive the aggregate used in the Agent response, not just the final physical repetition.
+SOL uses its full-workload contract with `sol_execbench_coverage_v1` in task identity.
+Earlier records remain readable but cannot substitute for a new contract. SOL source layout
+must be explicit, and its ordinary evaluation support does not imply Light ABBA support.
 
-After successful repeats, the aggregate replaces only the final result marker in the last repetition's projected stdout; that repetition's other stdout lines and stderr are retained. Earlier repetitions' executor streams remain in their private `executor.json` files. `record-read` returns the saved response with the same diagnostics and aggregate.
+## Public feedback and limits
 
-This increases GPU cost and wall time; repeats are sequential and do not multiply the enclosing deadline automatically. For repeated or multi-batch work, configure `ATREX_AKA_REQUEST_TIMEOUT_SECONDS` for the whole operation. The repetition count enters the dedup key, so switching policy does not silently reuse a result measured with another count. Dynamic changes in the remote environment behind the same target name cannot be inferred from a local request hash; use a new Campaign/storage scope when intentionally requalifying such an environment.
+Canonical publication/reuse requires a completed boolean verdict and known outcome.
+A successful transport with a failed or missing evaluator receipt is not a successful evaluation.
+Completed candidate rejection remains useful evidence; infrastructure unavailability does not.
 
-## Validation and rollback
+Feedback retains actionable compiler, runner, rank-local, numerical, and tolerance details.
+Private dimensions/credentials are redacted; failing-case seeds are exposed repair metadata.
+The diagnostic response limit is 8 MiB of ASCII-escaped JSON, with explicit omissions.
+The complete record plus newline must fit 32 MiB before publication.
 
-SOL upgrade regressions seed a retained store with unversioned responses missing coverage, then
-exercise the real Record reservation and acceptance paths: one replacement task, subsequent reuse,
-Agent duplicate rejection, unchanged legacy records, and rejection of incomplete or failed results.
-They also cover one- and three-repetition policies and Agent/acceptance identity alignment.
-
-Regression fixtures run outside the repository, per project convention. They exercise a local fake Gateway and real Supervisor subprocess/HTTP paths: all six measurement operations, exact source/result reads, bounded metadata-only listings that skip unreadable headers, cross-Session dedup, immutable identity checks, corrupt-index recovery, transient storage failure, accepted-ID polling, new-job infrastructure retry, cancellation/timeout budgets, ABBA checkpoints, default single execution and per-Shape median aggregation. Submission regressions cover HTTP/CLI rejection, bounded backoff, restart after rejection, recovery of saved legacy CLI rejections, and retained uncertainty after a lost POST response. Output checks cover non-marker diagnostics, last-marker-only aggregation, identical record reads and continued filtering of hidden-case failure logs. Coverage also includes Runtime authorization, hidden-result projection, deadlines and publication failures. These checks are not production GPU queue-time evidence or a real-model optimization-quality benchmark.
-
-For operator smoke checks, run an ordinary evaluation in a test Campaign, read its returned Record ID, issue the identical request again and confirm that the Gateway job count does not increase. Change Kernel source and confirm a new Record ID. For repeated mode, set the policy to 3 before Campaign startup and inspect the three private repetition directories. Test interruption only against a controlled Gateway; retain the accepted job IDs before restarting.
-
-Rollback: stop the Campaign and preserve its workspace, private records and request diagnostics. Restore a previously validated release or pinned revision with its matching configuration. Before resuming, check compatibility with the saved Journals, numbered memory files and Kernel commits, and reconcile accepted or uncertain Gateway jobs. A release without measurement-record support cannot use this store for deduplication or recovery; do not blindly resubmit unfinished work. Setting repetitions to 1 disables repeated measurement, not deduplication or recording; there is no switch that grants Agents direct Gateway credentials. Storage growth, duplicate-call rejection and retry cost are deliberate trade-offs.
+See [evaluator outcomes](evaluator-outcomes/README.md) for exact cache, diagnostic, and
+objective-score versus latency-ratio semantics, and
+[Supervisor promotion](supervisor-promotion.md) for acceptance reuse.

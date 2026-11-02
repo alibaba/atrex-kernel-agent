@@ -1,9 +1,10 @@
-# Community Local Sandbox
+# Community Local Gateway
 
 `python -m aka.legacy.execution.runtime_tools.local_gateway` starts a small,
 standard-library-only scheduler for maintaining and testing the localhost optimization path. It
-accepts requests from `python -m aka.legacy.execution.cli` and queues local GPU commands
-FIFO.
+accepts native source-archive Eval/ABBA requests from Light as well as requests from
+`python -m aka.legacy.execution.cli`, and queues local GPU commands FIFO. Native evaluation
+requires a compatible Atrex-Bench installation on the local GPU host.
 
 ## Start the Server
 
@@ -32,8 +33,7 @@ silently executed twice.
 
 ## Use with the Optimizer
 
-The optimizer continues to use `python -m aka.legacy.execution.cli`, so correctness, performance, and profiler commands have
-the same packaging and artifact-return behavior as the remote execution path:
+Point the default optimizer at the local endpoint:
 
 ```bash
 aka optimize --repo-root "$PWD" -- \
@@ -42,6 +42,10 @@ aka optimize --repo-root "$PWD" -- \
   --sandbox-hardware local \
   --sandbox-url http://127.0.0.1:8000
 ```
+
+Use `--profile workflow` before `--` for the explicit Legacy workflow. The native path
+uploads source archives and retains complete Atrex-Bench correctness and ABBA receipts;
+Legacy retains its evaluator/command compatibility path.
 
 `--framework` can be omitted to start all frameworks supported by the runtime GPU architecture in
 parallel. Their sandbox requests still enter this scheduler's FIFO queue, and their local optimizer state
@@ -53,6 +57,11 @@ The optimizer does not compare platform and inventory names because inventory ma
 desensitized GPU description. It uses the runtime architecture probe for automatic framework dispatch.
 
 ## Compatibility Surface
+
+The scheduler accepts inline Python and source-archive candidates, including native
+Atrex-Bench ABBA requests. The maximum job timeout is 10,800 seconds; this does not
+increase the default timeout or reserve extra GPU capacity. One job deadline covers
+all requested ABBA blocks.
 
 The community scheduler implements:
 
@@ -90,6 +99,9 @@ Clock requests are reported separately from applied locks in the Eval result's
 runs with `clock_locked=false`, matching the remote gateway's unsupported-device
 behavior. It does not equate a ROCm performance level with a fixed clock or report
 an unapplied lock as successful. Correctness checks and every ABBA leg still run.
+
+See [local source-tree evaluation and terminal evidence](local-gateway-source-evaluation.md)
+for upload integrity, source-bound exports, recovery, and validation scope.
 
 ## Security Boundary
 

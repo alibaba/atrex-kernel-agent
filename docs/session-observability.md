@@ -15,7 +15,7 @@ The target users are Campaign operators diagnosing failed or stalled runs, resea
 | Duplicate stream/native records or exported child usage | Counters reconcile without counting duplicate copies; uncertain coverage is explicitly `partial` or `unavailable`. |
 | Capture disabled | No new capture directory or capture monitor/readers; functional stdout/stderr, exit status, and existing stream/ledger accounting remain available. |
 
-Recorded-format fixtures and real local subprocesses verify these contracts. A [capture-off/on benchmark](session-capture-performance.md) measures process latency, Supervisor CPU time, and peak memory at three transcript sizes, with raw samples and reproduction commands. It is a synthetic capture-workload measurement, not a production Agent slowdown or Token-saving claim; diagnosis time and end-to-end savings have not been benchmarked.
+Recorded-format fixtures and real local subprocesses verify these contracts. A [capture-off/on benchmark](session-capture-performance.md) measures process latency, Supervisor CPU time, and peak memory at three transcript sizes, with archived raw samples. It is a synthetic capture-workload measurement, not a production Agent slowdown or Token-saving claim; diagnosis time and end-to-end savings have not been benchmarked.
 
 ## Capture lifecycle
 
@@ -79,19 +79,19 @@ Functional output waits for both pipe readers to reach EOF. A configured timeout
 
 | Responsibility | Implementation |
 | --- | --- |
-| Process execution, timeout/interruption, finalization hook | [`run_bounded()`](../orchestrator/agent_runtime/process.py) |
-| Capture setup, pipe readers, monitor, finalization, stdout-bound observation | [`session_capture.py`](../orchestrator/session_capture.py) |
-| Current-session and descendant transcript discovery | [`session_native.py`](../orchestrator/session_native.py) |
-| Incremental native reads, invocation-local limits, separate resume-history scan | [`session_tail.py`](../orchestrator/session_tail.py) |
-| De-duplicated conversation projection | [`session_transcript.py`](../orchestrator/session_transcript.py) |
-| Provider counters, reconciliation, partial/unavailable usage | [`session_usage.py`](../orchestrator/session_usage.py) |
-| Stream normalization and Capture/Ledger selection | [`adapter.py`](../orchestrator/agent_runtime/adapter.py), [`codex_ledger.py`](../orchestrator/agent_runtime/codex_ledger.py) |
-| Conservative merge of overlapping usage evidence | [`merge_token_usage_evidence()`](../orchestrator/agent_runtime/model.py) |
-| Observation consumers and Codex exception fallback | [`agent_runtime/runtime.py`](../orchestrator/agent_runtime/runtime.py), [`long_horizon/main_adapter.py`](../long_horizon/main_adapter.py), [`long_horizon/session.py`](../long_horizon/session.py) |
+| Process execution, timeout/interruption, finalization hook | [`run_bounded()`](../src/aka/light/agent/runtime/process.py) |
+| Capture setup, pipe readers, monitor, finalization, stdout-bound observation | [`session_capture.py`](../src/aka/light/agent/session_capture.py) |
+| Current-session and descendant transcript discovery | [`session_native.py`](../src/aka/light/agent/session_native.py) |
+| Incremental native reads, invocation-local limits, separate resume-history scan | [`session_tail.py`](../src/aka/light/agent/session_tail.py) |
+| De-duplicated conversation projection | [`session_transcript.py`](../src/aka/light/agent/session_transcript.py) |
+| Provider counters, reconciliation, partial/unavailable usage | [`session_usage.py`](../src/aka/light/agent/session_usage.py) |
+| Stream normalization and Capture/Ledger selection | [`adapter.py`](../src/aka/light/agent/runtime/adapter.py), [`codex_ledger.py`](../src/aka/light/agent/runtime/codex_ledger.py) |
+| Conservative merge of overlapping usage evidence | [`merge_token_usage_evidence()`](../src/aka/light/agent/runtime/model.py) |
+| Observation consumers and Codex exception fallback | [`agent_runtime/runtime.py`](../src/aka/light/agent/runtime/runtime.py), [`agent/provider.py`](../src/aka/light/agent/provider.py), [`workflow/session.py`](../src/aka/light/workflow/session.py) |
 
 ## Where records live
 
-Long Horizon writes into its existing Episode archive, so records survive removal of the Episode worktree:
+Light writes into its Episode archive, so records survive removal of the Episode worktree:
 
 ```text
 <campaign>/.atrex_long_horizon/episodes/eNNNN/sessions/
@@ -106,22 +106,36 @@ Long Horizon writes into its existing Episode archive, so records survive remova
 
 Other invocations through the Agent runtime, including framework-baseline and policy-review sessions, default to `<workspace-parent>/.atrex-session-traces/<workspace-name>/run-<uuid>/`. The default is outside the candidate Git workspace and does not add trace files to candidate commits.
 
-Set `ATREX_SESSION_CAPTURE_DIR` to override that root for standalone invocations. Relative paths resolve against the invocation workspace. Long Horizon selects its Episode-specific archive directory. Every invocation, including same-session repair/resume, gets a new `run-<uuid>`; the provider session ID can remain the same.
+Set `ATREX_SESSION_CAPTURE_DIR` to override that root for standalone invocations. Relative paths resolve against the invocation workspace. Light selects its Episode-specific archive directory. Every invocation, including same-session repair/resume, gets a new `run-<uuid>`; the provider session ID can remain the same.
 
 ## Disable capture and roll back
 
-Capture is enabled by default. To disable it, launch the existing optimization command with this environment variable:
+Both `light` and `light-sandbox` enable capture. Configure it through the selected Agent
+provider, not by exporting its internal environment switch:
 
-```bash
-export ATREX_SESSION_CAPTURE=0
-# Run the same orchestrator or Long Horizon command with its usual arguments.
+```json
+{"api_version":1,"patches":[{"id":"agent","config":{"sandbox":"none","capture":false}}]}
 ```
 
-The exact value `0` (ignoring surrounding whitespace) disables capture; unset or any other value keeps it enabled. The switch is read from each invocation's effective environment and takes precedence over `ATREX_SESSION_CAPTURE_DIR`, including Long Horizon's Episode-specific destination. It is checked before capture-directory creation, native discovery, or capture-thread startup. The previous invocation's in-memory capture observation is cleared, so it cannot be reused accidentally. `run_bounded()` then uses `Popen.communicate()`, and accounting uses the existing adapter/Codex-ledger path; additional native child accounting supplied by Capture is no longer available.
+Pass this patch before `--` when starting a native Light campaign. To keep Bubblewrap,
+use `"sandbox": "bwrap"` instead. Patches replace whole configurations, so retain any
+custom proc mode, timeout, executable, and read-only paths in the same object.
 
-This is a launch-time switch, not a live toggle. Exporting it in another shell does not alter a running Campaign: stop the affected runner through its normal shutdown path, then restart/resume it with the variable set. Already-running invocations are not retroactively changed. Re-enable capture for subsequent launches with `unset ATREX_SESSION_CAPTURE` or `export ATREX_SESSION_CAPTURE=1`.
+The provider sets `ATREX_SESSION_CAPTURE` for each invocation from its selected option;
+an inherited `ATREX_SESSION_CAPTURE=0` is not an override of that provider policy.
+Low-level process callers use the internal environment contract, where exactly `0`
+disables capture.
 
-Disabling capture does not delete existing archives, change provider credentials/HOME, disable CLI-native persistence, or disable the pre-existing Episode archives/ledger. In particular, Qoder's native persistence remains enabled; the switch is not a full reversal of the adapter changes. For a complete rollback, stop affected runners, redeploy the previously approved pre-PR revision (or revert this PR's commits), and restart using the existing recovery procedure. Preserve existing archives for diagnosis; rolling back code does not require deleting Campaign state.
+Capture-off execution retains functional stdout/stderr and available adapter/ledger usage.
+It does not delete old archives, disable provider-native persistence, or disable public
+Agent observation files. This is not a live toggle: preserve the frozen configuration
+when resuming a campaign, or start a new compatible launch at an Episode boundary.
+
+Ordinary Agent calls also publish normalized conversation/usage to their requested
+observation directory, including V1 and recovery calls before the first Episode.
+Those observations are separate from private raw capture and excluded from source identity.
+Provider-throttle/output-limit replacement Sessions retain their Episode observations;
+they do not reset settled usage.
 
 ## Conversation
 
@@ -161,7 +175,7 @@ Existing Phase Marker ordering is retained. Native-only child usage is not assig
 
 If Codex ledger reconciliation fails, the ledger cursor is invalidated before fallback, regardless of whether Capture is exact, partial, or unavailable. Available Capture usage is preserved; otherwise the caller keeps its existing stream fallback. The invocation observation reports `codex_ledger_unavailable:<ExceptionType>` and does not qualify for usage-verified resume. A later call cannot replay this invocation through the invalidated cursor. A successful Capture does not hide ledger failures.
 
-The supported native sources are Claude, Codex, Qoder, and Pi. Existing provider-home configuration is respected; this change does not remount credentials or replace HOME. Qoder no longer receives `--no-session-persistence`, so its native session files can be captured. Optional external reviewer helpers or arbitrary model processes bypassing the shared Agent runtime are not automatically covered unless their calls appear in the selected provider transcripts.
+The supported native sources are Claude, Codex, Qoder, and Pi. Existing provider-home configuration is respected; the selected Agent provider owns any isolated Home setup. Qoder no longer receives `--no-session-persistence`, so its native session files can be captured. Optional external reviewer helpers or arbitrary model processes bypassing the shared Agent runtime are not automatically covered unless their calls appear in the selected provider transcripts.
 
 ## Failure and privacy boundaries
 
@@ -177,14 +191,15 @@ These limits apply to diagnostic capture, not to the stdout/stderr returned to t
 
 If a persistence sink fails, the pipe reader keeps draining the child's output to EOF. Setup/finalization failures are logged without replacing the CLI outcome. Existing process timeout, dependency guards, termination, and resume policy remain in place. A forcibly killed observer cannot write a final status; surviving files may still say `running`.
 
-Each capture directory is created with mode `0700`. Only the current session and identified descendants are copied, not unrelated transcripts or credential files. Prompt, reasoning, and tool output may nevertheless contain sensitive content: these are local diagnostic files, not sanitized public artifacts. This PR adds no security isolation against the Agent running as the same OS user. The existing trace-retention manifest and upload policy are unchanged.
+Each capture directory is created with mode `0700`. Only the current session and identified descendants are copied, not unrelated transcripts or credential files. Prompt, reasoning, and tool output may nevertheless contain sensitive content: these are local diagnostic files, not sanitized public artifacts. Capture adds no security isolation against the Agent running as the same OS user. The existing trace-retention manifest and upload policy are unchanged.
 
 ## Verification
 
 The CLI import/argument smoke check requires no GPU or model credentials:
 
 ```bash
-python3 orchestrator/optimize.py --help
+aka optimize --help
+aka optimize --repo-root "$PWD" -- --help
 ```
 
 Regression tests are maintained outside this repository. Local validation uses recorded-format fixtures and real Python subprocesses instead of paid Agent CLIs. It covers native children, duplicate/cumulative counters, resume deltas, phase ordering, scoped shared-home discovery, capture limits, complete functional stdout/stderr, pipe draining after write/parser failures, ledger-failure diagnostics and resume qualification, normal exit, timeout, Long Horizon invocation archives, and the kill switch (including destination precedence, stale-observation clearing, environment propagation, and stream/ledger fallback). Boundary regressions also cover a larger ledger versus incomplete Capture, partial-fallback cursor invalidation, output arriving more than five seconds after the root exits, timeout/interruption after leader exit, and oversized native lines spanning multiple polls. The CLI smoke check alone does not verify these behaviors.

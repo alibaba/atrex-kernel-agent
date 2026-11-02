@@ -30,8 +30,10 @@ layout (`definition.json`, `reference.py`, `workload.jsonl`). See [problem
 preparation](quickstart.md) for the complete requirements. The AKA checkout path and the
 problem path are separate inputs.
 
-Existing optimization arguments and defaults retain their meanings after the mandatory `--`
-separator. Profile-selected environment values and absence are captured for children and recovery.
+The installed parser accepts retained optimization arguments after the mandatory `--`
+separator. Their workflow applicability is profile-specific: Light uses unified Episodes,
+not Legacy Fast/Full stages. Light's source-tree and ABBA path requires native Agate
+Atrex-Bench; select the [Legacy workflow](legacy-workflow.md) for SOL/SSH campaigns. Profile-selected environment values and absence are captured for children and recovery.
 The removed `orchestrator/optimize.py` shim is not a compatibility interface; automation must invoke
 the installed command.
 
@@ -42,12 +44,12 @@ Build the packages with a Python 3.10+ environment containing the `build` fronte
 ```sh
 python -m pip install build
 python tools/build_distributions.py --output /tmp/aka-dist
-python -m pip install /tmp/aka-dist/*.whl
+python -m pip install --force-reinstall /tmp/aka-dist/*.whl
 ```
 
 The installed packages require a **matching resource checkout** for declared external resources.
 Keep the packages and checkout from the same source
-revision; the `0.1.0` package version alone does not identify an unreleased checkout.
+revision; the `0.1.0` package version alone does not identify a source revision or repository release.
 Launch reconstruction checks the recorded implementation and explicitly declared resource
 identities. Normal startup does not initialize every submodule; initialize only selected resource
 submodules before exporting a checkout without Git metadata.
@@ -65,8 +67,8 @@ aka optimize --repo-root /path/to/aka -- \
 
 `python -m aka` accepts the same commands. The mandatory `--` separates framework
 options from the original application's arguments. `--repo-root` identifies the matching
-AKA checkout and makes it importable during the call; it does not change the working
-directory. `--op-dir` after the separator selects the problem. Without `--workspace`,
+AKA resource checkout; runtime code comes from the installed packages. It does not change
+the working directory. `--op-dir` after the separator selects the problem. Without `--workspace`,
 the original current-directory workspace default applies.
 
 Framework options are `--repo-root`, `--profile`, repeatable `--patch`, optional
@@ -77,8 +79,8 @@ not replace similarly named optimization flags, which belong after `--`.
 Core owns the neutral command dispatcher. Bootstrap contributes `run`, and Optimization
 contributes `optimize`, via the `aka.commands` package entry-point group. Help lists
 installed contributions without importing them; unknown or duplicate command names fail
-before loading a command. There is no implicit default command or Execution command in
-this version. Source-only use of `python -m aka` requires installed command metadata; there is no
+before loading a command. There is no implicit default command. The Legacy distribution also contributes
+`workflow` and `execution`; `aka --help` lists the installed command set. Source-only use of `python -m aka` requires installed command metadata; there is no
 source-tree fallback script.
 
 ## Select a startup implementation
@@ -143,8 +145,8 @@ declared commit with a clean working tree.
 
 Custom compositions retaining the legacy plugin are supported when they can be
 reconstructed consistently. The legacy profile selects `startup`, implemented by
-`aka.legacy.application.plugin`. The temporary Application adapter can later be replaced
-by Workflow through a launch-profile change. Bootstrap keeps the same Startup protocol.
+the selected Workflow plugin's startup adapter. Both Legacy and Light already use
+Workflow providers. Bootstrap keeps the neutral Startup protocol.
 Targets own forwarding `Invocation.environment` to children and persisting the selection
 for delayed restarts; they do not retain Core's context or composition owner.
 
@@ -160,8 +162,8 @@ from aka.contracts.startup import Invocation
 exit_code = run_profile(Path("/path/to/profiles/launch.json"), Invocation(("arg1",)))
 ```
 
-For the preserved optimizer, make the matching checkout importable and use its legacy
-host. Generic `aka run` does not add business checkouts to `sys.path`:
+For the optimization CLI adapter, install the matching packages and provide the resource
+checkout. Generic `aka run` does not add business checkouts to `sys.path`:
 
 ```python
 from pathlib import Path
@@ -273,12 +275,13 @@ Retain those inputs and do not rewrite locks to bypass identity checks.
 | Distribution | Ownership | Python |
 | --- | --- | --- |
 | `atrex-aka-framework` | `aka`, neutral dispatcher, `aka.core`, `aka.contracts`, `aka.bootstrap`, generic `aka run` command | 3.10+ |
-| `atrex-aka-legacy` | `aka.legacy`, Application and Task implementations, default profiles, `aka optimize` command | 3.10+ |
+| `atrex-aka-legacy` | Shared business providers, explicit Legacy Workflow, `optimize` / `workflow` / `execution` commands | 3.10+ |
+| `atrex-aka-light` | Managed Agent/Workspace/Runtime, evaluation and acceptance, default Light profiles | 3.10+ |
 | `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |
 | `atrex-aka-observation-long-horizon` | `aka.observation.long_horizon`, workflow-specific observation adapter | 3.10+ |
 
-Framework has no runtime package dependencies. Legacy and both optional distributions
-depend on `atrex-aka-framework==0.1.0`; Dashboard's `long-horizon` extra adds
+Framework has no runtime package dependencies. Light depends on `atrex-aka-legacy==0.1.0`.
+Legacy and both dashboard/observation distributions depend on `atrex-aka-framework==0.1.0`; Dashboard's `long-horizon` extra adds
 `atrex-aka-observation-long-horizon==0.1.0`. Neither optional distribution requires
 Legacy. Although the observation adapter imports only Contracts interfaces, its
 installation includes the full Framework distribution, including Core, Bootstrap and
@@ -287,7 +290,7 @@ packages into Framework and Legacy; module interfaces remain separate within the
 
 The consolidated packages replace the old Core, Contracts, Bootstrap and Optimization
 distributions. Remove the old distributions before installing their replacements to
-avoid overlapping files. The four current distributions own disjoint files and pin
+avoid overlapping files. The five current distributions own disjoint files and pin
 matching dependency versions. Distribution boundaries define installation ownership;
 they do not require a separate distribution for every future module. Build tooling
 stages owned files, builds sdists, then builds wheels from those sdists.
@@ -303,11 +306,10 @@ the viewer with the separately packaged long-horizon adapter, without importing 
 optimizer. The optimization profile does not load either plugin. See the
 [dashboard guide](optimization-dashboard.md) for source and installed launch commands.
 
-The launcher and legacy adapter are migration bridges used by existing entrypoints. They
-can be removed when the application implementation and its runtime resources are
-packaged and all callers use the supported Bootstrap entry, with equivalent startup,
-recovery and installation checks. Execution extraction is not required for this version
-to operate.
+The compatibility command converts optimization arguments once, then dispatches the
+selected installed Workflow through Bootstrap. Execution, Resources, Agent, and Workflow
+already own their packaged implementations and runtime assets; removed checkout scripts
+are not alternative launch interfaces.
 
 See [the framework interface](plugin-framework.md) for dependency, scope, event,
 configuration and cleanup semantics.

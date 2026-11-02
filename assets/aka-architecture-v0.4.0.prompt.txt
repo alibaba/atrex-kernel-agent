@@ -1,0 +1,60 @@
+Artwork generated with the built-in image_gen tool.
+
+Use case: infographic-diagram.
+Create a static 1536 x 1024 architecture diagram for Atrex Kernel Agent v0.4.0.
+
+Visual identity
+Use assets/aka-logo-dark.png as the exact AKA wordmark reference, placed at the top right. Match its sharp geometric, confident engineering character. Use modern bold geometric sans-serif headings, readable regular sans-serif body text, and small monospaced step numbers. Background near-white #F7F8FA; graphite #242628; secondary grey #687078; silver borders #D7DCE1. Limit warm vermilion #F36B36 to a few tiny accents besides the original logo. Establish hierarchy through typography, negative space, weight and monochrome contrast. Flat technical editorial design, crisp line icons, restrained four-pixel corners. No serif fonts, paper texture, rainbow card colors, pastel fills, glossy gradients, shadows or cartoon mascot.
+
+Header
+Title: "Atrex Kernel Agent".
+Subtitle: "Architecture · v0.4.0".
+AKA logo at top right, with small grey uppercase "DEFAULT WORKFLOW" below.
+
+Supervisor
+A wide solid graphite band below the header, with a narrow warm accent at its left edge. White title "SUPERVISOR"; secondary line "Workflow · Budgets · Private Git · Evaluator inputs · Promotion". A small authority icon at left and five white monoline symbols at right, labelled "Workflow", "Budgets", "Private Git", "Evaluator inputs", "Promotion".
+
+Architecture
+Six white cards with fine silver borders in three columns and two rows, traversed clockwise. Small plain grey step numbers, bold graphite titles, regular grey descriptions and subordinate monochrome pictograms. Coding agent has a fine graphite top rule. Coding agent and Incumbent have tiny warm accent marks by their step numbers.
+
+Top left — 01 Baseline
+"Operator + launch profile"
+"V0 reference / optional V1"
+Pictogram: document.
+
+Top middle — 02 Coding agent
+"Managed source draft"
+"Research · Edit · Report"
+Pictogram: code brackets.
+
+Top right — 03 Private Tool Runtime
+"Scoped HTTP tools"
+"Wiki · Records · Job routing"
+Pictogram: application window.
+
+Bottom right — 04 Agate GPU execution
+"Evaluate · Profile · ABBA"
+"Immutable evaluator inputs"
+Pictogram: processor.
+
+Bottom middle — 05 Acceptance
+"Correctness · Policy · Seal source"
+"Same-allocation ABBA verdict"
+Pictogram: checked document.
+
+Bottom left — 06 Incumbent
+"Promote verified improvement"
+"Otherwise retain current kernel"
+Pictogram: award.
+
+Thin graphite arrows outside cards:
+Baseline → Coding agent → Private Tool Runtime → Agate GPU execution → Acceptance → Incumbent.
+Label Coding agent → Runtime "requests"; label GPU → Acceptance "evidence".
+The feedback loop starts at the top of Incumbent, runs up into the aisle between rows, then right and up into the bottom of Coding agent. Label it "Next Episode". Baseline has only its outgoing arrow into Coding agent. No connector crosses text.
+
+Footer
+A fine silver divider.
+Bold: "Agents propose. The Supervisor verifies and promotes."
+Regular: "Wiki on · Source tree by default · Native agent / optional Bubblewrap".
+
+Keep the English text exact. No extra modules, metrics or unsupported claims. Deliver one complete static image.

@@ -1,6 +1,6 @@
 # Session capture performance evidence
 
-This benchmark compares capture disabled (`ATREX_SESSION_CAPTURE=0`) with capture enabled (`=1`) on the same implementation. The disabled arm exercises the previous `Popen.communicate()` path; the enabled arm includes live capture and finalization. It measures the overhead introduced by default-on capture, not Kernel performance or an Agent's optimization quality.
+This benchmark compares capture disabled (`ATREX_SESSION_CAPTURE=0`) with capture enabled (`=1`) on the same implementation. The disabled arm exercises the previous `Popen.communicate()` path; the enabled arm includes live capture and finalization. It measured the overhead introduced by capture in that implementation, not Kernel performance or an Agent's optimization quality.
 
 ![Capture-off/on latency and CPU curves at 1, 8, and 32 MiB](assets/session-capture-overhead.png)
 
@@ -39,168 +39,17 @@ Capture reads and processes output concurrently with the CLI, so some of its wor
 - CPU uses `time.process_time()`: Supervisor CPU across its threads, excluding child-process CPU. Peak RSS uses `resource.getrusage(RUSAGE_SELF)` for the fresh Supervisor process, including its imports; it is not the RSS delta over the timed interval.
 - Files are on the workstation's local temporary storage. Filesystem caches are warm; there is no cache flush or CPU isolation. The implementation polls native files at 1 Hz; short invocations may only reach the final native sync.
 
-This burst-output benchmark exposes capture overhead without hiding it behind model/network wait time. Its off/on ratios are **not** production Agent slowdown ratios. It does not cover long-running discovery, large resumed histories, many subagents, all provider formats, Linux storage, or concurrent Campaigns. The three points cannot establish asymptotic complexity. Those conditions require additional measurements before claiming negligible production overhead. Operators can use [the capture kill switch](session-observability.md#disable-capture-and-roll-back) if the extra resource cost is unacceptable.
+This burst-output benchmark exposes capture overhead without hiding it behind model/network wait time. Its off/on ratios are **not** production Agent slowdown ratios. It does not cover long-running discovery, large resumed histories, many subagents, all provider formats, Linux storage, or concurrent Campaigns. The three points cannot establish asymptotic complexity. Those conditions require additional measurements before claiming negligible production overhead. Operators can use [the capture configuration](session-observability.md#disable-capture-and-roll-back) if the extra resource cost is unacceptable.
 
-## Reproduction
+## Read the archived samples
 
-Run from the AKA checkout containing this change. Python 3.11+ and the standard library suffice; using the measured Python/OS gives a closer comparison. The helper is created in a temporary directory, not committed. It needs no installed provider CLI.
+These measurements describe the 2026-09-16 implementation identified by hashes in the
+raw JSON. They are retained as historical capture-cost evidence, not current Light
+performance measurements. The old checkout-import benchmark no longer runs against the
+installed module layout. Current capture selection is documented in
+[Session observability](session-observability.md#disable-capture-and-roll-back).
 
-The helper below now supplies Claude's `result.usage` as well as `modelUsage`, matching the current accounting contract. The archived measurements above used the earlier modelUsage-only fixture; their raw samples and script hashes remain unchanged and are not measurements of this updated helper.
-
-<details>
-<summary>Copy-paste benchmark command (includes the complete helper)</summary>
-
-```bash
-benchmark_dir="$(mktemp -d)"
-cat > "$benchmark_dir/benchmark.py" <<'PY'
-"""Synthetic run_bounded capture A/B; no model, GPU, credentials or test monkeypatches."""
-import argparse
-import hashlib
-import json
-import os
-import platform
-import resource
-import statistics
-import subprocess
-import sys
-import tempfile
-import time
-from datetime import datetime, timezone
-from pathlib import Path
-
-CHILD = """import pathlib,sys
-payload = pathlib.Path(sys.argv[1]).read_bytes()
-native = pathlib.Path(sys.argv[2])
-native.parent.mkdir(parents=True, exist_ok=True)
-native.write_bytes(payload)
-sys.stdout.buffer.write(payload)
-sys.stdout.buffer.flush()
-"""
-
-
-def sample(checkout, fixture, enabled):
-    sys.path.insert(0, str(checkout))
-    from orchestrator.agent_runtime.process import run_bounded
-    with tempfile.TemporaryDirectory(prefix='sample-', dir=fixture.parent) as temporary:
-        root = Path(temporary).resolve()
-        workspace, home = root / 'workspace', root / 'home'
-        workspace.mkdir()
-        home.mkdir()
-        native = home / '.claude/projects/bench/bench-session.jsonl'
-        # Fixed background discovery workload; unrelated content is never captured.
-        for i in range(64):
-            path = home / f'.claude/projects/unrelated/other-{i}.jsonl'
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text('{"type":"user","message":{"role":"user","content":"unrelated"}}\n')
-        env = {'PATH': os.environ.get('PATH', ''), 'HOME': str(home),
-               'ATREX_AGENT_CLI': 'claude', 'ATREX_SESSION_CAPTURE': str(enabled),
-               'ATREX_SESSION_CAPTURE_DIR': str(root / 'capture')}
-        command = [sys.executable, '-c', CHILD, str(fixture), str(native),
-                   '--session-id', 'bench-session', 'synthetic capture benchmark']
-        cpu_start, start = time.process_time(), time.perf_counter()
-        stdout, stderr, status, timed_out = run_bounded(command, workspace, 120, env)
-        elapsed, cpu = time.perf_counter() - start, time.process_time() - cpu_start
-        row = {'capture': bool(enabled), 'wall_seconds': elapsed, 'supervisor_cpu_seconds': cpu,
-               'peak_rss_mib': resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / (1024**2 if sys.platform == 'darwin' else 1024),
-               'stdout_bytes': len(stdout.encode()), 'stdout_sha256': hashlib.sha256(stdout.encode()).hexdigest(),
-               'exit_status': status, 'timed_out': timed_out, 'stderr_bytes': len(stderr.encode()),
-               'artifact_bytes': sum(p.stat().st_size for p in (root / 'capture').rglob('*') if p.is_file())}
-        assert status == 0 and not timed_out and not stderr
-        assert stdout.encode() == fixture.read_bytes()
-        if enabled:
-            report = json.loads(next((root / 'capture').glob('run-*/token-usage.json')).read_text())
-            row.update(capture_complete=report['capture_complete'], total_tokens=report['total']['total_tokens'],
-                       measurement=report['total']['measurement'])
-            assert row['capture_complete'] and row['measurement'] == 'exact'
-        return row
-
-
-def make_fixture(path, mib):
-    records = []
-    counters = {'input_tokens': 100, 'output_tokens': 20, 'cache_read_input_tokens': 0,
-                'cache_creation_input_tokens': 0}
-    # Exactly 4096 bytes per response; two identical source copies in each run.
-    for i in range(mib * 256):
-        event = {'type':'assistant', 'message':{'id':f'msg-{i:06}', 'role':'assistant',
-                 'content':[{'type':'text', 'text':''}], 'usage':counters}}
-        base = json.dumps(event, separators=(',', ':'))
-        event['message']['content'][0]['text'] = 'x' * (4096 - len(base.encode()) - 1)
-        line = json.dumps(event, separators=(',', ':')) + '\n'
-        assert len(line.encode()) == 4096
-        records.append(line)
-    total = {key:value*mib*256 for key,value in counters.items()}
-    records.append(json.dumps({'type':'result', 'usage':total, 'modelUsage':{'synthetic':total}})+'\n')
-    path.write_text(''.join(records))
-
-
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--checkout', type=Path, required=True)
-    parser.add_argument('--output', type=Path)
-    parser.add_argument('--sample', type=Path)
-    parser.add_argument('--capture', type=int, choices=(0,1))
-    args = parser.parse_args()
-    checkout = args.checkout.resolve()
-    if args.sample:
-        print(json.dumps(sample(checkout, args.sample.resolve(), args.capture)))
-        return
-    output = args.output.resolve()
-    output.parent.mkdir(parents=True, exist_ok=True)
-    data = {'started_at':datetime.now(timezone.utc).isoformat(),
-            'environment':{'platform':platform.platform(), 'machine':platform.machine(),
-              'python':sys.version, 'logical_cpus':os.cpu_count(), 'python_executable':sys.executable},
-            'checkout_head':subprocess.check_output(['git','rev-parse','HEAD'],cwd=checkout,text=True).strip(),
-            'tracked_diff_sha256':hashlib.sha256(subprocess.check_output(['git','diff'],cwd=checkout)).hexdigest(),
-            'sizes_mib':[1,8,32], 'repetitions':5, 'warmups_per_mode_per_size':1,
-            'workload':{'bytes_per_response':4096, 'native_copies':1, 'unrelated_native_files':64,
-                        'fresh_process_per_sample':True, 'timeout_seconds':120},
-            'benchmark_script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
-            'samples':[], 'warmups':[]}
-    if sys.platform == 'darwin':
-        for name, key in [('machdep.cpu.brand_string', 'cpu_model'), ('hw.memsize', 'physical_memory_bytes')]:
-            data['environment'][key] = subprocess.check_output(['sysctl', '-n', name], text=True).strip()
-    data['source_sha256'] = {
-        str(path.relative_to(checkout)): hashlib.sha256(path.read_bytes()).hexdigest()
-        for path in sorted((checkout / 'orchestrator').rglob('*.py'))
-        if path.name.startswith('session_') or path.parent.name == 'agent_runtime'
-    }
-    with tempfile.TemporaryDirectory(prefix='fixtures-',dir=output.parent) as tmp:
-        for size in data['sizes_mib']:
-            fixture = Path(tmp) / f'{size}.jsonl'
-            make_fixture(fixture,size)
-            for repetition in range(6):
-                # Alternate paired ordering to reduce monotonic drift bias.
-                for enabled in ((0,1) if repetition % 2 == 0 else (1,0)):
-                    result = subprocess.run([sys.executable,__file__,'--checkout',str(checkout),
-                       '--sample',str(fixture),'--capture',str(enabled)], text=True,capture_output=True,check=True)
-                    row = json.loads(result.stdout)
-                    row.update(size_mib=size,repetition=repetition,fixture_sha256=hashlib.sha256(fixture.read_bytes()).hexdigest())
-                    assert not enabled or row['total_tokens'] == size*256*120
-                    data['warmups' if repetition == 0 else 'samples'].append(row)
-                    output.write_text(json.dumps(data,indent=2)+'\n')
-                    print(f'{size} MiB capture={enabled} repeat={repetition}: wall={row["wall_seconds"]:.3f}s cpu={row["supervisor_cpu_seconds"]:.3f}s',flush=True)
-    data['finished_at']=datetime.now(timezone.utc).isoformat()
-    output.write_text(json.dumps(data,indent=2)+'\n')
-    for size in data['sizes_mib']:
-        for enabled in (False,True):
-            rows=[r for r in data['samples'] if r['size_mib']==size and r['capture']==enabled]
-            print(size,enabled,{k:statistics.median(r[k] for r in rows) for k in ('wall_seconds','supervisor_cpu_seconds','peak_rss_mib')})
-
-
-if __name__ == '__main__':
-    main()
-PY
-
-python3 "$benchmark_dir/benchmark.py" \
-  --checkout "$PWD" \
-  --output "$benchmark_dir/results.json"
-
-printf 'Raw results: %s\n' "$benchmark_dir/results.json"
-```
-
-</details>
-
-The command prints every sample and the median wall/CPU/RSS results. To independently reproduce the plotted values from either the new output or the checked-in raw data:
+Summarize the unchanged archived samples from the repository root:
 
 ```bash
 python3 - docs/assets/session-capture-performance.json <<'PY'
@@ -221,5 +70,3 @@ for size in data["sizes_mib"]:
                   f" min={min(values):.6f} max={max(values):.6f}")
 PY
 ```
-
-Replace the JSON path with `"$benchmark_dir/results.json"` to summarize a new run. Keep its raw output and environment when comparing results across machines.

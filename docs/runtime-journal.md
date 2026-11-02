@@ -1,109 +1,122 @@
 # Runtime Journal and Episode Reports
 
-Long-running optimization needs both immutable measurement facts and the Agent's evolving interpretation. Gateway Records already bind exact Kernel source to results; this interface adds durable research Directions, structured Experiments and terminal reports that reference those records instead of repeating measurement values in prose.
-
-The users are optimization Agents recording and retrieving evidence, and operators inspecting or recovering interrupted Episodes. Successful writes are persisted before acknowledgement. Validation errors identify the bad fields or lifecycle state so the Agent can correct a report within the same Session. This reduces reliance on an end-of-Episode reconstruction; it does not make Agent-authored analysis scientifically authoritative.
+The Light Journal stores terminal Episode reports and optional Agent-authored research
+annotations. Measurement records are independent Supervisor-owned facts. Research prose
+references those facts; it does not become authoritative correctness or performance evidence.
 
 ## Scope and compatibility
 
-The controller registers each Long Horizon Episode with its trusted number, workspace, base Commit and branch. Only its optimizer Sessions receive Journal access. Framework Baseline and auxiliary reviewers retain their existing interfaces. Agents cannot register an Episode, choose a Journal path, or select another Campaign in an HTTP request.
+The Workflow registers each Episode with a trusted workspace, number, base commit, and branch.
+Only authorized optimizer Sessions can write its Journal. Baseline and auxiliary reviewers
+have their own interfaces. Agents cannot select a private Journal path or another campaign.
 
-Long Horizon registers each optimization Episode through the Campaign API with no minimum experiment count. Re-registration must preserve the bound policy; existing bindings fail closed on a mismatch.
+**Research recording is disabled by default.** Reports and automatic measurement records remain
+enabled. To add Direction/Experiment annotations:
 
-New Long Horizon Episodes use Runtime Journal and Supervisor-created candidate commits; see [handoff and promotion](supervisor-promotion.md). Low-level local Journal APIs remain available to legacy integrations, but an unfinished legacy Episode must finish using its original version/configuration. Legacy Journals are not automatically migrated to Direction/Experiment IDs.
+```json
+{"api_version":1,"patches":[{"id":"light_journal","config":{"research_records":true}}]}
+```
 
-Protocol mixing returns HTTP 400 with `journal_protocol_conflict` and `repairable=false`: changing request arguments cannot switch this Episode to Runtime Journal. The Agent must continue the legacy append/finalize and handoff commands from its Episode prompt, preserving existing evidence. An already-finalized Journal only needs its remaining handoff steps; do not erase history to bypass the rejection.
+Pass the patch before `--` in `aka optimize --repo-root ... --patch ... -- ...`.
+The setting is frozen per Episode. Older Journals without the setting retain enabled behavior;
+resume them with their original configuration. Legacy local append/finalize APIs belong to
+the Legacy workflow and must not be mixed with Light reports.
 
-The Supervisor validates exact measured source and creates the candidate commit; Agents supply no Commit ID. All outcomes require valid report fields and no in-progress Direction. An empty pivot or blocked report is permitted when no Direction needs closing; blocked additionally requires a concrete blocker. Candidate reports require a selected passing full Evaluate. Plans/profile files and Phase Markers are not required.
+## Default report-only workflow
+
+After editing the permitted candidate files and obtaining a standard full evaluation, save
+a report under scratch. Replace the illustrative ID with a real measurement from this campaign:
+
+```json
+{
+  "status": "candidate_ready",
+  "summary": "Full evaluation passed for the selected candidate.",
+  "gateway_record_ids": ["gateway-11111111111111111111111111111111"]
+}
+```
+
+```bash
+python3 tools/sandbox.py --kind episode-report --request-file scratch/report.json
+```
+
+At least one citation must be a passing standard full Evaluate for the exact current
+candidate. Custom-input, shape-subset, correctness-only, Profile, or ABBA alone cannot
+satisfy that full-evaluation report binding. Supplemental acceptance checks and native
+ABBA promotion remain separate.
+
+`pivot` and `blocked` do not require invented research records. A blocked report needs
+a meaningful blocker. Invalid fields or evidence return repair guidance and leave the
+Episode open. A successful report response means the report was accepted, not that the
+kernel was promoted.
+
+## Optional research recording
+
+With `research_records: true`, Directions describe hypotheses, plans, lifecycle, and ancestry;
+Experiments describe changes and interpretations tied to Gateway records.
+A candidate report selects an Experiment with `selected_experiment_id`.
+No Direction may remain in progress at handoff.
+
+| Command | Purpose |
+| --- | --- |
+| `update-direction` | Propose, start, complete, abandon, block, or defer a hypothesis |
+| `record-experiment` | Attach analysis and actual measurement IDs |
+| `list-directions` / `list-experiments` | Export a visible-history index |
+| `load-direction` / `load-experiment` | Read an existing research record |
+| `episode-report` | Submit the terminal outcome |
+
+Write operations use `--request-file`. List operations use `--output-path scratch/...`;
+load operations use `--record-id`. All run through `python3 tools/sandbox.py --kind ...`.
+Disabled research writes return an unavailable contract; read-only queries can still inspect
+earlier recorded Episodes.
+
+At most three distinct Directions can be started in one Episode, and only one can be active
+at a time. Closing a Direction requires an explicit assessment and supporting Experiment IDs.
+Ancestry and Wiki attribution are validated claims, not proofs of benefit.
+See the [packaged Journal reference](../src/aka/light/workspace/resources/skills/runtime-records/references/journal.md)
+for the enabled research schema and
+[record queries](../src/aka/light/workspace/resources/skills/runtime-records/references/records.md).
+Edit only source files permitted by the selected layout; a default source-tree adapter is fixed.
 
 ## Lifecycle and failure paths
 
-```mermaid
-flowchart TD
-    C["Long Horizon controller<br/>register_episode"] --> S["Session capability<br/>workspace + private Journal binding"]
-    A["Agent: tools/sandbox.py"] --> S
-    S --> L["execute_journal<br/>Session/Episode locks + private file lock"]
-    L --> V["Validate fields, lifecycle and visible IDs"]
-    V -->|Invalid input; no mutation| E["400 + code/message/next_action<br/>Correct and resubmit"]
-    E --> A
-    V --> M["MeasurementStore.read<br/>Validate cited facts and Kernel binding"]
-    M --> J["Atomic private Journal write"]
-    J -->|Direction/Experiment| ACK["ID acknowledgement"]
-    J -->|Accepted Episode Report| P["Publish legacy Journal projection<br/>then handoff.json"]
-    P --> G["Existing Long Horizon verification and promotion"]
-    P -->|Publication failure| R["503; keep durable report<br/>Retry identical report after storage repair"]
-    L -->|Private evidence unreadable| I["Infrastructure error<br/>Do not invent evidence or rerun GPU work"]
-```
+`aka.light.runtime.server` authenticates and dispatches.
+`aka.light.workflow.journal_service` coordinates reporting, validation, and publication;
+`aka.light.workflow.journal` validates and persists the private Journal.
+CandidateWorkspace performs sealing, while Acceptance and Workflow own verification and promotion.
 
-`orchestrator/supervisor_runtime.py` authenticates, binds and dispatches. `supervisor/journal.py` validates requests, resolves measurement records and saves the private Episode document. `direction_lifecycle.py` replays legal state transitions; `direction_genealogy.py` validates optional ancestry. `tools/sandbox.py` only parses arguments and sends HTTP. Per-Episode locks serialize multiple Sessions, and OS file locks reject concurrent writers from another controller without blocking all Campaign requests.
+The report transaction validates citations, runs required candidate checks, seals exact source,
+persists the report, then publishes controller compatibility state and handoff.
+Later draft edits cannot change the seal. Identical accepted reports are idempotent and can
+repair interrupted publication; conflicting terminal mutations are rejected.
 
-## Objects and API
+Mandatory native correctness requires six cases and full coverage under matching source,
+input, evaluator, tolerance, and environment identity. Compatible full or correctness-only
+records may satisfy that correctness check. SOL uses its complete trusted workload contract,
+without native-only seed controls; Light ABBA still requires native Agate Atrex-Bench.
 
-| Object | Content | Ownership |
-| --- | --- | --- |
-| Direction | Hypothesis, rationale, plan, lifecycle, explicit assessment and ancestry | Agent proposes/interprets; Runtime validates and persists |
-| Experiment | Change, Gateway Record IDs, evidence narrative, analysis and action | Agent-authored interpretation; referenced measurements validated by Runtime |
-| Gateway Record | Exact request/Kernel binding and saved projected response | Existing Measurement Store |
-| Episode Report | Terminal status, summary, selected Experiment or blocker | Agent submits; Runtime validates; Supervisor independently decides acceptance |
+| Failure | Response |
+| --- | --- |
+| Invalid fields, citation, lifecycle, or measured candidate rejection | Repairable feedback; correct the request/source and resubmit |
+| Supplemental validation incomplete | Report remains unaccepted; preserve evidence for repair or a blocked outcome |
+| Private storage or post-write publication failure | Infrastructure error; reconcile durable state before retrying |
+| Unknown transport outcome | Inspect existing records/report; do not blindly repeat mutations |
+| Protocol conflict | Continue the original workflow/configuration; changing arguments cannot switch protocols |
 
-All calls use `POST /v1/journal/execute` and the existing Session bearer. The Agent CLI is:
-
-| Command | Input | Successful output |
-| --- | --- | --- |
-| `update-direction` | `--request-file FILE` | `status`, `direction_id` |
-| `record-experiment` | `--request-file FILE` | `status`, `experiment_id` |
-| `list-directions`, `list-experiments` | `--output-path scratch/FILE` | `status`, `file`, `count`; index written to file |
-| `load-direction`, `load-experiment` | `--record-id ID` | Complete public record as JSON |
-| `episode-report` | `--request-file FILE` | `status: accepted`, message |
-
-The HTTP payload uses `operation` plus exactly one of `request`, `file`, `direction_id`, or `experiment_id`. Operations are `direction_update`, `experiment_record`, `directions_list`, `experiments_list`, `direction_load`, `experiment_load`, and `episode_report`. Successful HTTP responses use the existing `exit_code/stdout/stderr` envelope; the CLI prints the JSON in stdout. Malformed input returns a structured HTTP 400, private-state/publication failures a 503; post-write failures must not be reported as safe input retries. Transport loss can leave a write's outcome unknown.
-
-Field-by-field examples are maintained in [the packaged Journal reference](../src/aka/light/workspace/resources/skills/runtime-records/references/journal.md); saved measurement readers are covered in [the packaged record reference](../src/aka/light/workspace/resources/skills/runtime-records/references/records.md). These files are the single sources installed into the Agent workspace. Complete encoded request bodies are capped at 2 MiB. Journal request files are capped at 2,093,056 bytes (2 MiB minus a 4 KiB envelope reserve); the client also checks the final encoded body to account for JSON expansion. Oversized requests are rejected locally with instructions to shorten text or lists, before sending HTTP. Private Episode Journals and exported indexes are capped at 16 MiB. Long text and list fields have smaller per-field limits reported by validation.
-
-### Directions and evidence
-
-Propose any number of useful ideas, but start at most three distinct Directions in one Episode and only one at a time. Complete/abandon/block/defer requires a started Direction, explicit supporting Experiment IDs and `hypothesis_status=unresolved|supported|refuted`. Closed Directions can be restarted or reassessed; previous events remain unchanged. Lifecycle completion does not imply a proven hypothesis.
-
-Optional ancestry has three kinds, each with a distinct purpose: `refinement` narrows or extends an earlier hypothesis; `correction` records a revised hypothesis without rewriting history and may explicitly supersede one parent; `combination` joins ideas from at least two distinct parent Directions. These are Agent-authored interpretations, not claims of measured benefit. An unchanged hypothesis reuses its existing Direction ID, with `start` used to resume a closed Direction; changing its implementation belongs in an Experiment. Cross-Campaign/DSL porting is not a Journal workflow. Parents must be visible in this Campaign, and declared ancestry cannot be changed later.
-
-Each Experiment cites at least one visible Kernel-bound Evaluate/ABBA/Profile/Dev/Check/Disassemble record. Failed diagnostics may document an unresolved blocker; Env/Wiki and unbound Dev are not Kernel evidence. Supported/refuted closure requires a completed observation in every selected Experiment. Runtime checks records and bindings, not causal relevance. Late evidence can attach to a closed Direction without silently reopening it or replacing selected support. Optional Wiki attribution follows the existing diagnostic-only schema.
-
-The Journal's private evidence reader derives full-evaluation eligibility from stored request options without carrying the raw request/options/inputs into its evidence view. Journal responses and compatibility reports are assembled separately; the eligibility flag is internal, not an Agent-facing field.
-
-Queries combine the current Journal with finalized earlier Runtime Journals in this Campaign, including non-winning explorations. The Supervisor builds a process-local Direction/Experiment history index on first use or restart, then ingests newly finalized Episodes once; ordinary requests read and replay only the current Episode. Each incremental ingest builds a private copy and atomically publishes the completed index, so concurrent readers keep an immutable snapshot rather than observing a partially folded Episode. A straggling older-Episode binding receives a private historical snapshot and cannot replace the newest Campaign cache. Unfinished previous Episodes, future Episodes and unrelated Campaigns are excluded. A deleted abandoned unfinished Episode disappears during the next rebuild; an existing unreadable Journal still fails closed. Stable global Direction/Experiment IDs and immutable ancestry avoid reconstructing identity from Episode-local indexes. List outputs are snapshots, not automatically refreshed files.
-
-### Reports and old consumers
-
-No Direction may remain in progress at handoff. `candidate_ready` requires a current-Episode selected Experiment, a passing full Evaluate record for byte-identical `kernel.py`, and a Supervisor-created candidate commit. The existing worktree validator checks HEAD, branch, source match and permitted diff. Custom-input, Shape-subset, correctness-only, Profile or ABBA alone are insufficient for that report binding; acceptance requires policy-matched recorded ABBA.
-
-After report/evidence validation and before creating the candidate commit or finalizing the Journal, the Supervisor selects an evaluator-specific acceptance gate. For Atrex-Bench it looks for a successful full or correctness-only Evaluate with six correctness cases and matching frozen Kernel, complete input/Shape contract, evaluator, tolerances, target and environment. Ordinary Atrex-Bench Evaluate supplies six cases by default. Only timing iterations, performance repetitions and full versus correctness-only mode may differ for this correctness-only reuse; custom inputs, explicit Shape subsets, fewer seeds and old records without the resolved policy cannot substitute. If none qualifies, the Supervisor requests `--kind run --mode correctness_only --multi-seed 5 --no-sync`.
-
-SOL-ExecBench instead runs or exactly reuses `--kind run --no-sync`. This invokes the official evaluator over every entry in `workload.jsonl`, using its per-workload tolerances. The request deliberately contains neither `--mode correctness_only` nor `--multi-seed`: those controls are Atrex-Bench typed options and would prevent the SOL Dev fallback. A qualifying SOL record must bind the exact candidate source, `reference.py`, `definition.json`, `workload.jsonl`, `solution.json`, the trusted `test_kernel.py`, and optional `config.json`; it must report positive, complete workload coverage and an all-pass result. The private Journal retains the successful Record under the compatibility key `acceptance_checks.multi_seed_correctness`; the Agent need not add an extra check to its Experiment. Agent duplicate-request errors remain unchanged.
-
-SOL Agent evaluation and acceptance share the `sol_execbench_coverage_v1` result contract in task identity. Upgrading a store with earlier unversioned SOL records automatically measures the first matching task again under the configured repetition policy; it does not repeatedly reuse a response whose coverage was discarded. Old Records remain readable, and new matching Records are reused normally. See [measurement upgrade behavior](measurement-records.md#optional-repeated-measurement).
-
-SOL measurements use the repository-trusted `reference/test_kernel.py` and the V0-committed
-`config.json`, replacing mutable copies before hashing and execution. Acceptance verifies the
-harness digest, not merely its presence in the Record. Configuration changes in an Agent draft,
-worktree or index cannot change this policy; an absent V0 config stays absent. Invalid or missing
-Git provenance stops dispatch rather than trusting the mutable copy.
-
-A confirmed correctness rejection returns repairable `candidate_correctness_failed` with the public Record ID and instructions to repair source/evidence and resubmit. The Journal remains in progress and the Supervisor creates no candidate commit. Infrastructure/unknown outcomes are not relabeled as candidate failures or accepted as passes. Execution retains the reporting Session's authorization and deadline. Pivot/blocked reports and identical replays of an accepted report submit no validation jobs. ABBA performance acceptance and Baseline-specific policies remain separate.
-
-After all validation, the Supervisor seals the exact candidate source, then saves the private report. Runtime then publishes a schema-1 compatibility Journal for existing Long Horizon consumers and atomically publishes `handoff.json` last. It maps Experiment IDs to the old selected index and derives evaluation fields from Gateway Records. Canonical memory remains Supervisor-generated. Identical accepted reports are idempotent and can repair a failed publication; conflicting terminal reports and subsequent mutations are rejected. Report rejection before persistence leaves the Journal open and writes no handoff.
-
-Ordinary report validation failures remain HTTP 400 with `repairable=true`. `error.message` identifies the invalid field, lifecycle state or evidence requirement, and `error.next_action` explains how to correct and resubmit. Field-shape errors also list missing, unexpected and allowed fields. Correct the report or the indicated prerequisite, then call `episode-report` again in the same Session; only an accepted report ends the Episode. This is distinct from a `journal_protocol_conflict`, which requires continuing the existing legacy workflow rather than changing report arguments.
-
-The workspace's `runtime_journal_projection` flag is only a claim. Completion checks, including interrupted-handoff recovery, read the existing private Journal from the controller's Campaign scope and verify its schema, Episode/base Commit/branch identity, terminal state, finalization and candidate Commit. Experiment IDs must be nonempty strings, unique within each document, and match exactly between the private Journal and its projection; omitted or unknown Experiments are rejected before downstream counting and memory compilation. This verifies identity and completeness, not equality of every projected field. Empty pivot/blocked reports require that verification and an empty private Experiment list. Missing, corrupt, unfinalized or mismatched private state fails closed; validation never creates a Journal to authorize the exception. Legacy terminal validation remains strict by default.
+The controller verifies its private report and source binding during completion and recovery.
+An Agent-writable projection cannot authorize completion or manufacture missing evidence.
+Generated memory is optional and does not control report durability.
 
 ## Storage, limits and rollback
 
-Private documents live beside the existing Measurement Store at `<Supervisor scope>/journals/episodes/eNNNNNNNN/journal.json`; they are outside the Agent workspace and hidden in Bubblewrap mode. Native mode still has the operator UID's filesystem authority. The legacy Journal/handoff projection is controller-only compatibility state for managed Episodes, not a replacement private fact store or a new security claim about native mode. Requests never accept private storage paths. Scratch exports use descriptor-based publication so symlinks cannot redirect writes outside the allowed workspace.
+Private Journals live at
+`<Supervisor scope>/journals/episodes/eNNNNNNNN/journal.json`.
+The HTTP body is limited to 2 MiB; request files to 2,093,056 bytes, reserving envelope space.
+Journals and exported indexes are bounded to 16 MiB, with smaller per-field limits.
 
-Before mutations, Runtime reads the legacy Journal without following symlinks. A symlink, invalid path component or non-regular file returns a repairable 400 with workspace-path repair instructions; no Journal mutation is applied. A missing legacy Journal remains valid. Storage-access failures, including I/O errors, remain non-repairable 503 infrastructure blockers rather than requests to rewrite evidence.
+History queries include the current Episode and finalized earlier Episodes in the same
+campaign, including rejected explorations. They exclude unfinished/future/unrelated Episodes.
+The process-local derived index is rebuilt on restart; private Journal files remain authoritative.
 
-Atomic document replacement favors simplicity but rewrites one bounded Episode document per update. The history index is derived, process-local state: restart rebuilds it from private Journals, and an earlier unfinished Episode that later finalizes triggers a rebuild. Point lookups use the index; list exports necessarily enumerate their visible entries. Operator edits to already-indexed finalized Journals require a Supervisor restart before queries reflect them. Interpretation still depends on Agent submissions, and damaged history found during indexing fails closed rather than silently discarding evidence. There is no automatic retention cleanup or retry of ambiguous mutations.
-
-Regression fixtures are kept outside the repository. They exercise a local fake GPU Gateway plus real HTTP/client, Git and filesystem paths: durable write/query, cross-Episode history, source/result binding, invalid-report repair, exact report replay, conflicting reports, privacy, scoped concurrent requests, legacy projection/validation and unchanged measurement APIs. These checks do not claim real-model optimization gains or production GPU qualification.
-
-Local regression coverage exercises durable Journal operations, report repair/replay, measurement bindings, controller-verified projections, omitted/unknown/duplicate Experiment IDs, Direction lifecycle/ancestry, empty terminal outcomes, private-input masking and sealed-source acceptance. Test fixtures remain outside the repository. Historical minimum-count policy can still be validated when explicitly registered, but the unified Campaign does not configure such a count.
+Bubblewrap hides the store from the agent. Native mode retains same-UID authority.
+Preserve Journals and measurement records when restoring a matching deployment.
+For the complete acceptance boundary, see [handoff and promotion](supervisor-promotion.md).
