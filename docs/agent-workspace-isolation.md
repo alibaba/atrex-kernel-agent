@@ -1,137 +1,131 @@
 # Agent workspace isolation
 
-AKA defaults to native coding-agent execution (`--agent-sandbox none`) on macOS/Linux, without filesystem isolation. Opt-in `--agent-sandbox bwrap` or `ATREX_AGENT_SANDBOX=bwrap` launches sessions inside a Linux Bubblewrap namespace. This isolates the coordinator-side filesystem; it is separate from the Gateway or SSH sandbox that executes GPU jobs. Once bwrap is selected, unsupported hosts or missing Bubblewrap fail instead of silently disabling isolation.
+The default `light` profile runs a native coding-agent process with capture on macOS/Linux.
+Select `light-sandbox` for coordinator-side Bubblewrap isolation on Linux.
+This is separate from the remote GPU executor. An explicit Bubblewrap selection fails
+when the host cannot provide it; it does not fall back to native execution.
 
-The [Supervisor GPU/Wiki Runtime](supervisor-runtime.md) handles remote requests; [Supervisor-owned handoff](supervisor-promotion.md) keeps optimization Episode Git/control state outside a persistent Agent draft. Framework Baseline and auxiliary workflows retain their scoped behavior.
+## Launch and configuration
+
+```bash
+aka optimize --repo-root "$PWD" --profile light-sandbox -- \
+  --op-dir /path/to/atrex-bench/operator \
+  --platform L20N --framework Cuda --agent-cli claude \
+  --workspace /path/to/new-runs
+```
+
+The coordinator needs `bwrap` and permission to create the required user/mount/PID
+namespaces. A remote GPU gateway does not satisfy this local requirement.
+On macOS, use native Light or run the coordinator in an appropriately configured Linux VM.
+
+Configure custom isolation through the Agent provider, with a composition patch before `--`:
+
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "agent", "config": {
+    "sandbox": "bwrap",
+    "capture": true,
+    "bwrap_executable": "bwrap",
+    "proc_mode": "private",
+    "read_only_paths": ["/absolute/path/to/required/runtime"]
+  }}]
+}
+```
+
+Replace the illustrative runtime path with an existing narrowly scoped directory, or omit it.
+A patch replaces the whole Agent configuration. Include both sandbox and capture settings
+when preserving `light-sandbox` behavior; the provider's standalone capture default is false.
+The former `--agent-sandbox`, `--bwrap-executable`, and `--agent-read-only-path` optimizer
+flags are not the installed configuration surface. The provider generates its internal
+environment from these options.
+
+| Option | Meaning |
+| --- | --- |
+| `sandbox` | `none` or `bwrap` |
+| `capture` | Diagnostic capture, independent of filesystem isolation |
+| `bwrap_executable` | Bubblewrap executable, default `bwrap` |
+| `read_only_paths` | Explicit extra installation/runtime paths |
+| `proc_mode` | `private` procfs, or explicit `projected` compatibility view |
+| `timeout_seconds` | Per-invocation active-time ceiling; Workflow Episode budget is separate |
 
 ## Launch lifecycle
 
-```mermaid
-flowchart TD
-    ENTRY["CliAgentRuntime / LongSessionRunner"] --> HOME["agent_home.prepare_agent_environment<br/>Session-local Provider Home"]
-    HOME --> OBS["Create Codex ledger observer<br/>against the same Home"]
-    OBS --> RUN["agent_runtime.process.run_bounded"]
-    RUN --> MODE{"agent_sandbox"}
-    MODE -->|none| NATIVE["Existing native command"]
-    MODE -->|bwrap| VIEW["agent_workspace<br/>Optimizer or auxiliary allowlist"]
-    VIEW --> WRAP["agent_sandbox + agent_installations<br/>Mounts and minimal CLI installations"]
-    WRAP --> FD["sandbox_launch<br/>Environment via anonymous --args FD"]
-    FD --> SPAWN["recovery_processes.spawn_owned_session"]
-    NATIVE --> SPAWN
-    SPAWN --> CAPTURE["Session capture<br/>Pipes + native transcripts + usage"]
-    CAPTURE --> EXIT["Finalize capture<br/>Publish auxiliary output only on success<br/>Always clean up temporary view"]
-    WRAP -->|Unsupported host or invalid grant| FAIL["Fail before starting Agent<br/>No silent unsandboxed fallback"]
-```
+`aka.light.agent.provider` owns the process policy. It prepares the Session Home before
+native transcript discovery and Codex ledger observation, constructs the allowed filesystem
+view, passes environment values through an anonymous argument FD, and launches the owned
+process tree. Capture observes the same Home throughout Session resume and close.
 
-The command and workspace retain their original absolute paths inside the namespace. Linked tools and native-session discovery retain their paths. Managed optimization Sessions run in a separate Git-free draft, not the controller's Git worktree. `HOME`, Provider config roots and XDG directories point to the isolated Home before ledger observers and capture are initialized. Recovery-owned launches pass the anonymous argument FD through their ownership wrapper; the parent closes it after spawning.
+The managed draft keeps its absolute path. The controller worktree, Git common directory,
+private Journal, evaluator checkout, and Gateway credentials are not mounted into an isolated
+optimization Session. The Agent receives a scoped HTTP Runtime capability instead.
 
-Campaign reviewer-state environment paths keep their lexical absolute form only in `bwrap` mode, so mount validation can detect symlinks. Native `none` mode retains the existing `Path.resolve()` behavior, including symlink resolution and `..` normalization. Wiki-profile paths are now Supervisor-only and no longer create Agent mounts.
-
-Direct launches omit Bubblewrap's `--die-with-parent`, preserving the native path's process-lifetime behavior: Supervisor or spawning-thread exit alone does not kill the Agent. This does not guarantee survival of lost output pipes or automatic reattachment. Recovery handoffs retain the flag, binding the sandbox to the durable ownership wrapper rather than the original Supervisor; the existing cleanup guardian remains responsible for orphan cleanup. Timeouts and explicit interruptions still use the existing process-group termination logic in both modes.
-
-## Usage and rollback
-
-To opt in to Bubblewrap:
-
-```bash
-python3 orchestrator/optimize.py \
-  --op-dir /path/to/operator \
-  --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
-  --framework Triton --agent-cli claude \
-  --agent-sandbox bwrap
-```
-
-The coordinator needs Linux, `bwrap` on `PATH`, and permission to create unprivileged user/mount/PID namespaces. A remote GPU Gateway does not satisfy that requirement. On macOS run the coordinator inside a Linux VM such as Lima, or explicitly select `none` to accept native execution without filesystem isolation. A container host must permit Bubblewrap namespace/proc mounts; `bwrap` never silently bypasses a failed isolation setup.
-
-| Setting | Meaning |
-| --- | --- |
-| `--agent-sandbox none\|bwrap` | Default `none` provides native execution without filesystem isolation; `bwrap` enables isolation. `ATREX_AGENT_SANDBOX` sets the CLI default; an explicit flag wins. |
-| `--bwrap-executable PATH` | Bubblewrap executable; default `bwrap`, or `ATREX_BWRAP_EXECUTABLE` |
-| `--agent-read-only-path PATH` | Explicit extra read-only host path, repeatable; mounted at its original absolute path |
-
-Additional grants are operator-authorized exceptions, not automatic dependency discovery. Broad host-home/repository roots and paths overlapping the writable workspace/session homes are rejected. Custom wrappers, external CA bundles, SSH identities, plugins or installations outside the supported layouts may need a narrowly scoped grant and corresponding client configuration. Do not grant whole credential or transcript directories to make a missing dependency disappear.
-
-When resuming a Campaign, preserve its original sandbox mode and Provider Home. Previously isolated Campaigns must explicitly retain `--agent-sandbox bwrap` or `ATREX_AGENT_SANDBOX=bwrap`; without either, the default is native execution. To disable the launch boundary, stop the campaign normally and launch with `--agent-sandbox none`. Existing prompts, accepted commits and evaluation policy remain compatible. Isolated Provider sessions are not automatically imported into the operator's global Home; a recovery that requires native CLI thread state must continue in the mode/Home that created it, or start a fresh Agent invocation using the existing recovery flow.
+Same-Session resume retains its Home and sandbox selection. A changed Home/config root or
+sandbox mode requires a new Session. Recorded campaign continuations restore their frozen
+provider options; do not reinterpret a running Session by changing environment variables.
 
 ## Filesystem and credentials
 
-The namespace starts from an empty root, not a read-only copy of the host root. It contains:
+Bubblewrap starts from an empty root with selected read-only system/runtime files, minimal
+devices, private temporary directories, and its selected proc view. It mounts:
 
-- Read-only system runtime directories and selected OS configuration/certificate files, minimal `/dev`, a private PID namespace and `/proc`, and private `/tmp` and `/run`.
-- The current Optimizer workspace at its original path, with mutable draft/scratch and read-only public inputs, canonical memory, installed HTTP client and manifest-listed Skills. Runtime-authorized sessions do not mount the whole repository tool/reference/Supervisor trees; the shell guard is mounted separately.
-- A writable, per-Session Provider Home under `<workspace-parent>/.atrex-agent-homes/<key>/`. Different workspaces/Sessions receive separate copies; same-Session resume keeps its Home. Homes are outside the candidate Git tree.
-- Minimal executable files, recognized npm packages/dependencies and Python installation libraries needed by the CLI. Runtime-managed sessions do not add an Agate installation mount. Discovery never restores an entire first-level directory under the operator Home. Installation aliases pointing into Provider history/auth state or the private Session storage are rejected.
+- The managed draft, permitted editable source roots, custom Skills/tools, and scratch.
+- Public contracts, fixed source adapters, reserved clients/Skills, and eligible history read-only.
+- A writable Session-specific Provider Home outside the candidate Git tree.
+- Minimal CLI installation files and explicitly validated extra grants.
 
-Only selected login/settings files are seeded for the active backend. Claude/Qoder/Codex/Pi transcript trees, caches and arbitrary global plugins are not copied. Qoder's `.auth/user` and `machine_id` are included; its entire `.qoder` or `.qodersec` tree is not mounted. Destination directory traversal does not follow Agent-created symlinks. Existing Session-local settings are preserved on resume, and changes never write back to the operator Home.
+Only selected login/settings files are seeded into a Provider Home. Transcript trees,
+arbitrary global plugins, and Agate configuration are not copied wholesale. Existing
+Session settings are preserved; refreshing host login state does not overwrite them.
+Model credentials intentionally supplied to the Agent remain usable by it.
 
-These are copies, not live credential synchronization: refreshed host login state does not overwrite an existing Session Home. State files are private to the owning OS user and can contain credentials and raw conversations. Retain them for resume, and remove them only after that Session is stopped and no longer needed. Session capture remains outside the workspace by default and uses the same isolated Home; do not explicitly relocate capture into an Agent-writable path if it must remain private.
-
-Environment inheritance otherwise follows the existing CLI contract. Model credentials intentionally supplied to the Agent remain usable by it. Gateway credentials are removed before launch; the Agent receives a workspace-scoped HTTP capability instead. New Homes do not copy Agate configuration, and old copies are masked for resumed Runtime-managed sessions. Environment values are passed through an anonymous `bwrap --args FD`, not `--setenv KEY secret` in the process command line. This is not protection against a privileged host operator or another process with equivalent OS credentials.
+Extra grants reject broad host-home roots, private state, symlink traversal, and unsafe
+overlap with workspace/Home boundaries. The Agent shares host networking for model and
+loopback Runtime access; this configuration supplies no network allowlist or cgroup quota.
+Native mode retains the operating-system authority of the launching user.
 
 ## Auxiliary sessions
 
-Supervisor-launched auxiliary sessions receive a temporary allowlist view at their original working directory. Inputs are mounted read-only; only declared output files are copied back with bounded, no-follow reads after normal process completion with exit code zero and no policy/environment termination. Timeout, interruption, process failure or guard termination skips publication and leaves existing destination reports unchanged. Other files written in that view are discarded. The existing caller still validates report contents.
+Supervisor reviewers and preprocessing calls use a temporary allowlist view: declared
+inputs are read-only, and declared outputs are copied back through bounded no-follow reads
+only after successful completion without policy/environment termination.
+Timeouts, interruption, failure, and guard termination do not publish auxiliary outputs.
 
-Temporary-view cleanup is attempted whether publication succeeds, fails or is skipped. If cleanup also fails while another exception is propagating, it adds a diagnostic note to that exception instead of replacing it. Otherwise it logs a warning with the residual view path without changing the returned stdout, stderr, exit status or timeout flag; a logging failure also cannot replace the result. The temporary view may remain on disk and need later cleanup. A publication error on an otherwise successful session still propagates to the caller.
+Public problem preprocessing is the explicit trusted exception allowed to read detailed
+inputs when creating the generalized contract. Optimization Sessions do not inherit that
+private input view. Provider-created child agents inherit the optimizer namespace rather
+than obtaining a new reviewer grant.
 
-| Role | Read-only inputs | Returned files |
-| --- | --- | --- |
-| Public problem generation | `reference.py`, `input.py`, `shapes.json`, `metadata.json` | `agent_problem.json` |
-| Production policy review | `review_request.json`, `candidate/` | `dependency_review.json` |
-| Baseline exit review | `crash_record.json`, `candidate/` | `resume.json` |
-| Baseline correctness review | `context/` | `correctness_review.md` |
+## Scratch and reusable state
 
-The allowlist contains at most 4,096 files / 16 MiB; each returned file is limited to 8 MiB. These roles receive no campaign Git, Gateway/private-reference, Wiki-history or recovery-state mounts. Public problem generation is the explicit trusted preprocessing exception that reads exact shapes to create the public contract; optimization sessions do not inherit its input view.
+Every new managed Light Episode starts with empty scratch, in native and sandbox modes.
+Same-Episode continuations preserve it. Candidate source and custom Skills/tools have
+separate snapshot rules; reusable state can survive an unpromoted kernel.
+Reserved assets are refreshed from trusted sources. See
+[reusable workspace](optional-light-modules.md#reusable-workspace).
 
-Provider-created child Agents inherit their Optimizer namespace, not a separate auxiliary allowlist. No persistent cross-Episode plan-review session is launched.
+## Restricted containers and preflight
 
-## Legacy grants and scope limits
+Use `proc_mode: projected` only when deliberately selecting the supported restricted-container
+view. It preserves namespace and filesystem isolation while exposing a bounded Session process
+view. It requires a compiler/development headers and ordinary namespace/bind permissions.
 
-Managed optimization Episodes use a persistent Git-free draft; the Supervisor owns candidate commits and acceptance. Some older roles and explicitly scoped helpers retain compatibility grants:
-
-| Role or behavior | Access | Authority |
-| --- | --- | --- |
-| Managed optimization Episode | Draft source and engineering artifacts; no real worktree, Git, private Journal or handoff | Supervisor seals measured source after `episode-report` |
-| Framework Baseline and non-managed integrations | Existing campaign Git grants; only user name/email copied from global Git configuration | Retain their existing workflow, outside the optimization-Episode contract |
-| Agent calls `tools/sandbox.py` | HTTP client and per-invocation capability; no evaluator/private-input/Gateway-credential grant | Supervisor GPU/Wiki Runtime |
-| Explicitly configured recovery/diagnostic helpers | Explicitly scoped telemetry and helper-state directories for append/atomic replace | Managed Episodes cannot grant access to the private worktree/store |
-
-Writable file grants include the containing directory to support atomic replacement and lock files. Validation checks that actual directory before creating or mounting it: it must not be the operator Home or an ancestor, traverse symlinks, or overlap the `.atrex-agent-homes` root in either direction. The current Session Home is mounted only through the dedicated Home setup, never through these legacy environment grants. Use a dedicated log/state subdirectory rather than placing a granted file directly under the operator Home.
-
-For managed optimization Episodes, Bubblewrap enforces the private worktree/Git/Journal boundary described in [Supervisor handoff and promotion](supervisor-promotion.md). Framework Baseline and non-managed integrations do not have that contract. Native mode separates working directories cooperatively but does not isolate processes sharing the operator's UID. Arbitrary GPU probe code remains untrusted; bounded Runtime projections are not a semantic data-loss-prevention guarantee for everything a probe could print.
-
-The Agent shares the host network for model and loopback Runtime access; Gateway/Wiki/SSH operations run on the Supervisor. Filesystem isolation adds no network allowlist or cgroup resource quota. Custom operator grants and inherited environment variables remain part of the trusted launch configuration.
-
-## Scratch lifecycle
-
-In `bwrap` mode, a newly materialized Episode starts with an empty `scratch/`. Resuming the pre-execution `preparing` phase also resets it; same-Episode exploration/recovery does not. Only that exact directory is cleared, and a symlink is removed without touching its target. The default native mode retains its existing behavior. No new requirement to write plans or reports under `scratch/` is introduced.
-
-## Verification
-
-Local fixtures are kept outside this repository, following its review convention. Checks cover no-sandbox compatibility, repeated CLI parsing, unsupported-host failure, minimal installation mounts, Provider-state isolation, rejection of host-Home/Session-Home legacy grants, safe Home reseeding, anonymous argument ownership, auxiliary input/output rules and scratch symlinks. Linux subprocess checks use temporary fake Agents, including the real Codex adapter launch path, without model/GPU calls. Lifecycle checks cover direct Supervisor/spawning-thread exit, handoff survival across Supervisor exit, ownership-wrapper death cleanup, and timeout cleanup.
-
-On Lima Ubuntu (Python 3.14.4, Bubblewrap 0.11.1), the isolation suite passes, including actual read-only mounts, hidden host files, Git worktree commits, native Session capture, recovery-wrapper FD propagation and timeout cleanup. PR1's external 111-check regression suite also passes on the native path. Installed Claude 2.1.235, Codex 0.148.0 and Qoder 1.1.28 execute `--version` inside the namespace. Pi is not installed in that VM; live authentication, model calls and GPU end-to-end campaigns were not exercised.
-
-For a no-model smoke check on Linux, run from the repository root:
+The installed, model-free compiler preflight is:
 
 ```bash
-python3 - <<'PY'
-import os
-import sys
-import tempfile
-from pathlib import Path
-from orchestrator.agent_runtime.process import run_bounded
-
-with tempfile.TemporaryDirectory(prefix="aka-sandbox-smoke-") as temporary:
-    workspace = Path(temporary) / "workspace"
-    workspace.mkdir()
-    environment = dict(os.environ, ATREX_AGENT_SANDBOX="bwrap", ATREX_SESSION_CAPTURE="0")
-    output, error, code, timed_out = run_bounded(
-        [sys.executable, "-c", "from pathlib import Path; Path('probe').write_text('ok'); print('ok')"],
-        workspace, 20, environment,
-    )
-    assert code == 0 and not timed_out, (code, error)
-    assert (workspace / "probe").read_text() == "ok"
-    print(output.strip())
-PY
+python3 -m aka.light.agent.preflight
 ```
+
+Run it in the Linux environment that will actually launch the Agent. It checks the packaged
+shim and compiler; it does not certify Bubblewrap namespace permission or GPU execution.
+See [projected proc details](optional-light-modules.md#bubblewrap-in-restricted-containers).
+
+## Verification and rollback
+
+[Light verification](optional-light-modules.md#verification-scope) records local process,
+allowlist, auxiliary-publication, and Linux Bubblewrap evidence. These checks do not establish
+all-provider authentication or live GPU qualification.
+
+Stop the campaign before deployment/configuration changes. Preserve the original Home,
+private store, and frozen selection for recovery. Use a new workspace when changing workflows
+or incompatible provider/resource identities.

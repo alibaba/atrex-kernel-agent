@@ -208,6 +208,13 @@ update, so identity checks and explicit partial-data states remain necessary.
 
 ## Long-horizon records and measurement semantics
 
+The current adapter derives canonical performance history from `memory/vN.json`;
+it does not yet read Light's default `.atrex_versions/vN.json` facts. To populate that
+history for a new Light run, enable `workflow.config.generate_memory: true`. Existing
+runs without summaries may still expose Episode/usage observations, but missing history
+must not be interpreted as zero performance or a failed campaign. Workflow/CI export
+reads version facts independently and does not share this reader limitation.
+
 The default reader accepts a single campaign or a parent containing direct
 `kernel_opt_*` directories. It does not recursively discover private episode worktrees
 and excludes symlinked campaign directories. Only the adapter interprets this layout.
@@ -262,6 +269,11 @@ only available source/manifest files and that summary, generated in memory witho
 writing to the optimizer workspace. It excludes raw memory, private evaluator data,
 Agent transcripts and unrelated directory trees.
 
+For Light `source_tree` or `cuda_manifest` candidates, this exporter does not collect
+the entire source directory. A downloaded root adapter or manifest is not a complete
+multi-file kernel package. Use the source-aware Workflow export or a suitable custom
+observation adapter for that purpose.
+
 The page labels exports as current workspace files. They are read at download time;
 they are not pinned historical candidates. Files may change while an optimization runs,
 and an output removed after listing produces a download error. Other adapters can declare
@@ -288,7 +300,7 @@ python -m pip install build
 python tools/build_distributions.py --output /tmp/aka-dashboard-dist \
   atrex-aka-framework atrex-aka-dashboard \
   atrex-aka-observation-long-horizon
-python -m pip install /tmp/aka-dashboard-dist/*.whl
+python -m pip install --force-reinstall /tmp/aka-dashboard-dist/*.whl
 ```
 
 For published packages, `pip install 'atrex-aka-dashboard[long-horizon]'` selects the

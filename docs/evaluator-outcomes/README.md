@@ -1,6 +1,8 @@
 # Evaluator outcomes across transport, cache, and version reports
 
-A successful Dev allocation can contain a failed evaluator process. Treating the allocation as a completed evaluation prevents a trusted harness from classifying that failure before checkpointing. In addition, an unavailable result can be cached permanently, diagnostic projection loses case execution status and failure detail, and a version's objective-score ratio can be confused with an unweighted latency ratio.
+A successful Dev allocation can contain a failed evaluator process. Earlier behavior treated that allocation as a completed evaluation, could cache unavailable results, lost diagnostic detail, and conflated objective-score ratios with latency ratios. The current contracts below separate transport success from evaluator verdicts and preserve bounded repair evidence.
+
+This document retains implementation-specific validation records. The before/after curve is tied to the revisions and environment listed below; its test counts are historical evidence, not a fresh validation of every subsequent checkout.
 
 The intended callers are trusted evaluator adapters and the existing Supervisor. The optional callbacks extend the transport API; the remaining changes restore evaluation and reporting invariants. No new task mode, permission, benchmark implementation, tolerance, or promotion formula is introduced.
 
@@ -136,20 +138,6 @@ assert canonical_result(response, request)["status"] == "completed"
 print(json.dumps({"rows": rows, "terminal_abba_timeout_cache": "PASS"}, indent=2))
 PY
 ```
-
-## Review gates
-
-| Gate | Result | Evidence |
-|---|---|---|
-| Change type | Mixed | Optional transport callbacks and report fields plus correctness fixes |
-| No test scripts in diff | Pass | Production modules and review documentation/data only |
-| Minimal implementation | Pass | Two explicit hooks reuse the existing lifecycle; cache publication and reuse share one canonical predicate |
-| Why and impact | Pass | Unavailable evaluation reuse, lost diagnostics, ambiguous score ratios described above |
-| Design and failure paths | Pass | Diagram and module contracts above |
-| Before/after curve | Pass | Four fault counts, both variants, raw data and public reproduction |
-| Permissions and privacy | Pass | No new execution permissions; only generic synthetic evidence published |
-| Validation | Pass | Recovery/replay, native ABBA terminal cache, and consumer regressions |
-| Verdict | Ready for independent re-review | Local regressions pass; hosting-platform checks and required reviews still apply |
 
 ## Complete evaluator failure feedback
 

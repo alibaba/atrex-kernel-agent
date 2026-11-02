@@ -101,7 +101,7 @@ Build and install the three packages from a matching checkout:
 ```sh
 python3 -m pip install build
 python3 tools/build_distributions.py --output /tmp/aka-wheels atrex-aka-framework atrex-aka-legacy atrex-aka-light
-python3 -m pip install --find-links /tmp/aka-wheels atrex-aka-light
+python3 -m pip install --force-reinstall --no-index --find-links /tmp/aka-wheels atrex-aka-light
 aka optimize --repo-root /path/to/aka --profile light -- --op-dir /path/to/problem --platform L20N --framework Cuda
 ```
 
@@ -275,19 +275,23 @@ Provider configuration uses the existing Core composition patch format. For exam
   "patches": [
     {"id": "agent", "config": {"sandbox": "bwrap", "capture": false, "bwrap_executable": "bwrap", "read_only_paths": []}},
     {"id": "tool_runtime", "config": {"measurement_repetitions": 3, "wiki": false, "queue_timeout": 60, "request_timeout": 1800}},
-    {"id": "workflow", "config": {"numerical_validation": false, "goal_episodes": false, "generate_memory": false}}
+    {"id": "workflow", "config": {"startup": true, "numerical_validation": false, "goal_episodes": false, "generate_memory": false}}
   ]
 }
 ```
 
 Patches replace a module's whole configuration; omitted fields receive that provider's defaults, not the previously selected profile's values. The `tool_runtime` and light Workflow options apply only to light compositions.
 
+Keep `"startup": true` in Workflow patches passed to `aka optimize`: the launch profile
+sets this field, while the standalone provider defaults it to false. Omitting it removes
+the required `startup` service and prevents the CLI from launching the campaign.
+
 | Provider | Options and defaults |
 | --- | --- |
 | `aka.light.agent.plugin` | `sandbox: none`, `capture: false`, `bwrap_executable: bwrap`, `read_only_paths: []`, `proc_mode: private`, `timeout_seconds: 28800` |
 | `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `pause_agent_during_requests: true`, `wiki: true`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
 | `aka.light.wiki.plugin` | `root: ""` (the selected checkout's `gpu-wiki`); see [Wiki providers](#wiki-providers) |
-| `aka.light.workflow.plugin` | `numerical_validation: false`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 2`, `episode_timeout_seconds: 14400`; optional `search` and `source_tree` |
+| `aka.light.workflow.plugin` | `startup: false` in the standalone provider, set to `true` by CLI profiles; `numerical_validation: false`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 2`, `episode_timeout_seconds: 14400`; optional `search` and `source_tree` |
 | `aka.light.workspace.plugin` | `inherit_state: true`; carry custom Skills/tools across Episodes independently of Kernel promotion |
 | `aka.light.execution.plugin` | No options; endpoint/timeouts remain prepared Execution request values |
 | `aka.light.evaluation.plugin` | No options; constructs measurement plans and projects/aggregates results |
@@ -317,7 +321,7 @@ wall-clock budget. Configure `workflow.config.episode_timeout_seconds` with a
 finite positive number of seconds, for example:
 
 ```json
-{"api_version":1,"patches":[{"id":"workflow","config":{"episode_timeout_seconds":14400}}]}
+{"api_version":1,"patches":[{"id":"workflow","config":{"startup":true,"episode_timeout_seconds":14400}}]}
 ```
 
 Report-repair continuations and fresh output-limit recovery sessions share that
@@ -402,6 +406,7 @@ An Agate call is not an Episode. Enable pooled search with a non-empty Workflow 
 {
   "api_version": 1,
   "patches": [{"id": "workflow", "config": {
+    "startup": true,
     "search": {
       "epochs": 10,
       "trajectories": 2,
@@ -555,7 +560,7 @@ explicitly. Put package documentation inside its imported package directory.
 The complete source snapshot, not only the adapter, determines the Kernel ID,
 measurement identity, report binding, sealed commit, promotion and Epoch broadcast.
 A rejected/pivoted source tree is not broadcast. Custom tools/Skills keep their
-independent inheritance policy. Source-tree tasks retain the pinned initial package
+independent inheritance policy. Explicitly imported source-tree tasks retain the pinned initial package
 as their framework baseline instead of asking a V1 Agent to rewrite the adapter.
 
 Evaluate and ABBA upload exact source archives to native Agate Eval, using persisted
@@ -595,7 +600,8 @@ on macOS. The Light sdist and wheel build successfully with the source/worker as
 
 ### Reusable workspace
 
-Managed Episodes expose `kernel.py`, writable `skills/` and `tools/`, temporary `scratch/`,
+Managed Episodes expose the selected candidate layout (a fixed adapter plus editable roots,
+a native CUDA manifest tree, or one Python file), writable `skills/` and `tools/`, temporary `scratch/`,
 optional Supervisor-owned `memory/v*.json`, and public contracts/instructions. `WORKSPACE.md` states
 the selected inheritance policy. Each reusable directory has a writable README index; Agents
 must update it when adding, modifying or deleting custom contents. Store reusable methods in
@@ -633,7 +639,7 @@ Light does **not** generate `memory/vN.json` by default, including V0, the frame
 baseline and terminal Episodes. To enable summaries, pass a composition patch:
 
 ```json
-{"api_version":1,"patches":[{"id":"workflow","config":{"generate_memory":true}}]}
+{"api_version":1,"patches":[{"id":"workflow","config":{"startup":true,"generate_memory":true}}]}
 ```
 
 Enabled summaries retain performance, experience, Profile evidence and open directions.
@@ -712,7 +718,7 @@ use this composition patch:
 }
 ```
 
-Pass it with `aka optimize --profile light --patch /path/to/patch.json -- ...` (also supported by
+Pass it with `aka optimize --repo-root /path/to/aka --profile light --patch /path/to/patch.json -- ...` (also supported by
 `light-sandbox`). Set it to `false` to disable them again. The selected value is persisted in the private Episode
 Journal; change it only at an Episode boundary or in a new workspace, not while resuming an existing
 Episode. Older Journals without the field retain enabled behavior; when resuming an older
@@ -870,9 +876,10 @@ fingerprint. GPU Wiki data remains in the explicitly selected checkout.
 
 Public profile names, module providers, Agent tool commands and persisted state
 filenames are unchanged. Pause at an Episode boundary before upgrading code;
-regenerate module/source locks for the new package identity. Private Python module
+retain the original package/resource identity for recorded continuations, or use a new
+workspace for a changed identity. Do not rewrite locks to bypass reconstruction checks. Private Python module
 paths are not compatibility APIs. Update direct integrations to the new owners,
-notably `aka.light.agent.proc_view` for projected-proc compilation preflight,
+notably `aka.light.agent.preflight` for projected-proc compilation preflight,
 `aka.light.evaluation.gateway` for the executor CLI and
 `aka.light.acceptance.audit_recovery` for operator repair. Historical
 `.atrex_long_horizon/`, `.atrex-supervisor-runtime/`, Record IDs and public
@@ -965,11 +972,12 @@ Record reads retain the saved canonical public result. New Evaluate results incl
 `diagnostics` (stage, opaque Shape, case/output identity, upstream error and numerical
 differences) and `performance_by_shape` (timing statistics and Kernel events).
 Feedback is retained through Shape aggregation, ABBA side projection and Record storage.
-Limits are 128 diagnostics, 8 KiB per message and 256 KiB total feedback; truncation is
-explicit. Gateway error objects remain available with credential/private-path redaction,
-plus actionable distinctions between source repair, infrastructure recovery and unknown
-outcome. Private input generators, seeds, values and whole request documents are not
-added to public feedback. Existing duplicate-request errors still identify the previous
+The projected diagnostic response is limited to 8 MiB of ASCII-escaped JSON, with
+explicit truncation metadata; optional performance detail has a separate budget. Complete
+record serialization is limited to 32 MiB. Gateway errors retain actionable repair/recovery
+guidance with credential/private-path and hidden-dimension redaction. Failing-case seeds
+are deliberately exposed as repair metadata; generators, input values and whole private
+request documents remain withheld. See [diagnostic limits](evaluator-outcomes/README.md#diagnostic-size-and-cache-contract). Existing duplicate-request errors still identify the previous
 Record; report-format errors still allow correction and resubmission.
 
 Previously sealed negative Eval/ABBA records with explicit device-unavailable evidence
@@ -977,9 +985,12 @@ are no longer reusable; their raw evidence remains intact. Other stored results 
 remain valid. This does not migrate the standalone Runtime's entire controller or
 remove Light's configured HTTP/Session deadlines and CLI uncertainty protection.
 
-## Upstream synchronization and Light measurement policy
+## Light measurement policy
 
-On 2026-10-19 this integration branch merged upstream `main` at `7247206287ef2747342eccb89421fa4606368e2d` (multi-GPU source-policy support). Its relocated Workflow changes apply to both upstream and light implementations. Explicit distributed evaluator contracts accept 2–64 GPUs and must agree with `hardware.required_gpus`. Multi-GPU Agate skips production **source-policy** checks only; SSH and single-GPU retain them. Evaluator correctness, supplemental numerical checks and performance acceptance remain enabled according to the selected profile.
+Explicit distributed evaluator contracts accept 2–64 GPUs and must agree with
+`hardware.required_gpus`. Validated multi-GPU Agate campaigns skip production source-policy
+inspection and framework conversion; SSH and single-GPU retain review. Correctness and
+performance remain required, and supplemental numerical checks follow the selected configuration.
 
 Light promotion now matches Runtime: compare the candidate and incumbent's GeoMean latency from the same native Eval ABBA measurement. Improvement is `(incumbent_us - candidate_us) / incumbent_us * 100`, and must strictly exceed the configured threshold (floating-point roundoff at equality is not an improvement). `performance_score` remains diagnostic, not a promotion gate. The existing Triton-to-Gluon conversion tolerance remains separate. The upstream `workflow` composition retains its original score-based rule.
 
@@ -1007,7 +1018,7 @@ the existing `--proc /proc` behavior; neither mode silently disables isolation.
 This is an explicit compatibility choice, not an automatic permission fallback:
 
 ```json
-{"api_version": 1, "patches": [{"id": "agent", "config": {"sandbox": "bwrap", "proc_mode": "projected"}}]}
+{"api_version": 1, "patches": [{"id": "agent", "config": {"sandbox": "bwrap", "capture": true, "proc_mode": "projected"}}]}
 ```
 
 The projected mode ports the standalone Runtime's container implementation:
@@ -1056,6 +1067,11 @@ checkpoint, whose registry and retained-state formats are different.
 Both the public module APIs and the actual source snapshots were integrated from fixed modular heads (`fd7e0466` Execution, `bb7660e1` Agent/Workflow). The newer, unmerged PR #113 redesign was inspected but not merged as part of updating `main`; its Evaluation/Experiment interfaces are not the contracts claimed here. This is an integration branch, not a claim that those upstream PRs are merged or their APIs cannot change. The pre-migration implementation is retained at `codex/aka-light-before-modularization`.
 
 ## Verification scope
+
+The following records describe checks performed for the referenced implementation changes.
+Their counts and local fixture paths are historical evidence, not a committed test suite or
+an assertion that this documentation update reran GPU/model campaigns. Current live source-layout
+evidence is collected in [native CUDA validation](native-cuda.md).
 
 Projected-proc compatibility was checked on 2026-10-19 in the existing restricted
 GDN/L20N Sandbox with Bubblewrap 0.4.0: the unchanged private-proc probe fails with
