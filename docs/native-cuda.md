@@ -213,7 +213,7 @@ process through `PYTHONPATH`, so fixed adapters can import candidate packages
 such as `impl.model`. Existing `PYTHONPATH` entries remain available.
 
 Run 83968987 exposed both integration gaps after passing V1 standard correctness.
-`<gpu_arch>` and MI308X stopped before their next managed session; PPU supplemental
+MI308X stopped before their next managed session; PPU supplemental
 validation could not import `impl`. PPU's platform status was green despite a
 failed optimizer manifest, so it is not passing evidence. The internal CI fix
 adds an explicit final check of the recorded optimizer exit code.
