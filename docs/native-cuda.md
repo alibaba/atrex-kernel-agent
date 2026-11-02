@@ -30,7 +30,7 @@ header/declaration identity, crash recovery, measurement deduplication, Skill
 installation, and numerical failure classification. Both Light and Legacy wheels
 build from their source distributions. Executable Agate Skill assets retain the
 gateway-owned source; English documentation is checked against its reviewed
-upstream and translation digests. L20N preproduction exercised native CUDA Evaluate,
+upstream and translation digests. `<gpu_arch>` preproduction exercised native CUDA Evaluate,
 multi-file CUTLASS, targeted numerical inputs, Profile, two-shape native ABBA and a
 deliberately incorrect candidate. One ABBA allocation encountered repository networking
 failure; the existing infrastructure retry recovered it and both shapes passed. Check/Disassemble and SOL/SSH do not accept native manifests; unsupported
@@ -130,7 +130,7 @@ terminal evidence and source-distribution builds. Validation runs in Aone Sandbo
 
 ## Agent optimization evidence
 
-The RMSNorm campaign uses bf16 inputs on L20N preproduction, with shapes
+The RMSNorm campaign uses bf16 inputs on `<gpu_arch>` preproduction, with shapes
 `(3, 128)`, `(256, 2048)` and `(510, 8192)`. V1 is the accepted framework
 baseline; V2 onward count as optimization rounds. Every measured optimization
 candidate contains `kernel.cu` and `solution.json`, with no candidate `kernel.py`.
@@ -170,7 +170,7 @@ Supplementary GPU jobs: `ev_9c6a67eb9362`, `ev_83048a3d8cec`, `ev_32532da4633d`.
 ## Default source-directory validation
 
 New tasks default to `source_tree` without requiring an import manifest. The
-47-case regression suite passed in Aone Sandbox. Production Agate L20N validation
+47-case regression suite passed in Aone Sandbox. Production Agate `<gpu_arch>` validation
 used an empty candidate configuration: automatic bootstrap, expansion to a CUDA/
 C++/header tree, full-directory ABBA, numerical rejection and snapshot restoration.
 Three shapes (1024, 4097, 65536 elements) passed; deliberately changing the header
@@ -213,7 +213,7 @@ process through `PYTHONPATH`, so fixed adapters can import candidate packages
 such as `impl.model`. Existing `PYTHONPATH` entries remain available.
 
 Run 83968987 exposed both integration gaps after passing V1 standard correctness.
-L20N and MI308X stopped before their next managed session; PPU supplemental
+MI308X stopped before its next managed session; PPU supplemental
 validation could not import `impl`. PPU's platform status was green despite a
 failed optimizer manifest, so it is not passing evidence. The internal CI fix
 adds an explicit final check of the recorded optimizer exit code.

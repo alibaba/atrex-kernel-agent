@@ -21,7 +21,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         prog="aka optimize",
         usage="%(prog)s --repo-root PATH [EXECUTION OPTIONS] -- [OPTIMIZATION ARGS]",
         description="Translate the retained optimization CLI for installed AKA modules and explicit tool resources.",
-        epilog="Example: aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform L20N --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
+        epilog="Example: aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
     )
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument(

@@ -37,6 +37,9 @@ runs through Agate; GPU Wiki provides optimization knowledge.
 
 - [2026-10] **v0.4.0: A lightweight workflow and plugin architecture.** Better kernel performance with **20–30% lower average token consumption**, plus configurable, replaceable providers for agents, workspaces, evaluation, execution, and knowledge. [Release notes](docs/releases/v0.4.0.md).
 - [2026-09] [From leaderboards to real-world workloads: accelerating Qwen3.8-Max's core inference operators](https://mp.weixin.qq.com/s/q1wrpgu3R8S8dEqR-PhQgw) (WeChat): **AKA** delivers lower average latency than expert implementations for all **three key operator families** across **60 real-world shapes**, with up to **1.55× speedup** over production/official baselines.
+
+  ![Operator performance comparison for FA4 prefill, FA4 decode, and GDN prefill: AKA, expert implementations, and production/official baselines.](assets/operator-performance-comparison.png)
+
 - [2026-09] We released **Atrex Kernel Agent v0.3.0** with resumable fast, full, and goal episodes; native Atrex-Bench and multi-framework production campaigns; Claude, Qoder, Codex, and Pi backends; isolated SSH GPU execution with recovery; PPU profiling; plugin-backed GPU Wiki retrieval; and production-mode supplemental numerical probes. See the [v0.3.0 release notes](docs/releases/v0.3.0.md).
 - [2026-08] We slimmed down **Atrex Kernel Agent** by consolidating on a single orchestrated workflow and removing legacy paths and redundant context for a smaller context footprint and lower token usage.
 - [2026-07] We helped **Qwen3.8** rank **No. 1** on the **SOL-ExecBench FlashInfer operator optimization leaderboard**.
@@ -51,7 +54,7 @@ give it the operator path, target GPU, framework, and optimization budget:
 
 ```text
 Read docs/quickstart.md and set up the matching AKA packages from this checkout.
-Optimize /path/to/atrex-bench/operator on an L20N Agate worker using CUDA,
+Optimize /path/to/atrex-bench/operator on a <gpu_arch> Agate worker using CUDA,
 Claude as the coding agent, production mode, and up to 20 iterations.
 Use ~/aka-opt as the workspace. Check the required environment, launch the
 campaign, and report the verified result and output location.

@@ -7,9 +7,9 @@ For SOL formats and problem contracts, see [solution-json.md](solution-json.md) 
 
 ```bash
 # Automatic mode derives the worker budget from current quotas and admission.
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm
 # Limit concurrent single-GPU workers; 1 forces serial execution.
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm --shape-shards 2
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm --shape-shards 2
 ```
 
 This applies only to atrex eval and is enabled by default without new Diamond configuration.
@@ -41,7 +41,7 @@ This evaluation rollback excludes CDC target handoff; environments switched to C
 ## ABBA baseline comparison
 
 ```bash
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm \
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm \
   --baseline baseline.py --abba-repeats 2 --job-timeout 1800
 ```
 
@@ -62,7 +62,7 @@ It provides neither statistical-significance claims nor automatic promotion deci
 ## Multi-file source archives
 
 ```bash
-agate eval --gpu L20D --reference-dir ./data/op \
+agate eval --gpu '<gpu_arch>' --reference-dir ./data/op \
   --candidate candidate.tar.gz --candidate-entry src/model.py \
   --baseline baseline.zip --baseline-entry pkg/entry.py \
   --abba-repeats 2 --job-timeout 1800
@@ -78,10 +78,10 @@ An existing empty/malformed archive returns `validation/source_archive_invalid`,
 ## Runner config and evaluator versions
 
 ```bash
-agate eval --gpu L20N --config eval.json
-agate eval --gpu L20N --candidate my_kernel.py --reference-dir data/rms_norm \
+agate eval --gpu '<gpu_arch>' --config eval.json
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm \
   --set validation_mode=correctness_only --set benchmark_mode=cuda_graph_replay
-agate eval --gpu L20D --config abba.json --abba-repeats 2 --job-timeout 1800
+agate eval --gpu '<gpu_arch>' --config abba.json --abba-repeats 2 --job-timeout 1800
 ```
 
 JSON config `input`/`reference_dir` paths resolve relative to the config file; YAML is also supported when PyYAML is installed.
@@ -97,9 +97,9 @@ Do not describe the default as resolving the newest index version on every job.
 ## Placement and measurement confidence
 
 ```bash
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm \
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm \
   --cluster-label stage=preview --node-label ray.io/market-type=spot
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm --lock-clocks
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm --lock-clocks
 ```
 
 Cluster labels match configuration; node labels use native backend scheduling.
