@@ -78,8 +78,8 @@ An existing empty/malformed archive returns `validation/source_archive_invalid`,
 ## Runner config and evaluator versions
 
 ```bash
-agate eval --gpu L20N --config eval.json
-agate eval --gpu L20N --candidate my_kernel.py --reference-dir data/rms_norm \
+agate eval --gpu '<gpu_arch>' --config eval.json
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm \
   --set validation_mode=correctness_only --set benchmark_mode=cuda_graph_replay
 agate eval --gpu L20D --config abba.json --abba-repeats 2 --job-timeout 1800
 ```

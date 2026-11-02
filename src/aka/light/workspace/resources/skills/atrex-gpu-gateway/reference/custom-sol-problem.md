@@ -72,7 +72,7 @@ python3 create_custom_sol_smoke.py
 agate eval --backend sol \
   --solution custom-scale2-smoke/solution.json \
   --problem custom-scale2-smoke \
-  --gpu L20N
+  --gpu '<gpu_arch>'
 ```
 
 These commands use production by default. The same problem directory also works with the upstream local tool:

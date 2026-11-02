@@ -60,7 +60,7 @@ From the AKA checkout:
 ```bash
 aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/atrex-bench/operator \
-  --platform L20N --framework Cuda --agent-cli claude \
+  --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
   --optimization-mode production \
   --workspace "$HOME/aka-opt" --max-iters 20
 ```

@@ -27,7 +27,7 @@ An existing upstream solution.json can therefore be submitted unchanged.
 Submit it with:
 
 ```bash
-agate eval --backend=sol --solution solution.json --gpu L20N
+agate eval --backend=sol --solution solution.json --gpu '<gpu_arch>'
 ```
 
 ## Fields

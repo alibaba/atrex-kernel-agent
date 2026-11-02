@@ -14,7 +14,7 @@ replacing paths and using the endpoint and hardware selected for this run:
 
 ```sh
 aka execution \
-  --workspace /path/to/prepared-workspace --hardware L20N \
+  --workspace /path/to/prepared-workspace --hardware '<gpu_arch>' \
   --gateway-profile prod --kind dev --timeout 60 \
   -- python3 gpu_smoke.py
 ```

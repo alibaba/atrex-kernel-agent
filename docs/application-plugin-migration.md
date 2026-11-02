@@ -20,7 +20,7 @@ checkout resources available:
 ```sh
 aka optimize --repo-root "$PWD" -- --help
 aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/problem --platform L20N --framework Triton \
+  --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton \
   --agent-cli codex --workspace /path/to/runs
 ```
 
@@ -61,7 +61,7 @@ aka --help
 aka optimize --help
 aka optimize --repo-root /path/to/aka -- --help
 aka optimize --repo-root /path/to/aka -- \
-  --op-dir /path/to/problem --platform L20N --framework Triton \
+  --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton \
   --agent-cli codex --workspace /path/to/runs
 ```
 

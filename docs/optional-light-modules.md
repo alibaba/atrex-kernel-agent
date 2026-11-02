@@ -102,7 +102,7 @@ Build and install the three packages from a matching checkout:
 python3 -m pip install build
 python3 tools/build_distributions.py --output /tmp/aka-wheels atrex-aka-framework atrex-aka-legacy atrex-aka-light
 python3 -m pip install --force-reinstall --no-index --find-links /tmp/aka-wheels atrex-aka-light
-aka optimize --repo-root /path/to/aka --profile light -- --op-dir /path/to/problem --platform L20N --framework Cuda
+aka optimize --repo-root /path/to/aka --profile light -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Cuda
 ```
 
 Use `--profile light-sandbox` on a Linux coordinator with Bubblewrap. macOS supports the native profiles; selecting Bubblewrap there fails explicitly. There is no silent native fallback.
@@ -1074,7 +1074,7 @@ an assertion that this documentation update reran GPU/model campaigns. Current l
 evidence is collected in [native CUDA validation](native-cuda.md).
 
 Projected-proc compatibility was checked on 2026-10-19 in the existing restricted
-GDN/L20N Sandbox with Bubblewrap 0.4.0: the unchanged private-proc probe fails with
+GDN/`<gpu_arch>` Sandbox with Bubblewrap 0.4.0: the unchanged private-proc probe fails with
 `Operation not permitted`, while namespace-only and projected-mode probes pass.
 Eight external Linux regressions cover process ownership/local PID projection,
 forbidden proc links, read-only mounts, caller-only maps/FD compatibility,

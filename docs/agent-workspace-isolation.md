@@ -10,7 +10,7 @@ when the host cannot provide it; it does not fall back to native execution.
 ```bash
 aka optimize --repo-root "$PWD" --profile light-sandbox -- \
   --op-dir /path/to/atrex-bench/operator \
-  --platform L20N --framework Cuda --agent-cli claude \
+  --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
   --workspace /path/to/new-runs
 ```
 

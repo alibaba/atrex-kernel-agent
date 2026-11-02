@@ -151,7 +151,7 @@ and [promotion recovery](supervisor-promotion.md).
 
 Package/composition, filesystem, HTTP, source sealing, and recovery checks are documented in
 the [Light verification record](optional-light-modules.md#verification-scope).
-[Native CUDA validation](native-cuda.md) records scoped live L20N evidence.
+[Native CUDA validation](native-cuda.md) records scoped live `<gpu_arch>` evidence.
 [Evaluator-outcome checks](evaluator-outcomes/README.md) use local fault injection.
 These are evidence for their documented paths, not a performance guarantee for every provider.
 

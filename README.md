@@ -51,7 +51,7 @@ give it the operator path, target GPU, framework, and optimization budget:
 
 ```text
 Read docs/quickstart.md and set up the matching AKA packages from this checkout.
-Optimize /path/to/atrex-bench/operator on an L20N Agate worker using CUDA,
+Optimize /path/to/atrex-bench/operator on a <gpu_arch> Agate worker using CUDA,
 Claude as the coding agent, production mode, and up to 20 iterations.
 Use ~/aka-opt as the workspace. Check the required environment, launch the
 campaign, and report the verified result and output location.
