@@ -5,9 +5,9 @@ Use this for quick import/construction diagnostics. Use `eval` for correctness o
 ## Entry point and inputs
 
 ```bash
-agate check my_kernel.py --gpu L20D
-agate check my_kernel.py --gpu L20D --init-kwargs init_kwargs.json
-agate check my_kernel.py --gpu L20D -r requirements.txt --no-wait
+agate check my_kernel.py --gpu '<gpu_arch>'
+agate check my_kernel.py --gpu '<gpu_arch>' --init-kwargs init_kwargs.json
+agate check my_kernel.py --gpu '<gpu_arch>' -r requirements.txt --no-wait
 agate get <job_id> --wait
 ```
 

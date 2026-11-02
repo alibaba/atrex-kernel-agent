@@ -4,7 +4,7 @@
 with the request, so evaluation is not limited to a predefined problem catalog.
 
 ```bash
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm
 ```
 
 `--candidate` supplies the implementation to evaluate. `--reference-dir` supplies the correctness reference and shapes.

@@ -57,18 +57,18 @@ Use `agate update --check` to check for updates and `agate update` to install th
 
 ```bash
 # Check compilation triggered by import and construction.
-agate check my_kernel.py --gpu L20D
+agate check my_kernel.py --gpu '<gpu_arch>'
 # Supply a JSON object when Model requires constructor arguments.
-agate check my_kernel.py --gpu L20D --init-kwargs init_kwargs.json
+agate check my_kernel.py --gpu '<gpu_arch>' --init-kwargs init_kwargs.json
 
 # Check correctness and performance with real inputs.
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm
 # Check correctness only.
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm --mode correctness_only
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm --mode correctness_only
 
 # Profile progressively when needed.
-agate profile --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm --level survey
-agate profile --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm --level deep --kernel-regex rms
+agate profile --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm --level survey
+agate profile --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm --level deep --kernel-regex rms
 ```
 
 `check` maps to `POST /v1/jobs/compile`; there is no `agate compile` CLI subcommand.
@@ -100,7 +100,7 @@ Candidates and `reference.py` have separate limits, each 128 KiB by default; see
 ## Submission, queries and failures
 
 ```bash
-agate eval --gpu L20D --candidate my_kernel.py --reference-dir data/rms_norm --no-wait
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm --no-wait
 agate get <job_id> --wait
 agate jobs --status running
 agate cancel <job_id>
