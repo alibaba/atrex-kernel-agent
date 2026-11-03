@@ -57,6 +57,26 @@ class EpisodeHistory:
         self.episodes_root = episodes_root
 
     def _conversation(self, directory: Path, destination: Path, remaining: int) -> dict:
+        from aka.agent.public_output import read_sessions
+        observations = read_sessions(directory)
+        if observations:
+            # Agent owns normalization and its storage format. The enclosing
+            # terminal attempt seals this Workflow reading projection.
+            rows = [{"type": "session_start", "source": "agent_observations"}]
+            for observation in observations:
+                rows.append({"type": "invocation_start", "session_id": observation.session_id,
+                             "runtime": observation.runtime, "updated_at": observation.updated_at})
+                rows.extend(dict(event) for event in observation.events)
+                rows.append({"type": "invocation_end", "status": observation.status,
+                             "token_usage": dict(observation.usage)})
+            rows.append({"type": "session_end"})
+            raw = ("\n".join(json.dumps(row, ensure_ascii=False, allow_nan=False) for row in rows) + "\n").encode()
+            if len(raw) > min(MAX_CONVERSATION_BYTES, remaining):
+                return {"available": False, "reason": "history_size_limit"}
+            publish(destination, "conversation.jsonl", raw)
+            return {"available": True, "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest(),
+                    "state": "observed", "finished_at": observations[-1].updated_at,
+                    "source": "agent_observations", "capture_complete": False}
         candidates = []
         for session in _directories(directory / "sessions", r"run-[0-9a-f]{32}"):
             try:
