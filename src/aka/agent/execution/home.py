@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import os
 import stat
+import subprocess
 from pathlib import Path
 from aka.core.filesystem import open_private_directory
 
@@ -103,6 +104,31 @@ def prepare_home(workspace, session_id, backend, environment, *, state_root=None
             with os.fdopen(fd, "wb") as output:
                 output.write(content)
     values = dict(environment)
+    # Retain identity only, never credential helpers, hooks or arbitrary host Git config.
+    identity = {}
+    git_environment = {key: value for key, value in environment.items()
+                       if key in {"HOME", "PATH", "XDG_CONFIG_HOME"}}
+    git_environment["HOME"] = str(host)
+    for field in ("name", "email"):
+        try:
+            result = subprocess.run(["git", "config", "--get", "user." + field], cwd=workspace,
+                env=git_environment, capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            identity[field] = result.stdout.strip()
+    if identity:
+        import json
+        content = "[user]\n" + "".join(f"\t{key} = {json.dumps(value, ensure_ascii=False)}\n" for key, value in identity.items())
+        with open_private_directory(home) as directory:
+            try:
+                fd = os.open(".gitconfig", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+            except FileExistsError:
+                read_regular_bytes(home / ".gitconfig")
+            else:
+                with os.fdopen(fd, "w", encoding="utf-8") as output:
+                    output.write(content)
     for variable, relative in backend.files.environment_roots:
         with open_private_directory(home / relative):
             pass

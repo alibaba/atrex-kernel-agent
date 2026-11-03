@@ -20,6 +20,7 @@ from .execution.process import (
     spawn_session,
 )
 from .resources import shell_guard_path
+from .environment import HOST_TRANSPORT_PREFIXES as _HOST_TRANSPORT_PREFIXES, EXPLICIT_ROUTING, filter_environment, host_transport
 
 
 _STANDARD_ENVIRONMENT = {
@@ -35,10 +36,6 @@ _BACKEND_ENVIRONMENT = frozenset(
     name for runtime_id in DEFAULT_BACKEND_REGISTRY.ids
     for name in DEFAULT_BACKEND_REGISTRY.create(runtime_id).environment_variables
 )
-_HOST_TRANSPORT_PREFIXES = (
-    "AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_",
-    "ATREX_GPU_WIKI_", "AKA_EXECUTION_", "AKA_GATEWAY_",
-)
 
 
 def _validate_environment(values):
@@ -52,7 +49,7 @@ def _validate_environment(values):
 
 def _validate_scoped_environment(values, permitted, authority):
     _validate_environment(values)
-    if any(key.startswith(_HOST_TRANSPORT_PREFIXES) for key in values):
+    if any(host_transport(key) for key in values):
         raise PermissionError("Scoped Agent cannot receive host transport environment")
     if any(key not in permitted for key in values):
         raise PermissionError("Scoped Agent environment exceeds authorized variables")
@@ -181,6 +178,7 @@ class Agent:
         workspace = Path(workspace).absolute()
         values = dict(environment)
         _validate_environment(values)
+        values = filter_environment(values, backend, explicit=explicit_environment)
         # Internal markers are created here, never accepted from caller environments.
         values.pop(PREPARED_ENV, None)
         values.pop("AKA_AGENT_INVOCATION", None)
@@ -190,6 +188,7 @@ class Agent:
         guard = self._guard_path()
         mounts = list(access.mounts)
         authority = {}
+        authority.update((name, values[name]) for name in explicit_environment if name in EXPLICIT_ROUTING and name in values)
         from .tools.protocol import ENDPOINT_ENV, TOKEN_ENV
         if ENDPOINT_ENV in values or TOKEN_ENV in values:
             if self._tool_host is None:
@@ -376,6 +375,8 @@ class Agent:
             self._running += 1
         launch = None
         try:
+            if any(host_transport(name) and name not in context.authority for name in values):
+                raise PermissionError("Agent invocation cannot receive host transport environment")
             guard = self._guard_path()
             if guard is not None:
                 if context.authority.get("BASH_ENV") != str(guard):

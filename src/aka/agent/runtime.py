@@ -78,9 +78,11 @@ def terminal_usage_from_stream(stdout: str) -> TokenUsage:
     )
 
 
-def build_session_environment(runtime_id: str, *, shell_guard=None, environment=None) -> dict[str, str]:
+def build_session_environment(runtime_id: str, *, shell_guard=None, environment=None, backend=None) -> dict[str, str]:
     """Build CLI execution defaults; the host supplies resources and protection policy."""
     environment = dict(os.environ if environment is None else environment)
+    from .environment import filter_environment
+    environment = filter_environment(environment, backend if backend is not None else DEFAULT_BACKEND_REGISTRY.create(runtime_id))
     environment["ATREX_AGENT_CLI"] = runtime_id
     python_bin = str(Path(sys.executable).absolute().parent)
     path_parts = [
@@ -137,7 +139,7 @@ class CliAgentRuntime:
         return self._adapter.prepare_command(command)
 
     def session_environment(self):
-        return build_session_environment(self.id, environment=self._environment)
+        return build_session_environment(self.id, environment=self._environment, backend=self._adapter)
 
     def _session_settings(self, environment=None) -> str:
         values = self._environment if environment is None else environment
