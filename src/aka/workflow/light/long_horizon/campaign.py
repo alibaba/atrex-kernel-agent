@@ -1861,6 +1861,7 @@ class LongHorizonCampaign:
                 prompt,
                 output_directory=store.episode_dir(episode),
                 episode_timeout_seconds=self.base_campaign.module_options.episode_timeout_seconds,
+                resumed=resumed and active.get("resumed_from_phase") != "preparing",
                 handoff_path=handoff_path,
                 handoff_resumes=(
                     max(self.handoff_resumes, GOAL_HANDOFF_RESUMES)

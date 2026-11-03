@@ -134,10 +134,13 @@ class LongSessionRunner:
         self.usage_policy = usage_policy
         self.source_inventory = source_inventory
 
-    def run(self, *args, episode_timeout_seconds=14400, **kwargs) -> SessionResult:
-        from aka.workflow.light.deadline import episode_timeout
-        seconds = episode_timeout(episode_timeout_seconds)
-        return self._run(*args, deadline=time.monotonic() + seconds, **kwargs)
+    def run(self, *args, episode_timeout_seconds=14400, resumed=False, **kwargs) -> SessionResult:
+        from aka.workflow.light.deadline import episode_deadline
+        deadline = episode_deadline(episode_timeout_seconds, kwargs.get("output_directory"), resumed=resumed)
+        if deadline <= time.monotonic():
+            return SessionResult(-signal.SIGKILL, True, 0, "", 0, None,
+                completion_diagnosis="Episode deadline exhausted; no session started")
+        return self._run(*args, deadline=deadline, **kwargs)
 
     def _run(
         self,
