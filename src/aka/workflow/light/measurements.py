@@ -149,12 +149,14 @@ class SharedMeasurements:
         if selected is not None and selected.failure is not None:
             result["failure"] = asdict(selected.failure)
         if operation == "same_allocation_abba" and selected is not None:
-            result.update(correct=passed,
-                baseline={"latency_us_by_shape": dict(selected.incumbent_latency_us_by_shape),
-                          "latency_us_geomean": selected.incumbent_latency_us},
-                candidate={"latency_us_by_shape": dict(selected.candidate_latency_us_by_shape),
-                           "latency_us_geomean": selected.candidate_latency_us},
-                improvement_pct=selected.improvement_pct)
+            from aka.evaluation.native_abba import recorded_comparison
+            try:
+                result.update(recorded_comparison(selected, identities))
+            except ValueError as error:
+                known = False
+                result["error"] = str(error)
+            result.update(complete=bool(known and settled), correct=passed if known else None,
+                          all_pass=passed if known else None)
         binding = self.kernel(source) if source is not None else {}
         attempts = [attempt for attempt in record.attempts if attempt.result is not None]
         exit_code = attempts[-1].result.returncode if attempts else None

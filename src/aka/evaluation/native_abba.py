@@ -5,7 +5,8 @@ import math
 import statistics
 import json
 import ast
-from dataclasses import replace
+from dataclasses import asdict, replace
+from collections.abc import Mapping
 from pathlib import Path
 
 from aka.contracts.evaluation import VerificationResult, VerificationRun
@@ -13,6 +14,52 @@ from .abba import verification_schedule
 from .aggregation import aggregate
 from .correctness_summary import correctness_summary
 from .transport_results import _compile_failures
+
+
+def recorded_comparison(verification, identities):
+    """Project only a schedule proved by the prepared identities and run facts."""
+    if not identities or any(identity.method != "atrex-bench/abba" for identity in identities):
+        raise ValueError("record has no native ABBA measurement identity")
+    blocks = {identity.parameters.get("abba_sdk_blocks") for identity in identities}
+    timeouts = {identity.parameters.get("runner_overrides", {}).get("perf_timeout_s") for identity in identities}
+    repetitions = {identity.parameters.get("measurement_repetitions", 1) for identity in identities}
+    if len(blocks) != 1 or len(timeouts) != 1 or len(repetitions) != 1:
+        raise ValueError("ABBA measurement configuration differs across batches")
+    blocks, timeout, repetitions = next(iter(blocks)), next(iter(timeouts)), next(iter(repetitions))
+    if any(type(value) is not int or value < 1 for value in (blocks, timeout, repetitions)):
+        raise ValueError("ABBA measurement configuration is incomplete")
+    repeats = blocks * 2
+    schedule = [(str(step["revision"]), outer * repeats + int(step["repeat"]))
+                for outer in range(repetitions) for step in verification_schedule(repeats)]
+    runs = [asdict(run) if isinstance(run, VerificationRun) else run for run in verification.runs]
+    if any(not isinstance(run, Mapping) for run in runs):
+        raise ValueError("ABBA record has invalid run evidence")
+    points = [(point.side, point.repeat, point.shape_id) for identity in identities for point in identity.points]
+    shapes = {point[2] for point in points}
+    if (None in shapes or not shapes or len(points) != len(set(points))
+            or set(points) != {(side, repeat, shape) for side, repeat in schedule for shape in shapes}
+            or [(run.get("revision"), run.get("repeat")) for run in runs] != schedule):
+        raise ValueError("ABBA record does not contain the complete prepared schedule")
+    for run in runs:
+        if run.get("exit_code") != 0 or not isinstance(run.get("result"), Mapping) or type(run.get("result").get("all_pass")) is not bool:
+            raise ValueError("ABBA record has incomplete run evidence")
+        if run.get("result")["all_pass"]:
+            latencies = run.get("result").get("latency_us_by_shape", {})
+            if set(latencies) != shapes or any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
+                                               for value in latencies.values()):
+                raise ValueError("ABBA record has incomplete Shape measurements")
+    passed = all(run.get("result")["all_pass"] for run in runs)
+    if verification.gate not in {"PASS", "FAIL"} or (verification.gate == "PASS") != passed:
+        raise ValueError("ABBA verdict differs from the recorded run evidence")
+    return {"comparison": {"method": "abba", "repeats": repeats},
+            "comparison_run_timeout": timeout, "correct": passed,
+            "baseline": {"correct": all(run.get("result")["all_pass"] for run in runs if run.get("revision") == "incumbent"),
+                         "latency_us_geomean": verification.incumbent_latency_us,
+                         "latency_us_by_shape": dict(verification.incumbent_latency_us_by_shape)},
+            "candidate": {"correct": all(run.get("result")["all_pass"] for run in runs if run.get("revision") == "candidate"),
+                          "latency_us_geomean": verification.candidate_latency_us,
+                          "latency_us_by_shape": dict(verification.candidate_latency_us_by_shape)},
+            "improvement_pct": verification.improvement_pct}
 
 
 def prepare_comparison(request, configuration, workspace, evaluation_input, context):
@@ -276,8 +323,7 @@ def interpret_payloads(payloads: list[dict], shapes: list[str], repeats: int, re
             runs.append(VerificationRun(str(step["revision"]), outer * repeats + int(step["repeat"]), 0, merged))
             sides[str(step["revision"])].append(merged)
         if any(row.get("all_pass") is not True for values in sides.values() for row in values):
-            return VerificationResult("FAIL", None, None, None, runs=runs,
-                error="Native ABBA recorded a completed compile, correctness, or performance failure")
+            continue
         def side_metrics(values):
             by_shape = {sid: math.exp(statistics.mean(math.log(row["latency_us_by_shape"][sid]) for row in values)) for sid in shapes}
             return {"all_pass": True, "latency_us_by_shape": by_shape,
@@ -286,6 +332,9 @@ def interpret_payloads(payloads: list[dict], shapes: list[str], repeats: int, re
         baseline = side_metrics(sides["incumbent"])
         candidate = side_metrics(sides["candidate"])
         samples.append({"correct": True, "baseline": baseline, "candidate": candidate})
+    if len(samples) != repetitions:
+        return VerificationResult("FAIL", None, None, None, runs=runs,
+            error="Native ABBA recorded a completed compile, correctness, or performance failure")
     combined = aggregate(samples, "same_allocation_abba")
     baseline, candidate = combined["baseline"]["latency_us_geomean"], combined["candidate"]["latency_us_geomean"]
     return VerificationResult("PASS", candidate, baseline, (baseline / candidate - 1) * 100, runs=runs,
