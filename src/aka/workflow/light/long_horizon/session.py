@@ -4,6 +4,7 @@ import json
 import signal
 import time
 import uuid
+from threading import Event
 from collections.abc import Mapping
 from contextlib import ExitStack
 from pathlib import Path
@@ -15,6 +16,7 @@ from aka.contracts.agent import Agent, NativeInvocation
 from .models import EpisodeHandoff, InvocationObservation, SessionResult
 from .protocol import handoff_diagnosis, read_handoff
 from .output_limit import recovery_prompt
+from aka.workflow.light.orchestration.infrastructure_retry import InfrastructureUnavailable
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
@@ -60,6 +62,7 @@ def _claude_transient_api_error(stdout: str) -> str:
 
 def _claude_terminal_failure(stdout, session_id):
     """Workflow recovery policy for the root session's terminal provider error."""
+    from aka.agent.provider_errors import rate_limit_code
     if not session_id:
         return None, None
     last_assistant = None
@@ -74,7 +77,17 @@ def _claude_terminal_failure(stdout, session_id):
             continue
         if event.get("type") == "assistant":
             last_assistant, failure = event, (None, None)
+            if event.get('isApiErrorMessage') is True:
+                message = event.get('message')
+                blocks = message.get('content', []) if isinstance(message, dict) else []
+                for block in blocks:
+                    if isinstance(block, dict) and block.get('type') == 'text':
+                        code = rate_limit_code(str(block.get('text', '')))
+                        if code:
+                            failure = ('rate_limit', code)
         elif event.get("type") == "result":
+            if event.get('is_error') is True and failure[0] == 'rate_limit':
+                continue
             failure = (None, None)
             assistant, last_assistant = last_assistant, None
             if (event.get("is_error") is not True or event.get("terminal_reason") != "api_error"
@@ -84,6 +97,26 @@ def _claude_terminal_failure(stdout, session_id):
                      if isinstance(assistant.get(key), str)}
             if codes == {"max_output_tokens"}:
                 failure = ("output_limit", "max_output_tokens")
+    return failure
+
+
+def _pi_terminal_failure(stdout):
+    from aka.agent.provider_errors import rate_limit_code
+    failure = (None, None)
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(event, dict):
+            continue
+        message = event.get('message')
+        if event.get('type') != 'message_end' or not isinstance(message, dict) or message.get('role') != 'assistant':
+            continue
+        failure = (None, None)
+        if message.get('stopReason') in {'error', 'aborted'}:
+            code = rate_limit_code(str(message.get('errorMessage', ''))) if message['stopReason'] == 'error' else None
+            failure = ('rate_limit', code) if code else ('provider_error', 'pi_assistant_' + message['stopReason'])
     return failure
 
 
@@ -117,6 +150,7 @@ class LongSessionRunner:
         deadline: float,
         reasoning_effort: str = "max",
         session_id: str = "",
+        output_directory: Path | None = None,
         telemetry_environment: Mapping[str, str] | None = None,
         access=None,
         tool_session_factory=None,
@@ -171,10 +205,14 @@ class LongSessionRunner:
             next_prompt = prompt
             purpose = "optimization"
             attempt = 0
+            rate_limit_retries = 0
+            retry_resume = False
 
             while True:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
+                    if purpose == "rate_limit_recovery":
+                        raise InfrastructureUnavailable("Rate-limited Episode exhausted its deadline; draft preserved")
                     timed_out = True
                     exit_status = exit_status or -signal.SIGKILL
                     completion_diagnosis = "Episode deadline exhausted; no continuation started"
@@ -184,12 +222,15 @@ class LongSessionRunner:
                     from concurrent.futures import CancelledError
                     raise CancelledError("Search coordinator stopped this Episode")
                 if remaining_token_budget is not None and total_tokens >= remaining_token_budget:
+                    if purpose == "rate_limit_recovery":
+                        raise InfrastructureUnavailable("Rate-limited Episode exhausted its token budget; draft preserved")
                     completion_diagnosis = "Episode token budget exhausted; no continuation started"
                     exit_status = exit_status or 1
                     break
                 if next_prompt is not None:
                     turn_prompt = next_prompt
-                    resume = False
+                    resume = retry_resume
+                    retry_resume = False
                 else:
                     if resume_count >= max(0, handoff_resumes):
                         break
@@ -235,7 +276,8 @@ class LongSessionRunner:
                 active_session_id = turn.session_id or active_session_id
                 failure_kind, provider_error_code = (
                     _claude_terminal_failure(stdout, active_session_id)
-                    if self.agent_cli == "claude" else (None, None)
+                    if self.agent_cli == "claude" else _pi_terminal_failure(stdout)
+                    if self.agent_cli == "pi" else (None, None)
                 )
                 if failure_kind:
                     exit_status = exit_status or 1
@@ -253,6 +295,10 @@ class LongSessionRunner:
                         provider_error_code=provider_error_code,
                     )
                 )
+                # Keep the invocation's recovery label, but let subsequent
+                # budget exhaustion record normal work once throttling ends.
+                if purpose == "rate_limit_recovery" and failure_kind != "rate_limit":
+                    purpose = "optimization"
                 if record_usage is not None:
                     record_usage(total_tokens)
                 # Even an interrupted candidate has consumed real model tokens.
@@ -271,6 +317,40 @@ class LongSessionRunner:
                         break
                 else:
                     completion_diagnosis = handoff_diagnosis(handoff_path)
+                if failure_kind == "rate_limit" and not timed_out:
+                    rate_limit_retries += 1
+                    purpose = "rate_limit_recovery"
+                    delay = min(60, 5 * 2 ** min(rate_limit_retries - 1, 4))
+                    print(f"[long-horizon] provider rate limit ({provider_error_code}); "
+                          f"retry {rate_limit_retries} in {delay}s; same Episode and draft; "
+                          "no optimization round consumed", flush=True)
+                    if (deadline - time.monotonic() <= 0 or
+                            (remaining_token_budget is not None and total_tokens >= remaining_token_budget)):
+                        raise InfrastructureUnavailable("Rate-limited Episode reached its budget; draft preserved")
+                    if (cancel if cancel is not None else Event()).wait(delay):
+                        from concurrent.futures import CancelledError
+                        raise CancelledError("Search coordinator stopped rate-limit recovery")
+                    continuation = (
+                        "Continue the SAME optimization Episode after provider throttling. "
+                        "Preserve the existing kernel/source tree and scratch. Inspect saved progress "
+                        "and reconcile existing Runtime/Gateway results before repeating work. "
+                        "Finish the existing episode-report contract; do not reset the candidate."
+                    )
+                    if native.supports_resume and active_session_id:
+                        next_prompt = continuation
+                        retry_resume = True
+                    else:
+                        native.close()
+                        active_session_id = str(uuid.uuid4())
+                        native = self.agent.open_session(
+                            self.agent_cli, workspace, session_id=active_session_id,
+                            environment=telemetry_environment,
+                            output_directory=output_directory,
+                        )
+                        next_prompt = prompt.rstrip() + "\n\n" + continuation
+                    continue
+                if failure_kind == "provider_error":
+                    completion_diagnosis = f"Provider session failed: {provider_error_code}"
                 if timed_out:
                     if time.monotonic() >= deadline:
                         completion_diagnosis = "Episode deadline exhausted; no continuation started"
@@ -291,15 +371,12 @@ class LongSessionRunner:
                         -signal.SIGTERM,
                         128 + signal.SIGTERM,
                     }
-                    dependency_terminated = (
-                        "dependency policy violation" in stderr.lower()
-                    )
                     if failure_kind == "output_limit":
                         completion_diagnosis = (
                             "Claude max_output_tokens: response output limit exceeded; "
                             f"{recoveries}/{output_limit_recovery_retries} fresh-session recoveries used"
                         )
-                        if (exit_status != 1 or dependency_terminated
+                        if (exit_status != 1
                                 or recoveries >= output_limit_recovery_retries):
                             break
                         if turn.terminal_usage.total_tokens is None:
@@ -337,7 +414,6 @@ class LongSessionRunner:
                     )
                     can_resume = (
                         (externally_terminated or bool(transient_api_error))
-                        and not dependency_terminated
                         and active_session_id
                         and native.supports_resume
                         and resume_count < max(0, handoff_resumes)

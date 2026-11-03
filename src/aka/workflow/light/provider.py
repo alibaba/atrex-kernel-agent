@@ -14,6 +14,7 @@ from .search import SearchOptions
 
 @dataclass(frozen=True)
 class WorkflowOptions:
+    file_system: str | None = None
     numerical_validation: bool = False
     goal_episodes: bool = False
     generate_memory: bool = False
@@ -29,6 +30,9 @@ class WorkflowOptions:
 
     def __post_init__(self):
         import math
+        if self.file_system is not None:
+            from aka.task.source.formats import select
+            select(self.file_system)
         for name in ("wiki", "research_records", "inherit_state"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be boolean")
@@ -54,7 +58,8 @@ class WorkflowOptions:
 class LightWorkflow:
     def __init__(self, agent, problem, source, candidate, *, executor, execution_context,
                  experiment_factory, evaluator_factory, evaluation_defaults,
-                 measurement_parallelism=4, workflow_observer=None, options=WorkflowOptions()):
+                 measurement_parallelism=4, workflow_observer=None, options=WorkflowOptions(),
+                 episode_evidence_reader=None, episode_evidence_interpreter=None):
         if not agent.capabilities.tool_runtime:
             raise ValueError("light Workflow requires an Agent with scoped tool sessions")
         if any(not callable(getattr(candidate, method, None)) for method in (
@@ -70,6 +75,8 @@ class LightWorkflow:
         self.evaluation_defaults = evaluation_defaults
         self.measurement_parallelism = measurement_parallelism
         self.workflow_observer = workflow_observer
+        self.episode_evidence_reader = episode_evidence_reader
+        self.episode_evidence_interpreter = episode_evidence_interpreter
         self._closed = False
         self._campaigns = WeakSet()
 

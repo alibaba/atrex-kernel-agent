@@ -114,7 +114,7 @@ def commit_sol(ws, contribution_paths):
 def _source_history(workspace):
     if not (workspace / ".git").exists():
         return []
-    result = subprocess.run(["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
+    result = subprocess.run(["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py", "solution.json"],
                             cwd=workspace, capture_output=True, text=True)
     return result.stdout.split() if not result.returncode else []
 
@@ -144,7 +144,14 @@ def _retry_context(workspace, source_commit, source_files, groups):
 
 def _require_kernel(content):
     if not any(item.path == "kernel.py" for item in content.files):
-        raise ValueError("kernel initialization requires an explicit kernel.py contribution")
+        from aka.task.source.formats.registry import from_inputs
+        selected = {item.path: item.source.read_bytes() if item.source is not None else item.text.encode()
+                    for item in content.files}
+        system, policy = from_inputs(selected)
+        if system.name != "cuda_manifest":
+            raise ValueError("initialization requires kernel.py or a native CUDA manifest")
+        system.validate({name: value for name, value in selected.items()
+                         if name != ".atrex_file_system.json"}, policy)
 
 
 def _validate_uncommitted_source(workspace, source_files, selected):

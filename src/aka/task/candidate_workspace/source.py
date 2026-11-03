@@ -9,13 +9,18 @@ import tempfile
 
 from aka.contracts.content import WorkspaceFile
 from aka.contracts.workspace import RevisionContent
-from aka.task.source.tree import POLICY, _directory_sources, editable, source_name, validate_files, validate_policy
+from aka.task.source.tree import _directory_sources
+from aka.task.source.formats import POLICY, SELECTION, editable, source_name, validate_files, validate_policy
+from aka.task.source.formats.registry import resolve as resolve_format, for_policy
 from .files import MAX_FILE, read_regular_bytes
 from .history import resolve_revision
 from .records import _git, current_revision, read_working
 
 
 def _policy(workspace, revision=None):
+    system, policy = resolve_format(workspace, revision=revision)
+    if system.name == 'cuda_manifest':
+        return policy, json.dumps(policy, sort_keys=True).encode()
     if revision is not None:
         result = _git(workspace, "show", f"{revision}:{POLICY}", check=False)
         raw = result.stdout if not result.returncode else None
@@ -29,6 +34,8 @@ def _policy(workspace, revision=None):
 
 
 def _committed_files(workspace, revision, policy):
+    if policy is not None and policy.get('kind') == 'agate_cuda':
+        return for_policy(policy).from_git(workspace, revision, policy)
     if policy is None:
         result = _git(workspace, "show", f"{revision}:kernel.py", check=False)
         return {"kernel.py": result.stdout if not result.returncode else None}
@@ -49,6 +56,8 @@ def _committed_files(workspace, revision, policy):
 
 
 def _declared_files(workspace, policy, *, validate=True):
+    if policy.get('kind') == 'agate_cuda':
+        return for_policy(policy).collect(workspace, policy, validate=validate)
     names = tuple(dict.fromkeys((*policy["immutable_files"], *policy["editable_roots"])))
     selected = tuple(name for name in names if (workspace / name).exists() or (workspace / name).is_symlink())
     files = _directory_sources(workspace, selected)
@@ -60,28 +69,34 @@ def read_source(workspace, *, revision=None):
     if revision is not None:
         revision = resolve_revision(workspace, revision)
     policy, raw = _policy(workspace, revision)
+    head = current_revision(workspace)
+    if revision is None and head:
+        original = _git(workspace, "show", f"{head}:{SELECTION}", check=False)
+        selected = read_working(workspace, (SELECTION,)).files[SELECTION]
+        if original.returncode == 0 and selected != original.stdout:
+            raise ValueError("working file system selection differs from its committed identity")
     if revision is not None:
         files = _committed_files(workspace, revision, policy)
     elif policy is not None:
-        head = current_revision(workspace)
         if head:
             committed, recorded = _policy(workspace, head)
-            if committed is None or recorded != raw:
+            native_bringup = policy.get("kind") == "agate_cuda" and committed is None and original.returncode != 0
+            if not native_bringup and (committed is None or recorded != raw):
                 raise ValueError("working source declaration differs from its committed identity")
         files = _declared_files(workspace, policy)
     else:
         files = dict(read_working(workspace, ("kernel.py",)).files)
         if files["kernel.py"] is not None and len(files["kernel.py"]) > MAX_FILE:
             raise ValueError("source file exceeds the existing bounded limit")
-    if raw is not None:
+    if raw is not None and policy.get('kind') != 'agate_cuda':
         files[POLICY] = raw  # Opaque contribution; only this owner interprets it.
     return RevisionContent(files)
 
 
 def source_identity(source):
-    from aka.task.source.tree import from_inputs
+    from aka.task.source.formats import from_inputs
     data = dict(source.files)
-    if data.get("kernel.py") is None:
+    if data.get("kernel.py") is None and data.get("solution.json") is None:
         raise ValueError("source identity requires kernel.py")
     if data.get(POLICY) is not None:
         data = {name: value for name, value in data.items() if value is not None}
@@ -109,6 +124,10 @@ def validate_source_deletions(workspace, names):
 def validate_source_record(workspace, selected):
     revision = current_revision(workspace)
     policy, raw = _policy(workspace, revision or None)
+    if revision and SELECTION in selected:
+        previous = _git(workspace, "show", f"{revision}:{SELECTION}", check=False)
+        if previous.returncode == 0 and previous.stdout != selected[SELECTION]:
+            raise ValueError("file system selection cannot change within a candidate")
     if policy is None or not revision:
         return
     if POLICY in selected and selected[POLICY] != raw:
@@ -130,18 +149,31 @@ def install_source(workspace, source):
     from .content import _install_files, selected_file_bytes
     from .records import _restore_files
     workspace = Path(workspace)
-    if source.files.get("kernel.py") is None:
+    if source.files.get("kernel.py") is None and source.files.get("solution.json") is None:
         raise ValueError("source publication requires kernel.py")
     files = tuple(WorkspaceFile(name, text=data.decode("utf-8"))
                   for name, data in source.files.items() if data is not None)
     selected = selected_file_bytes(workspace, files)
-    policy = validate_policy(json.loads(selected[POLICY])) if POLICY in selected else None
+    from aka.task.source.formats.registry import from_inputs as select_inputs
+    _, policy = select_inputs(selected)
     content = {name: data for name, data in selected.items() if name != POLICY}
     if policy is not None:
         validate_files(content, policy)
     elif set(selected) != {"kernel.py"}:
         raise ValueError("multiple source files require a complete Task source declaration")
-    previous, _ = _policy(workspace)
+    try:
+        previous, _ = _policy(workspace)
+    except (ValueError, KeyError):
+        revision = current_revision(workspace)
+        previous, _ = _policy(workspace, revision) if revision else (None, None)
+        if previous is None or previous.get("kind") != "agate_cuda":
+            raise
+    if previous is None and policy is not None and policy.get("kind") == "agate_cuda":
+        revision = current_revision(workspace)
+        if revision:
+            recorded, _ = _policy(workspace, revision)
+            if recorded is not None and recorded.get("kind") == "agate_cuda":
+                previous = recorded
     if previous != policy:
         if previous is not None:
             raise ValueError("source declaration cannot change within a draft")
@@ -281,7 +313,7 @@ def _candidate_source(handle, source):
     if violation:
         raise ValueError(violation)
     selected = dict(source.files)
-    if selected.get("kernel.py") is None:
+    if selected.get("kernel.py") is None and selected.get("solution.json") is None:
         raise ValueError("candidate source requires kernel.py")
     if any(marker.encode() in data for name, data in selected.items() if data is not None and name != POLICY
            for marker in TIMELINE_PROBE_MARKERS):
@@ -301,7 +333,7 @@ def _candidate_source(handle, source):
             raise ValueError("single-file sealing requires unchanged manifest and a kernel-only candidate")
         deleted = ()
     else:
-        if current_policy != policy or current_raw != raw or selected.get(POLICY) != raw:
+        if current_policy != policy or current_raw != raw or (policy.get('kind') != 'agate_cuda' and selected.get(POLICY) != raw):
             raise ValueError("candidate source declaration differs from its Episode baseline")
         validate_files({name: data for name, data in selected.items() if name != POLICY and data is not None}, policy)
         if any(not editable(policy, name) or name in policy["immutable_files"] for name in changed):

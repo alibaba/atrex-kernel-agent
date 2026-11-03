@@ -4,10 +4,12 @@ from aka.workflow.legacy.plugin import WORKFLOW
 name = "light"
 provide = ("workflow",)
 inject = ("agent", "problem", "source", "candidate", "executor", "execution_context",
-          "evaluator_factory", "evaluation_defaults", "experiment_factory", "measurement_parallelism", "workflow_observer")
+          "evaluator_factory", "evaluation_defaults", "experiment_factory", "measurement_parallelism", "workflow_observer",
+          "experiment_episode_evidence", "evaluation_episode_interpreter")
 identity_packages = ("aka.workflow.light", "aka.contracts", "aka.workflow.legacy",
                      "aka.execution")
 Config = {"type": "object", "properties": {
+    "file_system": {"type": "string", "enum": ["single_file", "source_tree", "cuda_manifest"]},
     "startup": {"type": "boolean"},
     "numerical_validation": {"type": "boolean"},
     "goal_episodes": {"type": "boolean"},
@@ -44,6 +46,8 @@ def apply(ctx, config):
                              experiment_factory=ctx.experiment_factory, evaluator_factory=ctx.evaluator_factory,
                              evaluation_defaults=ctx.evaluation_defaults, measurement_parallelism=ctx.measurement_parallelism,
                              workflow_observer=ctx.workflow_observer,
+                             episode_evidence_reader=ctx.experiment_episode_evidence,
+                             episode_evidence_interpreter=ctx.evaluation_episode_interpreter,
                              options=WorkflowOptions(**{
                                  key: value for key, value in config.items() if key != "startup"
                              }))

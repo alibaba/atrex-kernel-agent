@@ -40,6 +40,8 @@ def _candidate_languages(
     solution: dict[str, Any], *, candidate_sources: Iterable[str] = ()
 ) -> list[str]:
     """Return the candidate languages declared by current or legacy manifests."""
+    if isinstance(solution.get('entry_point'), dict) and solution['entry_point'].get('type') == 'cuda':
+        return ['cuda']
     spec = solution.get("spec")
     languages = spec.get("languages") if isinstance(spec, dict) else None
     if not isinstance(languages, list):

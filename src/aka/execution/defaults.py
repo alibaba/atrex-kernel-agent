@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 
-DEFAULT_SANDBOX_TIMEOUT = 600
+from aka.contracts.evaluation import derived_evaluation_timeout
 
 
-MAX_SANDBOX_TIMEOUT = 600
+DEFAULT_SANDBOX_TIMEOUT = derived_evaluation_timeout()

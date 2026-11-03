@@ -36,6 +36,8 @@ class ManagedCampaign(Campaign):
         campaign.agent = workflow.agent
         campaign.source_provider = workflow.source
         campaign.candidate_workspace = workflow.candidate
+        campaign.episode_evidence_reader = workflow.episode_evidence_reader
+        campaign.episode_evidence_interpreter = workflow.episode_evidence_interpreter
         campaign.module_options = workflow.options
         from .runtime import ManagedRuntimeFactory
         campaign.tool_runtime = ManagedRuntimeFactory(workflow, campaign)
@@ -154,11 +156,43 @@ class ManagedCampaign(Campaign):
                 return invoke(grant.environment, grant.filesystem_access)
         return invoke(environment, access)
 
+    def ensure_framework_baseline(self):
+        super().ensure_framework_baseline()
+        from aka.task.source.formats import POLICY, SELECTION, task_selection
+        from aka.task.source.formats.registry import resolve
+        from aka.contracts.content import WorkspaceFile
+        import json
+        source = self.candidate_workspace.read_source(self.workspace)
+        requested = task_selection(self.module_options.file_system, framework=self.framework,
+                                   source_tree=POLICY in source.files)
+        selected, _ = resolve(self.workspace, revision="HEAD")
+        if selected.name != requested.name:
+            raise ValueError(f"Selected {requested.name} requires a matching candidate; found {selected.name}")
+        content = (json.dumps({"name": selected.name}, sort_keys=True) + "\n").encode()
+        retained = self.candidate_workspace.read_working(self.workspace, (SELECTION,)).files[SELECTION]
+        if retained is not None and retained != content:
+            raise ValueError("Candidate file system cannot change when resuming a Campaign")
+        self.candidate_workspace.record(self.workspace,
+            expected_revision=self.candidate_workspace.current_revision(self.workspace),
+            files=(WorkspaceFile(SELECTION, text=content.decode()),), message="Pin candidate file system")
+
     def setup_baseline(self):
         initial = self.problem.initial_source
         content = self.source_provider.prepare(SourceRequest(
             initial=initial, name=self.campaign_name, framework=self.framework,
             platform=self.platform))
+        from aka.task.source.formats import POLICY, task_selection
+        imported_tree = any(item.path == POLICY for item in content.files)
+        system = task_selection(self.module_options.file_system, framework=self.framework,
+                                source_tree=imported_tree)
+        if system.name != "single_file" and (initial.kind == "sol" or self.sandbox_ssh):
+            raise ValueError("Compiled/source-tree candidates require native Eval")
+        if system.name == "source_tree" and not imported_tree:
+            from aka.workflow.light.support.paths import supervisor_campaign_root
+            content = system.prepare_source(SourceRequest(initial=initial, name=self.campaign_name,
+                framework=self.framework, platform=self.platform), self.source_provider,
+                options=None, state_root=supervisor_campaign_root(self.workspace) / "initial-source",
+                native_eval=bool(self.atrex_bench_root) and not self.sandbox_ssh)
         self._selected_initial_kernel = next(
             (entry.source.read_bytes() if entry.source is not None else entry.text.encode()
              for entry in content.files if entry.path == "kernel.py"), None)

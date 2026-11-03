@@ -109,13 +109,41 @@ Response:
 {"status":"recorded","experiment_id":"experiment_22222222222222222222222222222222"}
 ```
 
-All shown fields are required; textual fields must be non-empty. Existing optional `wiki_usage`, `wiki_query_ids`, and `wiki_usage_status` attribution fields remain supported with the legacy schema; malformed attribution is diagnostic, not an acceptance gate. The Direction must be in progress or closed;
+All shown fields are required; textual fields must be non-empty. Optional `wiki_usage`, `wiki_query_ids`, and `wiki_usage_status` record knowledge attribution. Invalid attribution rejects the request before an Experiment is recorded; correct the returned field issues and resubmit with the same Gateway Record IDs, without repeating GPU work. Previously stored malformed attribution remains diagnostic on read. Copy the provider's returned `query_id` verbatim. Each usage row needs `query_id`, `disposition`, `use`, `evidence`, and either an emitted `wiki_id` (`store::record`) or `cite` (`wiki@version relative-path:start-end`); both may be retained. Query IDs are bounded opaque tokens, not restricted to one backend's prefix. Attribution arrays contain at most 64 entries. `declared` requires non-empty valid usage; `wiki_query_ids` must include every query ID appearing in `wiki_usage`, including `reference_only` and `rejected` rows. For `no_material_use`, include the queries considered without usage rows; for `not_queried`, omit both. The Direction must be in progress or closed;
 not merely proposed. Late records can attach already obtained evidence after closure, even while
 another Direction is active. This does not restart exploration or change previous closure support.
 `gateway_record_ids` is a non-empty, duplicate-free list of visible Kernel-bound Gateway IDs: Evaluate, ABBA, Profile, Dev,
 Check, and Disassemble are all valid evidence. The record must belong to this Campaign; corrupted private records are infrastructure blockers. It may span different Kernels; order does not mean
 before/after. Do not submit Kernel IDs, Job IDs, digests, or result payloads instead of these IDs.
 When asserting improvement over another measurement, cite that result too and explain the comparison.
+
+| Wiki `disposition` | Meaning |
+| --- | --- |
+| `applied` | Applied the guidance to this implementation |
+| `partially_applied` | Applied only part of the guidance |
+| `reference_only` | Considered the guidance as context without applying it |
+| `rejected` | Evaluated and rejected the guidance |
+
+Do not use `used`, `material_use` or `considered`; these are not enum values.
+Add the following fields to the Experiment request, copying IDs and citations from actual responses:
+
+```json
+{
+  "wiki_usage_status": "declared",
+  "wiki_query_ids": ["wiki-query-0123456789abcdef0123456789abcdef"],
+  "wiki_usage": [{
+    "query_id": "wiki-query-0123456789abcdef0123456789abcdef",
+    "wiki_id": "gpu_wiki::example.record",
+    "disposition": "applied",
+    "use": "Fused the two memory passes described by the record",
+    "evidence": "The cited Gateway evaluation measured lower latency"
+  }]
+}
+```
+
+For a path-based provider, use its emitted `cite`, such as `gpu@v1 docs/a.md:3-5`,
+instead of inventing a `wiki_id`. Choose the disposition from the actual experiment,
+not from whether the query returned records. Omit attribution entirely if not recording research.
 
 | Experiment `action` | Meaning |
 | --- | --- |

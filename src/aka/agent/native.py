@@ -194,6 +194,11 @@ class NativeSession:
         codex_ledger_usable = codex_observer is not None
         self.runtime_id = runtime_id
         self.environment = environment
+        self._home_binding = {key: environment.get(key) for key in (
+            "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR",
+            "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+            "XDG_DATA_HOME", "XDG_STATE_HOME", "ATREX_AGENT_SANDBOX",
+        )}
         self._observer = codex_observer
         self._setup_errors = codex_setup_errors
         self._ledger_usable = codex_ledger_usable
@@ -269,6 +274,9 @@ class NativeSession:
             raise RuntimeError("native session has been closed")
         self._hooks.check_invocation(self._invoked, resume)
         invocation_environment = self._hooks.invocation_environment(self.environment, environment)
+        for key, value in self._home_binding.items():
+            if invocation_environment.get(key) != value:
+                raise ValueError(f"Cannot change {key} inside an open Agent session")
         if resume:
             if not self.supports_resume or not self._session_id:
                 raise RuntimeError(

@@ -29,6 +29,10 @@ class SourceArchiveError(RuntimeError):
 
 
 def source_descriptor(value):
+    if isinstance(value, dict) and value.get('schema_version') == 1 and isinstance(value.get('entry_point'), dict):
+        source = value.get('source')
+        if isinstance(source, dict) and source.get('type') == 'oss_archive':
+            value = {'archive': source.get('archive'), 'entry_point': 'solution.json'}
     if not isinstance(value, dict) or set(value) != {"archive", "entry_point"}:
         return False
     try:
@@ -38,6 +42,14 @@ def source_descriptor(value):
     return True
 
 
+def archive_matches(value, archive):
+    if value == {'archive': archive.path, 'entry_point': archive.entry_point}:
+        return True
+    return (source_descriptor(value) and archive.entry_point == 'solution.json'
+            and value.get('source', {}).get('archive') == archive.path
+            and value['source'].get('sha256') == hashlib.sha256(archive.content).hexdigest())
+
+
 def validate_archives(prepared, archives, operation):
     if not archives:
         for value in (prepared.get("request", {}).get("candidate"),
@@ -45,13 +57,13 @@ def validate_archives(prepared, archives, operation):
             if isinstance(value, dict):
                 raise UnsupportedExecution("source archive descriptors require retained archive bytes")
         return
-    if operation not in {"run", "same_allocation_abba"} or prepared.get("kind") != "run":
-        raise UnsupportedExecution("source archives require a typed Eval operation")
+    if operation not in {"run", "same_allocation_abba", "profile"} or prepared.get("kind") not in {"run", "profile"}:
+        raise UnsupportedExecution("source archives require a typed Eval or Profile operation")
     request = prepared.get("request", {})
     roles = {item.role for item in archives}
     for item in archives:
         descriptor = request.get("candidate") if item.role == "candidate" else request.get("abba", {}).get("baseline")
-        if descriptor != {"archive": item.path, "entry_point": item.entry_point}:
+        if not archive_matches(descriptor, item):
             raise ValueError("source archive bytes differ from their selected descriptor")
     for role, value in (("candidate", request.get("candidate")),
                         ("baseline", request.get("abba", {}).get("baseline"))):
@@ -130,15 +142,17 @@ def upload_bytes(url, data, *, timeout):
 
 class SourceArchiveState:
     """One private reservation/wire journal under an exclusive physical-request lock."""
-    def __init__(self, directory, name, *, request, archives, route, key, clock=time.monotonic):
+    def __init__(self, directory, name, *, request, archives, route, key, clock=time.monotonic, kind='eval'):
         if not isinstance(key, str) or not key:
             raise UnsupportedExecution("source archive transport requires its original physical request key")
         self.directory, self.name, self.clock = directory, name, clock
         self.request, self.archives, self.route, self.key = request, archives, route, key
+        self.kind = kind
         descriptors = [{"role": item.role, "path": item.path, "entry_point": item.entry_point,
                         "bytes": len(item.content), "sha256": hashlib.sha256(item.content).hexdigest()}
                        for item in archives]
-        self.logical_identity = hashlib.sha256(json.dumps([request, descriptors],
+        identity_parts = [request, descriptors] if kind == "eval" else [kind, request, descriptors]
+        self.logical_identity = hashlib.sha256(json.dumps(identity_parts,
             sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
         self.state = self._read()
         if self.state is not None and (self.state.get("logical_identity") != self.logical_identity
@@ -189,7 +203,7 @@ class SourceArchiveState:
             self.save()
             try:
                 reservation = json_call("POST", "/v1/uploads", {
-                    "kind": "eval", "spec": self.request["spec"],
+                    "kind": self.kind, "spec": self.request["spec"],
                     "files": [{key: item[key] for key in ("path", "bytes", "sha256")} for item in self.descriptors],
                     **({"placement": self.request["placement"]} if "placement" in self.request else {}),
                 }, remaining)
@@ -259,9 +273,12 @@ class SourceArchiveState:
 
 
 @contextmanager
-def retained_upload(workspace, request, archives, *, route, key, clock=time.monotonic):
+def retained_upload(workspace, request, archives, *, route, key, clock=time.monotonic, kind='eval'):
     workspace = Path(workspace).absolute()
-    name = hashlib.sha256(json.dumps([str(workspace), list(route), key], separators=(",", ":")).encode()).hexdigest()
+    identity_parts = [str(workspace), list(route), key]
+    if kind != "eval":
+        identity_parts.insert(0, kind)
+    name = hashlib.sha256(json.dumps(identity_parts, separators=(",", ":")).encode()).hexdigest()
     with open_private_directory(workspace.parent / ".aka-execution-uploads") as directory:
         descriptor = os.open(name + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
         try:
@@ -270,7 +287,7 @@ def retained_upload(workspace, request, archives, *, route, key, clock=time.mono
             except BlockingIOError:
                 raise SourceArchiveError("upload-already-active") from None
             yield SourceArchiveState(directory, name + ".json", request=request, archives=archives,
-                                     route=route, key=key, clock=clock)
+                                     route=route, key=key, clock=clock, kind=kind)
         finally:
             os.close(descriptor)
 
@@ -286,10 +303,11 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
     if not endpoint:
         raise UnsupportedExecution("source archives require a confirmed HTTP gateway route")
     key = request.get("idempotency_key")
+    kind = 'profile' if args.kind == 'profile' else 'eval'
     deadline = time.monotonic() + args.timeout + grace
     json_call = lambda method, path, payload, timeout: transport._gateway_json(
         endpoint, method, path, payload, timeout)
-    with retained_upload(workspace, request, archives, route=(endpoint, profile), key=key) as state:
+    with retained_upload(workspace, request, archives, route=(endpoint, profile), key=key, kind=kind) as state:
         try:
             wire = state.prepare(json_call=json_call, deadline=deadline)
         except SourceArchiveError as error:
@@ -303,7 +321,7 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
         reserved = state.state["reservation"]["job_id"]
         if state.state["phase"] in {"submission_intent", "submitted"}:
             identifier = state.state.get("job_id", reserved)
-            reference = JobReference("gateway", identifier, "eval", endpoint, profile, identity, key)
+            reference = JobReference("gateway", identifier, kind, endpoint, profile, identity, key)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise SourceArchiveError("upload-budget-exhausted")
@@ -320,11 +338,11 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
                     state.submitted(observed)
                 except ValueError:
                     if state.state.get("phase") == "submitted":
-                        emit_fact({"event": "submitted", "identifier": state.state["job_id"], "operation": "eval",
+                        emit_fact({"event": "submitted", "identifier": state.state["job_id"], "operation": kind,
                             "backend": "gateway", "endpoint": endpoint, "profile": profile,
                             "request_identity": identity, "idempotency_key": key})
                     raise
-            emit_fact({"event": "submitted", "identifier": identifier, "operation": "eval",
+            emit_fact({"event": "submitted", "identifier": identifier, "operation": kind,
                        "backend": "gateway", "endpoint": endpoint, "profile": profile,
                        "request_identity": identity, "idempotency_key": key})
             remaining = deadline - time.monotonic()
@@ -339,7 +357,7 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
         if remaining <= 0:
             raise SourceArchiveError("upload-budget-exhausted")
         state.begin_submission()
-        return transport._run_direct_job(url=endpoint, kind="eval", payload=wire,
+        return transport._run_direct_job(url=endpoint, kind=kind, payload=wire,
             timeout=remaining, queue_wait_grace=0, on_submitted=state.submitted)
 
 
@@ -370,7 +388,7 @@ def replay_archived(jobs, command, *, idempotency_key, retry):
         return result
     json_call = lambda method, path, payload, timeout: jobs.http(jobs.endpoint, method, path, payload, timeout)
     with retained_upload(command.workspace, request, archives, route=(jobs.endpoint, jobs.profile),
-                         key=idempotency_key, clock=jobs.clock) as state:
+                         key=idempotency_key, clock=jobs.clock, kind='profile' if prepared['kind'] == 'profile' else 'eval') as state:
         def preparation_failure(error):
             cancelled = error.code == "upload-cancelled"
             category = "cancelled" if cancelled else "request" if error.status in {400, 401, 403, 404, 405, 409, 413, 422} else "infrastructure"
@@ -401,7 +419,7 @@ def replay_archived(jobs, command, *, idempotency_key, retry):
                 attempts=(attempt,), diagnostics=(diagnostic,), causes=(cause,)))
         if state.state["phase"] in {"submission_intent", "submitted"}:
             identifier = state.state.get("job_id", state.state["reservation"]["job_id"])
-            reference = JobReference("gateway", identifier, "eval", jobs.endpoint, jobs.profile, identity, idempotency_key)
+            reference = JobReference("gateway", identifier, state.kind, jobs.endpoint, jobs.profile, identity, idempotency_key)
             remaining = deadline - jobs.clock()
             if remaining <= 0:
                 if state.state["phase"] == "submission_intent":

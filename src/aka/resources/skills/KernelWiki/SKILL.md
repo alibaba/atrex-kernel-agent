@@ -38,3 +38,7 @@ payload and notes. A zero-match fallback sample is labelled, not advice for your
 question. A missing hardware spec is not permission to substitute another GPU.
 When research recording is enabled, record `query_id` and canonical `wiki_id` in the existing
 Experiment Journal when knowledge materially affects an experiment; retrieval alone is not adoption.
+Use `applied`, `partially_applied`, `reference_only` or `rejected` for `disposition`;
+`used`, `material_use` and `considered` are invalid. See the complete attribution JSON example in
+`skills/runtime-records/references/journal.md`. Correct rejected attribution fields and resubmit
+with the existing Gateway Record IDs; do not repeat GPU work.

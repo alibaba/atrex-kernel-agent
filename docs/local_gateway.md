@@ -1,9 +1,10 @@
-# Community Local Sandbox
+# Community Local Gateway
 
 `python -m aka.legacy.execution.runtime_tools.local_gateway` starts a small,
 standard-library-only scheduler for maintaining and testing the localhost optimization path. It
-accepts requests from `python -m aka.legacy.execution.cli` and queues local GPU commands
-FIFO.
+accepts native source-archive Eval/ABBA requests from Light as well as requests from
+`python -m aka.legacy.execution.cli`, and queues local GPU commands FIFO. Native evaluation
+requires a compatible Atrex-Bench installation on the local GPU host.
 
 ## Start the Server
 
@@ -32,8 +33,7 @@ silently executed twice.
 
 ## Use with the Optimizer
 
-The optimizer continues to use `python -m aka.legacy.execution.cli`, so correctness, performance, and profiler commands have
-the same packaging and artifact-return behavior as the remote execution path:
+Point the default optimizer at the local endpoint:
 
 ```bash
 aka optimize --repo-root "$PWD" -- \
@@ -42,6 +42,10 @@ aka optimize --repo-root "$PWD" -- \
   --sandbox-hardware local \
   --sandbox-url http://127.0.0.1:8000
 ```
+
+Use `--profile workflow` before `--` for the explicit Legacy workflow. The native path
+uploads source archives and retains complete Atrex-Bench correctness and ABBA receipts;
+Legacy retains its evaluator/command compatibility path.
 
 `--framework` can be omitted to start all frameworks supported by the runtime GPU architecture in
 parallel. Their sandbox requests still enter this scheduler's FIFO queue, and their local optimizer state
@@ -54,10 +58,16 @@ desensitized GPU description. It uses the runtime architecture probe for automat
 
 ## Compatibility Surface
 
+The scheduler accepts inline Python and source-archive candidates, including native
+Atrex-Bench ABBA requests. The maximum job timeout is 10,800 seconds; this does not
+increase the default timeout or reserve extra GPU capacity. One job deadline covers
+all requested ABBA blocks.
+
 The community scheduler implements:
 
 - `GET /healthz`
 - `GET /v1/env` and `GET /v1/env/local`
+- `POST /v1/uploads` and `PUT /v1/uploads/<upload_ref>` for candidate and baseline source archives, stored locally with size and SHA-256 verification
 - `POST /v1/jobs/eval` for native Atrex-Bench evaluation
 - `POST /v1/jobs/profile` for supported `ncu`/`rocprofv3` profiling requests
 - `POST /v1/jobs/dev`, including uploaded text files, environment variables, timeouts, and idempotency keys
@@ -70,6 +80,28 @@ The community scheduler implements:
 contract, and falls back to a self-contained `dev` request for SOL, aggregate, custom-input, or otherwise
 unrepresentable commands. `disassemble` remains unsupported and returns a structured HTTP 501
 `kind_not_supported` response.
+
+Eval accepts Python source strings and `{archive, entry_point}` source bundles.
+Archive entries must be regular files with relative paths. Uploads and queued
+job references persist in the state directory across restarts. Source uploads
+do not require OSS credentials or an external storage service.
+
+An `abba` request runs every requested A/B/B/A block through Atrex-Bench's
+native evaluation mode in the same local GPU allocation. The result retains
+each complete SDK block under `abba.sdk_results`, including failed candidate
+verdicts. Missing or incomplete evaluator evidence fails the job. Runner
+overrides preserve the requested warmup and per-run timing budgets; allocation
+timeouts may be up to 10800 seconds. The installed Atrex-Bench must support
+native ABBA and the JSON runner configuration contract.
+
+Clock requests are reported separately from applied locks in the Eval result's
+`clock_lock` field. The local adapter currently manages NVIDIA clocks; on AMD it
+runs with `clock_locked=false`, matching the remote gateway's unsupported-device
+behavior. It does not equate a ROCm performance level with a fixed clock or report
+an unapplied lock as successful. Correctness checks and every ABBA leg still run.
+
+See [local source-tree evaluation and terminal evidence](local-gateway-source-evaluation.md)
+for upload integrity, source-bound exports, recovery, and validation scope.
 
 ## Security Boundary
 

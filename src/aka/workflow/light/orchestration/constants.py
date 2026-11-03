@@ -9,16 +9,22 @@ from pathlib import Path
 from aka.resources.bundles import resource_path
 from aka.evaluation.resources import profile_driver_script
 from aka.task.problem.resources import native_harness_script
+from aka.workflow.legacy.review_rules.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
+from aka.contracts.evaluation import (
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_ABBA_RUN_TIMEOUT,
+    derived_evaluation_timeout,
+)
+from aka.resources.bundles import resource_path as resource
 
 from aka.agent import SUPPORTED_RUNTIME_IDS
-from aka.contracts.evaluation import DEFAULT_ABBA_REPEATS, DEFAULT_ABBA_RUN_TIMEOUT, derived_evaluation_timeout
 
 REPO_ROOT = resource_path("")
 PROMPTS_DIR = resource_path("prompts/research-episodes")
 WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
 SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
 ATREX_BENCH_HARNESS = native_harness_script()
-SOL_HARNESS = REPO_ROOT / "reference" / "test_kernel.py"
+SOL_HARNESS = resource("reference/test_kernel.py")
 PROFILE_DRIVER = profile_driver_script()
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
 SANDBOX_FULL_WORKFLOW_PROMPT = PROMPTS_DIR / "sandbox_full_workflow.md"
@@ -40,7 +46,6 @@ FRAMEWORK_BASELINE_VERSION = (
 FRAMEWORK_BASELINE_TIMEOUT_S = 28800
 FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
 FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
-DEPENDENCY_REVIEW_SCHEMA_VERSION = 2
 DEPENDENCY_REVIEW_TIMEOUT_S = 600
 DEPENDENCY_REVIEW_PROMPT = PROMPTS_DIR / "dependency_review.md"
 AGENT_PROBLEM_GENERATION_PROMPT = PROMPTS_DIR / "generalize_agent_problem.md"

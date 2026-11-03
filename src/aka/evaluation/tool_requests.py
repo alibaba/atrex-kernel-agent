@@ -29,6 +29,7 @@ def parse_tool_arguments(argv):
                  "--kernel-name", "--kernel-regex", "--profile-shape-id", "--arch", "--sanitize", "--deps-mode", "--env-gpu"):
         parser.add_argument(flag)
     parser.add_argument("--mode", dest="evaluation_mode", choices=("full", "correctness_only"))
+    parser.add_argument("--correctness-max-rel-l2", type=float)
     for flag in ("--multi-seed", "--timed-runs", "--shape-batch-size", "--comparison-repeats", "--comparison-run-timeout",
                  "--launch-skip", "--launch-count", "--top-kernels"):
         parser.add_argument(flag, type=int)
@@ -71,6 +72,12 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         return ToolRequest(args.kind, None, args)
     if args.no_sync and args.sync:
         raise ValueError("--no-sync and --sync are mutually exclusive")
+    if args.correctness_max_rel_l2 is not None:
+        import math
+        if not math.isfinite(args.correctness_max_rel_l2) or args.correctness_max_rel_l2 <= 0:
+            raise ValueError("correctness threshold must be finite and positive")
+        if args.kind not in {"auto", "run"} or args.command:
+            raise ValueError("correctness threshold requires an implicit Evaluate request")
     workspace = Path(workspace)
     defaults = dict(defaults or {})
     kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
@@ -128,7 +135,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     from .source_archives import prepare_source
     descriptor, candidate_archive, _, _ = prepare_source(source)
     archives = (candidate_archive,) if candidate_archive is not None else ()
-    candidate = source.files["kernel.py"]
+    candidate = source.files.get('kernel.py') or source.files.get('solution.json')
     if not isinstance(candidate, bytes) or not candidate.strip():
         raise ValueError("typed operation requires nonempty candidate source")
     content = selected_content(evaluation_input)
@@ -154,7 +161,10 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         request["deps_mode"] = args.deps_mode
     provisional = replace(provisional, num_gpus=request["spec"].get("num_gpus", 1),
         languages=tuple(request["spec"].get("languages", ())))
-    if candidate_archive is not None and kind in {"profile", "check", "disassemble"}:
+    native_manifest = source.files.get('kernel.py') is None
+    if native_manifest and kind in {'check', 'disassemble'}:
+        raise ValueError('Compiled manifests support Evaluate and Profile; use Evaluate correctness_only for a build/correctness check')
+    if candidate_archive is not None and not native_manifest and kind in {"profile", "check", "disassemble"}:
         from .diagnostic_preparation import command as diagnostic_command
         return ToolRequest(kind, diagnostic_command(provisional, request, source, kind, args, requirements), args)
     request["candidate"] = descriptor
@@ -169,6 +179,8 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             request["runner_overrides"] = {"skip_kernel_attribution": True}
             for field in ("profiler", "level", "counters", "kernel_regex", "top_kernels"):
                 request.pop(field, None)
+        if args.correctness_max_rel_l2 is not None:
+            request["options"]["correctness_max_rel_l2"] = args.correctness_max_rel_l2
         from .measurement_policy import warmup_overrides
         timing_environment = dict(explicit)
         from aka.execution.command_syntax import option_value
@@ -184,7 +196,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             baseline = (workspace_provider.read_source(workspace / baseline_path) if (workspace / baseline_path).is_dir()
                         else workspace_provider.read_working(workspace, (baseline_path,)))
             if (workspace / baseline_path).is_dir():
-                baseline_bytes = baseline.files["kernel.py"]
+                baseline_bytes = baseline.files.get('kernel.py') or baseline.files.get('solution.json')
             else:
                 baseline_bytes = baseline.files[baseline_path]
             if not isinstance(baseline_bytes, bytes) or not baseline_bytes.strip():

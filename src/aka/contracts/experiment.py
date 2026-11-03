@@ -60,6 +60,7 @@ class RetainedEpisodeReceipt:
 class ExperimentEpisodeEvidenceReader(Protocol):
     def read_episode_receipts(
         self, episode_workspace: Path, *, source_sha256: Mapping[str, str | None],
+        source_identity: str | None = None,
     ) -> Iterator[RetainedEpisodeReceipt]:
         """Read matching receipts lazily, preserving per-row failure ordering."""
         ...

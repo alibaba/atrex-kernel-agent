@@ -52,7 +52,9 @@ if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from aka.evaluation.resources import profile_driver_script
 
-SCRIPT_DIR = Path(__file__).resolve().parent          # <repo>/reference
+from aka.resources.bundles import resource
+
+SCRIPT_DIR = resource("reference/CLAUDE.md").parent
 GROUND_TRUTH = ("definition.json", "reference.py", "workload.jsonl")
 
 
@@ -248,7 +250,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     # 4) harness + constraints + docs (copied from reference/)
-    (ws / "test_kernel.py").write_text((SCRIPT_DIR / "test_kernel.py").read_text(encoding="utf-8"), encoding="utf-8")
+    (ws / "test_kernel.py").write_text(resource("reference/test_kernel.py").read_text(encoding="utf-8"), encoding="utf-8")
     (ws / "profile_driver.py").write_text(
         profile_driver_script().read_text(encoding="utf-8"), encoding="utf-8"
     )

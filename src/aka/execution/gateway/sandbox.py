@@ -80,6 +80,14 @@ from pathlib import Path, PurePosixPath
 from threading import Lock
 from typing import Any, Iterable
 
+from aka.contracts.evaluation import derived_evaluation_timeout
+from aka.execution.gateway.request_values import (
+    safe_relative as _safe_relative,
+    option_values as _option_values,
+    parse_env_items as _parse_env_items,
+    python_inline_imports as _python_inline_imports,
+)
+
 from aka.core.filesystem import durable_write_json  # noqa: E402
 from aka.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
 from aka.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
@@ -100,11 +108,6 @@ from aka.execution.command_syntax import (
     test_kernel_script_index as _test_kernel_script_index,
 )
 from aka.execution.outcomes import emit_fact, emit_diagnostic, backend_attempt
-from .request_values import (
-    safe_relative as _safe_relative,
-    python_inline_imports as _python_inline_imports,
-    parse_env_items as _parse_env_items,
-)
 
 
 DEFAULT_SYNC_PATHS = ("profiles",)
@@ -169,7 +172,7 @@ INPUT_SKIP_SUFFIXES = {
 }
 OUTPUT_BEGIN = "__ATREX_SANDBOX_OUTPUT_BEGIN__"
 OUTPUT_END = "__ATREX_SANDBOX_OUTPUT_END__"
-DEFAULT_COMMAND_TIMEOUT = 600
+DEFAULT_COMMAND_TIMEOUT = derived_evaluation_timeout()
 DEFAULT_EVAL_SHAPE_BATCH_SIZE = 4
 DEFAULT_EVAL_BATCH_WORKERS = 4
 MAX_HTTP_REQUEST_TIMEOUT = 600
@@ -240,6 +243,7 @@ NVIDIA_PROFILE_TOOL_INPUT_PATHS = frozenset(
     {
         "profiling/nvidia/profile_nvidia.sh",
         "profiling/nvidia/classify_ncu.py",
+        "profiling/nvidia/ncu_classification.py",
     }
 )
 AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"profiling/amd/profile_kernel.sh"})
@@ -433,6 +437,9 @@ def _evaluation_input_paths(
     for path in referenced:
         if "verification_artifacts" not in PurePosixPath(path).parts:
             continue
+        support = PurePosixPath(path).parent / "numerical_inputs.py"
+        if (workspace / support).is_file():
+            selected.add(support.as_posix())
         snapshots = PurePosixPath(path).parent / "snapshots"
         if (workspace / snapshots).is_dir():
             selected.update(_expand_workspace_input(workspace, snapshots.as_posix()))

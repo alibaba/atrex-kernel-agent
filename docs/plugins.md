@@ -1,7 +1,9 @@
 # AKA local plugins
 
-AKA loads the plugins selected by the Resources configuration. The default Workflow selects
-`plugins/gpu-wiki` from the checkout supplied with `--repo-root`.
+AKA loads the plugins selected by the Resources configuration. The explicit Legacy `workflow`
+profile selects `plugins/gpu-wiki` from the checkout supplied with `--repo-root`. The default
+Light launch enables Wiki; set `tool_runtime.config.wiki` to `false` to disable it. See
+[Light configuration](optional-light-modules.md#independent-wiki-execution).
 A custom configuration can select explicit `plugins` paths or a `plugin_dir` catalog; catalog mode
 discovers immediate subdirectories containing `plugin.json`. A plugin may contribute tools, Skills,
 instructions, and workspace resources.
@@ -26,11 +28,8 @@ resource export or the AKA Python packages. Select its directory explicitly in t
 `plugins` list alongside any other required plugins, or select a `plugin_dir` catalog containing it.
 Keep this directory available to the campaign. AKA links the selected Skill directory into
 `.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`, and `.qoder/skills/micro-analysis`.
-In the campaign's Agent environment, list the enabled catalog:
-
-```bash
-python -m aka.legacy.resources.cli list
-```
+In a managed Light draft, list the enabled catalog with `python3 tools/plugin.py list`.
+Explicit Legacy campaigns use `python -m aka.legacy.resources.cli list`.
 
 The Skill ID is `micro-analysis.micro-analysis`. Ask the Agent, for example:
 
@@ -49,6 +48,12 @@ of the plugin files. Keep the original selected plugin directory available for e
 Use a new campaign to change plugin selection rather than modifying a running campaign's locks.
 
 ## Design and runtime flow
+
+The diagram below describes the Legacy Resources path. Managed Light drafts instead
+use the thin `tools/plugin.py` HTTP client and the selected private Runtime catalog.
+The Supervisor checks Session capabilities and schemas before invoking tools. Wiki is a
+separate replaceable provider with lazy corpus revision pinning and independent caching;
+see [Wiki providers](optional-light-modules.md#wiki-providers).
 
 ```mermaid
 flowchart TD
@@ -89,11 +94,13 @@ the usual way. Conflicting resource or Skill installation paths fail before anyt
 
 ## Discover and call tools
 
-In a campaign's Agent environment, list the plugins selected by that campaign:
+In a managed Light draft:
 
 ```bash
-python -m aka.legacy.resources.cli list
+python3 tools/plugin.py list
 ```
+
+In an explicit Legacy campaign, use `python -m aka.legacy.resources.cli list`.
 
 The campaign supplies the plugin-selection environment. Changing into the repository or a campaign
 workspace alone does not select plugins. For standalone discovery from the checkout root, in a shell
@@ -121,11 +128,14 @@ To query GPU Wiki when that plugin is enabled, create `wiki_request.json`:
 }
 ```
 
-In the campaign's Agent environment, call:
+In a managed Light draft, call:
 
 ```bash
-python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json
+python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json
 ```
+
+Explicit Legacy campaigns use
+`python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json`.
 
 For a standalone call from the checkout root, retain the same catalog and workspace selection:
 
@@ -142,7 +152,7 @@ The standard episode request uses the deterministic Wiki parser. Other prose can
 existing bridge agent. Mining and admission through `wiki-gate` remain separate from this query
 tool, and direct Wiki scripts remain available for maintenance and standalone use.
 
-The plugin declares the public store and optional `internal_gpu_wiki` sibling as dependencies. A
+The checkout-backed Legacy plugin declares the public store and optional `internal_gpu_wiki` sibling as dependencies. A
 conflicting `ATREX_WIKI_STORE_ROOT` is rejected instead of silently selecting an undeclared store.
 
 ## Add a tool plugin
@@ -237,7 +247,7 @@ Conflicting native names fail explicitly instead of shadowing another Skill.
 - Each tool declares a description, `command` argv array, input/output schema files, and an integer
   timeout from 1 to 3600 seconds. `command` supports `{python}` and `{plugin_root}` placeholders.
   The executable must exist when the plugin is discovered.
-- `instructions` maps scope names to files. `common` is included in every scope. AKA supplies
+- `instructions` maps scope names to files. `common` is included in every scope. Legacy supplies
   `setup`, `episode`, `fast_episode`, and `framework_baseline`, with template values such as
   `{{PLATFORM}}`, `{{ARCH}}`, `{{FRAMEWORK}}`, and `{{OPERATOR}}`.
 - `resources` maps workspace names to local paths. A resource can be declared as
@@ -254,6 +264,10 @@ arrays require an item schema. Unknown keywords and constraints on incompatible 
 discovery.
 
 ## Locking and recovery
+
+The lock and direct-call details below describe Legacy Resources. Light's private catalog
+and Wiki revision identity are owned by the Runtime/provider; an Agent cannot change them
+through a workspace manifest. Light's plugin errors use its scoped Runtime feedback contract.
 
 Initialization writes `.atrex_plugins/lock.json` with the discovered plugin directory, resolved
 commands, versions, and SHA-256 fingerprints of plugin code, schemas, instructions, resources, and

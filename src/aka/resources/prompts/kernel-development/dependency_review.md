@@ -99,7 +99,8 @@ Rules:
 - `verdict` is `allow` only when every check and dependency is allowed; otherwise it is `reject`.
 - Every reason must explain actual use, not rely on package reputation.
 - Every check and dependency must cite at least one candidate-file location using exactly
-  `candidate/kernel.py:...` or `candidate/solution.json:...`. `review_request.json` is trusted context,
+  `candidate/<file>:...` for a file in the supplied candidate (including package
+  sources in a tree task). `review_request.json` is trusted context,
   not candidate evidence: use it to understand the requested framework and phase, but never include it
   in an `evidence` array.
 - Do not relax structural policy errors reported by the supervisor; this review decides semantic

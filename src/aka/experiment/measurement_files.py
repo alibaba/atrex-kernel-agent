@@ -29,6 +29,14 @@ def record_episode_evaluation(scope: EpisodeEvidenceScope | None, content: Episo
         "kernel_sha256": kernel_sha256,
         "result": result,
     }
+    source = scope.candidate_workspace.read_source(workspace)
+    if set(source.files) != {"kernel.py"}:
+        payload["schema_version"] = 4
+        payload["kernel_sha256"] = scope.candidate_workspace.source_identity(source)
+        payload["source_sha256"] = {name: hashlib.sha256(data).hexdigest()
+                                    for name, data in source.files.items() if data is not None}
+        if solution_sha256 is not None:
+            payload["source_sha256"]["solution.json"] = solution_sha256
     path = workspace / EPISODE_EVALUATIONS_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
     line = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode(

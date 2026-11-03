@@ -35,3 +35,6 @@ def apply(ctx, config):
     ctx.contribute("agent_skills", "aka-execution", AgentSkill(
         "aka-execution", Path(__file__).resolve().parents[1] / "skills/aka-execution",
         "Prepare requests for the selected AKA Execution entry point and preserve complete results."))
+    ctx.contribute("agent_skills", "atrex-gpu-gateway", AgentSkill(
+        "atrex-gpu-gateway", Path(__file__).resolve().parents[1] / "skills/atrex-gpu-gateway",
+        "Author native candidate manifests and use the selected Gateway operations."))

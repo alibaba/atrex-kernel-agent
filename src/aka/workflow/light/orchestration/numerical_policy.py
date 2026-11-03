@@ -21,17 +21,17 @@ from concurrent.futures import CancelledError
 
 from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.task.problem.resources import native_harness_script
+from aka.evaluation.drivers import numerical_inputs as probe_algorithms
 from aka.workflow.light.measurement_policy import CANDIDATE_TIMEOUT
-from aka.workflow.light.host.workspace import read_input, publish
+from aka.workflow.light.host.workspace import read_input
+from aka.resources.publication import publish
 from aka.workflow.light.host.projection import bounded_text, credential_values, redact_diagnostics
 from aka.core.filesystem import read_regular_bytes
 
 from aka.workflow.light.long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
-from .constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
-from .durable_state import durable_write_json
-from .infrastructure_retry import (
-    check_review_service, retry_infrastructure,
-)
+from aka.workflow.light.orchestration.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
+from aka.core.filesystem import durable_write_json
+from aka.workflow.light.orchestration.infrastructure_retry import (check_review_service, retry_infrastructure)
 
 from importlib.resources import files
 from aka.resources.bundles import resource_path
@@ -41,6 +41,7 @@ DRIVER = ROOT / "long_horizon" / "remote_numerical.py"
 # Trusted package assets may be imported through a virtualenv's lib64 -> lib
 # alias. Canonicalize them here, not in _digest/read_input: candidate and
 # reviewer-owned evidence must still reject symlinks in every path component.
+PROBE_ALGORITHMS = Path(probe_algorithms.__file__).resolve(strict=True)
 PROMPT = resource_path("prompts/research-episodes/numerical_review.md")
 HARNESS = native_harness_script().resolve(strict=True)
 
@@ -128,7 +129,7 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
                 if (frozen / "workload.jsonl").is_file():
                     durable_write_json(state_root / "numerical_feedback.json", {
                         "status": "advisory", "reason": "supplemental input ABI unsupported for SOL",
-                        "kernel_sha256": hashlib.sha256(read_input(frozen, "kernel.py")).hexdigest(),
+                        "kernel_sha256": owner.source_identity(owner.read_source(frozen)),
                     })
                     return ""
                 return f"{SUPPLEMENTAL_PENDING_PREFIX}: trusted input.py/reference.py/shapes.json unavailable"
@@ -145,9 +146,9 @@ def _digest(files):
 
 
 def _sources(campaign, workspace):
-    from .session_io import _production_review_candidate_paths
+    from aka.workflow.light.orchestration.session_io import _production_review_candidate_paths
 
-    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "transport.py": HARNESS}
+    files = {"instructions.md": PROMPT, "driver.py": DRIVER, "numerical_inputs.py": PROBE_ALGORITHMS, "transport.py": HARNESS}
     for source in _production_review_candidate_paths(workspace, workspace_provider=campaign.candidate_workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     # Metadata/configuration are part of the pinned public input contract and
@@ -190,7 +191,7 @@ def _validate_review(value, digest):
 
 
 def _request_review(campaign, workspace, files, digest, previous=None, *, state_root, cancel):
-    from .supervisor_runtime import scrub_environment
+    from aka.workflow.light.orchestration.supervisor_runtime import scrub_environment
 
     def review_once():
         cancel.check()
@@ -295,6 +296,11 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         raise ValueError("retained probe world_size differs from the trusted contract")
     shapes = json.loads(shapes_path.read_text())
     schedule = validation_schedule(suite, shapes, digest, "thorough")
+    from aka.task.source.formats import layout_at
+    if layout_at(workspace).typed_only:
+        from .typed_numerical import run
+        return run(campaign, workspace, suite, shapes, schedule, directory, cancel=cancel,
+                   max_rel_l2=_fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2)
     results = []
     for index, plan in enumerate(schedule):
         cancel.check()
@@ -318,16 +324,17 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         with tempfile.TemporaryDirectory(prefix="probe-", dir=directory) as temporary:
             probe = Path(temporary)
             campaign.candidate_workspace.install_source(probe, campaign.candidate_workspace.read_source(workspace))
-            for name in ("kernel.py", "solution.json", "input.py", "reference.py", "shapes.json",
+            for name in ("solution.json", "input.py", "reference.py", "shapes.json",
                          "metadata.json", "agent_problem.json", "config.json", "definition.json", "workload.jsonl"):
                 if (workspace / name).is_file():
                     publish(probe, name, read_input(workspace, name))
             publish(probe, "numerical_probe.py", DRIVER.read_bytes())
+            publish(probe, "numerical_inputs.py", PROBE_ALGORITHMS.read_bytes())
             publish(probe, "probe-request.json", request.read_bytes())
             response = retry_infrastructure(campaign.workspace,
                 f"numerical-probe:{digest}:{hashlib.sha256(request.read_bytes()).hexdigest()}",
                 lambda: campaign.measure_for_acceptance(probe, [
-                    "--kind", "dev", "--no-sync", "--",
+                    "--kind", "dev", "--no-sync", "--input", "numerical_inputs.py", "--",
                     "python3", "numerical_probe.py", "probe-request.json",
                 ], execution_timeout=600, parent=cancel.parent, reference_snapshot=probe), cancel=cancel)
         durable_write_json(directory / f"response-{index:04d}.json", response)
@@ -532,7 +539,7 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     elif status == "needs_repair":
         if flow == "framework_baseline":
             next_step = (
-                "Repair kernel.py, rerun the bounded V1 smoke command, then stop. "
+                "Repair the candidate sources, rerun the bounded V1 smoke command, then stop. "
                 "Do not submit episode-report. "
             )
         elif research_records:

@@ -24,8 +24,8 @@ def _name(name):
 
 
 def source_artifact(source):
-    if not isinstance(source, RevisionContent) or not isinstance(source.files.get("kernel.py"), bytes):
-        raise ValueError("candidate source must contain kernel.py")
+    if not isinstance(source, RevisionContent) or not any(isinstance(source.files.get(name), bytes) for name in ('kernel.py', 'solution.json')):
+        raise ValueError("candidate source must contain a Python entry point or native manifest")
     if set(source.files) == {"kernel.py"}:
         return MeasurementArtifact("candidate.py", source.files["kernel.py"], "candidate-source", "text/x-python"), "raw-kernel/1"
     value = {"schema_version": 1, "files": {_name(name): None if data is None else base64.b64encode(data).decode()
@@ -47,7 +47,18 @@ def prepare_source(source, *, role="candidate"):
                 member = tarfile.TarInfo(_name(name))
                 member.size, member.mode = len(content), 0o644
                 archive.addfile(member, io.BytesIO(content))
-    packed = PreparedSourceArchive(role, f"archives/{role}.tar.gz", "kernel.py", output.getvalue())
+    native = source.files.get('kernel.py') is None
+    packed = PreparedSourceArchive(role, f"archives/{role}.tar.gz", "solution.json" if native else "kernel.py", output.getvalue())
+    if native:
+        manifest = json.loads(source.files['solution.json'])
+        if (manifest.get('schema_version') != 1 or manifest.get('entry_point', {}).get('type') != 'cuda'
+                or manifest.get('source', {}).get('type') != 'local'
+                or set(manifest['source']['files']) != set(source.files) - {'solution.json'}):
+            raise ValueError('native manifest must declare exactly its retained sources')
+        manifest['source'] = {'type': 'oss_archive', 'archive': packed.path,
+                              'sha256': hashlib.sha256(packed.content).hexdigest(),
+                              'files': {name: hashlib.sha256(data).hexdigest() for name, data in source.files.items()}}
+        return manifest, packed, artifact, format_name
     return {"archive": packed.path, "entry_point": packed.entry_point}, packed, artifact, format_name
 
 
@@ -87,9 +98,14 @@ def request_sources(request, archives):
     for role, value in (("candidate", candidate), ("baseline", request.get("abba", {}).get("baseline"))):
         archive = selected.get(role)
         if isinstance(value, dict):
-            if archive is None or value != {"archive": archive.path, "entry_point": archive.entry_point}:
+            from aka.execution.gateway.source_archives import archive_matches
+            if archive is None or not archive_matches(value, archive):
                 raise ValueError("prepared source descriptor differs from its archive binding")
             source = archive_source(archive)
+            if value.get("schema_version") == 1:
+                expected, _, _, _ = prepare_source(source, role=role)
+                if value != expected:
+                    raise ValueError("native manifest differs from its retained source content")
         elif archive is not None:
             raise ValueError("prepared source archive lacks its descriptor")
         elif isinstance(value, str):

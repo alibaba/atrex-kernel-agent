@@ -1,0 +1,135 @@
+{
+  "rows": [
+    {
+      "failures": 0,
+      "variant": "before",
+      "successes": 5,
+      "repetitions": 5,
+      "percent": 100,
+      "submissions": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "failures": 0,
+      "variant": "after",
+      "successes": 5,
+      "repetitions": 5,
+      "percent": 100,
+      "submissions": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "failures": 1,
+      "variant": "before",
+      "successes": 0,
+      "repetitions": 5,
+      "percent": 0,
+      "submissions": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "failures": 1,
+      "variant": "after",
+      "successes": 5,
+      "repetitions": 5,
+      "percent": 100,
+      "submissions": [
+        2,
+        2,
+        2,
+        2,
+        2
+      ]
+    },
+    {
+      "failures": 2,
+      "variant": "before",
+      "successes": 0,
+      "repetitions": 5,
+      "percent": 0,
+      "submissions": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "failures": 2,
+      "variant": "after",
+      "successes": 5,
+      "repetitions": 5,
+      "percent": 100,
+      "submissions": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ]
+    },
+    {
+      "failures": 3,
+      "variant": "before",
+      "successes": 0,
+      "repetitions": 5,
+      "percent": 0,
+      "submissions": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ]
+    },
+    {
+      "failures": 3,
+      "variant": "after",
+      "successes": 0,
+      "repetitions": 5,
+      "percent": 0,
+      "submissions": [
+        3,
+        3,
+        3,
+        3,
+        3
+      ]
+    }
+  ],
+  "terminal_abba_timeout_cache": "PASS",
+  "methodology": {
+    "baseline": "0df128c6598a88176568058f84dfb232fbe735ed",
+    "after": "5390ffe0bc8c18f29109d6b8e3e895e6cc7b59c4",
+    "python": "3.12.13",
+    "platform": "macOS arm64",
+    "model": "none",
+    "gpu": "none",
+    "network": "mocked deterministic terminal Gateway responses",
+    "concurrency": 1,
+    "max_infra_retries": 2,
+    "timeout_seconds": 60,
+    "queue_wait_grace_seconds": 0,
+    "sleep": "mocked",
+    "cache": "fresh directory per repetition; second identical call checks durable replay",
+    "aggregation": "valid receipts / 5 repetitions * 100; min=max in every group",
+    "seed": "not applicable; no randomness",
+    "scope": "recovery success, not GPU or LLM speed"
+  }
+}

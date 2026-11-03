@@ -42,7 +42,7 @@ def filesystem_access(workspace, *, include_git=False):
     workspace = Path(workspace).resolve(strict=True)
     protected = tuple(workspace / name for name in IMMUTABLE_BASELINE_PATHS
                       if (workspace / name).exists())
-    from .source import POLICY, _policy
+    from .source import POLICY, SELECTION, _policy
     source_policy, _ = _policy(workspace)
     from .context import MANIFEST, context_store, load_context, uses_context
     if uses_context(workspace):
@@ -61,4 +61,6 @@ def filesystem_access(workspace, *, include_git=False):
     if source_policy is not None:
         protected += (workspace / POLICY, *(workspace / name for name in source_policy["immutable_files"]))
         protected = tuple(dict.fromkeys(protected))
+    if (workspace / SELECTION).exists():
+        protected += (workspace / SELECTION,)
     return FilesystemAccess(_git_mounts(workspace) if include_git else (), (), protected)

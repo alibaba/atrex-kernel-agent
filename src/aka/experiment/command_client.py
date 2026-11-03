@@ -1,6 +1,7 @@
 """Call the selected Agent tool; execution and records remain Experiment-owned."""
 from dataclasses import asdict, replace
 import hashlib
+import json
 import os
 from pathlib import Path
 from threading import Event, Thread

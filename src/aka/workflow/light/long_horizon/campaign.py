@@ -29,8 +29,8 @@ from .protocol import read_handoff
 from .session import LongSessionRunner
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
 from aka.workflow.light.orchestration.constants import SUPPLEMENTAL_PENDING_PREFIX
-from .telemetry import summarize_episode
-from .verifier import GatewayABBAValidator
+from aka.workflow.light.long_horizon.telemetry import summarize_episode
+from aka.workflow.light.long_horizon.verifier import GatewayABBAValidator
 
 from aka.resources.bundles import resource_path
 PROMPTS_DIR = resource_path("prompts/research-episodes")
@@ -192,9 +192,7 @@ def _latest_complete_episode_performance(
     path = episode_workspace / EPISODE_EVALUATIONS_PATH
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
-        kernel_path = episode_workspace / "kernel.py"
         kernel_sha256 = workspace_provider.source_identity(workspace_provider.read_source(episode_workspace))
-        kernel_mtime = kernel_path.stat().st_mtime
     except (OSError, ValueError):
         return None
     for line in reversed(lines):
@@ -205,20 +203,8 @@ def _latest_complete_episode_performance(
         result = payload.get("result") if isinstance(payload, dict) else None
         if not isinstance(result, dict) or result.get("all_pass") is not True:
             continue
-        schema_version = payload.get("schema_version")
-        recorded_kernel_sha256 = payload.get("kernel_sha256")
-        if isinstance(schema_version, int) and schema_version >= 2:
-            if recorded_kernel_sha256 != kernel_sha256:
-                continue
-        else:
-            # Schema v1 predates code fingerprints.  It is safe only when the
-            # current kernel has not been modified since this measurement.
-            try:
-                measured_at = _iso_timestamp(str(payload["timestamp"]))
-            except (KeyError, TypeError, ValueError):
-                continue
-            if measured_at < kernel_mtime:
-                continue
+        if payload.get('kernel_sha256') != kernel_sha256:
+            continue
         by_shape = result.get("latency_us_by_shape")
         if not isinstance(by_shape, dict) or not by_shape:
             continue
@@ -470,7 +456,7 @@ class LongHorizonCampaign:
         directives = main_adapter.episode_directives(
             self.base_campaign, version
         )
-        from .recorded_verifier import RecordedABBAValidator
+        from aka.workflow.light.long_horizon.recorded_verifier import RecordedABBAValidator
         acceptance_request = ""
         selected_verifier = verifier or self.verifier
         if isinstance(selected_verifier, RecordedABBAValidator):
@@ -504,13 +490,15 @@ class LongHorizonCampaign:
                 + template
             )
         # Insert fragments before substituting values so nested task placeholders resolve too.
+        overrides = {"WIKI_DIRECTIVE": self.base_campaign.wiki_prompt("episode")} if fragments["WIKI_DIRECTIVE"] else {}
         for marker, name in fragments.items():
-            template = template.replace(
-                "{{" + marker + "}}",
-                (PROMPTS_DIR / name).read_text(encoding="utf-8").strip() if name else "",
-            )
+            text = overrides.get(marker)
+            if text is None:
+                text = (PROMPTS_DIR / name).read_text(encoding="utf-8").strip() if name else ""
+            template = template.replace("{{" + marker + "}}", text)
         template = template.replace("{{CONVERSION_RESEARCH}}", (
-            (PROMPTS_DIR / "conversion_research.md").read_text(encoding="utf-8").strip()
+            (self.base_campaign.wiki_prompt("conversion")
+             or (PROMPTS_DIR / "conversion_research.md").read_text(encoding="utf-8").strip())
             if self.base_campaign.tool_runtime.wiki else
             "Wiki is disabled. Use supplied public conversion knowledge and compiler evidence; "
             "do not guess architecture-specific layouts. Report a blocker if necessary information is unavailable."
@@ -1142,6 +1130,27 @@ class LongHorizonCampaign:
             state.tokens += max(0, int(tokens))
 
         episode_dir = store.episode_dir(episode)
+        from aka.workflow.legacy.episode_output import capture as capture_episode_output
+        from aka.workflow.legacy.episode_output import unavailable as unavailable_episode_output
+        baseline = main_adapter.read_memory(self.workspace, 0) or {}
+        expected_cases = self._expected_shape_ids()
+        if expected_cases is None:
+            expected_cases = (baseline.get("performance") or {}).get("latency_us_by_shape") or {}
+        capture_error = None
+        try:
+            capture_episode_output(worktree.path, episode_dir, episode=episode,
+                version=memory_version, base_revision=base_commit,
+                expected_case_ids=tuple(sorted(expected_cases)),
+                candidate_workspace=self.base_campaign.candidate_workspace,
+                episode_evidence_reader=self.base_campaign.episode_evidence_reader,
+                episode_evidence_interpreter=self.base_campaign.episode_evidence_interpreter)
+        except (OSError, ValueError) as exc:
+            capture_error = f"{type(exc).__name__}: {exc}"
+            unavailable_episode_output(episode_dir, episode=episode, version=memory_version,
+                base_revision=base_commit, head_revision=self.base_campaign.candidate_workspace.current_revision(worktree.path), reason=capture_error)
+            if accepted:
+                accepted = False
+                violation = "terminal candidate output unavailable: " + capture_error
         self.base_campaign.candidate_workspace.archive(worktree, episode_dir / "archive", "HEAD")
         self._copy_runtime_artifacts(worktree, episode_dir)
         journal = load_journal(journal_path)
@@ -1174,6 +1183,8 @@ class LongHorizonCampaign:
             else None,
             "verification": verification.as_dict() if verification else None,
         }
+        if capture_error:
+            attempt["candidate_output_unavailable"] = capture_error
         if getattr(self.base_campaign, "search_coordinate", None) is not None:
             attempt["search"] = dict(self.base_campaign.search_coordinate)
         if recovered_after_supervisor_interruption:
@@ -1692,7 +1703,7 @@ class LongHorizonCampaign:
             state.consecutive_without_promotion = main_adapter.restored_stall(
                 self.workspace
             )
-        from .recorded_verifier import RecordedABBAValidator
+        from aka.workflow.light.long_horizon.recorded_verifier import RecordedABBAValidator
         verifier = self.verifier or self.base_campaign.acceptance_verifier(
             execute=self.base_campaign.measure_for_acceptance,
             hardware=self.base_campaign.sandbox_hardware,
@@ -1848,6 +1859,7 @@ class LongHorizonCampaign:
             result = runner.run(
                 agent_workspace,
                 prompt,
+                output_directory=store.episode_dir(episode),
                 episode_timeout_seconds=self.base_campaign.module_options.episode_timeout_seconds,
                 handoff_path=handoff_path,
                 handoff_resumes=(

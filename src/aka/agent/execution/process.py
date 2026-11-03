@@ -115,7 +115,14 @@ def _monitor(
         failure = unavailable(environment) if unavailable is not None else None
         if failure is None and violation is not None:
             for pid, argv in descendant_process_commands(proc.pid):
-                reason = violation(argv, environment)
+                # Observed per-process cwd is callback evidence, never a launch
+                # environment override or the controller's own working directory.
+                observed = dict(environment, AKA_INSPECTED_PROCESS_CWD="")
+                try:
+                    observed["AKA_INSPECTED_PROCESS_CWD"] = os.readlink(f"/proc/{pid}/cwd")
+                except OSError:
+                    pass
+                reason = violation(argv, observed)
                 if reason:
                     failure = (126, f"Agent host policy violation: pid={pid}: {reason}")
                     break

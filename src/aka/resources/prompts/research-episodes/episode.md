@@ -1,8 +1,9 @@
 # Kernel optimization episode {{EPISODE}}
 
 Optimize the candidate described in `WORKSPACE.md` through evidence-backed engineering.
-For a single-file task edit `kernel.py`; for a source-tree task keep the fixed adapter and
-edit only the declared source directories. Continue investigating,
+Follow its selected file-system contract for editable paths, fixed files and source organization;
+read the atrex-gpu-gateway Skill for format, build configuration and measurement usage.
+Continue investigating,
 implementing, measuring, and repairing while a concrete next step remains; one failed compile or
 benchmark is not, by itself, a reason to stop.
 

@@ -47,6 +47,11 @@ Version labels do not request a fresh measurement. See the record-query examples
 in [requests.md](references/requests.md). Record reads return the saved result,
 not another GPU execution. A successful read exits zero even when the saved
 operation failed; inspect `status` and `result.correct`.
+An identical call that is still executing returns `gateway_task_running` immediately
+after local input identity checks. Wait for the original call; do not submit it again
+or try `record-read` before a completed Record ID exists. `remaining_seconds` counts
+down the original Runtime request deadline, not a guaranteed Agate completion time;
+the original call may return a timeout after cleanup. A null value means no estimate.
 
 `result.error.code: "candidate_source_rejected"` is a source
 repair, not an infrastructure blocker. Fix the listed forbidden imports,
@@ -67,7 +72,7 @@ than resubmitting an identical failed task.
 For a CUDA extension on Torch `2.9.0+cu130` / CUDA `13.0`, a compiler error in
 `ATen/core/List_inl.h:201` about a missing `typename` can be a C++17 toolchain
 compatibility issue, even though that header already contains `typename`.
-The same minimal extension was verified to compile with C++20 on L20N/sm_120.
+The same minimal extension was verified to compile with C++20 on `<gpu_arch>`/sm_120.
 If this exact signature and environment match, try `-std=c++20` in both
 `extra_cflags` and `extra_cuda_cflags` in your extension build, then rerun Check
 or Evaluate. Do not patch installed Torch headers, change the GPU environment,

@@ -54,7 +54,8 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
     from .episode_evidence import capture as capture_evidence
     capture_evidence(workspace, episode_dir, episode=episode)
     workspace, episode_dir = Path(workspace), Path(episode_dir)
-    names = ('kernel.py', 'solution.json')
+    source = candidate_workspace.read_source(workspace)
+    names = tuple(dict.fromkeys((*source.files, 'solution.json')))
     files = {}
     unavailable = None
     for name in names:
@@ -65,7 +66,7 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
     if unavailable is None:
         working = candidate_workspace.read_working(workspace, names).files
         files = {name: content for name, content in working.items() if content is not None}
-    if 'kernel.py' not in files:
+    if not any(content is not None for content in source.files.values()):
         unavailable = unavailable or 'candidate kernel is missing'
     head = candidate_workspace.current_revision(workspace)
     committed = candidate_workspace.read_revision(workspace, head, list(names)).files
@@ -80,7 +81,8 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
             raise TypeError('selected Experiment does not provide episode evidence reading')
         if not callable(getattr(episode_evidence_interpreter, 'interpret_episode_receipts', None)):
             raise TypeError('selected Evaluation does not provide episode evidence interpretation')
-        receipts = episode_evidence_reader.read_episode_receipts(workspace, source_sha256=digests)
+        receipts = episode_evidence_reader.read_episode_receipts(workspace, source_sha256=digests,
+            source_identity=candidate_workspace.source_identity(source))
         for receipt in receipts:
             # Project each row before reading the next, retaining original error ordering.
             measurements = episode_evidence_interpreter.interpret_episode_receipts(
@@ -103,6 +105,18 @@ def capture(workspace, episode_dir, *, episode, version, base_revision, expected
         'files':{name:{'sha256':digests[name],'content_base64':base64.b64encode(content).decode('ascii')}
                  for name,content in files.items()} if not unavailable else {},
         'evaluations':evaluations}
+    _write(episode_dir, value)
+
+
+def unavailable(episode_dir, *, episode, version, base_revision, head_revision, reason):
+    """Keep a terminal record without claiming source or measurement evidence."""
+    _write(episode_dir, {'schema': 1, 'episode': episode, 'version': version,
+        'base_revision': base_revision, 'head_revision': head_revision,
+        'revision': None, 'unavailable': reason, 'files': {}, 'evaluations': []})
+
+
+def _write(episode_dir, value):
+    episode_dir = Path(episode_dir)
     episode_dir.mkdir(parents=True,exist_ok=True)
     path = episode_dir/FILENAME
     temporary = path.with_suffix('.tmp')
@@ -143,7 +157,10 @@ def _read(episode_dir, *, episode, version, expected_case_ids, attempt):
             raise ValueError('invalid captured episode revision')
     if value['revision'] is not None and value['revision'] != value['head_revision']:
         raise ValueError('captured source revision differs from final HEAD')
-    if 'kernel.py' not in value['files'] or set(value['files'])-{'kernel.py','solution.json'}:
+    if not {'kernel.py', 'solution.json'}.intersection(value['files']) or any(
+            not isinstance(name, str) or not name or '\\' in name
+            or Path(name).is_absolute() or any(part in {'.', '..'} for part in name.split('/'))
+            or any(not part for part in name.split('/')) for name in value['files']):
         raise ValueError('invalid captured episode source files')
     artifacts = []; handles = {}; digests = {}
     for name, row in value['files'].items():
@@ -151,9 +168,10 @@ def _read(episode_dir, *, episode, version, expected_case_ids, attempt):
         if _digest(content) != row['sha256']:
             raise ValueError('captured episode source digest changed')
         identifier = f'e{episode}_final_{name.replace(".","_")}'
-        role = 'episode-candidate-source' if name=='kernel.py' else 'episode-candidate-manifest'
+        role = 'episode-candidate-manifest' if name=='solution.json' else 'episode-candidate-source'
         artifacts.append(_artifact(identifier,f'episodes/e{episode:04d}/final/{name}',role,content,
-                                   'text/x-python' if name=='kernel.py' else 'application/json'))
+                                   {'.py': 'text/x-python', '.json': 'application/json'}.get(
+                                       Path(name).suffix, 'text/plain')))
         handles[name] = identifier; digests[name] = row['sha256']
     evaluations = []
     if not isinstance(value['evaluations'],list):

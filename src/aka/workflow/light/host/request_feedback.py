@@ -36,12 +36,15 @@ def _object(properties, required):
 
 def journal_schema(operation, body, *, research_records=False, supervisor_git=True):
     """The schema describes the JSON request file, not its HTTP envelope."""
-    from .journal import (
-        DIRECTION_PROPOSAL_FIELDS, DIRECTION_UPDATE_FIELDS, DIRECTION_CLOSURE_FIELDS,
-        EXPERIMENT_FIELDS, EXPERIMENT_ACTIONS,
+    from aka.workflow.light.host.journal import (
+        DIRECTION_PROPOSAL_FIELDS,
+        DIRECTION_UPDATE_FIELDS,
+        DIRECTION_CLOSURE_FIELDS,
+        EXPERIMENT_FIELDS,
+        EXPERIMENT_ACTIONS,
     )
-    from .direction_lifecycle import DIRECTION_STATUS, CLOSURES
-    from .direction_genealogy import RELATIONSHIPS
+    from aka.workflow.light.host.direction_lifecycle import DIRECTION_STATUS, CLOSURES
+    from aka.workflow.light.host.direction_genealogy import RELATIONSHIPS
 
     if operation in {"direction_update", "experiment_record"} and not research_records:
         return {"available": False, "reason": "research_records_disabled"}
@@ -67,11 +70,29 @@ def journal_schema(operation, body, *, research_records=False, supervisor_git=Tr
                 required.add("blocker")
         return _object(properties, required)
     if operation == "experiment_record":
+        from aka.evaluation.evidence_fields import (
+            QUERY_ID_RE, WIKI_ID_RE, WIKI_CITE_RE, WIKI_USAGE_DISPOSITIONS, WIKI_USAGE_STATUSES,
+        )
+        query_id = {"type": "string", "minLength": 1, "maxLength": 256,
+                    "pattern": "^" + QUERY_ID_RE.pattern + "$"}
+        usage = _object({
+            "query_id": query_id,
+            "wiki_id": {"type": "string", "minLength": 1, "maxLength": 1090,
+                        "pattern": "^" + WIKI_ID_RE.pattern + "$"},
+            "cite": {"type": "string", "minLength": 1, "maxLength": 4096,
+                     "pattern": "^" + WIKI_CITE_RE.pattern.replace("(?P<path>", "(")
+                     .replace("(?P<start>", "(").replace("(?P<end>", "(") + "$",
+                     "description": "Copy wiki@version relative-path:start-end verbatim; no parent paths; end >= start."},
+            "disposition": {"type": "string", "enum": sorted(WIKI_USAGE_DISPOSITIONS)},
+            "use": _text(), "evidence": _text(),
+        }, {"query_id", "disposition", "use", "evidence"})
+        usage["anyOf"] = [{"required": ["wiki_id"]}, {"required": ["cite"]}]
         properties = {key: _text() for key in EXPERIMENT_FIELDS}
         properties.update(direction_id={"type": "string", "pattern": "^direction_[0-9a-f]{32}$"},
                           gateway_record_ids=_ids("gateway-", minimum=1), action={"enum": sorted(EXPERIMENT_ACTIONS)},
-                          wiki_usage={"type": "array"}, wiki_query_ids={"type": "array"},
-                          wiki_usage_status={"type": "string"})
+                          wiki_usage={"type": "array", "maxItems": 64, "items": usage},
+                          wiki_query_ids={"type": "array", "maxItems": 64, "items": query_id},
+                          wiki_usage_status={"type": "string", "enum": sorted(WIKI_USAGE_STATUSES)})
         return _object(properties, EXPERIMENT_FIELDS)
     if operation == "direction_update":
         action = body.get("action")
@@ -231,8 +252,8 @@ def augment_error(response, *, route, request, research_records=False, superviso
                 "A validation rejection does not complete the Episode. " +
                 ("Select the current Episode's Experiment and close active Directions." if research_records else
                  "Do not create Direction/Experiment records. candidate_ready cites gateway_record_ids, "
-                 "including a passing standard full Evaluate for byte-identical kernel.py."))
-            from .errors import REPAIR_REQUEST
+                 "including a passing standard full Evaluate for a byte-identical complete candidate."))
+            from aka.workflow.light.host.errors import REPAIR_REQUEST
             if error.get("next_action") == REPAIR_REQUEST:
                 error["next_action"] = instruction
                 if result.get("recovery") == [{"instruction": REPAIR_REQUEST}]:

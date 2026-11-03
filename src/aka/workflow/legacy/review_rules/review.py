@@ -114,8 +114,10 @@ def _validate_review_item(
     candidate_evidence_found = False
     for value in evidence:
         stripped = value.strip()
+        # The supplied file set is authoritative. Legacy supplies kernel.py and
+        # solution.json; source-tree owners may include additional pinned files.
         match = re.fullmatch(
-            r"candidate/(kernel\.py|solution\.json)(?::.+)?",
+            r"candidate/([^:]+)(?::.+)?",
             stripped,
         )
         if match is not None and match.group(1) in candidate_files:

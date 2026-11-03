@@ -5,6 +5,7 @@ facts rather than model-reported ones.
 """
 from __future__ import annotations
 
+
 import json
 import math
 import re
@@ -12,8 +13,18 @@ import subprocess
 from pathlib import Path
 from typing import Optional
 
-from .constants import FRAMEWORK_BASELINE_FILE, STALL_STATE_FILE
-from .version_records import STATE_DIRECTORY, version_record_path
+# Re-export shared facts/fields for existing callers; policy stays local.
+from aka.task.candidate_workspace.state import (
+    git_head,
+    v0_baseline_commit,
+    read_framework_baseline,
+    resolve_framework_baseline_commit as _legacy_resolve_framework_baseline_commit,
+    _normalize_commit_hash,
+)
+from aka.task.git import git_path_blob, git_worktree_blob
+
+from aka.workflow.light.orchestration.constants import FRAMEWORK_BASELINE_FILE, STALL_STATE_FILE
+from aka.workflow.light.orchestration.version_records import STATE_DIRECTORY, version_record_path
 
 
 def latest_version(workspace: Path) -> int:
@@ -78,73 +89,23 @@ def speedup_vs_reference(
 
 
 # ── git is the SINGLE source of truth for a "committed win" ───────────────────
-# A real win is a commit that CHANGES kernel.py. A dead-end "record" commit leaves kernel.py
+# A real win changes the complete candidate source. A metadata-only record leaves source
 # identical to its parent. Everything (stall counter, target-met, convert incumbent) keys off
 # this git fact, NOT off the LLM-filled git_commit_hash / quality_gate in memory (which can drift
 # from what actually got committed). One primitive, reused everywhere: commit_changed_kernel().
 
 
-def git_head(workspace: Path) -> str:
-    """Current HEAD sha, or '' if not a repo / no commits yet."""
-    try:
-        r = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(workspace),
-                           capture_output=True, text=True)
-    except OSError:
-        return ""
-    return r.stdout.strip() if r.returncode == 0 else ""
-
-
-def git_path_blob(workspace: Path, ref: str, path: str) -> str:
-    """Committed blob id of one path at one ref, or '' when it is absent there."""
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", f"{ref}:{path}"],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
 def git_kernel_blob(workspace: Path) -> str:
-    """Committed kernel.py blob id, stable across metadata-only commits."""
-    return git_path_blob(workspace, "HEAD", "kernel.py")
+    """Committed candidate identity, stable across metadata-only commits."""
+    from aka.task.source.formats import revision_identity
+    return revision_identity(workspace)
 
 
-def git_worktree_blob(workspace: Path, path: str) -> str:
-    """Blob id of the on-disk file, or '' when it is missing."""
-    if not (workspace / path).is_file():
-        return ""
-    try:
-        result = subprocess.run(
-            ["git", "hash-object", "--", path],
-            cwd=str(workspace),
-            capture_output=True,
-            text=True,
-        )
-    except OSError:
-        return ""
-    return result.stdout.strip() if result.returncode == 0 else ""
-
-
-def v0_baseline_commit(workspace: Path) -> str:
-    """The commit that introduced ``kernel.py`` — the campaign's V0 baseline.
-
-    A setup session may commit campaign scaffolding (README, profile driver) before V0, so the
-    repository root commit is not necessarily V0 and may carry no kernel at all.
-    """
-    result = subprocess.run(
-        ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        return ""
-    commits = result.stdout.split()
-    return commits[0] if commits else ""
+def commit_changed_kernel(workspace: Path, commit: str) -> bool:
+    """Count changes to the complete candidate through its file system."""
+    from aka.task.source.formats import revision_changed
+    commit = _normalize_commit_hash(commit)
+    return bool(commit) and revision_changed(workspace, commit)
 
 
 def head_kernel_is_initial_baseline(workspace: Path) -> bool:
@@ -163,122 +124,10 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     baseline_commit = v0_baseline_commit(workspace)
     if not baseline_commit:
         return False
-    baseline_blob = subprocess.run(
-        ["git", "rev-parse", f"{baseline_commit}:kernel.py"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    if baseline_blob.returncode != 0:
-        return False
-    return bool(
-        baseline_blob.stdout.strip()
-        and baseline_blob.stdout.strip() == git_kernel_blob(workspace)
-    )
+    from aka.task.source.formats import revision_identity
+    baseline_identity = revision_identity(workspace, baseline_commit)
+    return bool(baseline_identity and baseline_identity == git_kernel_blob(workspace))
 
-
-def read_framework_baseline(workspace: Path) -> Optional[dict]:
-    """Read the framework-baseline marker from committed HEAD, never from the worktree.
-
-    An interrupted session can leave an unstaged marker behind; trusting it would pin a kernel
-    that was never validated.
-    """
-    show = subprocess.run(
-        ["git", "show", f"HEAD:{FRAMEWORK_BASELINE_FILE}"],
-        cwd=str(workspace),
-        capture_output=True,
-        text=True,
-    )
-    if show.returncode != 0:
-        return None
-    try:
-        marker = json.loads(show.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError(f"{workspace / FRAMEWORK_BASELINE_FILE} is not valid JSON: {exc}") from exc
-    if not isinstance(marker, dict):
-        raise RuntimeError(f"{workspace / FRAMEWORK_BASELINE_FILE} must contain a JSON object")
-    return marker
-
-
-def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
-    """Return the pinned (commit, version) of the framework baseline, or ("", 0) when unpinned.
-
-    Verification is fail-closed and never consults HEAD's tree, so the pin survives HEAD
-    advancing through later optimization versions. A broken marker is an error rather than a
-    silent fallback to the root commit.
-    """
-    marker = read_framework_baseline(workspace)
-    if marker is None:
-        return "", 0
-    commit = _normalize_commit_hash(marker.get("commit"))
-    if not commit:
-        raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} has no usable commit hash")
-    exists = subprocess.run(
-        ["git", "rev-parse", "--verify", f"{commit}^{{commit}}"],
-        cwd=str(workspace), capture_output=True, text=True,
-    )
-    if exists.returncode != 0:
-        raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} points at missing commit {commit[:12]}")
-    ancestry = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", commit, "HEAD"],
-        cwd=str(workspace), capture_output=True, text=True,
-    )
-    if ancestry.returncode != 0:
-        raise RuntimeError(
-            f"{FRAMEWORK_BASELINE_FILE} commit {commit[:12]} is not an ancestor of HEAD"
-        )
-    blob = subprocess.run(
-        ["git", "rev-parse", f"{commit}:kernel.py"],
-        cwd=str(workspace), capture_output=True, text=True,
-    )
-    recorded_blob = str(marker.get("kernel_blob") or "").strip()
-    if blob.returncode != 0 or not recorded_blob or blob.stdout.strip() != recorded_blob:
-        raise RuntimeError(
-            f"{FRAMEWORK_BASELINE_FILE} kernel blob does not match commit {commit[:12]}"
-        )
-    version_text = str(marker.get("version") or "")
-    match = re.fullmatch(r"v(\d+)", version_text)
-    if match is None:
-        raise RuntimeError(f"{FRAMEWORK_BASELINE_FILE} has an unusable version {version_text!r}")
-    return commit, int(match.group(1))
-
-
-def _normalize_commit_hash(ref: object) -> str:
-    """Return a safe git commit hash from an LLM-authored memory value.
-
-    A short SHA containing only decimal digits can be serialized as a JSON
-    number (for example ``7847485``).  Preserve that valid value by converting
-    integers back to strings, while rejecting booleans, floats, and arbitrary
-    git revisions/options.  Memory records are expected to contain commit
-    hashes, not general revision expressions.
-    """
-    if isinstance(ref, bool):
-        return ""
-    if isinstance(ref, int):
-        ref = str(ref)
-    if not isinstance(ref, str):
-        return ""
-    ref = ref.strip()
-    return ref if re.fullmatch(r"[0-9a-fA-F]{4,64}", ref) else ""
-
-
-def commit_changed_kernel(workspace: Path, ref: object) -> bool:
-    """True iff commit `ref` changed kernel.py vs its parent (i.e. a real win, not a dead-end
-    record commit). The one git primitive the win/stall/incumbent logic all share.
-
-    ``git_commit_hash`` is written by agents, so normalize it before passing it
-    to subprocess.  In particular, all-decimal short SHAs may round-trip
-    through JSON as integers.
-    """
-    commit_hash = _normalize_commit_hash(ref)
-    if not commit_hash:
-        return False
-    try:
-        r = subprocess.run(["git", "show", "--numstat", "--format=", commit_hash, "--", "kernel.py"],
-                           cwd=str(workspace), capture_output=True, text=True)
-    except (OSError, TypeError):
-        return False
-    return r.returncode == 0 and bool(r.stdout.strip())
 
 
 def read_stall(workspace: Path) -> Optional[int]:
@@ -355,3 +204,21 @@ def best_validated_latency_us(workspace: Path, *, from_version: Optional[int] = 
         if isinstance(latency, (int, float)):
             best = float(latency) if best is None else min(best, float(latency))
     return best
+
+
+def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
+    marker = read_framework_baseline(workspace)
+    if not marker or not marker.get("source_sha256"):
+        return _legacy_resolve_framework_baseline_commit(workspace)
+    from aka.task.source.formats import from_git
+    import hashlib
+    commit = _normalize_commit_hash(marker.get("commit"))
+    if not commit or subprocess.run(["git", "merge-base", "--is-ancestor", commit, "HEAD"],
+                                    cwd=workspace, capture_output=True).returncode:
+        raise RuntimeError("Framework baseline source commit is not an ancestor of HEAD")
+    if hashlib.sha256(from_git(workspace, commit)).hexdigest() != marker["source_sha256"]:
+        raise RuntimeError("Framework baseline source digest does not match its commit")
+    version = re.fullmatch(r"v(\d+)", str(marker.get("version", "")))
+    if version is None:
+        raise RuntimeError("Invalid framework baseline version")
+    return commit, int(version[1])

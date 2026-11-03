@@ -511,8 +511,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--correctness-max-rel-l2", type=float, default=None)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--timed-runs", type=int, default=100)
-    parser.add_argument("--candidate-timeout-s", type=float, default=20.0)
-    parser.add_argument("--perf-timeout-s", type=float, default=120.0)
+    parser.add_argument("--candidate-timeout-s", type=float, default=300.0)
+    parser.add_argument("--perf-timeout-s", type=float, default=300.0)
     parser.add_argument("--shape-id", action="append", dest="shape_ids")
     return parser
 
@@ -539,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
     if unknown:
         raise SystemExit("unknown --shape-id values: " + ", ".join(unknown))
     env = os.environ.copy()
-    pythonpath = str(runtime_src)
+    pythonpath = os.pathsep.join((str(runtime_src), str(workspace)))
     if env.get("PYTHONPATH"):
         pythonpath += os.pathsep + env["PYTHONPATH"]
     env["PYTHONPATH"] = pythonpath

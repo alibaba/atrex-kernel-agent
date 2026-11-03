@@ -1,0 +1,287 @@
+{
+  "baseline": "91d1488b9e51558b04d7be78310aacf7e5be46cd",
+  "after_base": "268c67487c1bc456b1d028835aa6aaf8ffb9e315",
+  "after_gateway_sha256": "8c79629de6dc57576be3a1c228a8dd8c1ea19ab3fe1e4d7a38049085a5acb325",
+  "environment": {
+    "platform": "Darwin",
+    "machine": "arm64",
+    "python": "3.12.14",
+    "concurrency": 1,
+    "repetitions_per_point": 5,
+    "seed": 42,
+    "model_prompt_gpu": "not used; transport-only CPU measurement",
+    "cache": "fresh state per version"
+  },
+  "rows": [
+    {
+      "version": "before",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 0,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 8.09383399609942
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 1,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.3481670137261972
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 2,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.29687500500585884
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 3,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.24370799656026065
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 4,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.24541698803659528
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 0,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.2885409921873361
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 1,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.21662499057129025
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 2,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.22975000320002437
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 3,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.2201669994974509
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 4,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.24820800172165036
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 0,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.4583330010063946
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 1,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.33183400228153914
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 2,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.23445799888577312
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 3,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.4504999960772693
+    },
+    {
+      "version": "before",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 4,
+      "http_status": 404,
+      "success": false,
+      "elapsed_ms": 0.30941700970288366
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 0,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 2.545082999859005
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 1,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.7512920021545142
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 2,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 2.5331659999210387
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 3,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.8537089927121997
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1024,
+      "archive_bytes": 1293,
+      "repetition": 4,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.7513339989818633
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 0,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 2.0077090011909604
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 1,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.6005420038709417
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 2,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.9465840014163405
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 3,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.6342089948011562
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 65536,
+      "archive_bytes": 75225,
+      "repetition": 4,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 0.9842909930739552
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 0,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 2.1600000036414713
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 1,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.7835420003393665
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 2,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 1.7689580126898363
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 3,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 2.2960409987717867
+    },
+    {
+      "version": "after",
+      "input_random_bytes": 1048576,
+      "archive_bytes": 1194903,
+      "repetition": 4,
+      "http_status": 200,
+      "success": true,
+      "elapsed_ms": 2.030124989687465
+    }
+  ]
+}

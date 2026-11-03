@@ -1,8 +1,8 @@
 # Plugin framework interface
 
 Core assembles plugins for Bootstrap, which invokes the profile-selected Startup. The
-legacy profile serves the existing optimizer; `aka run` can select independent
-implementations. This guide describes the framework shipped in this source tree. See
+default Light profile serves the optimizer; `workflow` explicitly selects Legacy.
+`aka run` can select independent implementations. This guide describes the framework shipped in this source tree. See
 [application invocation](application-plugin-migration.md) for setup and the supported
 checkout dependency.
 
@@ -13,15 +13,17 @@ checkout dependency.
 - `aka.contracts.application`: `ApplicationRequest` and synchronous
   `Application.run(request) -> int`; no dependency on Core or a backend.
 - `aka.contracts.startup`: neutral `Invocation` and synchronous
-  `Startup.run(invocation) -> int`, shared by legacy and future Workflow targets.
+  `Startup.run(invocation) -> int`, shared by installed Workflow targets.
 - `aka.bootstrap`: launch-profile resolution, startup target selection, invocation,
   continuation identity and disposal of the assembled composition. It has no fixed
   Application or Workflow dependency and contributes `aka run`.
-- `aka.legacy.application`: optimizer variables, default profiles, construction
-  plugin, checkout binding and legacy process adapters; contributes `aka optimize`.
+- `aka.legacy.compat`: optimization argument conversion and launch selection; contributes
+  `aka optimize`. Installed Workflow plugins provide the startup implementation.
+- `aka.light`: managed Agent, Workspace, Tool Runtime, measurement, acceptance, and Workflow providers.
 
-Core imports neither the optimization application nor Execution. The existing
-`plugin_runtime/` tool/skill registry is unrelated and remains untouched.
+Core imports neither the optimization application nor Execution. The local tool/Skill registries under
+`aka.legacy.resources.plugin_runtime` and `aka.light.runtime.plugins` serve a separate
+purpose; see [local plugins](plugins.md).
 
 ## Plugin declaration and lifetime
 
@@ -67,7 +69,7 @@ configuration before applying plugins and rejects duplicate single providers. A 
 row must be active even if it was disabled. An explicitly requested missing row fails; a
 required service must exist in the root Realm. Removing a row removes its own
 declaration, so Bootstrap independently requires the launch profile's target service
-(named `startup` in the default legacy profile). There is no fallback to the default
+(named `startup` in the explicit Legacy `workflow` profile). There is no fallback to the default
 when selection fails. Still-mounted children declared with `ctx.plugin(...,
 required=True)` must also be active when boot finishes; a pending or failed required
 child fails boot and disposes the composition. Explicitly disposed children are no
@@ -107,7 +109,7 @@ adapter currently uses a durable `launch-selection.json` referenced by schema 4 
 metadata. The [launch selection variable reference](application-plugin-migration.md#launch-selection-environment-variables)
 defines the snapshot path, digest, paired transport, temporary/durable lifetime and
 explicit `aka run --resume` entrypoint. See the [current recovery constraints](application-plugin-migration.md#current-child-and-recovery-behavior): selection-free main schema 3
-records may use the built-in default legacy profile and be upgraded by the
+records may use the historical built-in Legacy profile (not the new-launch Light default) and be upgraded by the
 validated recovery owner; new launch records remain strict.
 
 ## Isolation and events
@@ -136,7 +138,7 @@ AKA Core is inspired by Cordis plus loader mechanics, not by DSH's product
 `packages/core` plugin collection. It is not a Cordis-compatible runtime. DSH's
 asynchronous lifecycle, contextual event routing and event stop rules differ. No DSH
 dependency is installed. Async lifecycle, contextual event isolation, automatic
-discovery and application hot reload are not PR1 promises.
+discovery and application hot reload are not supported framework features.
 
 See [the application adapter guide](application-plugin-migration.md) for invocation,
 package ownership and the legacy adapter's composition and recovery limits.

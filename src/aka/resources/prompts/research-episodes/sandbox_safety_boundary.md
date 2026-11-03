@@ -17,7 +17,13 @@
   optionally generates memory summaries, commits source, and manages acceptance.
 - Use preinstalled dependencies only. Do not install packages or build third-party libraries locally
   or remotely (pip, uv, conda, setup.py, ninja, cmake, or package managers). GPU packages may JIT on
-  import, so inspect their source locally but run imports/probes only through permitted GPU operations.
+  import or first use, including `flashinfer`, `flash_attn`/`flash-attn`, `xformers`, and `vllm`.
+  Static source inspection is allowed; run imports/probes only through permitted remote GPU operations.
+  This execution boundary is separate from production candidate review: remote availability does not
+  authorize using a prebuilt operator as the candidate's computation. Production reviews judge actual
+  use, not package names; compiler/header/ABI/launch plumbing for self-authored kernels is not banned
+  merely because it comes from one of these packages.
+  As in Legacy, the process guard terminates a session on a confirmed local dependency-policy violation.
   If required tooling is unavailable, choose supported tooling or report a blocker.
 - Shared Gateway infrastructure is Supervisor-owned. Do not start, stop, signal, reconfigure, or
   replace its services, screen/SSH sessions, state, database, logs, or jobs. Report infrastructure

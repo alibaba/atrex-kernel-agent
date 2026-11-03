@@ -16,7 +16,8 @@ def unavailable(environment):
 
 
 def violation(argv, environment):
-    return agent_policy.dependency_process_violation(argv, environment)
+    cwd = environment.get("AKA_INSPECTED_PROCESS_CWD")
+    return agent_policy.dependency_process_violation(argv, environment, cwd=Path(cwd) if cwd else None)
 
 
 def prepare_environment(values, explicit_environment=()):

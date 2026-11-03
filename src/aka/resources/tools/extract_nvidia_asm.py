@@ -302,6 +302,14 @@ def _find_ncu_helpers():
         os.path.expanduser("~/.config/opencode/skills/ncu-report-skill/helpers"),
         os.path.expanduser("~/.codex/skills/ncu-report-skill/helpers"),
     ]
+    # Installed source uses the shared owner; remote bundles materialize the
+    # same files beside this script and do not need AKA installed on the worker.
+    try:
+        from aka.resources.bundles import resource
+    except ModuleNotFoundError:
+        pass
+    else:
+        search_paths.insert(1, str(resource("tools/ncu_helpers/ncu_utils.py").parent))
     for p in search_paths:
         if os.path.isfile(os.path.join(p, "ncu_utils.py")):
             return os.path.abspath(p)

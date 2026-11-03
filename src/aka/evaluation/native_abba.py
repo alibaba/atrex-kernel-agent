@@ -52,7 +52,7 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
             solution_bytes = frozen.files.get("solution.json")
             from aka.contracts.workspace import RevisionContent
             frozen = RevisionContent({"kernel.py": frozen.files.get("kernel.py")})
-        source = frozen.files.get("kernel.py")
+        source = frozen.files.get("kernel.py") or frozen.files.get("solution.json")
         if not isinstance(source, bytes) or not source.strip():
             raise ValueError("native ABBA requires two nonempty frozen kernel.py revisions")
         solution = json.loads(solution_bytes) if solution_bytes else {}

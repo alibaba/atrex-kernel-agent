@@ -38,7 +38,7 @@ def apply(ctx, config):
     ctx.contribute("agent_skills", "aka-execution", AgentSkill(
         "aka-execution", Path(__file__).resolve().parent.parent / "skills" / "aka-execution",
         "Prepare requests for the selected AKA Execution entry point and preserve complete results."))
-    if config["gateway_skill_path"]:
-        ctx.contribute("agent_skills", "atrex-gpu-gateway", AgentSkill(
-            "atrex-gpu-gateway", Path(config["gateway_skill_path"]).expanduser().resolve(),
-            "Gateway operations, request parameters, and client configuration."))
+    skill = (Path(config["gateway_skill_path"]).expanduser().resolve() if config["gateway_skill_path"]
+             else Path(__file__).resolve().parents[1] / "skills/atrex-gpu-gateway")
+    ctx.contribute("agent_skills", "atrex-gpu-gateway", AgentSkill(
+        "atrex-gpu-gateway", skill, "Gateway operations, request parameters, and client configuration."))

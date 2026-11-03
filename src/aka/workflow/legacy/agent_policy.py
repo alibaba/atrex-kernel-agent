@@ -96,10 +96,22 @@ def python_import_roots(code: str, *, _depth: int = 0) -> set[str]:
     return roots
 
 
-def dependency_process_violation(argv: list[str], environment=None) -> str | None:
-    """Describe a forbidden dependency build or host GPU action, if any."""
+def dependency_process_violation(
+    argv: list[str], environment=None, *, cwd: Path | None = None,
+    trusted_sandbox_entrypoints: frozenset[Path] | None = None,
+) -> str | None:
+    """Report confirmed policy violations for the shared dependency guard.
+
+    ``cwd`` must be the inspected process's directory, not the Supervisor's.
+    Missing process/file evidence is inconclusive (None), not authorization or
+    evidence of a violation. In particular, procfs can disappear during exit.
+    """
     if not argv:
         return None
+    from aka.resources.bundles import resource_path
+    canonical = resource_path('tools/sandbox.py')
+    trusted = frozenset({canonical}) if trusted_sandbox_entrypoints is None else trusted_sandbox_entrypoints
+    transport_names = {"sandbox.py", *(path.name for path in trusted)}
 
     def unwrap(segment: list[str]) -> list[str]:
         result = list(segment)
@@ -118,37 +130,46 @@ def dependency_process_violation(argv: list[str], environment=None) -> str | Non
         return result
 
     def command_segments(process_argv: list[str]) -> list[list[str]]:
-        tokens = process_argv
         executable = Path(process_argv[0]).name.lower()
-        if executable in {"bash", "sh", "dash", "zsh", "ksh"}:
-            command_index = next(
-                (
-                    index + 1
-                    for index, value in enumerate(process_argv[:-1])
-                    if value.startswith("-") and "c" in value[1:]
-                ),
-                -1,
-            )
-            if command_index >= 0:
-                try:
-                    lexer = shlex.shlex(
-                        process_argv[command_index], posix=True, punctuation_chars=";&|"
-                    )
-                    lexer.whitespace_split = True
-                    tokens = list(lexer)
-                except ValueError:
-                    tokens = process_argv
+        # A real argv already preserves argument boundaries. A quoted ';' in
+        # Dev's remote command is data, not a new local shell command.
+        if executable not in {"bash", "sh", "dash", "zsh", "ksh"}:
+            return [process_argv]
+        command_index = next(
+            (index + 1 for index, value in enumerate(process_argv[:-1])
+             if value.startswith("-") and "c" in value[1:]),
+            -1,
+        )
+        if command_index < 0:
+            return [process_argv]
+
+        # Split before unquoting: shlex's punctuation tokens otherwise lose the
+        # distinction between a shell operator and a literal quoted ';'/'|'.
+        command = process_argv[command_index]
+        boundaries = [-1]
+        quote = ""
+        escaped = False
+        for index, character in enumerate(command):
+            if escaped:
+                escaped = False
+            elif character == "\\" and quote != "'":
+                escaped = True
+            elif quote:
+                if character == quote:
+                    quote = ""
+            elif character in "'\"`":
+                quote = character
+            elif character in ";&|":
+                boundaries.append(index)
+        boundaries.append(len(command))
         segments: list[list[str]] = []
-        current: list[str] = []
-        for token in tokens:
-            if token and all(character in ";&|" for character in token):
-                if current:
-                    segments.append(current)
-                    current = []
-            else:
-                current.append(token)
-        if current:
-            segments.append(current)
+        try:
+            for left, right in zip(boundaries, boundaries[1:]):
+                segment = shlex.split(command[left + 1:right], comments=True)
+                if segment:
+                    segments.append(segment)
+        except ValueError:
+            return [process_argv]
         expanded = list(segments)
         for segment in segments:
             unwrapped = unwrap(segment)
@@ -157,7 +178,9 @@ def dependency_process_violation(argv: list[str], environment=None) -> str | Non
                 and Path(unwrapped[0]).name.lower() == "eval"
                 and len(unwrapped) > 1
             ):
-                expanded.extend(command_segments(["sh", "-c", " ".join(unwrapped[1:])]))
+                expanded.extend(
+                    command_segments(["sh", "-c", " ".join(unwrapped[1:])])
+                )
         return expanded
 
     def is_installer(segment: list[str]) -> bool:
@@ -201,7 +224,49 @@ def dependency_process_violation(argv: list[str], environment=None) -> str | Non
             }
         return False
 
+    def transport_status(segment: list[str]) -> str | None:
+        tokens = unwrap(segment)
+        if not tokens or not re.fullmatch(r"python[0-9.]*", Path(tokens[0]).name.lower()):
+            return None
+        mode, entry = _python_entrypoint(tokens)
+        if mode != "script" or Path(entry).name not in transport_names:
+            return None
+        script = Path(entry)
+        if not script.is_absolute():
+            if cwd is None or not cwd.is_absolute():
+                return "unknown"
+            script = cwd / script
+        from aka.core.filesystem import read_regular_bytes
+        try:
+            script = script.resolve(strict=True)
+            if script in trusted:
+                return "trusted"
+            # Workspace tools are regular copies of the HTTP-only client.
+            # Bound both reads; a failed read is not a content mismatch.
+            canonical = resource_path('tools/sandbox.py')
+            limit = 128 * 1024
+            expected = read_regular_bytes(canonical, limit=limit + 1)
+            if len(expected) > limit:
+                return "unknown"
+            actual = read_regular_bytes(script, limit=limit + 1)
+            return "trusted" if actual == expected else "untrusted"
+        except (OSError, ValueError, RuntimeError):
+            # Includes inaccessible/deleted cwd, disappearing processes/files
+            # and symlink loops. Never fall back to Path.cwd() here.
+            return "unknown"
+
     segments = command_segments(argv)
+    local_segments = []
+    for segment in segments:
+        status = transport_status(segment)
+        if status == "untrusted":
+            return "unregistered sandbox transport executed on the host"
+        if status is None:
+            local_segments.append(segment)
+        # A verified transport's arguments belong to the remote executor. An
+        # unreadable transport cannot be classified; neither permits inferring
+        # a local pip/build/import from its opaque request payload.
+    segments = local_segments
 
     def shared_gateway_mutation(segment: list[str]) -> bool:
         tokens = unwrap(segment)
@@ -228,8 +293,7 @@ def dependency_process_violation(argv: list[str], environment=None) -> str | Non
         if re.fullmatch(r"python[0-9.]*", executable):
             mode, entry = _python_entrypoint(tokens)
             if (mode == "script" and Path(entry).name == "local_gateway.py") or (
-                mode == "module"
-                and entry == "aka.execution.runtime_tools.local_gateway"
+                mode == "module" and entry == "aka.execution.runtime_tools.local_gateway"
             ):
                 return "serve" in lowered[1:]
             if mode == "code":
@@ -261,13 +325,11 @@ def dependency_process_violation(argv: list[str], environment=None) -> str | Non
             return None
         lowered = [token.lower() for token in tokens]
         executable = Path(lowered[0]).name
-        info_only = any(
-            token in {"--help", "-h", "--version"} for token in lowered[1:]
-        ) or (executable == "nvcc" and "-V" in tokens[1:])
-        if (
-            executable in {"nvcc", "cicc", "ptxas", "fatbinary", "ninja"}
-            and not info_only
-        ):
+        info_only = (
+            any(token in {"--help", "-h", "--version"} for token in lowered[1:])
+            or (executable == "nvcc" and "-V" in tokens[1:])
+        )
+        if executable in {"nvcc", "cicc", "ptxas", "fatbinary", "ninja"} and not info_only:
             return "CUDA/JIT build tool executed directly on the host"
         if executable in {"ncu", "rocprof", "rocprofv3", "compute-sanitizer"}:
             return "GPU profiler executed directly on the host"
@@ -279,11 +341,7 @@ def dependency_process_violation(argv: list[str], environment=None) -> str | Non
                 "profile_driver.py",
             }:
                 return "kernel/evaluator executed directly on the host"
-            if mode == "module" and entry.split(".", 1)[0] in {
-                "kernel",
-                "test_kernel",
-                "profile_driver",
-            }:
+            if mode == "module" and entry.split(".", 1)[0] in {"kernel", "test_kernel", "profile_driver"}:
                 return "kernel/evaluator executed directly on the host"
             if mode == "code":
                 imports = python_import_roots(entry)

@@ -256,6 +256,16 @@ def production_structure_violations(
     key = _framework_key(framework)
     if key not in _SUPPORTED_PRODUCTION_FRAMEWORKS:
         return [f"unsupported production framework: {framework}"]
+    try:
+        content = workspace_provider.read_source(workspace)
+        from aka.task.source.formats.registry import from_inputs
+        system, _ = from_inputs(content.files)
+    except (OSError, ValueError) as exc:
+        return [f"Invalid candidate source declaration: {exc}"]
+    if system.layout.framework is not None:
+        if key != system.layout.framework or require_gluon:
+            return ["Candidate source format does not implement the selected framework"]
+        return []
     kernel_path = workspace / "kernel.py"
     if not kernel_path.is_file():
         return ["kernel.py is missing"]
@@ -266,10 +276,6 @@ def production_structure_violations(
         return [f"kernel.py is not valid Python: {exc.msg} (line {exc.lineno})"]
 
     errors: list[str] = []
-    try:
-        content = workspace_provider.read_source(workspace)
-    except (OSError, ValueError) as exc:
-        return [f"Invalid candidate source tree: {exc}"]
     single_file = set(content.files) == {"kernel.py"}
     if single_file and _has_relative_import(tree):
         errors.append("relative/local-module imports are not self-contained")

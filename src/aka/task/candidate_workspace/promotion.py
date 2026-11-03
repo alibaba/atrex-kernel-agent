@@ -9,7 +9,7 @@ from .history import resolve_revision, working_facts
 from .policy import CANDIDATE_PATHS
 from .records import _git, current_revision, record
 from .source import POLICY, _policy, read_source
-from aka.task.source.tree import editable
+from aka.task.source.formats import editable
 
 
 def promote_candidate(workspace, *, base_commit, candidate_commit, episode,
@@ -43,7 +43,7 @@ def promote_candidate(workspace, *, base_commit, candidate_commit, episode,
             raise ValueError("promotion may change only declared editable source")
         reserved = (POLICY, *policy["immutable_files"], *policy["editable_roots"])
     source = read_source(workspace, revision=candidate_commit)
-    if source.files.get("kernel.py") is None:
+    if source.files.get("kernel.py") is None and source.files.get("solution.json") is None:
         raise ValueError("promotion candidate has no kernel.py")
     if commit_message is not None and (not isinstance(commit_message, str) or not commit_message.strip()):
         raise ValueError("promotion commit_message must be a nonempty string")

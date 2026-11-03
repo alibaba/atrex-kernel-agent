@@ -13,7 +13,7 @@ import json
 from pathlib import Path
 from threading import Event
 
-from aka.workflow.light.long_horizon import main_adapter
+import aka.workflow.light.long_horizon.main_adapter as main_adapter
 from aka.workflow.light.long_horizon.campaign import LongHorizonCampaign
 from aka.core.filesystem import durable_write_json
 from aka.workflow.light.orchestration.version_records import version_record_path
@@ -35,6 +35,9 @@ class EpisodeSearchDriver:
                   "inherit_state": self.campaign.module_options.inherit_state,
                   "research_records": self.campaign.research_records,
                   "wiki": self.campaign.tool_runtime.wiki,
+                  "pause_agent_during_requests": (
+                      self.campaign.tool_runtime.pause_agent_during_requests
+                  ),
                   "repetitions": self.campaign.tool_runtime.measurement_repetitions,
                   "evaluation": {name: getattr(self.campaign, name) for name in (
                       "sandbox_hardware", "sandbox_profile", "sandbox_url", "sandbox_ssh",

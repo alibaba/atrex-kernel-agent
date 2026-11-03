@@ -149,7 +149,9 @@ class GatewayCommandEvaluator:
                     from .measurement import gateway_identity
                     identities = (gateway_identity(request, references, kind, source_parameters=source_facts),)
                 if kind == "profile":
-                    if private:
+                    native_manifest = (isinstance(request.get("candidate"), dict)
+                                       and request["candidate"].get("entry_point", {}).get("type") == "cuda")
+                    if private and not native_manifest:
                         raise UnsupportedExecution("generalized profiles require the portable profile runner")
                     validate_prepared_profile(request, command.profile_options)
                     if PROFILE_ENVIRONMENT_KEYS.intersection(workload_environment(command)):

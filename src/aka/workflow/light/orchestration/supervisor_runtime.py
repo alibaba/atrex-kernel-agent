@@ -629,12 +629,26 @@ class SupervisorRuntime:
                 # Input authority belongs to the retained Task, never a mutable
                 # Agent copy. Evaluation prepares its selected references.
                 configuration = replace(self.evaluation_configuration, environment=environment)
+                evaluation_input = self.evaluation_input
+                if reference_snapshot is not None:
+                    # Only execute_trusted supplies this host-owned probe bundle.
+                    # HTTP Agent requests cannot select reference authority.
+                    from aka.contracts.content import WorkspaceFile
+                    from aka.evaluation.private_inputs import selected_content
+                    reference_files = selected_content(evaluation_input)
+                    for name in ("input.py", "reference.py", "shapes.json"):
+                        reference_files[name] = None
+                    files = []
+                    for name, item in reference_files.items():
+                        data = read_input(reference_snapshot, name) if item is None else item.content
+                        files.append(WorkspaceFile(name, text=data.decode("utf-8")))
+                    evaluation_input = replace(evaluation_input, files=tuple(files))
                 if execution_timeout is not None:
                     if type(execution_timeout) is not int or execution_timeout < 1:
                         raise ValueError("Trusted execution timeout must be positive")
                     configuration = replace(configuration, timeout=execution_timeout)
                 converted = request_from_argv(argv, workspace=staged,
-                    evaluation_input=self.evaluation_input, configuration=configuration,
+                    evaluation_input=evaluation_input, configuration=configuration,
                     workspace_provider=self.workspace_provider, defaults=measurement_defaults())
                 args = converted.args
                 if converted.kind in QUERY_KINDS:
@@ -662,7 +676,7 @@ class SupervisorRuntime:
             self._measurement_environment(command)
             command, request_digest = self._retained_request(command)
             request_id = "trusted-" + request_digest if capability.request_id == "acceptance" else capability.request_id
-            response = self.measurements.execute(command, request_id=request_id,
+            response = self._execute_measurement(command, request_digest=request_digest, request_id=request_id,
                 reuse_completed=reuse_completed, reuse_correctness=reuse_correctness)
             self.audit_process(capability, "gateway", argv, subprocess.CompletedProcess([], response["exit_code"], response["stdout"], response["stderr"]),
                 (response.get("agent_result", {}).get("identity") or {}).get("gateway_record_id"))
@@ -670,6 +684,30 @@ class SupervisorRuntime:
             if response["exit_code"] == 0:
                 self.publish_legacy_outputs(capability.workspace, command.workspace, args)
             return response
+
+    def _execute_measurement(self, command, *, request_digest, request_id, **options):
+        # A live equivalent call has one owner even across different Sessions.
+        # Durable completed/recovery state remains exclusively in Experiment.
+        with self.lock:
+            active = getattr(self, "_active_measurements", None)
+            if active is None:
+                active = self._active_measurements = {}
+            if request_digest in active:
+                original, deadline = active[request_digest]
+                value = {"code": "gateway_task_running", "status": "running",
+                    "message": "The same request is still running. Wait for its original response.",
+                    "original_request_id": original,
+                    "remaining_seconds": max(0, math.ceil(deadline - time.monotonic())),
+                    "estimate_basis": "runtime_request_deadline", "completion_guaranteed": False,
+                    "gateway_record_id": None}
+                return {"exit_code": 75, "stdout": json.dumps(value) + "\n", "stderr": "",
+                        "agent_result": value}
+            active[request_digest] = (request_id, time.monotonic() + command.timeout)
+        try:
+            return self.measurements.execute(command, request_id=request_id, **options)
+        finally:
+            with self.lock:
+                active.pop(request_digest, None)
 
     def _validate_candidate_correctness(self, capability: Capability, source) -> dict:
         validator = getattr(self, "numerical_validator", None)

@@ -75,17 +75,19 @@ python3 tools/sandbox.py --kind env
 ```
 
 For ABBA, optional `--comparison-run-timeout SECONDS` controls each run and must fit the
-configured allocation's complete schedule. The default is up to 120 seconds. Acceptance can
+configured allocation's complete schedule. Without that option, each run uses the smaller of
+the 300-second Performance timeout and its equal share of the configured allocation. Acceptance can
 reuse only an exact matching request, including baseline bytes, path, repeats and run timeout.
 The injected acceptance block supplies the exact command for the current
 configuration, including Shape batch size, and a `kernel-read` command for the committed
 incumbent. Use that block instead of this generic example when seeking acceptance reuse.
-It also reports Runtime-owned measurement repetitions and allocation timeout; do not emulate
+Runtime owns the measurement repetitions and derives the allocation timeout; do not emulate
 them with repeated Agent requests or environment overrides. Other request/input changes can
 prevent reuse. A matching comparison is optional and does not replace the report's full Evaluate.
 
-Full Evaluate and ABBA default to 100 timing iterations and 10 warmup iterations, one Shape
-per batch and at most 16 concurrent batches. Promotion minimizes GeoMean latency versus the
+Full Evaluate and ABBA default to 20 timing iterations and 5 warmup iterations, matching
+Legacy's sampling counts. They use one Shape per batch and at most 16 concurrent batches.
+Promotion minimizes GeoMean latency versus the
 incumbent; `performance_score` is diagnostic. The returned `improvement_pct` is
 `(speedup - 1) * 100`, matching Runtime (100 us to 80 us means 1.25x and 25%).
 This is not the latency-reduction percentage used by the Supervisor's promotion threshold.
@@ -213,6 +215,7 @@ Do not infer unavailable counters or missing measurements as zero.
 | Dev/Check/Profile/Disassemble failure | Read `result.error` and available `stdout`/`stderr` or diagnostic fields. Compiler/import/file errors require source or declared-input repair. A successful Dev probe is not automatically a passing Evaluate. |
 | Request rejected with `issues`, `request_schema`, `recovery` or `error.next_action` | Correct the named field/path or evidence reference. Follow the supplied operation-specific guidance, not guessed flags or IDs. |
 | `duplicate_gateway_task` | Read the previous Record ID supplied by the error. Do not relabel the version or change source merely to bypass deduplication. |
+| `gateway_task_running` | The same call is still executing; this request did not submit another Agate task. Wait for the original response. `remaining_seconds` is its remaining Runtime request budget, not a guaranteed successful completion ETA; null means unknown, and zero means the deadline has elapsed and cleanup is still in progress. No complete Record is available to read yet. |
 | `request_not_started`, explicitly `repairable: true` | No executor started. Wait at least `retry_after_seconds` and retry unchanged with backoff; this exception does not authorize retries for other failures. |
 | Infrastructure recovery exhausted | Runtime already owns bounded retries. Follow its final `next_action`; report a genuine blocker instead of declaring the Kernel incorrect or building another retry loop. |
 | Connection loss, unknown outcome, missing/revoked Session | Inspect saved records when available and ask the operator to reconcile or restore the Session. Do not resubmit blindly or bypass the Runtime. |
@@ -237,9 +240,9 @@ Do not request control files or changes to Kernel source via remote outputs.
 
 ## Optional Wiki
 
-Wiki is disabled by default. Only use these commands when the session explicitly enables Wiki
-and mounts `skills/KernelWiki/SKILL.md`; read that Skill for query scope and hardware identity.
-Do not depend on a `gpu-wiki/` source directory in the Agent workspace. When Wiki is disabled,
+Wiki is enabled by default. Only use these commands when the session mounts
+`skills/KernelWiki/SKILL.md`; read that Skill for query scope and hardware identity.
+Do not depend on a `gpu-wiki/` source directory in the Agent workspace. When Wiki is explicitly disabled,
 use supplied public knowledge and measured evidence instead.
 
 ```bash

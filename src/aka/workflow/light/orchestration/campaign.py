@@ -19,8 +19,9 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from aka.resources.bundles import resource_path as resource
 
-from .constants import (
+from aka.workflow.light.orchestration.constants import (
     SUPPLEMENTAL_PENDING_PREFIX,
     SUPPLEMENTAL_REPAIR_PREFIX,
     AGENT_PROBLEM_GENERATION_PROMPT,
@@ -28,7 +29,6 @@ from .constants import (
     ATREX_PRIVATE_REFERENCE_ENV,
     DEFAULT_CONVERT_AFTER,
     DEFAULT_HANDOFF_RESUMES,
-    DEFAULT_SANDBOX_TIMEOUT,
     DEFAULT_VERIFY_REPEATS,
     DEFAULT_VERIFY_RUN_TIMEOUT,
     DEPENDENCY_REVIEW_PROMPT,
@@ -46,32 +46,25 @@ from .constants import (
     SOL_SEED,
     WORKSPACE_INIT,
 )
-from .environment_recovery import (
+from aka.workflow.light.orchestration.environment_recovery import (
     ENVIRONMENT_TEMPFAIL,
     EnvironmentUnavailable,
     environment_state_file,
 )
-from .framework_baseline_progress import (
-    capture_unexpected_exit as capture_framework_baseline_exit,
+from aka.workflow.light.orchestration.framework_baseline_progress import (capture_unexpected_exit as capture_framework_baseline_exit)
+from aka.workflow.light.orchestration.framework_baseline_progress import (load_progress as load_framework_baseline_progress)
+from aka.workflow.light.orchestration.framework_baseline_progress import (mark_accepted as mark_framework_baseline_accepted)
+from aka.workflow.light.orchestration.framework_baseline_progress import (progress_path as framework_baseline_progress_path)
+from aka.workflow.light.orchestration.framework_baseline_progress import (restore_latest_candidate as restore_latest_framework_baseline_candidate)
+from aka.workflow.light.orchestration.framework_baseline_progress import (save_supervisor_recovery as save_framework_baseline_recovery)
+from aka.workflow.light.orchestration.hardware import hardware_directive, hardware_vendor, kernel_is_gluon
+from aka.workflow.light.orchestration.version_records import (
+    STATE_DIRECTORY,
+    save_version_record,
+    version_commit_paths,
+    version_record_path,
 )
-from .framework_baseline_progress import (
-    load_progress as load_framework_baseline_progress,
-)
-from .framework_baseline_progress import (
-    mark_accepted as mark_framework_baseline_accepted,
-)
-from .framework_baseline_progress import (
-    progress_path as framework_baseline_progress_path,
-)
-from .framework_baseline_progress import (
-    restore_latest_candidate as restore_latest_framework_baseline_candidate,
-)
-from .framework_baseline_progress import (
-    save_supervisor_recovery as save_framework_baseline_recovery,
-)
-from .hardware import hardware_directive, hardware_vendor, kernel_is_gluon
-from .version_records import STATE_DIRECTORY, save_version_record, version_commit_paths, version_record_path
-from .operator_layout import (
+from aka.task.problem.layout import (
     AGENT_PROBLEM_FILENAME,
     agent_visible_operator_files,
     has_agent_problem,
@@ -80,13 +73,13 @@ from .operator_layout import (
     validate_generated_agent_problem,
     validate_private_shapes,
 )
-from .optimization_policy import (
+from aka.workflow.light.orchestration.optimization_policy import (
     install_workspace_policy,
     optimization_mode_directive,
     production_kernel_violations,
     production_structure_violations,
 )
-from .session_io import (
+from aka.workflow.light.orchestration.session_io import (
     SessionResult,
     _production_review_candidate_paths,
     _production_review_digest,
@@ -103,7 +96,6 @@ from aka.workflow.light.runtime_resources import (
 )
 from .workspace_state import (
     git_head,
-    git_kernel_blob,
     git_path_blob,
     git_worktree_blob,
     head_kernel_is_initial_baseline,
@@ -216,7 +208,9 @@ class Campaign:
         if self.sandbox_timeout is None:
             from aka.contracts.evaluation import derived_evaluation_timeout
             self.sandbox_timeout = derived_evaluation_timeout(
-                repeats=self.verify_repeats, per_run_timeout=self.verify_run_timeout)
+                repeats=self.verify_repeats,
+                per_run_timeout=self.verify_run_timeout,
+            )
         if sum(
             bool(value)
             for value in (self.sandbox_ssh, self.sandbox_url, self.sandbox_profile)
@@ -376,7 +370,7 @@ class Campaign:
         }
 
     def start_runtime(self) -> None:
-        from .supervisor_runtime import RuntimeConfig, SupervisorRuntime
+        from aka.workflow.light.orchestration.supervisor_runtime import RuntimeConfig, SupervisorRuntime
 
         if getattr(self, "_supervisor_runtime", None) is not None:
             return
@@ -402,7 +396,7 @@ class Campaign:
     def supplemental_numerical_feedback(self, workspace: Path, source: bytes | None = None, *, parent=None,
                                         flow: str = "episode") -> str:
         """Validate frozen candidate bytes using private plans and recorded GPU probes."""
-        from .numerical_policy import validate_candidate
+        from aka.workflow.light.orchestration.numerical_policy import validate_candidate
 
         if not self.module_options.numerical_validation:
             return ""
@@ -420,6 +414,10 @@ class Campaign:
             FRAMEWORK=self.framework,
             OPERATOR=self.name,
         )
+
+    def wiki_prompt(self, slot: str) -> str | None:
+        """The selected Wiki provider's replacement for a built-in Wiki prompt fragment."""
+        return self.plugin_registry.wiki_prompt(slot) if self.tool_runtime.wiki else None
 
     def measure_for_acceptance(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
                                parent=None, reference_snapshot: Path | None = None) -> dict:
@@ -464,7 +462,6 @@ class Campaign:
         return {
             "baseline_kernel_id": runtime.measurements.kernel(incumbent_source)["kernel_id"],
             "measurement_repetitions": runtime.measurement_repetitions,
-            "allocation_timeout_seconds": runtime.config.timeout,
         }
 
     def acceptance_verifier(self, **options):
@@ -518,7 +515,7 @@ class Campaign:
         environment = {}
         environment.update(self.agent_boundary_environment())
         self.start_runtime()
-        from .supervisor_runtime import OWNER_ENV
+        from aka.workflow.light.orchestration.supervisor_runtime import OWNER_ENV
         environment[OWNER_ENV] = self._supervisor_runtime.owner_id
         if private_dir is not None:
             environment[ATREX_PRIVATE_REFERENCE_ENV] = str(private_dir)
@@ -688,7 +685,7 @@ class Campaign:
         candidate_digest: str,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
-        from .infrastructure_retry import check_review_service
+        from aka.workflow.light.orchestration.infrastructure_retry import check_review_service
 
         cache_key = candidate_digest + ":" + self.agent_cli
         cached = self._production_review_cache.get(cache_key)
@@ -826,7 +823,7 @@ class Campaign:
         require_gluon: bool,
     ) -> list[str]:
         """Bound timeout retries across sessions and supervisor restarts."""
-        from .infrastructure_retry import retry_review
+        from aka.workflow.light.orchestration.infrastructure_retry import retry_review
 
         digest = _production_review_digest(workspace, framework, require_gluon, workspace_provider=self.candidate_workspace)
         stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
@@ -860,7 +857,7 @@ class Campaign:
     @cached_property
     def source_checks_enabled(self) -> bool:
         """Freeze main's multi-GPU source policy from evaluator-owned metadata."""
-        from .sandbox_config import evaluator_num_gpus
+        from aka.execution.config import evaluator_num_gpus
         if self.sandbox_ssh:
             return True
         return evaluator_num_gpus(self.problem.evaluation.directory) < 2
@@ -1012,8 +1009,9 @@ class Campaign:
         runtime_arch = self.arch or "unknown (use the runtime GPU API before choosing codegen)"
         notes = self.notes.strip() or "none"
         hardware_evidence = (
-            "Before an optimization plan uses a hardware limit, source it through "
-            "`--kind wiki-query` and cite the returned record. "
+            (self.wiki_prompt("hardware_evidence") or
+             "Before an optimization plan uses a hardware limit, source it through "
+             "`--kind wiki-query` and cite the returned record.") + " "
             if self.tool_runtime.wiki else
             "Wiki queries are disabled. Use supplied, attributable hardware evidence; "
             "do not guess missing peak specifications. "
@@ -1193,13 +1191,14 @@ class Campaign:
 
         n = FRAMEWORK_BASELINE_VERSION
         baseline_commit = self._v0_baseline_commit()
-        v0_blob = git_path_blob(self.workspace, baseline_commit, "kernel.py")
+        from aka.task.source.formats import revision_identity
+        v0_identity = revision_identity(self.workspace, baseline_commit)
         pre_head = git_head(self.workspace)
         self._ensure_framework_baseline_solution_manifest()
 
         if action == "run":
             self._link_runtime()
-            self._restore_framework_baseline_candidate(v0_blob)
+            self._restore_framework_baseline_candidate(v0_identity)
             self._sync_framework_baseline_live(
                 phase="framework_baseline_correctness_review"
             )
@@ -1219,23 +1218,23 @@ class Campaign:
                 )
             recovery_used = False
             problem = self._framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
+                v0_identity, baseline_commit, include_policy_review=False
             )
             if problem:
                 self._recover_framework_baseline(
-                    problem, v0_blob, baseline_commit, pre_head
+                    problem, v0_identity, baseline_commit, pre_head
                 )
                 recovery_used = True
                 self._warn_restored_baseline_paths(baseline_commit)
                 problem = self._framework_baseline_problem(
-                    v0_blob, baseline_commit, include_policy_review=False
+                    v0_identity, baseline_commit, include_policy_review=False
                 )
         else:  # adopt: our own interrupted run already committed the kernel
             recovery_used = False
             self._sync_framework_baseline_live(phase="framework_baseline")
             self._warn_restored_baseline_paths(baseline_commit)
             problem = self._framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
+                v0_identity, baseline_commit, include_policy_review=False
             )
         result: Optional[dict] = None
         if not problem:
@@ -1250,12 +1249,12 @@ class Campaign:
             if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
                 numerical_repairs += 1
             self._recover_framework_baseline(
-                problem, v0_blob, baseline_commit, pre_head
+                problem, v0_identity, baseline_commit, pre_head
             )
             recovery_used = True
             self._warn_restored_baseline_paths(baseline_commit)
             problem = self._framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
+                v0_identity, baseline_commit, include_policy_review=False
             )
             if not problem:
                 result, problem = self._framework_baseline_external_gates(n)
@@ -1382,14 +1381,14 @@ class Campaign:
         if pinned_commit:
             return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
 
-        if set(self.candidate_workspace.read_source(self.workspace,
-                revision=self.candidate_workspace.current_revision(self.workspace)).files) != {"kernel.py"}:
+        from aka.task.source.formats import layout_at, revision_contains_reference
+        known_reference_wrapper = revision_contains_reference(self.workspace, self._v0_baseline_commit())
+        if not layout_at(self.workspace, committed=True).replaceable_baseline and not known_reference_wrapper:
             return "pin", "source-tree task keeps the pinned package/adapter as its Framework baseline"
 
         progressed = not head_kernel_is_initial_baseline(self.workspace)
-        dirty_candidate = git_worktree_blob(
-            self.workspace, "kernel.py"
-        ) != git_path_blob(self.workspace, "HEAD", "kernel.py")
+        from aka.task.source.formats import read, from_revision
+        dirty_candidate = read(self.workspace).snapshot != from_revision(self.workspace, "HEAD").snapshot
         restart_journal = framework_baseline_progress_path(self.workspace).is_file()
         # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
         # interrupted V1 worktree and needs validation/recovery first.
@@ -1398,7 +1397,7 @@ class Campaign:
         if not progressed and dirty_candidate:
             return "run", "resuming preserved framework-baseline work"
 
-        if self.framework_baseline == "auto" and self.optimization_mode != "production":
+        if self.framework_baseline == "auto" and self.optimization_mode != "production" and self.framework.lower() != "cuda":
             return (
                 "skip",
                 "leaderboard mode keeps the permissive V0 (use --framework-baseline always)",
@@ -1414,15 +1413,7 @@ class Campaign:
                 for value in structural
             ):
                 return "skip", "; ".join(structural)
-            baseline_commit = self._v0_baseline_commit()
-            reference_blob = git_path_blob(
-                self.workspace, baseline_commit, "reference.py"
-            )
-            known_reference_wrapper = bool(
-                reference_blob
-                and reference_blob
-                == git_path_blob(self.workspace, baseline_commit, "kernel.py")
-            ) or is_sol_op(Path(self.kernel_demo).resolve().parent)
+            known_reference_wrapper = known_reference_wrapper or is_sol_op(Path(self.kernel_demo).resolve().parent)
             if known_reference_wrapper:
                 return (
                     "run",
@@ -1474,7 +1465,7 @@ class Campaign:
             else None
         )
         order = self._framework_baseline_supervisor_order()
-        prompt = (PROMPTS_DIR / "framework_baseline_exit_supervisor.md").read_text(
+        prompt = resource("prompts/framework_baseline_exit_supervisor.md").read_text(
             encoding="utf-8"
         )
         for index, supervisor_cli in enumerate(order):
@@ -1852,7 +1843,7 @@ class Campaign:
         sections = [
             "## Mandatory external pre-implementation correctness guidance\n",
             " and ".join(reviewer_labels)
-            + " reviewed the bounded public packet. Before editing `kernel.py`, reconcile the "
+            + " reviewed the bounded public packet. Before editing candidate sources, reconcile the "
             "available guidance against the immutable reference. Shared requirements are "
             "mandatory; reviewer suggestions never override the public contract.\n",
         ]
@@ -1976,9 +1967,10 @@ class Campaign:
             )
         return result
 
-    def _restore_framework_baseline_candidate(self, v0_blob: str) -> None:
+    def _restore_framework_baseline_candidate(self, v0_identity: str) -> None:
         """Restore an ignored snapshot only when the worktree fell back to the V0 wrapper."""
-        if git_worktree_blob(self.workspace, "kernel.py") != v0_blob:
+        from aka.task.source.formats import workspace_identity
+        if workspace_identity(self.workspace) != v0_identity:
             return
         try:
             progress = load_framework_baseline_progress(self.workspace)
@@ -1989,7 +1981,7 @@ class Campaign:
         if not isinstance(snapshot, dict):
             return
         restored = restore_latest_framework_baseline_candidate(self.workspace)
-        if restored and git_worktree_blob(self.workspace, "kernel.py") != v0_blob:
+        if restored and workspace_identity(self.workspace) != v0_identity:
             print(
                 "[orchestrator] restored interrupted V1 candidate from local checkpoint: "
                 + ", ".join(restored),
@@ -2022,60 +2014,9 @@ class Campaign:
         return [measured[index][0] for index in dict.fromkeys(indexes)]
 
     def _ensure_framework_baseline_solution_manifest(self) -> None:
-        """Preseed a native V1 manifest so the implementation Agent need not infer its schema."""
-        path = self.workspace / "solution.json"
-        if path.is_file() or not self.atrex_bench_root:
-            return
-        framework = self.framework.strip().lower()
-        language = {
-            "cutedsl": "cutedsl",
-            "cuda": "cuda",
-            "flydsl": "flydsl",
-            "gluon": "gluon",
-            "triton": "triton",
-        }.get(framework, framework)
-        dependencies = {
-            "cuda": ["torch", "cuda-python"],
-            "triton": ["torch", "triton"],
-            "gluon": ["torch", "triton", "gluon"],
-            "cutedsl": ["torch", "nvidia-cutlass-dsl"],
-            "flydsl": ["torch", "flydsl"],
-        }.get(framework, ["torch"])
-        reference = self.workspace / "reference.py"
-        reference_source = (
-            reference.read_text(encoding="utf-8", errors="replace")
-            if reference.is_file()
-            else ""
-        )
-        entry_symbol = "Model" if "class Model" in reference_source else "run"
-        manifest = {
-            "name": f"{self.campaign_name}_v1_{language}",
-            "spec": {
-                "languages": ["python", language],
-                "dependencies": dependencies,
-                "entry_point": f"kernel.py::{entry_symbol}",
-            },
-            "sources": [
-                {
-                    "path": "kernel.py",
-                    "role": (
-                        "Single self-contained candidate file. Update this description and "
-                        "dependency roles to match the implemented framework loader exactly."
-                    ),
-                }
-            ],
-            "dependency_roles": {
-                dependency: (
-                    "candidate framework/runtime plumbing; update with the exact non-compute "
-                    "role used by kernel.py"
-                )
-                for dependency in dependencies
-            },
-        }
-        path.write_text(
-            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        from aka.task.source.formats import seed_baseline_metadata
+        seed_baseline_metadata(self.workspace, self.framework, self.campaign_name,
+                               native_eval=bool(self.atrex_bench_root))
 
     def _framework_baseline_smoke_command(self, n: int) -> tuple[str, str]:
         """Return the only ordinary evaluator command the V1 implementation Agent should run."""
@@ -2108,7 +2049,7 @@ class Campaign:
         return shlex.join(command), scope
 
     def _framework_baseline_sandbox_directive(self) -> str:
-        from .session_io import sandbox_boundary_directive
+        from aka.workflow.light.orchestration.session_io import sandbox_boundary_directive
         return sandbox_boundary_directive(
             self.sandbox_hardware or self.platform, self.sandbox_profile,
             self.sandbox_url, self.sandbox_ssh,
@@ -2130,9 +2071,12 @@ class Campaign:
                 self.agent_cli,
                 is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
                 wiki=self.tool_runtime.wiki,
+                pause_agent_during_requests=self.tool_runtime.pause_agent_during_requests,
+                knowledge_skills=self.plugin_registry.knowledge_skills() if self.tool_runtime.wiki else (),
             ),
             KNOWLEDGE_RESEARCH=(
-                (PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8")
+                (self.wiki_prompt("framework_baseline")
+                 or (PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8"))
                 .replace("{{PLATFORM}}", self.platform).replace("{{ARCH}}", self.arch)
                 .replace("{{FRAMEWORK}}", self.framework)
                 if self.tool_runtime.wiki else
@@ -2173,7 +2117,7 @@ class Campaign:
 
     def _framework_baseline_problem(
         self,
-        v0_blob: str,
+        v0_identity: str,
         baseline_commit: str,
         *,
         include_policy_review: bool = True,
@@ -2183,8 +2127,9 @@ class Campaign:
         Everything is judged from the worktree: that is what the gateway uploads, and it lets a
         session that wrote the kernel but never committed it still be accepted.
         """
-        candidate_blob = git_worktree_blob(self.workspace, "kernel.py")
-        if not candidate_blob or candidate_blob == v0_blob:
+        from aka.task.source.formats import workspace_identity
+        candidate_blob = workspace_identity(self.workspace)
+        if not candidate_blob or candidate_blob == v0_identity:
             return "the session left the V0 kernel unchanged; no framework implementation was produced"
         violations = [] if not self.source_checks_enabled else (
             self._production_kernel_violations()
@@ -2324,7 +2269,7 @@ class Campaign:
             )
 
     def _recover_framework_baseline(
-        self, problem: str, v0_blob: str, baseline_commit: str, pre_head: str
+        self, problem: str, v0_identity: str, baseline_commit: str, pre_head: str
     ) -> None:
         """Run one recovery session; unexpected exits invoke the progress supervisor."""
         print(
@@ -2391,17 +2336,16 @@ class Campaign:
 
     def _commit_framework_baseline(self, n: int, result: dict) -> str:
         """Commit the accepted kernel (C1) and then pin it in a metadata-only commit (C2)."""
-        staged = [
-            path
-            for path in (
-                "kernel.py",
-                "solution.json",
-                "CLAUDE.md",
-                "README.md",
-                *version_commit_paths(self.workspace, n, generate_memory=self.generate_memory),
-            )
-            if (self.workspace / path).exists()
-        ]
+        from aka.task.source.formats import read, commit_paths
+        artifact = read(self.workspace)
+        source = artifact.snapshot
+        source_files = artifact.files
+        staged = commit_paths(self.workspace, normalize=True)
+        staged += [path for path in (
+            "CLAUDE.md", "README.md",
+            *version_commit_paths(self.workspace, n, generate_memory=self.generate_memory),
+        ) if (self.workspace / path).exists()]
+        staged = list(dict.fromkeys(staged))
         staged += [
             str(path.relative_to(self.workspace))
             for path in sorted(self.workspace.glob(f"plans/v{n}_*.md"))
@@ -2433,17 +2377,16 @@ class Campaign:
                 stdout=subprocess.DEVNULL,
             )
         kernel_commit = subprocess.run(
-            ["git", "rev-list", "-1", "HEAD", "--", "kernel.py"],
+            ["git", "rev-list", "-1", "HEAD", "--", *source_files],
             cwd=str(self.workspace),
             capture_output=True,
             text=True,
             check=True,
         ).stdout.strip()
-        if git_kernel_blob(self.workspace) != git_worktree_blob(
-            self.workspace, "kernel.py"
-        ):
+        from aka.task.source.formats import from_git
+        if from_git(self.workspace, kernel_commit) != read(self.workspace).snapshot:
             raise RuntimeError(
-                "framework baseline kernel.py differs between the worktree and the commit"
+                "framework baseline candidate differs between the worktree and the commit"
             )
 
         _record_local_test_result(
@@ -2473,6 +2416,7 @@ class Campaign:
         commit whose sha the marker records, leaving a dangling pointer. This commit does not
         touch kernel.py, so it never registers as an optimization win.
         """
+        from aka.task.source.formats import baseline_marker
         marker = {
             "schema_version": 1,
             "version": f"v{version}",
@@ -2480,7 +2424,7 @@ class Campaign:
             "platform": self.platform,
             "arch": self.arch,
             "commit": commit,
-            "kernel_blob": git_path_blob(self.workspace, commit, "kernel.py"),
+            **baseline_marker(self.workspace, commit),
             "recorded_at": datetime.now(timezone.utc).isoformat(),
         }
         (self.workspace / FRAMEWORK_BASELINE_FILE).write_text(
@@ -2584,7 +2528,7 @@ class Campaign:
                 subprocess.run(
                     [
                         sys.executable,
-                        str(REPO_ROOT / "reference" / "sol_finalize.py"),
+                        str(resource("reference/sol_finalize.py")),
                         "--workspace",
                         str(self.workspace),
                     ],

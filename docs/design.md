@@ -1,523 +1,167 @@
 # Architecture Design
 
-## Overview
+AKA's default `light` profile composes a coding Agent, managed CandidateWorkspace,
+private HTTP Tool Runtime, and Supervisor-owned optimization workflow. The Agent proposes
+implementations and evidence; the Supervisor owns evaluator inputs, acceptance, Git sealing,
+promotion, budgets, and recovery.
 
-Atrex Kernel Agent is an orchestrated system for GPU kernel implementation, profiling, and
-iterative optimization. The installed `aka optimize` command is the supported entry point. The
-selected Workflow module owns the optimization lifecycle and launches isolated episodes through
-Claude, Qoder, Codex, or Pi. A user may invoke that command directly or ask a coding agent in the
-checkout to translate a natural-language task into its arguments and launch it.
+![AKA architecture](../assets/aka-architecture-v0.4.0.png)
 
-Agent sessions propose and implement changes. The orchestrator remains authoritative for
-budgets, state transitions, sandbox execution, correctness and performance gates, production
-policy, rollback, aggregation, and final packaging.
+[Launch and configuration](quickstart.md) · [Detailed module reference](optional-light-modules.md)
 
-Each canonical optimization version is one multi-experiment episode in a private Git worktree.
-The installed `aka.legacy.workflow` module supplies worktree isolation, journals, handoff recovery,
-fast five-trial evaluator-backed selection or full same-allocation ABBA verification, and squash
-promotion; it is not a second CLI.
+## Entry point and composition
 
-![Atrex Kernel Agent v0.3.0 architecture and workflow](../assets/atrex-architecture-current.png)
+`aka optimize --repo-root /path/to/aka -- ...` converts optimization arguments into a typed
+Workflow request, then launches through Bootstrap and Core. A launch manifest selects a
+composition and startup target. Core validates configuration, assembles dependencies, and
+disposes owned providers when the invocation ends.
 
-## Design Goals
-
-- **Mechanical control**: termination and acceptance are decided by code rather than Agent
-  self-assessment.
-- **Tiered optimization**: early fast episodes run five reviewed plan/implement/evaluator trials
-  without profiling or ABBA; later full episodes are supported by official profiler evidence.
-- **Reproducible state**: Git HEAD is the incumbent kernel; structured memory and artifacts
-  preserve the reasoning and measurements behind each attempt.
-- **Execution isolation**: GPU work crosses `python -m aka.legacy.execution.cli`; campaign memory, plans, edits,
-  and Git state remain local.
-- **Evaluator integrity**: immutable ground truth and full-workload validation prevent harness
-  edits or partial-shape wins from becoming accepted results.
-- **Production provenance**: production mode keeps deterministic structure and campaign-state
-  invariants, while the supervisor sends every candidate to an isolated policy Agent for complete
-  framework, compute-provenance, dependency, loader, and manifest review.
-- **Backend portability**: one Agent Runtime interface normalizes commands, events, usage, and
-  process policy across supported coding CLIs.
-
-## Project Structure
-
-```text
-.
-├── src/aka/
-│   ├── core/                          # Plugin declarations, composition and lifecycle
-│   ├── contracts/                     # Shared module interfaces
-│   ├── bootstrap/                     # Profile selection and continuation identity
-│   └── legacy/
-│       ├── workflow/                  # Campaign, episodes, recovery and public export
-│       ├── task/                      # Problem, source and candidate workspace ownership
-│       ├── execution/                 # Sandbox, gateway, profiling and runtime tools
-│       ├── agent/                     # Claude/Qoder/Codex/Pi adapters and session state
-│       └── resources/                 # Plugin tools, Skills and workspace resources
-├── packages/                          # Distribution metadata
-├── gpu-wiki/                          # Structured hardware/kernel retrieval and trace mining
-├── plugins/                           # Automatically discovered local plugin manifests and adapters
-├── reference-projects/                # Optional source-search repositories
-└── tools/                              # Build and validation-only checkout helpers
-```
-
-Runtime Skills, profiling helpers and prompts are package data owned by their modules. Resources
-installs the selected contributions into generated campaign workspaces; root directories are not
-runtime import or command interfaces.
-
-### Authority boundaries
-
-| Boundary | Owner | Durable result |
+| Profile | Workflow | Agent |
 | --- | --- | --- |
-| Campaign control | `aka.legacy.workflow.campaign` | Workspace Git history and canonical memory |
-| Episode exploration | Workflow plus one coding-agent session | Journal, handoff, archived attempt and telemetry |
-| GPU execution | `python -m aka.legacy.execution.cli` plus the configured executor | Structured evaluator result and requested profile artifacts |
-| Optimization knowledge | Discovered plugins, then optional `reference-projects/` | Evidence references recorded by the episode |
+| `light` | Managed drafts and unified Episodes | Native with capture |
+| `light-sandbox` | Same Light workflow | Bubblewrap with capture |
+| `workflow` | Explicit Legacy Fast/Full/goal workflow | Legacy |
+| `observed` / `sandbox` | Legacy workflow with an Agent replacement | Capture-enabled native / Bubblewrap |
 
-The Agent may edit only its isolated candidate worktree. It cannot decide promotion, mutate the
-incumbent directly, replace evaluator inputs, or use local host GPU execution. Conversely, the
-supervisor does not generate optimization code: it validates, measures, records, and promotes
-exact committed sources.
+Light requires the framework, legacy, and light distributions from a matching revision.
+The legacy package also supplies shared business implementations used by Light; installing it
+does not select the Legacy workflow. Recorded continuations restore their frozen selection
+rather than adopting new-launch defaults.
 
-## Supported Entry Point
-
-For interactive use, the recommended surface is a repository-scoped coding-agent prompt:
+## Project structure
 
 ```text
-Use the installed `aka optimize` command with this checkout as `--repo-root` to start one optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+src/aka/
+├── core/                  # Composition, dependency injection, lifecycle
+├── contracts/             # Shared service interfaces
+├── bootstrap/             # Launch selection and continuation identity
+├── light/
+│   ├── agent/             # Sessions, capture, isolation, active-time accounting
+│   ├── workspace/         # Candidate layouts, drafts, snapshots, private Git
+│   ├── runtime/           # Authenticated HTTP tools and thin agent clients
+│   ├── evaluation/        # Native Eval/ABBA, profiling, result interpretation
+│   ├── experiment/        # Measurement identity, records, deduplication
+│   ├── execution/         # GPU dispatch, job checkpoints, recovery
+│   ├── wiki/              # Knowledge-provider execution and caching
+│   ├── acceptance/        # Correctness, numerical checks, verification, audits
+│   └── workflow/          # Baselines, Episodes, reports, budgets, search
+├── legacy/                # Shared providers and explicit Legacy workflow
+├── observation/           # Workflow observation adapter
+└── dashboard/             # Optional viewer
 ```
 
-The coding agent resolves the request, checks prerequisites, and invokes the same supported entry
-point. It does not own campaign state transitions, acceptance, or termination, and this launch
-surface does not create a second optimization workflow.
+`packages/` owns distribution metadata. `plugins/`, `gpu-wiki/`, and selected
+`reference-projects/` supply checkout resources. Runtime prompts, Skills, clients, and
+profiling helpers belong to their packages and are published into campaign workspaces.
 
-For automation and direct operation, invoke the entry point explicitly:
+## Authority boundaries
 
-```bash
-aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/operator \
-  --platform TARGET_GPU \
-  --sandbox-hardware REMOTE_GPU \
-  --framework Triton
-```
+| Owner | Authority |
+| --- | --- |
+| Problem / Source | Public problem contract, private evaluator roles, frozen initial source and runtime requirements |
+| CandidateWorkspace | Candidate layout, allowed edits, exact snapshots, draft publication, private Git transactions |
+| Agent | CLI sessions, process supervision, usage observations, optional filesystem isolation |
+| Tool Runtime | Session capability, workspace authorization, request routing, deadlines and revocation |
+| Evaluation / Experiment / Execution | Measurement plan and result semantics / durable facts and reuse / physical GPU jobs |
+| Wiki provider | Knowledge source and public query operations; Runtime retains authorization and caching |
+| Journal / Acceptance | Report and optional research records / required correctness and performance evidence |
+| Workflow | Episode lifecycle, budgets, acceptance coordination, promotion and final export |
 
-Both launch surfaces converge before campaign initialization. The orchestrator creates an isolated
-Git-worktree episode for each optimization version. A fresh Agent thread may perform several related
-profile/research/edit/validate cycles. Claude and Codex
-support bounded same-thread recovery when the terminal handoff is incomplete; canonical state
-crosses episode boundaries through Git, structured memory, journals, plans, and profiles.
+The Agent does not choose private storage paths, submit a Git commit as proof, or rewrite
+the trusted evaluator. Native mode separates work cooperatively under the same OS user.
+Bubblewrap adds filesystem enforcement; it does not add a network allowlist or change
+the remote GPU executor.
 
-The main workspace name is deterministic. Leaderboard mode uses
-`kernel_opt_<op>_<framework>_<platform>`; production mode appends `_production` so a strict
-production campaign cannot silently resume permissive leaderboard history. Omitting `--framework`
-launches one child process and one independent workspace for every framework supported by the
-runtime-detected GPU vendor.
+## Campaign lifecycle
 
-## Core Components
+1. **Freeze inputs.** Load the operator, initial source, evaluator contract, runtime pins,
+   and selected candidate format. Production preprocessing provides a generalized public
+   contract while detailed inputs remain private.
+2. **Establish baselines.** Measure V0 and, when configured, establish V1 in the target
+   framework. Imported source trees retain their pinned initial package.
+3. **Explore.** Start or resume an Episode in a managed Git-free draft. The Agent can
+   research, edit, profile, evaluate, and inspect previous measurement records.
+4. **Report and seal.** A report cites a passing standard full Evaluate for the exact
+   source. Mandatory correctness, applicable production policy, and enabled supplemental
+   validation must succeed before the report can seal that candidate.
+5. **Compare and promote.** Obtain policy-matched native ABBA evidence for the sealed
+   candidate and committed incumbent. Promote only a strict improvement; otherwise retain
+   the incumbent and record the outcome.
+6. **Continue or export.** Carry eligible adaptive Skills/tools into the next Episode,
+   enforce campaign limits, and export the retained source with verified version facts.
 
-### Campaign lifecycle
+The default report uses `gateway_record_ids`. Direction/Experiment annotations are enabled
+separately by `light_journal.research_records`; then a report selects a recorded Experiment.
+Generated memory is also optional. With it disabled, committed `.atrex_versions/vN.json`
+facts still support versioning, reporting, and recovery.
 
-`Campaign` in `aka.legacy.workflow.campaign` is the single-operator state machine:
+## Source and measurement identity
 
-1. Materialize or resume a Git workspace and validate its committed V0.
-2. In production mode by default, create and pin a self-contained framework-native V1.
-3. Create one private branch/worktree per canonical version. The first two optimization episodes use
-   five fast `plan -> implement -> evaluator` trials per episode by default; later episodes use the
-   full evidence loop. The primary Agent uses maximum reasoning effort in both modes.
-4. Validate its structured journal and `candidate_ready`, `pivot`, or `blocked` handoff, with
-   bounded same-thread recovery for Claude and Codex.
-5. Check protected paths, the exact committed `kernel.py`, and production policy while allowing
-   uncommitted intermediate artifacts to remain in the episode worktree.
-6. Select the fastest passing hash-matched result from each fast episode's five trials and compare it
-   with canonical incumbent memory; compare full-mode candidates in one independent ABBA allocation.
-7. Squash-promote only a strict correctness-passing improvement; otherwise commit only canonical
-   failure/pivot/block evidence.
-8. Stop on version budget, token budget, optional stall budget, or target utilization.
-9. Recheck production policy and package the final candidate.
+New tasks default to `source_tree`, with a fixed Python adapter and editable `impl/`.
+Explicit alternatives are `single_file` and `cuda_manifest`. Layout implementations own
+validation and packaging; Workflow uses their common artifact interface.
 
-`HEAD` is always the incumbent. A failed, regressing, or policy-violating candidate is not
-allowed to replace it.
+A Kernel ID binds the complete source snapshot for multi-file candidates, including headers
+and build settings. A measurement identity additionally binds evaluator/input bytes, target,
+options, transport, and repetition policy. Changing any required identity produces a new task.
+Agent duplicates return the existing record reference; trusted acceptance can reuse compatible,
+completed evidence. Unavailable or contradictory results cannot become cached verdicts.
 
-### Agent Runtime
+See [candidate layouts](native-cuda.md), [measurement records](measurement-records.md),
+and [evaluator outcomes](evaluator-outcomes/README.md).
 
-`aka.legacy.agent` separates backend-specific command and event formats from campaign
-control. Adapters expose a common request/result model containing:
+## Correctness and promotion
 
-- exit status and timeout state;
-- normalized session identity;
-- terminal token usage;
-- per-event usage deltas and phase-marker receipts when supported;
-- backend capability and observation-error metadata.
+Native Atrex-Bench candidate acceptance uses six correctness cases per shape. A targeted
+smoke test, custom-input probe, or partial-shape measurement cannot replace full-contract
+evidence. Supplemental numerical planning is default-off and adds measured probes when enabled.
 
-The process supervisor also protects the host execution boundary by rejecting dependency builds,
-direct host GPU execution, and profiler use outside the sandbox.
-
-### Workspace runtime assets
-
-Resources installs explicitly selected tools, Skills, profiling content and optional reference
-projects inside each campaign workspace. AKA discovers the configured plugin manifests; the bundled
-GPU Wiki plugin provides `gpu-wiki.query` through `python -m aka.legacy.resources.cli`. Plugin
-manifests own resources and phase instructions; campaign locks check versions and content fingerprints
-on resume. See [Local plugins](plugins.md).
-It also prepares backend-specific project-local discovery trees:
-
-- `.claude/` and `.qoder/` receive Agent definitions and knowledge skills;
-- `.agents/skills/` receives repository-scoped Codex/Pi optimization skills;
-- The repository-native `gen-plan` skill is linked into every backend's local discovery tree. It
-  freezes a concrete candidate proposal and independently obtains the Codex and Qoder reviews enabled
-  for the current episode mode against that proposal and the same bounded evidence. A matching primary
-  backend reviews in its current session to avoid recursion. The campaign probes each reviewer when it
-  is first enabled, caches the result in private runtime state, and disables later calls to reviewers
-  that were unavailable.
-
-### Sandbox execution
-
-All correctness, benchmark, and profiling work crosses
-`python -m aka.legacy.execution.cli`. The sandbox builds an explicit input allowlist, omits optimizer-only state,
-submits evaluator or profiler work to the configured remote executor, and synchronizes only the
-requested result artifacts. Campaign memory, plans, edits, episode state, and Git history stay on
-the coordinator.
-
-The remote executor is selected explicitly. Gateway URL/profile modes retain typed evaluator and
-profiler requests plus their existing HTTP/OSS transports. OpenSSH mode creates a fresh
-`/tmp/atrex-sandbox.*` directory and uploads the allowlisted bundle with `scp`, but never executes a
-candidate in the login account's ordinary shell. `python -m aka.legacy.execution.cli` always enters a Bubblewrap
-namespace that exposes a minimal read-only system tree, explicitly configured read-only runtime
-directories, one assigned physical NVIDIA GPU, and the one writable job directory. Runtime bind
-sources are denied when broad/sensitive, resolved on the remote host, and validated again so a
-symlink cannot restore access to credentials or a host root. The physical index is resolved to a GPU
-UUID; its device node and common driver nodes are the only GPU devices bound. MIG mode fails closed
-until capability-node assignment is available. The namespace unshares network, PID, IPC, and
-UTS namespaces, replaces `HOME` and `/tmp`, and clears the inherited environment. The remote Python
-watchdog enforces the requested command deadline without relying on GNU `timeout`.
-
-SSH aliases, keys, ports, and jump hosts are resolved by standard OpenSSH configuration. Bubblewrap
-and unprivileged user namespaces are mandatory; there is no unisolated fallback. These modes are
-mutually exclusive, and neither makes remote filesystem state authoritative.
-
-### Environment failure recovery
-
-SSH command failures, including status 255, pass through an independent isolated GPU health probe.
-The default probe performs allocation, arithmetic, and synchronization. SSH campaigns persist an
-additional trusted framework/SOL runtime preflight and run it before initialization, even with an
-explicit architecture. Recovery polling replays both probes, so an incompatible evaluator does not
-repeatedly restart the optimizer merely because CUDA device properties are readable. Native bundled
-evaluator contracts and candidate correctness remain the real evaluator's responsibility.
-A healthy probe preserves the original exit status as a candidate/tool failure. A transfer exception,
-or a failed probe after a failed command, atomically transitions the optimizer to
-`environment_blocked` and records a private marker. The coding-session process guard watches that
-marker and terminates the complete Agent process group. Supervisor-owned sandbox processes poll the
-same marker, terminate their own process groups, and cancel queued ABBA futures; SSH ABBA batches run
-serially on the assigned GPU, and SSH auto-framework dispatch is rejected. A remote directory that
-could not be deleted is recorded separately and becomes a
-required recovery action rather than being forgotten.
-
-Only the outer recovery owner starts `python -m aka.legacy.workflow.monitor_optimize_tasks`. The detached monitor holds an
-OS advisory lock, repeats the configured health probe, removes every deferred remote workspace, and
-then replays the exact original argument array and working directory. Recovery state is keyed by the
-resolved target, init, runtime binds, assigned GPU, health probe, and a unique invocation identity;
-existing metadata is validated before reuse. After `Popen`, the monitor retains the marker as
-`restarting.json` while it supervises operator resolution, selected-resource validation, campaign
-construction, and workspace resume. An early exit restores `failure.json`; the durable campaign
-resume signal begins a two-phase transition: the monitor moves the marker to `active.json`, then the
-same registered primary must observe that marker and persist an acknowledgement. The monitor remains
-alive until the recovered optimizer exits. The marker records a fresh handoff ID and explicit start
-time, so the initialization timeout is independent of the older outage marker mtime. A second advisory
-lock is inherited by the restart process tree. The root and each controlled independent session start
-behind a stable wrapper, gated primary, and cleanup guardian in a separate session. All three
-kernel-start-time-qualified identities are written to the handoff registry before the actual command
-can run. The wrapper persists the primary result immediately, cleans same-group descendants, and only
-then persists completion. If the wrapper dies after recording the result, the guardian retains the
-lock, cleans the target group, and commits the same completion record. Every protocol write fsyncs its
-temporary file before replacement, and every critical replace or unlink fsyncs the affected directory.
-A replacement monitor can therefore adopt a live interrupted handoff and distinguish proven cleanup
-from an ownerless interruption without signalling a reused raw diagnostic PID or depending on periodic
-descendant snapshots. Resolved
-environment-only recovery options are replayed, and `monitor.pid` is removed by its matching lock
-owner on exit. Existing V1 snapshots and Long Horizon active episode state provide the restart
-boundary. User
-interrupts, budget termination, and failures followed by a healthy probe never create a monitor.
-
-An interrupted SOL V0 with committed sources reuses that source commit and retries measurement;
-changed, missing, or staged sources fail closed without being overwritten. Long Horizon usage is
-durably recorded after each coding invocation, before propagating an environment failure and before
-GPU verification. Cumulative per-run receipts and token totals share one atomic state replacement:
-replaying a receipt does not double count, and recovery retains actual token usage without consuming
-an episode outcome. Partial reported usage is counted; unavailable usage is not fabricated.
-
-```mermaid
-flowchart TD
-    A[Agent requests sandbox run/profile] --> B[Build allowlisted bundle]
-    B --> C[Create remote temporary directory]
-    C --> D[Upload with scp]
-    D --> E[Enter mandatory Bubblewrap namespaces]
-    E --> F[Expose assigned GPU UUID/device only]
-    F --> G0[Portable Python deadline watchdog]
-    G0 --> G{Remote exit status}
-    G -->|0| H[Download requested artifacts]
-    G -->|non-zero, including 255| I[Independent isolated GPU health probe]
-    I -->|healthy| J[Return original candidate status]
-    I -->|unhealthy| K[Atomically write failure.json]
-    C -->|transport failure| K
-    D -->|transport failure| K
-    H --> L{Remote cleanup succeeded?}
-    J --> L
-    L -->|yes| M[Return result]
-    L -->|no| N[Persist cleanup marker]
-    N --> K
-    K --> O[Terminate Agent and sibling process groups]
-    O --> P[Detached monitor acquires OS advisory lock]
-    P -. operator rollback .-> X[Run verified stop-recovery control]
-    X --> X1{Monitor or stopper owns advisory lock?}
-    X1 --> X2[Persist stop and ask registered session owners to terminate]
-    X2 --> X3[Confirm empty tree and restore failure marker]
-    X3 --> X4[Select gateway transport]
-    P --> Q{Health probe succeeds?}
-    Q -->|no| R[Sleep and retry]
-    R --> Q
-    Q -->|yes| S{Deferred cleanup succeeds?}
-    S -->|no| R
-    S -->|yes| T{Spawn exact argv and cwd}
-    T -->|Popen fails| R
-    T -->|spawned| U[Record handoff ID, explicit start time, and process identities]
-    U --> U0[Retain marker and process-tree-owned advisory lock]
-    U0 --> V{Primary publishes durable readiness?}
-    V -->|early exit or outage| Z[Terminate registered groups and restore failure marker]
-    Z --> R
-    V -->|yes| W[Move marker to active]
-    W --> W0{Primary acknowledges matching active handoff?}
-    W0 -->|no or exits| Z
-    W0 -->|yes| W1{Durable primary exit and cleanup completion?}
-    W1 -->|zero and complete| W2[Archive active marker and release ownership]
-    W1 -->|nonzero or ownership lost| Z
-    W1 -->|operator stop| X
-    U0 -. monitor replaced .-> Y{Tree lock and registered identity still live?}
-    Y -->|yes| V
-    Y -->|no| Z
-```
-
-The motivating failure mode is an unattended optimization losing a GPU host after hours of work:
-previously it either consumed candidate budget for an infrastructure fault or required a human to
-reconstruct the exact launch. Success means candidate failures retain their status, confirmed
-environment failures stop all active work, no uploaded workspace survives recovery, only one monitor
-runs, and the exact command resumes automatically. The tradeoffs are an additional SSH/upload and
-namespace startup cost, a Bubblewrap requirement, no network inside candidate jobs, and explicit
-read-only binds for runtimes outside the minimal system tree.
-
-Rollback is configuration-only: run `.atrex_environment/<command-id>/stop-recovery.sh` and require
-its verified zero status, archive that private directory for diagnosis, and relaunch the same command
-with `--sandbox-url` or `--sandbox-profile` instead of `--sandbox-ssh`. Each stop first writes an
-immutable request that is handled by the live monitor, or by the stopper after it acquires the monitor
-lock; it succeeds only after the identity-owned process tree is empty and `stopped.json` is committed
-under that lock. Resume clears only its locked request snapshot, so a later stop cannot be erased. The
-persistent tombstone also blocks a detached monitor that had not reached the lock when stop was
-requested.
-`monitor.pid` is diagnostic and must not be signalled as a rollback mechanism. No candidate Git
-commit or canonical memory needs to be reverted. Run the generated `recover.sh` (or pass `--resume`
-while starting the monitor) to clear the tombstone under the monitor lock. If automatic restart is
-undesired but SSH should remain enabled, use the same verified stop path and then run
-`python -m aka.legacy.workflow.monitor_optimize_tasks --state-dir STATE_DIR --resume --once --no-restart` after
-cleaning any listed remote workspaces.
-
-### Full-workload optimization
-
-SOL and native Atrex-Bench operators run one campaign over the complete workload set. Every
-candidate is validated for full-workload correctness and compared by its full-workload geomean.
-Production makes generalized input handling a mode policy rather than an operator opt-in. A native
-operator's user-provided `agent_problem.json` is validated and used directly. When only detailed
-`shapes.json` exists, a dedicated clean problem-authoring session reads the evaluator inputs in an
-ephemeral directory and derives the public contract before any baseline or optimization session runs.
-Only the resulting generalized domain, invariants, safe aggregate distribution, and synthetic
-development cases enter the campaign workspace.
-
-The sandbox injects exact shapes and evaluator metadata only at the official remote evaluation
-boundary. Profiling selects an opaque id from canonical memory and injects only that real shape into
-the ephemeral remote profile job; the complete hidden shape table never enters the workspace.
-Optimization feedback retains aggregate results plus real per-shape latency keyed by opaque shape id,
-while withholding shape inputs, per-case failure details, and raw evaluator logs. The Atrex-Bench
-runtime is copied into the workspace without linking its checkout-level `data/` tree. Sandbox private
-shape injection, opaque-shape profiling, and generalized result masking require the persisted workspace
-mode to be `production`. Leaderboard always retains legacy exact-shape exposure, regardless of whether
-the source operator also contains a public problem contract.
-
-### Production policy
-
-`optimization_mode=leaderboard` allows evidence-backed framework changes and compatible
-third-party libraries. `optimization_mode=production` is fail-closed:
-
-- the selected framework is a hard constraint;
-- every candidate is reviewed by an independent Agent according to actual use, without import
-  allowlists or package-name rejection; toolchain/launch plumbing may be accepted, while prebuilt
-  compute, alternate frameworks, PyTorch compute fallbacks, hidden dispatch, and external code are
-  rejected;
-- deterministic checks retain only syntax, self-containment, single-file versioning, immutable
-  campaign state, and the Triton-to-Gluon phase latch;
-- `kernel.py` and `solution.json` are copied into a bounded temporary workspace for every complete
-  production-candidate review;
-- a missing, malformed, incomplete, or evidence-mutating Agent verdict fails closed;
-- violating episode candidates are rejected before promotion and recorded as failed memory.
-
-Independently of optimization mode, Triton campaigns enter a mandatory Triton-to-Gluon episode after
-the configured stall threshold. The episode receives an explicit conversion directive and
-TTGIR/conversion-sheet workflow. Conversion remains latched until a committed Gluon candidate passes
-correctness and performance-parity gates.
-
-### Long Horizon episode engine
-
-`Campaign.run()` in `aka.legacy.workflow.campaign` invokes the Workflow episode engine. It creates
-an isolated branch and Git worktree from the incumbent for each episode. The Agent records
-structured experiments in a journal and publishes one terminal handoff: `candidate_ready`,
-`pivot`, or `blocked`.
-
-A candidate must commit a `kernel.py` that still matches the worktree, preserve protected paths, and
-satisfy production policy. Other uncommitted intermediate artifacts may remain in the worktree.
-Fast candidates must have one complete passing evaluator record whose `kernel.py` hash matches the
-final candidate and whose latency strictly improves on canonical incumbent memory. Full candidates
-must pass the exact same-allocation ABBA schedule. Accepted candidates are squash-promoted with
-canonical memory; rejected and non-candidate episodes advance memory without changing the incumbent.
-Every round's numbered memory is checked against committed `HEAD` before state advances. Active
-episode state supports crash recovery.
-
-## End-to-End Flow
-
-### 1. Resolve the operator and runtime
-
-`--op-dir` supplies all operator-specific ground truth. The Workflow detects SOL or native
-Atrex-Bench format, probes the runtime GPU architecture, resolves the framework set, validates
-explicitly selected resources, and creates a framework/hardware-suffixed workspace below `--workspace` or
-the current directory.
-
-### 2. Establish V0
-
-SOL and native Atrex-Bench operators receive a mechanically seeded PyTorch reference wrapper and
-immutable evaluator inputs. The supervisor writes the README, commits the source baseline, runs one
-official full-workload base-seed evaluator, writes `memory/v0.json` plus a concise report, and commits
-that measurement separately. Memory points to the stable source commit, so no commit-hash amend loop
-is possible. Only the non-canonical derived legacy boundary retains a bounded setup Agent fallback.
-V0 profiling, multi-seed validation, and ABBA are intentionally deferred.
-
-### 3. Establish the framework baseline
-
-Production mode runs a dedicated framework-baseline session by default
-(`--framework-baseline=auto`). For a supervisor-seeded reference V0 it skips the redundant pre-V1
-policy review and pre-creates a minimal native `solution.json`. Before the implementation Agent starts,
-the supervisor gives the bounded public contract, immutable reference, input builder, and V0 evidence to
-the enabled isolated Codex and Qoder reviewers, in parallel when both are enabled. Their
-correctness-only reviews are cached under
-`.atrex_long_horizon/framework_baseline/`, reconciled in the V1 prompt, and never receive private shapes or
-permission to edit the candidate. Each reviewer may nominate at most two paths from a mechanically bounded
-local reference catalog. The supervisor prefers reviewer consensus, publishes no more than two exact paths,
-and prevents V1 from recursively browsing sibling references. The coding Agent then implements one
-correctness-first framework candidate and iterates only on three native smoke ids chosen across the V0 latency
-distribution. It does not run the full workload, multi-seed, benchmark, memory writer, or Git commit.
-After the Agent exits, the supervisor runs the complete policy review concurrently with one combined
-evaluator call that measures base-seed performance and checks five additional correctness cases. It writes
-canonical memory, commits V1, and pins that commit for optimization. `always` enables this stage in
-leaderboard mode; `never` starts from V0.
-
-V1 uses exit-triggered recovery rather than continuous journaling. A non-zero Agent exit, timeout,
-or runtime exception causes one local snapshot of the candidate, debug artifacts, Git state, and
-terminal tails under `.atrex_long_horizon/framework_baseline/`. A separate read-only progress
-supervisor summarizes them into `resume.json`; only that supervisor falls back through the configured
-Agent CLI, Codex, then Qoder. The outer V1 implementation stays on `--agent-cli`. Process restart
-preserves the interrupted worktree and restores the latest candidate snapshot when necessary.
-
-### 4. Explore one episode per version
-
-By default, optimization episodes 1 and 2 use the fast loop:
+Light uses native same-allocation A/B/B/A measurements. Its promotion metric is:
 
 ```text
-repeat five times:
-  reviewed plan -> implement -> one full-workload base-seed evaluator
-select fastest passing hash-matched trial -> handoff
+latency_reduction_pct = (incumbent_geomean_us - candidate_geomean_us)
+                        / incumbent_geomean_us * 100
 ```
 
-Fast mode uses the normal `gen-plan` synthesis with the reviewers enabled for fast episodes inside its
-planning phase. Those reviewers default off. Fast mode does not run a separate research phase,
-profile, run multi-seed correctness, or run ABBA. The
-sandbox records the evaluator result with the final `kernel.py` hash. The supervisor uses that result
-for correctness and compares it with the latest complete passing canonical incumbent measurement.
-`--fast-episodes 0` disables this path; another non-negative value changes its window.
+The reduction must strictly exceed the configured threshold. Objective scores and public
+speedup ratios are diagnostic and have distinct meanings. Production source-policy review
+is shared with Legacy; the validated distributed Agate exception is frozen from evaluator
+metadata, not candidate declarations.
 
-Episode 3 and later use the full evidence loop as many times as needed:
+Light's native ABBA requires an Agate Atrex-Bench contract. SOL inputs can be loaded with
+explicit `single_file`, but SOL/SSH comparisons have no Light ABBA fallback.
+The [Legacy guide](legacy-workflow.md) covers the supported alternative verification path.
 
-```text
-profile -> research -> plan -> edit/compile/repair
-        -> correctness -> benchmark -> journal/checkpoint -> repeat or handoff
-```
+## Recovery and observability
 
-GPU commands run remotely while plans, source edits, journals, and Git remain local. A
-`candidate_ready` handoff is not authoritative: the supervisor validates protected paths, policy,
-the worktree's exact committed `kernel.py`, and the candidate commit, then applies the current mode's
-fast comparison or incumbent/candidate ABBA gate. A rejected candidate, `pivot`, or `blocked` outcome
-advances canonical memory without changing the incumbent. Active episode state is restart-safe and
-reuses the registered worktree with its intermediate files after a supervisor restart.
+The Supervisor persists accepted job IDs, request identities, complete ABBA batches, report
+transactions, source seals, and promotion audits. Direct HTTP replay uses durable idempotency
+keys. An uncertain CLI submission without an ID needs reconciliation, not blind resubmission.
 
-For progress visibility, the supervisor creates ignored `memory/live.json` at episode start and the
-journal command refreshes it after every decisive experiment. This live view is explicitly
-non-canonical; a numbered `memory/v<N>.json` is written after terminal handoff processing and
-mode-appropriate verification, then checked for valid committed contents before state advances.
+Session throttling and output-limit recovery retain the Episode draft and observation history.
+Agent active time excludes authenticated blocking Runtime requests. GPU, Wiki, and queue
+deadlines remain independently enforced.
 
-### 5. Finalize
+Capture is diagnostic; missing transcripts or usage counters remain explicit gaps.
+Canonical state never depends on an Agent-writable projection.
+See [Session observability](session-observability.md), [Runtime Journal](runtime-journal.md),
+and [promotion recovery](supervisor-promotion.md).
 
-At termination, production mode rechecks policy and SOL campaigns emit a directly submittable
-output.
+## Verification
 
-## Workspace State
+Package/composition, filesystem, HTTP, source sealing, and recovery checks are documented in
+the [Light verification record](optional-light-modules.md#verification-scope).
+[Native CUDA validation](native-cuda.md) records scoped live `<gpu_arch>` evidence.
+[Evaluator-outcome checks](evaluator-outcomes/README.md) use local fault injection.
+These are evidence for their documented paths, not a performance guarantee for every provider.
 
-```text
-kernel_opt_<name>_<framework>_<platform>[_production]/
-├── kernel.py
-├── test_kernel.py
-├── README.md
-├── memory/v<N>.json
-├── memory/long_horizon_e<NNNN>.json  # Evidence for promoted episodes
-├── plans/
-├── profiles/
-├── framework_baseline.json
-└── .atrex_long_horizon/               # Episode state, journals, telemetry, verification
-```
+## Upgrade and rollback
 
-Not every campaign uses every artifact. Git plus unmasked `memory/v<N>.json` files are the durable
-optimization history. `.atrex_long_horizon/` and temporary verification payloads are excluded
-from main-workspace commits; their recoverable local state remains on disk.
+Keep the installed packages, selected resources, and recorded configuration consistent.
+Stop at an Episode boundary before changing deployment code. Restore the original matching
+deployment to resume frozen continuations; use a new workspace for a different workflow,
+source contract, or search topology. Do not rewrite recorded identities to force an upgrade.
+Preserve private evidence and backups for operator repair.
 
-## Profiling and Telemetry
-
-- NVIDIA profiling uses `profiling/nvidia/profile_nvidia.sh` and Nsight Compute.
-- AMD profiling uses `profiling/amd/profile_kernel.sh`, rocprofv3, ATT, PMC, and assembly extraction.
-- PPU profiling uses the selected `ppu-acu-joint-profile` Skill as an evidence router: ACU-only device analysis,
-  standalone adaptive timeline analysis, and bounded joint analysis are separate selectable modes.
-  PPU alone uses a per-iteration evidence gate: the episode agent may skip a new PPU profile when
-  source or compiler inspection, the probe-free benchmark, or still-valid PPU evidence already
-  answers the current question. Otherwise it chooses the least intrusive decisive route and stops
-  when that route answers the question. Timeline writers and sites remain hypothesis-driven;
-  optional joint analysis uses an independent probe-free ACU launch, and full-block lifetime
-  coverage remains opt-in tail evidence.
-- A PPU terminal journal may select still-valid ACU, timeline, joint, candidate-comparison, or
-  measured-envelope conclusions as `accepted_ppu_diagnostics`. The supervisor recomputes the outer
-  and transitive artifact hashes, then invokes the schema-specific validator; only decision-grade
-  evidence with a matching authoritative kernel, binding payload, schema, evidence id, and accepted
-  validation state is retained. Comparison identity and invalidation conditions remain explicit in
-  the row. Canonical memory writes revalidate each row against the episode worktree on promoted,
-  rejected, and interrupted paths. Invalid optional rows are excluded with a reason rather than
-  aborting the campaign. JSON receipts are limited to 64 MiB; their hash and parsed metadata come
-  from the same read, while raw artifact hashes are streamed. The supervisor then adds stable
-  memory and artifact references to canonical `memory/v<N>.json`. A later episode can therefore
-  decide whether to reuse the bounded conclusion without loading the raw episode archive.
-- `python -m aka.legacy.workflow.memory_manager` creates, reads, updates, masks, and summarizes iteration records.
-- Episodes attribute wall time and token usage to profile, research, planning, implementation,
-  correctness, benchmark, and recording phases when the backend emits complete markers and usage
-  deltas.
-- Missing or inconsistent observations are retained with explicit partial/unavailable measurement
-  labels rather than fabricated values.
-
-## Critical Constraints
-
-- Hardware specifications require auditable sources from enabled knowledge tools or primary references.
-- Official profiler evidence is required before full-mode optimization changes; fast mode explicitly
-  substitutes five reviewed plans plus hash-matched evaluator results and best-candidate selection.
-  PPU is the scoped exception: follow `ppu-acu-joint-profile` and collect new PPU profiler evidence
-  only when its per-iteration decision rule says the unresolved fact can change the next edit.
-- Ground-truth evaluator inputs are immutable.
-- Correctness must pass before performance conclusions or promotion.
-- Every accepted candidate must be represented by Git and structured memory.
-- `masked: true` memory is excluded from active planning.
-- Production candidates must be self-contained in their selected framework.
+See [installation and continuation](application-plugin-migration.md) and the
+[v0.4.0 upgrade notes](releases/v0.4.0.md#upgrading-from-v030).

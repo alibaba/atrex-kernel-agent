@@ -93,11 +93,14 @@ def _restrictions(workspace):
         protected.update(value["source_paths"])
         protected.update(value["context"])
         protected.update(value.get("namespaces", {}))
-    from aka.task.source.tree import policy_at
+    from aka.task.source.formats import policy_at
     policy = policy_at(workspace)
     if policy is not None:
         protected.update(policy["editable_roots"])
         protected.update(policy["immutable_files"])
+        if policy.get("kind") == "agate_cuda":
+            from aka.task.source.formats.registry import for_policy
+            protected.update(for_policy(policy).evidence_paths(workspace, policy))
     return protected
 
 

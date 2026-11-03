@@ -71,7 +71,8 @@ def verified_memory(workspace, memory, candidate_workspace):
         return False
     # The owner validates its own opaque identities; failed reads are not verification.
     try:
-        return candidate_workspace.read_revision(workspace, revision, ['kernel.py']).files['kernel.py'] is not None
+        source = candidate_workspace.read_source(workspace, revision=revision)
+        return bool(candidate_workspace.source_identity(source))
     except (RuntimeError, ValueError):
         return False
 
@@ -534,11 +535,12 @@ class RetainedWorkflowExport:
         for candidate in candidates:
             if not candidate.revision or not candidate.record_revision:
                 continue
-            source = self.candidate_workspace.read_revision(
-                workspace, candidate.revision, ['kernel.py', 'solution.json']).files
-            for filename, role, mime in (('kernel.py','candidate-source','text/x-python'),
-                                          ('solution.json','candidate-manifest','application/json')):
-                content = source[filename]
+            source = dict(self.candidate_workspace.read_source(workspace, revision=candidate.revision).files)
+            source.update(self.candidate_workspace.read_revision(
+                workspace, candidate.revision, ['solution.json']).files)
+            for filename, content in source.items():
+                role = 'candidate-manifest' if filename == 'solution.json' else 'candidate-source'
+                mime = {'.py': 'text/x-python', '.json': 'application/json'}.get(Path(filename).suffix, 'text/plain')
                 if content is None:
                     if filename == 'kernel.py':
                         raise ValueError('recorded candidate source is missing')
@@ -595,6 +597,9 @@ class RetainedWorkflowExport:
                 artifacts.append(_artifact('wiki_'+hashlib.sha256(relative.encode()).hexdigest(),
                     'wiki/'+path.parent.name+'/'+path.name,'wiki-query-event',path.read_bytes()))
         sessions = list(read_sessions(workspace))
+        for directory in sorted(runtime.glob('episodes/e*')):
+            number = int(directory.name[1:])
+            sessions.extend(replace(s, episode=number) for s in read_sessions(directory))
         for directory in sorted(runtime.glob('episodes/e*/agent_observations')):
             sessions.extend(read_sessions(directory, direct=True))
         sessions = tuple(SessionFact(
