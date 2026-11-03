@@ -13,11 +13,11 @@
   },
   "resources": {
     "gpu-wiki": {
-      "path": "../../gpu-wiki",
+      "path": "../gpu-wiki",
       "mount": false
     },
     "internal-gpu-wiki": {
-      "path": "../../internal_gpu_wiki",
+      "path": "../internal_gpu_wiki",
       "optional": true,
       "mount": false
     }
