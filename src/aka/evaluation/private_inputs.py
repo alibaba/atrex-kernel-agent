@@ -35,6 +35,17 @@ def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capa
     from aka.execution.input_snapshot import snapshot_command_inputs
     files = {}
     private = evaluation_input.private_reference_dir is not None
+    if evaluator and evaluation_input.adapter == "legacy-sol-v1":
+        if command.input_files:
+            raise ValueError("SOL evaluation does not accept explicit workspace overrides")
+        if capabilities is None or not capabilities.prepared_inputs:
+            raise UnsupportedExecution("selected executor cannot transport the closed SOL evaluation inputs")
+        files = {item.path: item for item in prepared_files}
+        if "kernel.py" not in files or "test_kernel.py" not in content:
+            raise ValueError("SOL evaluation requires frozen candidate and harness inputs")
+        files.update(content)
+        return replace(command, prepared_inputs=PreparedExecutionInputs(
+            tuple(files[name] for name in sorted(files)), (), tuple(sorted(content))))
     # Private Task members replace only matching public allowlist paths.
     if evaluator and private and inject_private:
         for name in _PRIVATE_FILES:

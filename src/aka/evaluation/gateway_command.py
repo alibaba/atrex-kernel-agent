@@ -252,6 +252,7 @@ class GatewayCommandEvaluator:
             if kind == "profile" and num_gpus > 1:
                 raise ValueError("distributed profile requires the typed route")
             from .measurement import portable_profile_identity
+            frozen_files = ()
             identities = (portable_profile_identity(command, reference),) if kind == "profile" else ()
             if kind in {"run", "profile"} and candidate:
                 from aka.contracts.workspace import RevisionContent
@@ -267,14 +268,35 @@ class GatewayCommandEvaluator:
                     from .measurement import _digest
                     sol = self.evaluation_input is not None and self.evaluation_input.adapter == "legacy-sol-v1"
                     shapes = self.evaluation_input.case_ids if self.evaluation_input is not None else ()
+                    sol_facts = {}
+                    if sol:
+                        from .sol_evidence import trusted_inputs, input_identity, workload_ids
+                        content = trusted_inputs(self.evaluation_input)
+                        shapes = workload_ids(content)
+                        context["sol_workload_ids"] = shapes
+                        from aka.contracts.execution import ExecutionFile
+                        from .portable_selection import public_inputs
+                        frozen_files = public_inputs(command, evaluator=True,
+                            prepared_files=(ExecutionFile("kernel.py", candidate.encode()),))
+                        frozen = {item.path: item for item in frozen_files}
+                        if command.input_files:
+                            raise ValueError("SOL evaluation does not accept explicit workspace overrides")
+                        from .sol_evidence import single_source_solution
+                        single_source = single_source_solution(frozen)
+                        sol_facts = {"sol_input_binding": "closed-task/1", "sol_input_digest": input_identity(content),
+                            "sol_candidate_inputs_digest": input_identity({name: item for name, item in frozen.items()
+                                if name not in content})}
                     parameters = {"mode": "full", "workload_scope": "full-task" if sol and tuple(command.command) == ("python3", "test_kernel.py") else "unknown",
-                        "hardware": command.hardware, "command": list(command.command), **source_facts}
+                        "hardware": command.hardware, "command": list(command.command),
+                        "environment_digest": _digest(dict(command.environment)), **source_facts, **sol_facts}
+                    if sol and not single_source:
+                        parameters["workload_scope"] = "subset-or-custom"
                     identity = MeasurementIdentity("legacy-sol/eval" if sol else "legacy-eval/command",
                         tuple(MeasurementPoint("candidate", "sha256:" + source_facts["candidate_source_sha256"], 0, shape) for shape in shapes or (None,)),
                         _digest({"task": {name: item.content.hex() for name, item in content.items()}, "parameters": parameters}),
                         parameters, tuple(command.requirements), "explicit-requirements" if command.requirements else "unknown")
                     identities = (identity,)
-            return PreparedEvaluation((portable_inputs(replace(command, operation="dev", profile_options=None), self.evaluation_input, content, evaluator=evaluator, kind=kind, capabilities=capabilities),), 1, context,
+            return PreparedEvaluation((portable_inputs(replace(command, operation="dev", profile_options=None), self.evaluation_input, content, evaluator=evaluator, kind=kind, capabilities=capabilities, prepared_files=frozen_files),), 1, context,
                                       measurement_identities=identities)
         if kind == "profile" and profile_level == "deep" and not (options.kernel_regex if options is not None else None):
             raise ValueError("--profile-level deep requires --kernel-regex")
@@ -359,6 +381,9 @@ class GatewayCommandEvaluator:
                 if measurement is None and context["command"].submission is None:
                     from .evaluator import result_from_stdout
                     measured = result_from_stdout(result.stdout)
+                    if identity.method == "legacy-sol/eval":
+                        from .sol_evidence import validate_result
+                        validate_result(measured, context["sol_workload_ids"])
                     payload = {"runs": [{"revision": "candidate", "repeat": identity.points[0].repeat,
                         "exit_code": result.returncode, "result": measured}]}
                     return assess_payload(identity, result, payload)
@@ -410,6 +435,10 @@ class GatewayCommandEvaluator:
                 (MeasurementArtifact("evaluation.json", content, "evaluation"),))
         if measurement is None or (len(results) == 1 and any(line.startswith(TEST_RESULT_PREFIX) for line in results[0].stdout.splitlines())):
             result = results[0]
+            if context.get("sol_workload_ids"):
+                checked = self._command_evaluation(result, context, results)
+                if checked.verification is None or checked.verification.gate == "ERROR":
+                    return checked
             stdout = prepare_dev_output(command.workspace, result.stdout,
                 evaluator=context["evaluator"], private=context["private"], baseline=context.get("baseline"))
             if context["repetitions"] > 1:
@@ -495,8 +524,25 @@ class GatewayCommandEvaluator:
             payload = result_from_stdout(result.stdout)
         except (RuntimeError, json.JSONDecodeError):
             return CommandEvaluation(result)
-        verification = VerificationResult("PASS" if payload.get("all_pass") else "FAIL",
+        error = None
+        if context.get("sol_workload_ids"):
+            from .sol_evidence import validate_result
+            try:
+                for item in results:
+                    measured = result_from_stdout(item.stdout)
+                    validate_result(measured, context["sol_workload_ids"])
+                    if item.transport_status not in {"succeeded", "failed"} or item.facts.disposition != "terminal":
+                        raise ValueError("SOL execution has not reached a confirmed terminal state")
+                    if measured["all_pass"] and item.returncode != 0:
+                        raise ValueError("SOL passing receipt has a failed command exit")
+            except (ValueError, RuntimeError) as failure:
+                error = str(failure)
+                payload = {"all_pass": None, "error": error}
+                result = replace(result, transport_returncode=2, exit_code=None,
+                    stdout=TEST_RESULT_PREFIX + json.dumps(payload, allow_nan=False) + "\n")
+        verification = VerificationResult("ERROR" if error else "PASS" if payload.get("all_pass") else "FAIL",
             payload.get("latency_us_geomean"), None, None,
+            error=error,
             candidate_performance_score=payload.get("performance_score"),
             candidate_latency_us_by_shape=shape_latency_facts(payload.get("latency_us_by_shape")))
         content = json.dumps(payload).encode()

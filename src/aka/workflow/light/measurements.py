@@ -125,13 +125,19 @@ class SharedMeasurements:
         elif identities and identities[0].method.startswith("source-tree/"):
             operation = identities[0].method.split("/", 1)[1]
         settled = record.lifecycle == "terminal" and record.phase == "complete"
-        if (settled and selected is not None and selected.gate in {"PASS", "FAIL"} and identities
-                and all(identity.method == "legacy-sol/eval" and identity.parameters.get("workload_scope") == "full-task" for identity in identities)
-                and all(attempt.result is not None and attempt.result.transport_status in {"succeeded", "failed"} for attempt in record.attempts)):
-            # The selected SOL evaluator owns its full workload verdict. There
-            # is no typed Atrex six-case or per-Shape guarantee to manufacture.
-            known = True
-            valid = selected.gate == "PASS"
+        if identities and any(identity.method == "legacy-sol/eval" for identity in identities):
+            from aka.evaluation.sol_evidence import matches_task
+            # Old projections alone cannot establish which evaluator actually ran.
+            trusted = all(matches_task(identity, self.evaluation_input) for identity in identities)
+            known = (trusted and settled and selected is not None and selected.gate in {"PASS", "FAIL"}
+                and not selected.error and len(measurements) == len(identities)
+                and all(measurement.validity == "invalid" or
+                        measurement.validity == "valid" and measurement.completeness == "complete"
+                        for measurement in measurements)
+                and (selected.gate != "PASS" or all(measurement.validity == "valid" for measurement in measurements)))
+            valid = known and selected.gate == "PASS"
+        if any(measurement.identity.digest != identity.digest for measurement, identity in zip(measurements, identities)):
+            known = valid = False
         if source is None:
             known = valid = False
         passed = selected.gate == "PASS" and valid if selected is not None and known and settled else None
