@@ -75,7 +75,8 @@ def public_inputs(command, *, evaluator, prepared_files=()):
     else:
         basenames = {Path(token).name for token in parts}
         if "profile_nvidia.sh" in basenames:
-            selected.update(("profiling/nvidia/profile_nvidia.sh", "profiling/nvidia/classify_ncu.py"))
+            selected.update(("profiling/nvidia/profile_nvidia.sh", "profiling/nvidia/classify_ncu.py",
+                             "profiling/nvidia/ncu_classification.py"))
             helpers = "profiling/nvidia/ncu_helpers"
             if (workspace / helpers).is_dir():
                 selected.add(helpers)

@@ -294,10 +294,10 @@ def extract_sass_cutedsl(kernel_file):
 
 
 def _find_ncu_helpers():
-    """Detect the ncu report helpers path (bundled copy ships in tools/ncu_helpers/)."""
+    """Detect the ncu report helpers path (Execution owns profiling/nvidia/ncu_helpers/)."""
     script_dir = os.path.dirname(os.path.abspath(__file__))
     search_paths = [
-        os.path.join(script_dir, "ncu_helpers"),
+        os.path.join(script_dir, "..", "profiling", "nvidia", "ncu_helpers"),
         os.path.expanduser("~/.claude/skills/ncu-report-skill/helpers"),
         os.path.expanduser("~/.config/opencode/skills/ncu-report-skill/helpers"),
         os.path.expanduser("~/.codex/skills/ncu-report-skill/helpers"),
@@ -305,11 +305,11 @@ def _find_ncu_helpers():
     # Installed source uses the shared owner; remote bundles materialize the
     # same files beside this script and do not need AKA installed on the worker.
     try:
-        from aka.resources.bundles import resource
+        from aka.execution.resources import profiling_resource
     except ModuleNotFoundError:
         pass
     else:
-        search_paths.insert(1, str(resource("tools/ncu_helpers/ncu_utils.py").parent))
+        search_paths.insert(1, str(profiling_resource("nvidia/ncu_helpers/ncu_utils.py").parent))
     for p in search_paths:
         if os.path.isfile(os.path.join(p, "ncu_utils.py")):
             return os.path.abspath(p)

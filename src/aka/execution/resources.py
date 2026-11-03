@@ -1,12 +1,23 @@
 """Declare only the runtime and optional profiling content owned by Execution."""
 from importlib.resources import files
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from aka.contracts.agent_resources import AgentSkill, WorkspaceResourceContribution
 
 ROOT = Path(str(files("aka.execution")))
 PROFILING_CAPABILITIES = ("nvidia", "amd", "ppu", "timeline", "ppu-acu")
 PROFILING_CONFIG = {"type": "array", "items": {"type": "string", "enum": list(PROFILING_CAPABILITIES)}}
+
+
+def profiling_resource(relative: str) -> Path:
+    """Locate a packaged profiling asset for an explicitly prepared worker input."""
+    path = PurePosixPath(relative)
+    if path.is_absolute() or ".." in path.parts or path == PurePosixPath("."):
+        raise ValueError("profiling resource must be a relative asset path")
+    result = ROOT / "profiling" / path
+    if not result.is_file():
+        raise FileNotFoundError(result)
+    return result
 
 
 def validate_profiling(profiling):

@@ -857,7 +857,7 @@ class Campaign:
     @cached_property
     def source_checks_enabled(self) -> bool:
         """Freeze main's multi-GPU source policy from evaluator-owned metadata."""
-        from aka.execution.config import evaluator_num_gpus
+        from aka.evaluation.metadata import evaluator_num_gpus
         if self.sandbox_ssh:
             return True
         return evaluator_num_gpus(self.problem.evaluation.directory) < 2
@@ -1465,7 +1465,7 @@ class Campaign:
             else None
         )
         order = self._framework_baseline_supervisor_order()
-        prompt = resource("prompts/framework_baseline_exit_supervisor.md").read_text(
+        prompt = (PROMPTS_DIR / "framework_baseline_exit_supervisor.md").read_text(
             encoding="utf-8"
         )
         for index, supervisor_cli in enumerate(order):
@@ -2071,8 +2071,6 @@ class Campaign:
                 self.agent_cli,
                 is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
                 wiki=self.tool_runtime.wiki,
-                pause_agent_during_requests=self.tool_runtime.pause_agent_during_requests,
-                knowledge_skills=self.plugin_registry.knowledge_skills() if self.tool_runtime.wiki else (),
             ),
             KNOWLEDGE_RESEARCH=(
                 (self.wiki_prompt("framework_baseline")
