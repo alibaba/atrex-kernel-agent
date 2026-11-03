@@ -11,7 +11,7 @@
     {
       "id": "workflow-export",
       "insert": {
-        "name": "aka.legacy.workflow.export",
+        "name": "aka.workflow.legacy.export",
         "required": true
       }
     },

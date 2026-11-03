@@ -8,7 +8,7 @@
       "config": {"profile": "legacy"}
     },
     {"id": "evaluation", "name": "aka.evaluation.plugin", "required": true},
-    {"id": "canonical-reader", "name": "aka.legacy.workflow.canonical_reader_plugin", "required": true},
+    {"id": "canonical-reader", "name": "aka.workflow.legacy.canonical_reader_plugin", "required": true},
     {"id": "experiment", "name": "aka.experiment.plugin", "required": true}
   ]
 }

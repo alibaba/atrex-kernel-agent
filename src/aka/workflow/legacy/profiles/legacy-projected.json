@@ -1,0 +1,5 @@
+{
+  "extends": "aka.workflow.legacy:profiles/workflow.json",
+  "composition": "legacy-projected",
+  "doc": "Legacy Workflow with Agent/Candidate protocol 2; bwrap/projected"
+}

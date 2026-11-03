@@ -1,0 +1,57 @@
+{
+  "api_version": 1,
+  "bundles": [
+    "workflow"
+  ],
+  "patches": [
+    {
+      "id": "resources",
+      "config": {
+        "plugins": [
+          "${aka:repo_root}/plugins/gpu-wiki"
+        ],
+        "bundles": [
+          "measurement-session",
+          "research-records"
+        ]
+      }
+    },
+    {
+      "id": "agent",
+      "remove": true
+    },
+    {
+      "id": "agent",
+      "insert": {
+        "name": "aka.agent.plugin",
+        "required": true,
+        "config": {
+          "sandbox": "bwrap",
+          "proc_mode": "projected"
+        }
+      }
+    },
+    {
+      "id": "evaluation",
+      "config": {
+        "shape_batch_size": 1,
+        "comparison_method": "native-abba",
+        "measurement_repetitions": 1
+      }
+    },
+    {
+      "id": "workflow",
+      "remove": true
+    },
+    {
+      "id": "workflow",
+      "insert": {
+        "name": "aka.workflow.light.plugin",
+        "required": true,
+        "config": {
+          "startup": true
+        }
+      }
+    }
+  ]
+}

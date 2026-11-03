@@ -77,7 +77,7 @@ def request_arguments(options, parser):
         parser.error("new requests require --platform or settings.platform")
     provided_settings = tuple(sorted(settings))
     settings.setdefault("framework", "")
-    from aka.legacy.workflow.requests import create_launch
+    from aka.workflow.legacy.requests import create_launch
     launch = create_launch(options.problem, workspace_base=options.workspace_base or Path.cwd(),
                            workspace_suffix=options.workspace_suffix or "",
                            settings=WorkflowSettings(**settings), runtime=CampaignRuntimeSettings(**runtime),

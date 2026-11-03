@@ -14,9 +14,9 @@ from importlib.resources import files
 
 def profile_path(value):
     if value in (None, "", "workflow"):
-        return Path(str(files("aka.legacy.workflow"))) / "profiles/workflow.json"
+        return Path(str(files("aka.workflow.legacy"))) / "profiles/workflow.json"
     if value in {"observed", "sandbox", "light", "light-sandbox"}:
-        return Path(str(files("aka.light.workflow"))) / "profiles" / (value + ".json")
+        return Path(str(files("aka.workflow.light"))) / "profiles" / (value + ".json")
     return Path(value).expanduser().resolve()
 
 

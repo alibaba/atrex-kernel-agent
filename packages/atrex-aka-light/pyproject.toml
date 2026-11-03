@@ -15,7 +15,7 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka.light", "aka.light.*"]
+include = ["aka.workflow.light", "aka.workflow.light.*"]
 
 [tool.setuptools.package-data]
-"aka.light.workflow" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json", "long_horizon/*.md"]
+"aka.workflow.light" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json", "long_horizon/*.md"]

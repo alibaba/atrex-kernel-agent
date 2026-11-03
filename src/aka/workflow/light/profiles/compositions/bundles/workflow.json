@@ -1,0 +1,87 @@
+{
+  "api_version": 1,
+  "entries": [
+    {
+      "id": "execution",
+      "name": "aka.execution.plugin",
+      "required": true,
+      "config": {
+        "profile": "legacy"
+      }
+    },
+    {
+      "id": "resources",
+      "name": "aka.resources.plugin",
+      "required": true,
+      "config": {
+        "plugins": [
+          "${aka:repo_root}/plugins/gpu-wiki"
+        ],
+        "bundles": [
+          "kernel-development"
+        ]
+      }
+    },
+    {
+      "id": "problem",
+      "name": "aka.task.problem.plugin",
+      "required": true,
+      "config": {
+        "worker_requirements": "${env:ATREX_SANDBOX_REQUIREMENTS_FILE}"
+      }
+    },
+    {
+      "id": "source",
+      "name": "aka.task.source.plugin",
+      "required": true
+    },
+    {
+      "id": "candidate",
+      "name": "aka.task.candidate_workspace.plugin",
+      "required": true
+    },
+    {
+      "id": "agent",
+      "name": "aka.workflow.legacy.agent_plugin",
+      "required": true
+    },
+    {
+      "id": "evaluation",
+      "name": "aka.evaluation.plugin",
+      "required": true
+    },
+    {
+      "id": "canonical-reader",
+      "name": "aka.workflow.legacy.canonical_reader_plugin",
+      "required": true
+    },
+    {
+      "id": "experiment",
+      "name": "aka.experiment.plugin",
+      "required": true
+    },
+    {
+      "id": "workflow-observer",
+      "name": "aka.workflow.legacy.observer",
+      "required": true
+    },
+    {
+      "id": "experiment-episode-evidence",
+      "name": "aka.experiment.episode_evidence_plugin",
+      "required": true
+    },
+    {
+      "id": "evaluation-episode-interpreter",
+      "name": "aka.evaluation.episode_evidence_plugin",
+      "required": true
+    },
+    {
+      "id": "workflow",
+      "name": "aka.workflow.legacy.plugin",
+      "required": true,
+      "config": {
+        "startup": true
+      }
+    }
+  ]
+}
