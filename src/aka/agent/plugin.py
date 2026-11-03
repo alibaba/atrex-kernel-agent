@@ -18,7 +18,7 @@ Config = {
         "sandbox": {"type": "string", "enum": ["none", "bwrap"]},
         "bwrap_executable": {"type": "string", "minLength": 1},
         "proc_mode": {"type": "string", "enum": ["private", "projected"]},
-        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "timeout_seconds": {"type": "number", "minimum": 0},
         "state_directory": {"type": "string", "minLength": 1},
     },
     "additionalProperties": False,

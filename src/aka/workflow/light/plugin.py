@@ -15,7 +15,7 @@ Config = {"type": "object", "properties": {
     "goal_episodes": {"type": "boolean"},
     "generate_memory": {"type": "boolean"},
     "output_limit_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
-    "episode_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "episode_timeout_seconds": {"type": "number", "minimum": 0},
     "wiki": {"type": "boolean"},
     "wiki_options": {"type": "object"},
     "research_records": {"type": "boolean"},
