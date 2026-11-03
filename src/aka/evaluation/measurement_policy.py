@@ -11,7 +11,10 @@ def warmup_overrides(environment=None):
         return {}
     if raw is not None and type(raw) not in (int, str):
         raise ValueError("warmup_iters must be a non-negative integer or default")
-    value = DEFAULT_WARMUP_ITERS if raw is None else int(raw)
-    if isinstance(raw, bool) or value < 0:
+    try:
+        value = DEFAULT_WARMUP_ITERS if raw is None else int(raw)
+    except ValueError as error:
+        raise ValueError("warmup_iters must be a non-negative integer or default") from error
+    if value < 0:
         raise ValueError("warmup_iters must be a non-negative integer or default")
     return {"warmup_iters": value}

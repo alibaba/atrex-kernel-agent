@@ -80,9 +80,6 @@ def _typed_workspace_limitation(
     for option in unsupported_options:
         if _option_value(command, option) is not None:
             return f"{option} is not supported by the typed API"
-    warmup = _option_value(command, "--warmup")
-    if warmup is not None and str(warmup) != "5":
-        return "non-default --warmup is not supported by the typed API"
     for option, default in (("--atol", 1e-2), ("--rtol", 0.05)):
         value = _option_value(command, option)
         if value is not None:
