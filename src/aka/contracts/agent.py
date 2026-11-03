@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ContextManager, Literal, Protocol
@@ -139,6 +139,13 @@ class AgentRuntimeCapabilities:
     usage_delta: bool
     phase_marker_receipt: bool
     usage_delta_observed: bool = False
+
+
+@dataclass(frozen=True)
+class AgentProcessPolicy:
+    """Host callbacks evaluated while an Agent process is running."""
+    unavailable: Callable[[Mapping[str, str]], tuple[int, str] | None] | None = None
+    violation: Callable[[list[str], Mapping[str, str]], str | None] | None = None
 
 
 @dataclass(frozen=True)

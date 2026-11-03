@@ -43,6 +43,8 @@ Defaults.update(rule_set=DEFAULT_RULE_SET, settings_defaults={}, runtime_default
 
 
 def apply(ctx, config):
+    from .agent_host import process_policy
+    ctx.contribute("agent_process_policies", "workflow", process_policy(ctx.execution_context.environment))
     from .resources import contribute
     contribute(ctx, config)
     workflow = select_rule_set(config).assemble(

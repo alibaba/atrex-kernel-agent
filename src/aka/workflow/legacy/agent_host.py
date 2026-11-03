@@ -7,12 +7,24 @@ from . import agent_policy
 
 def unavailable(environment):
     state = environment.get("ATREX_ENVIRONMENT_STATE_FILE", "")
-    if state and Path(state).is_file():
+    if state and (Path(state).is_file() or environment.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") != "1"
+                  and Path(state).with_name("restarting.json").is_file()):
         return (
             75,
             "Remote GPU environment became unavailable; terminated Agent for durable recovery",
         )
     return None
+
+
+def process_policy(environment):
+    from aka.contracts.agent import AgentProcessPolicy
+    screen, state = agent_policy.protected_gateway_identity(environment)
+    protected = dict(environment, ATREX_PROTECTED_GATEWAY_SCREEN=screen, ATREX_PROTECTED_GATEWAY_STATE_DIR=state)
+    return AgentProcessPolicy(
+        unavailable=lambda values: unavailable({**protected, **values}),
+        violation=lambda argv, values: violation(argv, {**values,
+            "ATREX_PROTECTED_GATEWAY_SCREEN": screen, "ATREX_PROTECTED_GATEWAY_STATE_DIR": state}),
+    )
 
 
 def violation(argv, environment):

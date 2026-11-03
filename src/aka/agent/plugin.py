@@ -18,7 +18,7 @@ Config = {
         "sandbox": {"type": "string", "enum": ["none", "bwrap"]},
         "bwrap_executable": {"type": "string", "minLength": 1},
         "proc_mode": {"type": "string", "enum": ["private", "projected"]},
-        "timeout_seconds": {"type": "number", "minimum": 0},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
         "state_directory": {"type": "string", "minLength": 1},
     },
     "additionalProperties": False,
@@ -84,6 +84,21 @@ def apply(ctx, config):
         options(config),
         shell_guard=selected_guard(ctx),
         session_name=config.get("session_name", ""),
+        unavailable=lambda environment: selected_process_policy(ctx, "unavailable", environment),
+        violation=lambda argv, environment: selected_process_policy(ctx, "violation", argv, environment),
     )
     ctx.effect(agent.close, label="close Agent")
     ctx.provide(AGENT, agent)
+
+
+def selected_process_policy(ctx, method, *args):
+    from aka.contracts.agent import AgentProcessPolicy
+    for entry in ctx.resolve("agent_process_policies"):
+        if not isinstance(entry.value, AgentProcessPolicy):
+            raise TypeError("Agent process policy must use the public contract")
+        callback = getattr(entry.value, method)
+        if callback is not None:
+            result = callback(*args)
+            if result is not None:
+                return result
+    return None

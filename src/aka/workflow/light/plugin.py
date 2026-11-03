@@ -40,6 +40,8 @@ def validate_config(config):
 
 
 def apply(ctx, config):
+    from aka.workflow.legacy.agent_host import process_policy
+    ctx.contribute("agent_process_policies", "workflow", process_policy(ctx.execution_context.environment))
     from .provider import LightWorkflow, WorkflowOptions
     workflow = LightWorkflow(ctx.agent, ctx.problem, ctx.source, ctx.candidate,
                              executor=ctx.executor, execution_context=ctx.execution_context,
