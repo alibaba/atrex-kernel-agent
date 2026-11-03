@@ -20,7 +20,7 @@ from .constants import (
     SANDBOX_SAFETY_BOUNDARY_PROMPT,
     TEST_RESULT_PREFIX,
 )
-from .environment_recovery import (
+from aka.execution.recovery import (
     raise_if_environment_blocked,
 )
 from .workspace_state import speedup_vs_reference

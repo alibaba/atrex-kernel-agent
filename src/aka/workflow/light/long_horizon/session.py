@@ -10,7 +10,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Callable
 
-from aka.workflow.light.orchestration.environment_recovery import raise_if_environment_blocked
+from aka.execution.recovery import raise_if_environment_blocked
 
 from aka.contracts.agent import Agent, NativeInvocation
 from .models import EpisodeHandoff, InvocationObservation, SessionResult

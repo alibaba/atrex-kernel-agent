@@ -67,7 +67,7 @@ class ManagedCampaign(Campaign):
         return super().start_runtime()
 
     def run(self):
-        from aka.workflow.light.orchestration.environment_recovery import EnvironmentUnavailable as LightEnvironmentUnavailable
+        from aka.execution.recovery import EnvironmentUnavailable as LightEnvironmentUnavailable
 
         try:
             from aka.workflow.light.support.paths import supervisor_campaign_root
@@ -96,7 +96,7 @@ class ManagedCampaign(Campaign):
 
     def agent_environment(self):
         # Evaluation/Execution credentials and routing remain in the host.
-        from aka.workflow.light.orchestration.environment_recovery import environment_state_file
+        from aka.execution.recovery import environment_state_file
         state = environment_state_file()
         return {"ATREX_ENVIRONMENT_STATE_FILE": str(state)} if state is not None else {}
 

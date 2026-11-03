@@ -611,16 +611,6 @@ class LegacyExperiment:
         return result
 
 
-def abba_stage(repeats: int, shape_batch_size: int):
-    """Retain the original durable retry identity for each prepared batch."""
-    def stage(request, index, command):
-        return (
-            f"abba:{request.base_commit}:{request.candidate_commit}:"
-            f"{max(1, repeats)}:{shape_batch_size}:{Path(command.command[-2]).name}"
-        )
-    return stage
-
-
 def evaluation_stage(request, index, command):
     """Stable retry identity for an arbitrary selected Evaluator command."""
     import hashlib

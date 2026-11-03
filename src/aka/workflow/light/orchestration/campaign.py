@@ -46,7 +46,7 @@ from aka.workflow.light.orchestration.constants import (
     SOL_SEED,
     WORKSPACE_INIT,
 )
-from aka.workflow.light.orchestration.environment_recovery import (
+from aka.execution.recovery import (
     ENVIRONMENT_TEMPFAIL,
     EnvironmentUnavailable,
     environment_state_file,

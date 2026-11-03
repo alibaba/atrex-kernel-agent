@@ -1878,18 +1878,6 @@ def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
     return False
 
 
-def _ray_submit_version_mismatch(job: dict | None) -> bool:
-    from .protocol import terminal_cancellation
-    if terminal_cancellation(job):
-        return False
-    error = job.get("error") if job else None
-    return bool(
-        isinstance(error, dict)
-        and error.get("reason") == "submit_failed"
-        and "Version check returned 404" in str(error.get("message", ""))
-    )
-
-
 def _queue_timeout_before_start(job: dict | None) -> bool:
     from .protocol import terminal_cancellation
     if terminal_cancellation(job):
