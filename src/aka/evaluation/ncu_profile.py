@@ -277,9 +277,15 @@ def main(argv=None):
                      if type(value) in (int, float) and type(previous.get(name)) in (int, float)}
             (analysis / "diff_metrics.json").write_text(_json(delta) + "\n")
         classifier = Path(__file__).with_name("classify_ncu.py")
+        if not args.no_classify and not classifier.is_file():
+            try:
+                from aka.execution.resources import profiling_resource
+                classifier = profiling_resource("nvidia/classify_ncu.py")
+            except (ModuleNotFoundError, FileNotFoundError):
+                result.setdefault("warnings", []).append("Optional symptom classifier unavailable; use the measured metrics")
         if not args.no_classify and classifier.is_file():
             classified = subprocess.run([sys.executable, str(classifier), "--metrics",
-                str(analysis / "metrics_key_run.json"), "--output", str(output / "summary.txt")])
+                str(analysis / "metrics_key_run.json"), "--evidence-format", "csv", "--output", str(output / "summary.txt")])
             if classified.returncode:
                 result.setdefault("warnings", []).append("Optional symptom classification failed; use the measured metrics")
         result = public_result(result)

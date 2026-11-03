@@ -54,8 +54,17 @@ LOCALIZE_BY_SYMPTOM = {
 }
 
 
-def format_summary(metrics, findings):
+CSV_LOCALIZE_BY_SYMPTOM = {
+    "memory-bound": ["source.txt", "metrics.csv"],
+    "pipeline-stalls": ["source.txt", "metrics.csv"],
+    "compute-bound": ["source.txt", "metrics.csv"],
+    "register-pressure": ["source.txt"],
+}
+
+
+def format_summary(metrics, findings, *, localize_by_symptom=None):
     """Generate summary.txt text content."""
+    localize_by_symptom = LOCALIZE_BY_SYMPTOM if localize_by_symptom is None else localize_by_symptom
     lines = []
 
     # Part 1: Key metrics
@@ -144,7 +153,7 @@ def format_summary(metrics, findings):
         seen = set()
         localize = []
         for s in symptom_list:
-            for f in LOCALIZE_BY_SYMPTOM.get(s, ()):
+            for f in localize_by_symptom.get(s, ()):
                 if f not in seen:
                     seen.add(f)
                     localize.append(f)
@@ -176,7 +185,8 @@ def format_summary(metrics, findings):
     return "\n".join(lines) + "\n"
 
 
-def main():
+def main(*, localize_by_symptom=None):
+    localize_by_symptom = LOCALIZE_BY_SYMPTOM if localize_by_symptom is None else localize_by_symptom
     parser = argparse.ArgumentParser(
         description="NCU Metrics Symptom Classification Tool")
     parser.add_argument("--metrics", required=True,
@@ -185,7 +195,10 @@ def main():
                         help="Output summary.txt path (default: stdout)")
     parser.add_argument("--json", action="store_true",
                         help="Output in JSON format (findings list)")
+    parser.add_argument("--evidence-format", choices=("binary", "csv"), default="binary")
     args = parser.parse_args()
+    if args.evidence_format == "csv":
+        localize_by_symptom = CSV_LOCALIZE_BY_SYMPTOM
 
     metrics_path = Path(args.metrics)
     if not metrics_path.exists():
@@ -210,7 +223,7 @@ def main():
             PATTERNS[f[0]][2] for f in findings if f[0] in PATTERNS
         ))
         localize = sorted({f for s in symptoms
-                           for f in LOCALIZE_BY_SYMPTOM.get(s, ())})
+                           for f in localize_by_symptom.get(s, ())})
         result = {
             "findings": [
                 {"pattern": pid, "label": label,
@@ -222,7 +235,7 @@ def main():
         }
         output = json.dumps(result, indent=2, ensure_ascii=False)
     else:
-        output = format_summary(metrics, findings)
+        output = format_summary(metrics, findings, localize_by_symptom=localize_by_symptom)
 
     if args.output:
         Path(args.output).write_text(output, encoding="utf-8")
