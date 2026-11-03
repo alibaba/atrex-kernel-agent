@@ -6,7 +6,7 @@ from .rule_sets import DEFAULT_RULE_SET, LegacyRuleSet, defaults_schema, select_
 from aka.contracts.workflow import WorkflowSettings, CampaignRuntimeSettings
 
 WORKFLOW = ServiceKey("workflow", "Workflow", module="aka.contracts.workflow")
-name = "workflow"
+name = "legacy"
 provide = ("workflow",)
 inject = ("agent", "problem", "source", "candidate", "executor", "execution_context", "measurement_parallelism",
           "evaluator_factory", "evaluation_defaults", "experiment_factory", "workflow_observer", "canonical_measurement_reader",

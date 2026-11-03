@@ -1,7 +1,7 @@
 """Select the managed light Workflow without changing legacy behavior."""
 from aka.workflow.legacy.plugin import WORKFLOW
 
-name = "workflow"
+name = "light"
 provide = ("workflow",)
 inject = ("agent", "problem", "source", "candidate", "executor", "execution_context",
           "evaluator_factory", "evaluation_defaults", "experiment_factory", "measurement_parallelism", "workflow_observer")
