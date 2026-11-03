@@ -30,6 +30,7 @@ from .protocol import read_handoff
 from .session import LongSessionRunner
 from .dependencies import EpisodeMeasurements, EpisodeEnvironment, Verifier
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
+from .episode_exchange import prepare as prepare_episode_exchange
 from .telemetry import summarize_episode
 
 PROMPT_PATH = PROMPTS_DIR / "episode.md"
@@ -605,6 +606,13 @@ class LongHorizonCampaign:
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
+        from .episode_exchange import FILES
+        exchange = prepare_episode_exchange(worktree.path)
+        destination = episode_dir / "episode_runtime"
+        destination.mkdir(parents=True, exist_ok=True)
+        for name in FILES:
+            if (exchange / name).is_file():
+                shutil.copy2(exchange / name, destination / name)
         destination = episode_dir / 'agent_observations'
         if destination.exists():
             shutil.rmtree(destination)
@@ -1070,7 +1078,7 @@ class LongHorizonCampaign:
         """Archive and commit one terminal episode exactly once."""
         episode = worktree.episode
         base_commit = worktree.base_commit
-        journal_path = worktree.path / RUNTIME_DIR / "journal.json"
+        journal_path = prepare_episode_exchange(worktree.path) / "journal.json"
         state.episodes = max(state.episodes, episode)
         if not tokens_accounted:
             state.tokens += max(0, int(tokens))
@@ -1271,6 +1279,8 @@ class LongHorizonCampaign:
     ) -> dict[str, Any]:
         candidates: list[Path] = []
         if worktree_path is not None:
+            from .runtime_paths import EXCHANGE_DIR
+            candidates.append(worktree_path / EXCHANGE_DIR / "journal.json")
             candidates.append(worktree_path / RUNTIME_DIR / "journal.json")
         candidates.append(
             store.episode_dir(episode) / "episode_runtime" / "journal.json"
@@ -1292,7 +1302,7 @@ class LongHorizonCampaign:
         verifier: Verifier,
     ) -> bool:
         """Finish a terminal handoff that arrived after the supervisor exited."""
-        runtime = worktree.path / RUNTIME_DIR
+        runtime = prepare_episode_exchange(worktree.path)
         handoff = read_handoff(runtime / "handoff.json")
         if handoff is None:
             return False
@@ -1742,7 +1752,7 @@ class LongHorizonCampaign:
             fast_trial_count = self._active_fast_trials(
                 active, episode_mode=episode_mode
             )
-            runtime = worktree.path / RUNTIME_DIR
+            runtime = prepare_episode_exchange(worktree.path)
             journal_path = runtime / "journal.json"
             handoff_path = runtime / "handoff.json"
             if not resumed or not journal_path.is_file():

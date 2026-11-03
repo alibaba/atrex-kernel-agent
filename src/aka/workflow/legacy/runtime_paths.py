@@ -2,12 +2,14 @@
 from aka.contracts.workspace import WorkspaceExclusion
 
 RUNTIME_DIR = '.atrex_long_horizon'
+EXCHANGE_DIR = '.atrex_episode'
 VERIFY_DIR = 'verification_artifacts/.atrex_long_horizon_verify'
 LIVE_MEMORY_FILE = 'memory/live.json'
 STALL_STATE_FILE = '.orchestrator_state.json'
 
 WORKFLOW_EXCLUSIONS = (
     WorkspaceExclusion(RUNTIME_DIR, subtree=True),
+    WorkspaceExclusion(EXCHANGE_DIR, subtree=True),
     WorkspaceExclusion(VERIFY_DIR, subtree=True),
     WorkspaceExclusion(STALL_STATE_FILE),
     WorkspaceExclusion('framework_baseline_resume.json'),
