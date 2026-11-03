@@ -65,9 +65,19 @@ class SharedMeasurements:
     @staticmethod
     def _measurements(record):
         latest = {attempt.task_id: attempt for attempt in record.attempts}
-        return tuple(latest[step.task_id].assessment for step in record.steps
-                     if step.measurement_identity is not None and step.task_id in latest
-                     and latest[step.task_id].assessment is not None)
+        measurements = []
+        for step in record.steps:
+            if step.measurement_identity is None:
+                continue
+            attempt = latest.get(step.task_id)
+            if (attempt is None or attempt.disposition != "terminal" or attempt.result is None
+                    or attempt.result.facts.disposition != "terminal"
+                    or attempt.result.transport_status not in {"succeeded", "failed"}
+                    or attempt.assessment is None
+                    or attempt.assessment.identity.digest != step.measurement_identity.digest):
+                return ()
+            measurements.append(attempt.assessment)
+        return tuple(measurements)
 
     def kernel(self, source):
         if not isinstance(source, RevisionContent):
@@ -84,11 +94,17 @@ class SharedMeasurements:
         identities = {self.workspace_provider.source_identity(source) for source in sources}
         if len(identities) != 1:
             raise ExperimentRecordError("source_binding_mismatch", record.ref)
+        for identity in self._identities(record):
+            expected = identity.parameters.get("candidate_source_sha256")
+            artifact_digest = identity.parameters.get("candidate_source_artifact_sha256")
+            if (expected not in identities or artifact_digest not in {artifact.sha256 for artifact in artifacts}):
+                raise ExperimentRecordError("source_binding_mismatch", record.ref)
         return sources[0]
 
     def _evidence(self, experiment, record):
         identities = self._identities(record)
         measurements = self._measurements(record)
+        source = self._source(experiment, record)
         selected = record.evaluation
         known = bool(identities) and len(measurements) == len(identities) and all(
             (measurement.validity == "invalid" or measurement.validity == "valid" and measurement.completeness == "complete")
@@ -116,6 +132,8 @@ class SharedMeasurements:
             # is no typed Atrex six-case or per-Shape guarantee to manufacture.
             known = True
             valid = selected.gate == "PASS"
+        if source is None:
+            known = valid = False
         passed = selected.gate == "PASS" and valid if selected is not None and known and settled else None
         result = {"all_pass": passed, "correct": passed, "mode": mode,
                   "error": selected.error if selected is not None else None,
@@ -131,7 +149,6 @@ class SharedMeasurements:
                 candidate={"latency_us_by_shape": dict(selected.candidate_latency_us_by_shape),
                            "latency_us_geomean": selected.candidate_latency_us},
                 improvement_pct=selected.improvement_pct)
-        source = self._source(experiment, record)
         binding = self.kernel(source) if source is not None else {}
         attempts = [attempt for attempt in record.attempts if attempt.result is not None]
         exit_code = attempts[-1].result.returncode if attempts else None
@@ -223,9 +240,22 @@ class SharedMeasurements:
             if existing is not None:
                 if existing.phase != "complete" or existing.lifecycle != "terminal":
                     record = experiment.resume_recorded(request, request_id=identity, max_remeasurements=0)
+                    return self._response(experiment, record)
                 else:
+                    from .host.errors import AgentRequestError
+                    record_id = "gateway-" + existing.ref.experiment_id
+                    if not (reuse_completed or reuse_correctness):
+                        raise AgentRequestError("This request_id already has a completed record.",
+                            code="duplicate_request_id", gateway_record_id=record_id,
+                            next_action="Read the existing record, or use a new request_id for a new measurement.")
                     record = experiment.run_recorded(request, request_id=identity)
-                return self._response(experiment, record)
+                    if (self._evidence(experiment, record)["execution_status"] != "completed"
+                            or self.environment_identity and any(measurement.environment_identity != self.environment_identity
+                                for measurement in self._measurements(record))):
+                        raise AgentRequestError("The stored evidence cannot qualify this measurement.",
+                            code="record_not_reusable", gateway_record_id=record_id,
+                            next_action="Read the existing record; use a new request_id for a fresh measurement if needed.")
+                    return self._response(experiment, record, reused=True)
             if (reuse_correctness or reuse_completed) and self.environment_identity:
                 prepared = (self.command_evaluator if isinstance(request, CommandSpec) else self.evaluator).prepare(request)
                 identities = prepared.measurement_identities
@@ -246,7 +276,7 @@ class SharedMeasurements:
             raise ValueError("Record queries take IDs, not commands or GPU inputs")
         with self._open() as experiment:
             if args.kind == "record-read":
-                return self._response(experiment, self._record(experiment, args.record_id))
+                return self._response(experiment, self._record(experiment, args.record_id), reused=True)
         if args.kind == "kernel-read":
             path = Path(args.output_path or "")
             if path.is_absolute() or ".." in path.parts or len(path.parts) < 2 or path.parts[0] != "scratch":

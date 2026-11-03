@@ -362,6 +362,8 @@ class FileExperimentRecords:
                 old = self.get(ref)
                 if not old.plan_digest or old.plan_digest != digest:
                     raise ExperimentRecordError("plan_identity_mismatch", ref)
+                if old.lifecycle == "terminal":
+                    return old
                 return self._save(replace(old, lifecycle="prepared", phase="execute", outcome=None,
                                          record_version=old.record_version + 1, updated_at=_now()))
         return self._update(ref, lambda old: replace(old, steps=steps, plan_digest=digest,

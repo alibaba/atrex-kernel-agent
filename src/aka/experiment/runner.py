@@ -108,9 +108,12 @@ class LegacyExperiment:
 
     def reusable(self, ref, identities):
         """Experiment qualifies stored evidence without an Evaluation approval call."""
+        from .queries import _eligible, _measurements, _source
         record = self.get(ref)
-        measurements = record.evaluation.measurements if record.evaluation else ()
-        if record.phase != "complete" or record.lifecycle != "terminal" or not measurements:
+        if not _eligible(record):
+            return False
+        measurements = _measurements(record)
+        if not measurements or _source(self._records(), record, identities) is None:
             return False
         return tuple(item.identity.digest for item in measurements) == tuple(item.digest for item in identities) and all(
             item.completeness == "complete" and item.validity == "valid" and item.comparability == "comparable"
@@ -160,7 +163,12 @@ class LegacyExperiment:
             record, created = records.register(ref, request_id, self._request_data(request),
                 kind="command" if isinstance(request, CommandSpec) else "evaluation", purpose=self.purpose)
             if not created:
-                if record.phase == "complete" and record.outcome is not None and (resume is None or record.lifecycle == "terminal"):
+                if record.phase == "complete" and record.outcome is not None and record.lifecycle == "terminal":
+                    evaluator = self.command_evaluator if isinstance(request, CommandSpec) else self.evaluator
+                    prepared = evaluator.prepare(request)
+                    records.prepared(ref, (*prepared.steps, *prepared.fallback_steps),
+                        () if isinstance(request, CommandSpec) else prepared.inputs,
+                        prepared.measurement_identities, resume=True)
                     return record, None
                 if resume is None:
                     raise ExperimentRecordError("experiment_incomplete", ref)
