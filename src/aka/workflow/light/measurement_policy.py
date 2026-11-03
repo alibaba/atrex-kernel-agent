@@ -5,12 +5,19 @@ its evaluator or acceptance policy. Explicit request/operator overrides still
 participate in the measurement identity.
 """
 
+from aka.contracts.evaluation import (
+    DEFAULT_CANDIDATE_TIMEOUT,
+    DEFAULT_PERFORMANCE_TIMEOUT,
+)
+
+
 # Preserve the legacy candidate gate: one base seed plus five additional seeds.
 CORRECTNESS_CASES = 6
-BENCH_ITERS = 100
-WARMUP_ITERS = 10
-CANDIDATE_TIMEOUT = 120
-PERFORMANCE_TIMEOUT = 120
+# Budget each Shape independently. Candidate initialization/correctness retains
+# the production-safe 600-second allowance; steady-state measurement is 300
+# seconds. Operators may still override the enclosing allocation.
+CANDIDATE_TIMEOUT = DEFAULT_CANDIDATE_TIMEOUT
+PERFORMANCE_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
 SHAPE_BATCH_SIZE = 1
 BATCH_WORKERS = 16
 MEASUREMENT_CONTRACT = "runtime-native-eval-v1"
@@ -23,11 +30,11 @@ def validate_abba_repeats(repeats: int) -> None:
 
 
 def runner_overrides() -> dict:
-    return {"warmup_iters": WARMUP_ITERS, "candidate_timeout_s": CANDIDATE_TIMEOUT,
+    return {"candidate_timeout_s": CANDIDATE_TIMEOUT,
             "perf_timeout_s": PERFORMANCE_TIMEOUT}
 
 
 def measurement_defaults() -> dict:
-    return {"contract": MEASUREMENT_CONTRACT, "bench_iters": BENCH_ITERS,
+    return {"contract": MEASUREMENT_CONTRACT,
             "correctness_cases": CORRECTNESS_CASES, "lock_clocks": True,
             "runner_overrides": runner_overrides()}

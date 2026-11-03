@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from aka.contracts.evaluation import derived_evaluation_timeout, DEFAULT_ABBA_RUN_TIMEOUT
+
 import json
 import math
 from pathlib import Path
@@ -182,11 +184,11 @@ class GatewayABBAValidator:
         ssh: str = "",
         ssh_init: str = "",
         health_command: str = "",
-        timeout: int = 600,
+        timeout: int = derived_evaluation_timeout(),
         repeats: int = 2,
-        per_run_timeout: int = 120,
+        per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT,
         min_improvement_pct: float = 0.0,
-        queue_wait_grace: int = 14_400,
+        queue_wait_grace: int = 120,
         private_reference_dir: Path | None = None,
         shape_batch_size: int = DEFAULT_SHAPE_BATCH_SIZE,
     ):

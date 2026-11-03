@@ -18,6 +18,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from aka.core.filesystem import durable_rmdir, durable_unlink, durable_write_json, durable_write_text
 
 HANDOFF_ID_ENV = "ATREX_ENVIRONMENT_RESTART_HANDOFF_ID"
@@ -525,6 +528,12 @@ def _kill_owned_wrapper(process: subprocess.Popen[Any]) -> None:
     process.wait()
 
 
+def _process_launcher() -> tuple[str, ...]:
+    if not __package__:
+        return (str(Path(sys.executable).resolve()), str(Path(__file__).resolve()))
+    return (sys.executable, "-m", "aka.execution.processes")
+
+
 def spawn_owned_session(
     command: Sequence[str | os.PathLike[str]],
     *,
@@ -532,6 +541,7 @@ def spawn_owned_session(
     environment: Mapping[str, str] | None = None,
     finalize_handoff: bool = False,
     inherited_descriptors: tuple[int, ...] = (),
+    launcher: tuple[str, ...] | None = None,
     registered_callback: Callable[[subprocess.Popen[Any]], None] | None = None,
     **popen_options: Any,
 ) -> subprocess.Popen[Any]:
@@ -550,6 +560,12 @@ def spawn_owned_session(
         if type(descriptor) is not int or descriptor <= 2:
             raise ValueError("invalid owned child descriptor")
         os.fstat(descriptor)
+    inherited_descriptors = tuple(dict.fromkeys(inherited_descriptors))
+    if isinstance(launcher, (str, bytes)):
+        raise ValueError("owned session launcher must be an argument sequence")
+    selected_launcher = _process_launcher() if launcher is None else tuple(launcher)
+    if not selected_launcher or any(not isinstance(value, str) or not value for value in selected_launcher):
+        raise ValueError("owned session launcher must contain nonempty strings")
     values["AKA_OWNED_CHILD_FDS"] = json.dumps(inherited_descriptors)
     environment = values
     handoff_id = values.get(HANDOFF_ID_ENV, "")
@@ -572,11 +588,13 @@ def spawn_owned_session(
     start_read, start_write = os.pipe()
     os.set_inheritable(start_read, True)
     wrapper = [
-        sys.executable, "-m", "aka.execution.processes",
+        *selected_launcher,
         "--owned-session",
         str(start_read),
         "1" if finalize_handoff else "0",
         role,
+        "--launcher-json",
+        json.dumps(selected_launcher),
         "--",
         *argv,
     ]
@@ -907,16 +925,30 @@ def _cleanup_guardian_entry(argv: list[str]) -> int:
 
 
 def _owned_session_entry(argv: list[str]) -> int:
-    if len(argv) < 6 or argv[0] != "--owned-session" or argv[4] != "--":
+    if len(argv) < 6 or argv[0] != "--owned-session":
         print("invalid recovery owner invocation", file=sys.stderr, flush=True)
         return 125
     try:
         start_fd = int(argv[1])
-    except ValueError:
+        separator = 4
+        launcher = _process_launcher()
+        if argv[4] == "--launcher-json":
+            if len(argv) < 8:
+                return 125
+            selected = json.loads(argv[5])
+            if not isinstance(selected, list) or not selected or any(
+                not isinstance(value, str) or not value for value in selected
+            ):
+                return 125
+            launcher = tuple(selected)
+            separator = 6
+        if argv[separator] != "--" or len(argv) <= separator + 1:
+            return 125
+    except (ValueError, TypeError):
         return 125
     finalize_handoff = argv[2] == "1"
     role = argv[3]
-    command = argv[5:]
+    command = argv[separator + 1:]
     if start_fd <= 2 or not command:
         return 125
     try:
@@ -946,7 +978,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     guardian_read, guardian_write = os.pipe()
     os.set_inheritable(guardian_read, True)
     guardian_command = [
-        sys.executable, "-m", "aka.execution.processes",
+        *launcher,
         "--cleanup-guardian",
         str(guardian_read),
         str(os.getpid()),
@@ -1004,7 +1036,7 @@ def _owned_session_entry(argv: list[str]) -> int:
     primary_read, primary_write = os.pipe()
     os.set_inheritable(primary_read, True)
     primary_command = [
-        sys.executable, "-m", "aka.execution.processes",
+        *launcher,
         "--owned-command",
         str(primary_read),
         "--",

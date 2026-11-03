@@ -37,6 +37,7 @@ class ManagedRuntimeFactory:
         evaluation_input = w.problem.content(c.problem, c.workspace,
             generated_digest=getattr(c, "_generated_agent_problem_digest", None)).evaluation
         environment = dict(w.execution_context.environment)
+        environment.setdefault("ATREX_SANDBOX_QUEUE_WAIT_GRACE", "120")
         environment.update(task_environment(evaluation_input.worker_requirements))
         if evaluation_input.private_reference_dir is not None:
             environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(evaluation_input.private_reference_dir)

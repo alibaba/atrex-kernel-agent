@@ -88,7 +88,8 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         cases = args.multi_seed + 1 if args.multi_seed is not None else defaults.get("correctness_cases", 1)
         if args.shape_id and args.multi_seed is None:
             cases = 1
-        timed = args.timed_runs if args.timed_runs is not None else defaults.get("bench_iters", 20)
+        from .measurement_policy import DEFAULT_BENCH_ITERS
+        timed = args.timed_runs if args.timed_runs is not None else defaults.get("bench_iters", DEFAULT_BENCH_ITERS)
         if type(cases) is not int or cases < 1 or type(timed) is not int or timed < 1:
             raise ValueError("correctness cases and timing iterations must be positive")
         command = ("python3", "test_kernel.py", "--version", args.version or "v0", "--multi-seed", str(cases - 1), "--timed-runs", str(timed))
@@ -168,6 +169,13 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             request["runner_overrides"] = {"skip_kernel_attribution": True}
             for field in ("profiler", "level", "counters", "kernel_regex", "top_kernels"):
                 request.pop(field, None)
+        from .measurement_policy import warmup_overrides
+        timing_environment = dict(explicit)
+        from aka.execution.command_syntax import option_value
+        explicit_warmup = option_value(list(command), "--warmup", None)
+        if explicit_warmup is not None:
+            timing_environment["AKA_GATEWAY_WARMUP_ITERS"] = explicit_warmup
+        request["runner_overrides"].update(warmup_overrides(timing_environment))
         request["runner_overrides"].update(defaults.get("runner_overrides", {}))
         if "lock_clocks" in defaults:
             request["options"]["lock_clocks"] = defaults["lock_clocks"]
@@ -182,15 +190,20 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             if not isinstance(baseline_bytes, bytes) or not baseline_bytes.strip():
                 raise ValueError("baseline comparison requires nonempty frozen source")
             repeats = args.comparison_repeats if args.comparison_repeats is not None else configuration.repeats
-            if type(repeats) is not int or repeats < 2 or repeats % 2:
-                raise ValueError("comparison repetitions must be positive and even")
+            if type(repeats) is not int or not 2 <= repeats <= 16 or repeats % 2:
+                raise ValueError("comparison repetitions must be even, in 2..16")
             from aka.contracts.workspace import RevisionContent
             baseline_source = baseline if (workspace / baseline_path).is_dir() else RevisionContent({"kernel.py": baseline_bytes})
             baseline_descriptor, baseline_archive, _, _ = prepare_source(baseline_source, role="baseline")
             if baseline_archive is not None:
                 archives = (*archives, baseline_archive)
             request["abba"] = {"baseline": baseline_descriptor, "repeats": repeats // 2}
-            request["runner_overrides"]["perf_timeout_s"] = args.comparison_run_timeout or configuration.per_run_timeout
+            available = (configuration.timeout - 30) // (2 * repeats)
+            seconds = (min(configuration.per_run_timeout, available)
+                       if args.comparison_run_timeout is None else args.comparison_run_timeout)
+            if seconds <= 0 or seconds > available:
+                raise ValueError("comparison run timeout must be positive and fit the full ABBA allocation schedule")
+            request["runner_overrides"]["perf_timeout_s"] = seconds
             operation = "same_allocation_abba"
     else:
         request["options"] = {key: value for key, value in request["options"].items() if key in {"bench_iters", "timeout_s"}}

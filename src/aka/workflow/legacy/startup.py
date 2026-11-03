@@ -45,8 +45,11 @@ class WorkflowStartup:
                        for key, value in profile_settings.items() if key not in launch.provided_settings}
             settings = replace(settings, **updates)
         if launch.provided_runtime is not None:
-            runtime = replace(runtime, **{key: value for key, value in profile_runtime.items()
-                                         if key not in launch.provided_runtime})
+            updates = {key: value for key, value in profile_runtime.items()
+                       if key not in launch.provided_runtime}
+            if "timeout" not in launch.provided_runtime and "timeout" not in updates:
+                updates["timeout"] = None
+            runtime = replace(runtime, **updates)
         problem = launch.request.problem
         original = launch.request.settings
         if launch.provided_settings is not None and any(

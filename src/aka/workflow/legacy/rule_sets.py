@@ -1,7 +1,7 @@
 """Select Workflow-owned rules and validate profile defaults before assembly."""
 from dataclasses import dataclass, fields
 import math
-from typing import get_origin, get_type_hints
+from typing import get_args, get_origin, get_type_hints
 
 from aka.contracts.workflow import WorkflowSettings, CampaignRuntimeSettings
 from .constants import CONVERT_PERF_TOL, AGENT_CLI_CHOICES
@@ -28,6 +28,9 @@ _NONNEGATIVE = {"convert_after", "fast_episodes", "handoff_resumes"}
 def defaults_schema(kind):
     properties = {}
     for name, annotation in get_type_hints(kind).items():
+        nullable = type(None) in get_args(annotation)
+        if nullable:
+            annotation = next(value for value in get_args(annotation) if value is not type(None))
         if get_origin(annotation) is tuple:
             schema = {"type": "array", "items": {"type": "string", "enum": ["codex", "qoder"]}}
         else:
@@ -51,6 +54,8 @@ def validate_defaults(kind, values):
         if name not in annotations:
             raise ValueError(f"unknown {kind.__name__} profile field: {name}")
         annotation = annotations[name]
+        if type(None) in get_args(annotation):
+            annotation = next(value for value in get_args(annotation) if value is not type(None))
         if get_origin(annotation) is tuple:
             if not isinstance(value, (tuple, list)) or any(v not in ("codex", "qoder") for v in value):
                 raise ValueError(f"{name} requires supported reviewer names")

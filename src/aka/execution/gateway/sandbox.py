@@ -100,6 +100,11 @@ from aka.execution.command_syntax import (
     test_kernel_script_index as _test_kernel_script_index,
 )
 from aka.execution.outcomes import emit_fact, emit_diagnostic, backend_attempt
+from .request_values import (
+    safe_relative as _safe_relative,
+    python_inline_imports as _python_inline_imports,
+    parse_env_items as _parse_env_items,
+)
 
 
 DEFAULT_SYNC_PATHS = ("profiles",)
@@ -247,14 +252,6 @@ TYPED_KINDS = frozenset({"run", "profile"})
 EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 
 
-def _safe_relative(value: str) -> str:
-    path = PurePosixPath(value)
-    if not value or path.is_absolute() or ".." in path.parts:
-        raise ValueError(f"path must be relative to the workspace: {value!r}")
-    normalized = path.as_posix()
-    if normalized in ("", "."):
-        raise ValueError(f"path must not resolve to the workspace root: {value!r}")
-    return normalized
 
 
 def _find_agate() -> str | None:
@@ -469,22 +466,6 @@ def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
 
 
 
-def _python_inline_imports(parts: list[str]) -> set[str]:
-    """Return top-level modules imported by a direct ``python -c`` command."""
-    if not parts or not re.fullmatch(r"python(?:[0-9.]+)?", Path(parts[0]).name):
-        return set()
-    try:
-        code_index = parts.index("-c") + 1
-        tree = ast.parse(parts[code_index])
-    except (ValueError, IndexError, SyntaxError):
-        return set()
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".", 1)[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            imported.add(node.module.split(".", 1)[0])
-    return imported
 
 
 def _referenced_workspace_inputs(workspace: Path, parts: list[str]) -> set[str]:
@@ -657,16 +638,6 @@ def _runtime_requirements(
 
 
 
-def _parse_env_items(items: Iterable[str]) -> dict[str, str]:
-    env_vars: dict[str, str] = {}
-    for item in items:
-        if "=" not in item or item.startswith("="):
-            raise ValueError(f"invalid --env {item!r}; expected KEY=VALUE")
-        key, value = item.split("=", 1)
-        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key):
-            raise ValueError(f"invalid --env key {key!r}")
-        env_vars[key] = value
-    return env_vars
 
 
 
@@ -1990,15 +1961,18 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
 
 
 def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
-    """Queue grace extends client waiting; only advertised limits bound runtime."""
-    from .requests import effective_budget, hard_limit
-    return effective_budget(command_timeout, limit=hard_limit(os.environ, "run")).effective
+    """Reserve queue grace inside the typed-job deadline without clamping."""
+    from .requests import effective_budget, hard_limit, typed_gateway_job_timeout
+    limit = hard_limit(os.environ, "run")
+    requested = typed_gateway_job_timeout(command_timeout, queue_wait_grace, limit=limit)
+    return effective_budget(requested, limit=min(10_800, limit) if limit is not None else 10_800).effective
 
 
 def _dev_gateway_job_timeout(command_timeout: int) -> int:
-    """Respect this backend's declared dev ceiling without imposing a default."""
+    """Retain the main Dev allocation ceiling and any stricter backend limit."""
     from .requests import effective_budget, hard_limit
-    return effective_budget(command_timeout, limit=hard_limit(os.environ, "dev")).effective
+    limit = hard_limit(os.environ, "dev")
+    return effective_budget(command_timeout, limit=min(600, limit) if limit is not None else 600).effective
 
 
 def _resume_interrupted_agate_wait(
@@ -2203,7 +2177,9 @@ def _typed_agate_command(
         command += ["--mode", str(request.get("mode") or "full"),
                     "--num-correctness-cases", str(options["num_correctness_cases"]),
                     "--bench-iters", str(options["bench_iters"])]
-        warmup = os.environ.get("AKA_GATEWAY_WARMUP_ITERS", "5")
+        warmup = os.environ.get("AKA_GATEWAY_WARMUP_ITERS", "default")
+        if warmup == "default" and "warmup_iters" in request.get("runner_overrides", {}):
+            warmup = str(request["runner_overrides"]["warmup_iters"])
         if warmup != "default":
             command += ["--set", "warmup_iters=" + warmup]
         if "abba" in request:

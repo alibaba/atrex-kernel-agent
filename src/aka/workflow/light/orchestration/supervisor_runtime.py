@@ -1,6 +1,8 @@
 """Campaign-owned GPU/Wiki, Journal and sealed Episode handoff service."""
 from __future__ import annotations
 
+from aka.contracts.evaluation import derived_evaluation_timeout
+
 import json
 import argparse
 import hashlib
@@ -127,7 +129,7 @@ def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
 @dataclass(frozen=True)
 class RuntimeConfig:
     hardware: str
-    timeout: int = 600
+    timeout: int = derived_evaluation_timeout()
     url: str = ""
     profile: str = ""
     ssh: str = ""
@@ -273,7 +275,9 @@ class SupervisorRuntime:
         self.evaluation_identity = getattr(services, "evaluation_identity", None)
         self.environment = dict(services.configuration.environment)
         from aka.execution.configuration import queue_wait_grace
-        self.gateway_queue_wait_grace = 0 if config.ssh else queue_wait_grace(self.environment)
+        self.gateway_queue_wait_grace = 0 if config.ssh else queue_wait_grace(
+            {"ATREX_SANDBOX_QUEUE_WAIT_GRACE": self.environment.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", "120")})
+        self.environment["ATREX_SANDBOX_QUEUE_WAIT_GRACE"] = str(self.gateway_queue_wait_grace)
         self.measurement_repetitions = config.measurement_repetitions
         if self.measurement_repetitions not in {1, 3}:
             raise ValueError("measurement_repetitions must be 1 or 3")
@@ -317,7 +321,7 @@ class SupervisorRuntime:
     def request_timeout_seconds(self) -> float:
         if self.config.request_timeout is not None:
             return self.config.request_timeout
-        return self.config.timeout + self.gateway_queue_wait_grace + 120
+        return 2 * (self.config.timeout + self.gateway_queue_wait_grace) + 120
 
     def close(self):
         with self.lock:

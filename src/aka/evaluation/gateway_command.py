@@ -279,7 +279,7 @@ class GatewayCommandEvaluator:
         try:
             request = prepare_request(command.workspace, command.hardware, command.timeout, [f"{key}={value}" for key, value in explicit_environment.items()],
                 list(command.command), kind, reference_dir=reference, reference_content=reference_content, requirements=requirements,
-                runtime_version=environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip(),
+                runtime_version=environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip(), measurement_environment=environment,
                 profiler=options.profiler if options is not None else None, profile_level=profile_level,
                 counters=options.counters if options is not None else (),
                 kernel_regex=options.kernel_regex if options is not None else None, top_kernels=options.top_kernels if options is not None else None)
@@ -455,7 +455,7 @@ class GatewayCommandEvaluator:
                 if failures:
                     payload.update(all_pass=False, failures=failures)
             stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
-            stdout = with_measurement_conditions(stdout, gateway_warmup_iters=command.environment.get("AKA_GATEWAY_WARMUP_ITERS", "5"))
+            stdout = with_measurement_conditions(stdout, gateway_warmup_iters=measurement.request.get("runner_overrides", {}).get("warmup_iters", "default"))
             code = 0 if payload["all_pass"] else 1
         else:
             stdout = PROFILE_RESULT_PREFIX + json.dumps(jobs[0]["result"], ensure_ascii=False) + "\n"

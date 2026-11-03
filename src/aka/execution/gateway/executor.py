@@ -119,6 +119,8 @@ class GatewayExecutor(GatewayRecoveryMixin):
         for key, env in mapping.items():
             if key in self.configuration:
                 value = self.configuration[key]
+                if key == "warmup_iters" and value == "default":
+                    continue
                 import json
                 environment[env] = json.dumps(value) if isinstance(value, list) else str(value)
         if command.requirements:

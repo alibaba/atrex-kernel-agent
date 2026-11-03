@@ -14,7 +14,7 @@ Config = {"type":"object", "properties":{
     "recovery_retry_delays":{"type":"array", "items":{"type":"number", "minimum":0}},
     "recovery_retry_budget_s":{"type":"number", "minimum":0},
     "dev_dependencies":{"type":"array", "items":{"type":"string"}}, "profiling": PROFILING_CONFIG}, "additionalProperties":False}
-Defaults = {"warmup_iters":"5", "retry_delays":[], "dev_dependencies":[], "profiling":[],
+Defaults = {"warmup_iters":"default", "retry_delays":[], "dev_dependencies":[], "profiling":[],
             "idempotent_replay":False, "recovery_retry_delays":[], "recovery_retry_budget_s":0}
 def validate_config(config):
     validate_profiling(config["profiling"])

@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Iterable
 from .metadata import distributed_evaluation_world_size as _distributed_evaluation_world_size
 from aka.task.problem.inputs import validate_performance_baseline
+from .measurement_policy import DEFAULT_BENCH_ITERS, warmup_overrides
 FP4_MAX_REL_L2 = 0.2
 
 from aka.execution.command_syntax import option_value as _option_value
@@ -110,6 +111,7 @@ def prepare_request(
     top_kernels: int | None = None,
     candidate_source: str | None = None,
     candidate_solution: dict | None = None,
+    measurement_environment=None,
 ) -> dict[str, Any]:
     """Build the public run/profile request without importing the agate package."""
     content = reference_content or {}
@@ -140,7 +142,7 @@ def prepare_request(
         shapes = {shape_id: shapes[shape_id] for shape_id in requested_shape_ids}
     try:
         multi_seed = int(_option_value(command, "--multi-seed", 0))
-        bench_iters = int(_option_value(command, "--timed-runs", 20))
+        bench_iters = int(_option_value(command, "--timed-runs", DEFAULT_BENCH_ITERS))
         atol = float(_option_value(command, "--atol", 1e-2))
         rtol = float(_option_value(command, "--rtol", 0.05))
     except (TypeError, ValueError) as exc:
@@ -212,7 +214,12 @@ def prepare_request(
     if kind == "run":
         # Ordinary measurements need correctness and latency. Kernel attribution
         # is a separate profiler pass and belongs to the explicit Profile route.
-        request["runner_overrides"] = {"skip_kernel_attribution": True}
+        policy_environment = dict(_parse_env_items(env_items))
+        policy_environment.update(measurement_environment or {})
+        explicit_warmup = _option_value(command, "--warmup", None)
+        if explicit_warmup is not None:
+            policy_environment["AKA_GATEWAY_WARMUP_ITERS"] = explicit_warmup
+        request["runner_overrides"] = {"skip_kernel_attribution": True, **warmup_overrides(policy_environment)}
         version = str(_option_value(command, "--version", "v0"))
         request["mode"] = (
             "correctness_only"

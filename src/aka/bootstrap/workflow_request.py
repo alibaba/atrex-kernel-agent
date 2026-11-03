@@ -5,7 +5,7 @@ import argparse
 from dataclasses import fields
 import json
 from pathlib import Path
-from typing import get_type_hints
+from typing import get_args, get_type_hints
 
 from aka.contracts.workflow import CampaignRuntimeSettings, WorkflowSettings
 from aka.contracts.workflow_launch import decode_launch, encode_launch
@@ -23,6 +23,8 @@ def register_request_options(parser):
         for field in fields(kind):
             flag = "--" + field.name.replace("_", "-")
             annotation = hints[field.name]
+            if type(None) in get_args(annotation):
+                annotation = next(value for value in get_args(annotation) if value is not type(None))
             options = {"dest": field.name, "default": argparse.SUPPRESS}
             if annotation is bool:
                 options["action"] = argparse.BooleanOptionalAction

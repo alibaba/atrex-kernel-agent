@@ -26,7 +26,7 @@ class ManagedCampaign(Campaign):
             verify_repeats=evaluation.verify_repeats,
             verify_run_timeout=evaluation.verify_run_timeout,
             min_improvement_pct=evaluation.min_improvement_pct,
-            problem_generation_timeout=min(settings.setup_timeout, 1800),
+            problem_generation_timeout=settings.setup_timeout,
             v1_ask_codex="codex" in settings.framework_baseline_reviewers,
             v1_ask_qoder="qoder" in settings.framework_baseline_reviewers,
             agent_sandbox="bwrap" if workflow.agent.capabilities.filesystem_isolation else "none")
@@ -286,7 +286,7 @@ class ManagedCampaign(Campaign):
                           if validation_error else "Create agent_problem.json now.")
                 result = self._run_session(staging,
                     render_prompt(prompt_source, REPAIR_CONTEXT=repair),
-                    timeout=min(self.problem_generation_timeout, 1800),
+                    timeout=self.problem_generation_timeout,
                     agent_cli=self.agent_cli, reasoning_effort="max",
                     extra_environment=self.agent_boundary_environment("problem-generation"))
                 self._account(result, f"agent problem generation attempt {attempt + 1}")

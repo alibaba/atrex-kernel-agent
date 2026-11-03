@@ -42,6 +42,9 @@ def contribute_resources(ctx):
         visibility="runtime",
     )
     ctx.contribute("workspace_resources", resource.name, resource)
+    ctx.contribute("workspace_resources", "evaluation-numerical-inputs", WorkspaceResourceContribution(
+        "evaluation-numerical-inputs", Path(__file__).with_name("drivers") / "numerical_inputs.py",
+        visibility="runtime"))
 
     ctx.contribute("workspace_resources", "execution-profile-driver", WorkspaceResourceContribution(
         "execution-profile-driver", Path(__file__).with_name("drivers") / "profile_driver.py", visibility="runtime"))

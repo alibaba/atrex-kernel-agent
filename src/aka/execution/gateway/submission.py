@@ -7,7 +7,7 @@ import tempfile
 from . import sandbox as transport
 from .returned_files import emit
 from aka.execution.outcomes import emit_fact, emit_diagnostic
-from .requests import NATIVE_ABBA, operation_request, prepared_operation, effective_budget, hard_limit
+from .requests import NATIVE_ABBA, operation_request, prepared_operation, effective_budget, hard_limit, typed_gateway_job_timeout
 
 
 def run_prepared(args, workspace, sync_paths, grace):
@@ -23,7 +23,9 @@ def submit_prepared(args, workspace, grace, prepared):
     request = operation_request(prepared["request"], kind)
     effective_budget(args.timeout + grace, scope="wait")
     if kind in {"run", "profile"}:
-        budget = effective_budget(args.timeout, limit=hard_limit(os.environ, kind))
+        limit = hard_limit(os.environ, kind)
+        requested = typed_gateway_job_timeout(args.timeout, grace, limit=limit)
+        budget = effective_budget(requested, limit=limit)
         request.setdefault("options", {})["timeout_s"] = budget.effective
     else:
         emit_diagnostic({"failure_class":"protocol", "reason":"job-runtime-budget-unconfirmed"})

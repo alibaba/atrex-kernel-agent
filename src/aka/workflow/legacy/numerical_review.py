@@ -136,6 +136,7 @@ def _sources(campaign, workspace, *, harness=None):
         raise ValueError('numerical validation requires the frozen Task harness')
     driver = campaign.plugin_registry.resource_result().resource("evaluation-numerical-driver").source
     files = {"instructions.md": PROMPT, "driver.py": driver, "transport.py": harness}
+    files["numerical_inputs.py"] = campaign.plugin_registry.resource_result().resource("evaluation-numerical-inputs").source
     for source in _production_review_candidate_paths(workspace):
         files["candidate/" + source.relative_to(workspace).as_posix()] = source
     for name in ("input.py", "reference.py", "agent_problem.json", "metadata.json", "README.md"):

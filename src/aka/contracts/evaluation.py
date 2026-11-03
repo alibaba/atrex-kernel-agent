@@ -19,6 +19,35 @@ if TYPE_CHECKING:
     from .experiment import RetainedEpisodeReceipt
 
 
+DEFAULT_CANDIDATE_TIMEOUT = 600
+DEFAULT_PERFORMANCE_TIMEOUT = 300
+DEFAULT_ABBA_RUN_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
+DEFAULT_ABBA_REPEATS = 2
+ABBA_SCHEDULING_OVERHEAD = 30
+
+
+def derived_evaluation_timeout(
+    *,
+    repeats: int = DEFAULT_ABBA_REPEATS,
+    per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT,
+    candidate_timeout: int = DEFAULT_CANDIDATE_TIMEOUT,
+    performance_timeout: int = DEFAULT_PERFORMANCE_TIMEOUT,
+) -> int:
+    """Return one allocation large enough for either Eval or A/B/B/A."""
+    values = {
+        "repeats": repeats,
+        "per_run_timeout": per_run_timeout,
+        "candidate_timeout": candidate_timeout,
+        "performance_timeout": performance_timeout,
+    }
+    if any(type(value) is not int or value <= 0 for value in values.values()):
+        raise ValueError("evaluation timing inputs must be positive integers")
+    return max(
+        candidate_timeout + performance_timeout,
+        2 * repeats * per_run_timeout + ABBA_SCHEDULING_OVERHEAD,
+    )
+
+
 EVALUATION_EPISODE_INTERPRETER = ServiceKey(
     "evaluation_episode_interpreter", "EvaluationEpisodeInterpreter",
     module="aka.contracts.evaluation",
@@ -373,9 +402,9 @@ class CommandEvaluator(Protocol):
 
 @dataclass(frozen=True)
 class EvaluationConfiguration:
-    timeout: int = 600
-    repeats: int = 2
-    per_run_timeout: int = 120
+    timeout: int = derived_evaluation_timeout()
+    repeats: int = DEFAULT_ABBA_REPEATS
+    per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT
     shape_batch_size: int = 4
     max_parallelism: int = 4
     private_reference_dir: Path | None = None

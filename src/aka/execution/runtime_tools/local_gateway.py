@@ -67,7 +67,7 @@ ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 DEFAULT_BODY_LIMIT = 32 * 1024 * 1024
 DEFAULT_OUTPUT_LIMIT = 32 * 1024 * 1024
 DEFAULT_JOB_TIMEOUT = 600
-MAX_JOB_TIMEOUT = 600
+MAX_JOB_TIMEOUT = 10800
 MAX_SOURCE_BYTES = 24 * 1024 * 1024
 MAX_PROFILE_COUNTERS = 256
 PROFILE_LEVELS = frozenset({"survey", "sol", "deep"})
@@ -486,6 +486,13 @@ def _validate_typed_request(payload: Any, kind: str) -> dict[str, Any]:
     _validate_timeout(options.get("timeout_s", DEFAULT_JOB_TIMEOUT), "options.timeout_s")
 
     _validate_env_vars(payload.get("env_vars"))
+    runner_overrides = payload.get("runner_overrides", {})
+    if not isinstance(runner_overrides, dict):
+        raise ValueError("runner_overrides must be an object")
+    if "warmup_iters" in runner_overrides:
+        warmup = runner_overrides["warmup_iters"]
+        if type(warmup) is not int or not 0 <= warmup <= 1_000_000:
+            raise ValueError("runner_overrides.warmup_iters must be an integer in 0..1000000")
     _validate_requirements(payload.get("requirements"))
     _validate_idempotency_key(payload)
     lock_clocks = payload.get("lock_clocks", False)
@@ -1062,6 +1069,7 @@ class LocalScheduler:
             if kind in {"eval", "profile"} and request.get("lock_clocks", False):
                 clock_reset = self._lock_clocks(env)
                 clock_env = env
+            request = dict(request, _local_clock_locked=clock_reset is not None)
             current = self.store.get(job_id)
             if self._stop.is_set():
                 self.store.complete(
@@ -1246,6 +1254,8 @@ class LocalScheduler:
             "--bench-iters", str(options.get("bench_iters", 100)),
             "--skip-kernel-attribution",
         ]
+        if "warmup_iters" in request.get("runner_overrides", {}):
+            argv += ["--warmup-iters", str(request["runner_overrides"]["warmup_iters"])]
         if request.get("lock_clocks", False):
             argv.append("--clock-locked")
         return argv
@@ -1426,6 +1436,10 @@ class LocalScheduler:
                     return
                 if isinstance(result, dict):
                     result["kernel_attribution"] = "not_collected"
+                    result["clock_lock"] = {
+                        "requested": request.get("lock_clocks", False),
+                        "applied": request.get("_local_clock_locked", False),
+                    }
                     # Candidate compile/correctness failure is an evaluation outcome, not
                     # gateway infrastructure failure. run_eval intentionally exits nonzero
                     # in that case, while the public job still completes successfully.

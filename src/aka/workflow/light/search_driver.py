@@ -15,7 +15,7 @@ from threading import Event
 
 from aka.workflow.light.long_horizon import main_adapter
 from aka.workflow.light.long_horizon.campaign import LongHorizonCampaign
-from aka.workflow.light.orchestration.durable_state import durable_write_json
+from aka.core.filesystem import durable_write_json
 from aka.workflow.light.orchestration.version_records import version_record_path
 from .search import latency, read_state
 from .search_git import commit_files

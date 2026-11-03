@@ -136,6 +136,10 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
     driver_path = Path(remote_numerical.__file__)
     driver = PreparationFile(f"{directory}/test_kernel.py", read(driver_path), content_type="text/x-python")
     inputs.append(driver)
+    inputs.append(PreparationFile(
+        f"{directory}/numerical_inputs.py",
+        read(driver_path.with_name("numerical_inputs.py")), content_type="text/x-python",
+    ))
     requirements, dependency_policy = _requirements(configuration, evaluation_input)
     parameters = {
         "comparison": {"metric": "relative_l2", "max_rel_l2": limit},

@@ -14,11 +14,11 @@ from .search import SearchOptions
 
 @dataclass(frozen=True)
 class WorkflowOptions:
-    numerical_validation: bool = True
+    numerical_validation: bool = False
     goal_episodes: bool = False
     generate_memory: bool = False
     output_limit_recovery_retries: int = 2
-    episode_timeout_seconds: float = 28800
+    episode_timeout_seconds: float = 14400
     search: SearchOptions | dict | None = None
     wiki: bool = False
     wiki_options: dict | None = None

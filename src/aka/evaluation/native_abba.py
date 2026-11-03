@@ -115,7 +115,7 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
         [f"{key}={value}" for key, value in environment.items()], list(command.command), "run",
         reference_dir=reference, reference_content=references, requirements=requirements,
         runtime_version=configuration.environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", ""),
-        candidate_source=candidate[0], candidate_solution=candidate[1])
+        candidate_source=candidate[0], candidate_solution=candidate[1], measurement_environment=configuration.environment)
     payload["candidate"] = candidate[3]
     payload["abba"] = {"baseline": baseline[3], "repeats": configuration.repeats // 2}
     payload["spec"]["languages"] = _candidate_languages(candidate[1], candidate_sources=(baseline[0], candidate[0]))
