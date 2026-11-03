@@ -61,5 +61,3 @@ def remote_termination(job):
     if job.get("status") == "succeeded" and isinstance(result, dict):
         return True
     return None
-
-
