@@ -167,12 +167,15 @@ class LongSessionRunner:
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         owned = ExitStack()
+        current_session = ExitStack()
+        owned.callback(current_session.close)
 
         def open_native(identity):
+            current_session.close()
             environment = dict(telemetry_environment or {})
             selected_access = access
             if tool_session_factory is not None:
-                grant = owned.enter_context(
+                grant = current_session.enter_context(
                     tool_session_factory(workspace, access=access, deadline=deadline)
                 )
                 environment.update(grant.environment)
@@ -183,8 +186,9 @@ class LongSessionRunner:
                 session_id=identity,
                 environment=environment,
                 access=selected_access,
+                output_directory=output_directory,
             )
-            owned.callback(native.close)
+            current_session.callback(native.close)
             return native
 
         try:
@@ -327,7 +331,7 @@ class LongSessionRunner:
                     if (deadline - time.monotonic() <= 0 or
                             (remaining_token_budget is not None and total_tokens >= remaining_token_budget)):
                         raise InfrastructureUnavailable("Rate-limited Episode reached its budget; draft preserved")
-                    if (cancel if cancel is not None else Event()).wait(delay):
+                    if (cancel if cancel is not None else Event()).wait(min(delay, max(0, deadline - time.monotonic()))):
                         from concurrent.futures import CancelledError
                         raise CancelledError("Search coordinator stopped rate-limit recovery")
                     continuation = (
@@ -340,13 +344,8 @@ class LongSessionRunner:
                         next_prompt = continuation
                         retry_resume = True
                     else:
-                        native.close()
                         active_session_id = str(uuid.uuid4())
-                        native = self.agent.open_session(
-                            self.agent_cli, workspace, session_id=active_session_id,
-                            environment=telemetry_environment,
-                            output_directory=output_directory,
-                        )
+                        native = open_native(active_session_id)
                         next_prompt = prompt.rstrip() + "\n\n" + continuation
                     continue
                 if failure_kind == "provider_error":
@@ -399,7 +398,6 @@ class LongSessionRunner:
                         )
                         # Unlike a report-format repair, this starts a fresh
                         # model context without resetting the Episode/draft.
-                        owned.close()
                         active_session_id = str(uuid.uuid4())
                         native = open_native(active_session_id)
                         purpose = "output_limit_recovery"
