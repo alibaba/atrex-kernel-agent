@@ -35,7 +35,7 @@ class EpisodeSearchDriver:
                   "inherit_state": self.campaign.module_options.inherit_state,
                   "research_records": self.campaign.research_records,
                   "wiki": self.campaign.tool_runtime.wiki,
-                  "time_budget_policy": "wall-clock",
+                  "time_budget_policy": "active-time",
                   "repetitions": self.campaign.tool_runtime.measurement_repetitions,
                   "evaluation": {name: getattr(self.campaign, name) for name in (
                       "sandbox_hardware", "sandbox_profile", "sandbox_url", "sandbox_ssh",

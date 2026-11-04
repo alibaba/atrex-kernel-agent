@@ -104,7 +104,8 @@ See [Wiki providers](optional-light-modules.md#wiki-providers).
 
 Evaluation controls measurement repetitions. Light Workflow configuration controls
 queue/request timeouts and optional Wiki settings. Blocking authenticated Runtime requests pause the
-requesting agent tree. Episode deadlines default to four hours and include blocked requests as wall-clock time.
+requesting agent tree. Episodes default to four hours of active Agent time and exclude
+these blocked waits. Used time survives continuation and clean restart; downtime is excluded.
 The handler continues running and resumes the agent before sending its response.
 Cancellation and capability revocation terminate owned work rather than granting more authority.
 

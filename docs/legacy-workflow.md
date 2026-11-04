@@ -346,7 +346,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --verify-repeats N               ABBA repeat pairs (default: 2)
 --verify-run-timeout S           ABBA performance budget (default: 300)
 --timeout S                      Explicit enclosing evaluation allocation
---framework-baseline-timeout S   Baseline wall-clock budget (default: 28800)
+--framework-baseline-timeout S   Baseline active-Agent-time budget (default: 28800)
 --setup-timeout S                Setup budget (default: 7200)
 ```
 

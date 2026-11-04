@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 import math
 from pathlib import Path
@@ -97,6 +98,7 @@ class _Invocation:
     active: int = 0
     processes: set = field(default_factory=set)
     cancelled: bool = False
+    control: object | None = None
 
 
 class Agent:
@@ -341,6 +343,8 @@ class Agent:
             if context is None:
                 return
             context.cancelled = True
+            if context.control is not None:
+                context.control.kill()
             processes = tuple(context.processes)
             from .tools.protocol import TOKEN_ENV
             token = context.authority.get(TOKEN_ENV)
@@ -387,6 +391,7 @@ class Agent:
             context.active += 1
             self._running += 1
         launch = None
+        owned_control = ExitStack()
         try:
             if any((host_transport(name) or name.startswith(POLICY_ENVIRONMENT_PREFIX))
                    and name not in context.authority for name in values):
@@ -410,7 +415,18 @@ class Agent:
                 context.host_home,
                 context.access,
             )
+            from .execution.control import SessionControl
+            from .tools.protocol import TOKEN_ENV
+            control = SessionControl(suspend=self._process_runner is None)
+            with self._lock:
+                if context.cancelled or self._closed:
+                    raise RuntimeError("Agent session has been cancelled")
+                context.control = control
+            owned_control.callback(control.kill)
+            if TOKEN_ENV in context.authority:
+                owned_control.enter_context(self._tool_host.bind_control(cwd, values, control))
             if self._process_runner is not None:
+                control.clock.start()
                 return self._process_runner(
                     launch.command, cwd=cwd, timeout=limit, env=launch.environment
                 )
@@ -423,16 +439,21 @@ class Agent:
                 unavailable=self._unavailable,
                 violation=self._violation,
                 inherited_descriptors=launch.pass_fds,
+                session_control=control,
             )
         finally:
-            if launch is not None:
-                launch.close()
-            with self._lock:
-                context.processes.clear()
-                context.active -= 1
-                self._running -= 1
-                self._processes = {p for p in self._processes if p.poll() is None}
-                self._idle.notify_all()
+            try:
+                owned_control.close()
+            finally:
+                if launch is not None:
+                    launch.close()
+                with self._lock:
+                    context.control = None
+                    context.processes.clear()
+                    context.active -= 1
+                    self._running -= 1
+                    self._processes = {p for p in self._processes if p.poll() is None}
+                    self._idle.notify_all()
 
     def runtime(self, runtime_id):
         from .runtime import build_agent_runtime
@@ -518,6 +539,9 @@ class Agent:
             if self._closed:
                 return
             self._closed = True
+            for context in self._invocations.values():
+                if context.control is not None:
+                    context.control.kill()
             processes = tuple(self._processes)
             tool_host = self._tool_host
         for process in processes:

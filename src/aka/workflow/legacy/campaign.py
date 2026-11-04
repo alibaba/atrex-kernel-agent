@@ -2214,9 +2214,7 @@ class Campaign:
         root = Path(workspace).resolve(strict=True)
         if not any(m.source == root and m.target == root for m in access.mounts):
             command_access = replace(access, mounts=(FilesystemMount(root, root, True), *access.mounts))
-        import time
-        registration = self.services.command_session(workspace, command_access,
-            deadline=time.monotonic() + timeout if timeout is not None else None) if plugins else nullcontext(({}, None))
+        registration = self.services.command_session(workspace, command_access) if plugins else nullcontext(({}, None))
         runtime = (
             self.agent_runtime
             if agent_cli == self.agent_cli

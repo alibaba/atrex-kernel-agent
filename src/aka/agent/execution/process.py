@@ -102,6 +102,12 @@ def signal_process_groups(process_groups: set[int], sig: signal.Signals) -> None
             os.killpg(process_group, sig)
         except ProcessLookupError:
             pass
+        except PermissionError:
+            # macOS may report EPERM for a group containing only already-killed
+            # zombies. Do not hide a denial for any remaining live member.
+            from aka.core.processes import process_snapshot
+            if any(record.pgid == process_group for record in process_snapshot().values()):
+                raise
 
 
 def _monitor(
@@ -150,88 +156,79 @@ def run_bounded(
     *,
     spawn=None,
     inherited_descriptors=(),
+    session_control=None,
     unavailable=None,
     violation=None,
 ) -> tuple[str, str, int, bool]:
-    """Run a guarded command, optionally without a wall-clock deadline."""
+    """Bound active Agent time; admitted host waits suspend the owned tree."""
     from ..provider import validate_timeout
+    from .control import SessionControl
 
     validate_timeout(timeout)
+    control = session_control or SessionControl()
     spawn = spawn or spawn_session
-    proc = spawn(
-        command,
-        role="coding-agent",
-        inherited_descriptors=inherited_descriptors,
-        environment=env,
-        cwd=str(cwd),
-        stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
+    proc = None
+    guard = None
     guard_stop = threading.Event()
-    failures = []
-    groups = {proc.pid}
-    guard = threading.Thread(
-        target=dependency_guard,
-        args=(proc, guard_stop, failures, env or {}, groups, violation, unavailable),
-        name=f"agent-monitor-{proc.pid}",
-        daemon=True,
-    )
-    guard.start()
+    groups, failures = set(), []
     timed_out = False
     started = time.monotonic()
-    deadline = started + timeout if timeout is not None else None
+    last_heartbeat = started
     last_output_change = started
     output_sizes = (0, 0)
     try:
+        control.clock.start()
+        proc = spawn(
+            command, role="coding-agent", inherited_descriptors=inherited_descriptors,
+            environment=env, cwd=str(cwd), stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        groups.add(proc.pid)
+        control.attach(proc.pid)
+        guard = threading.Thread(target=dependency_guard,
+            args=(proc, guard_stop, failures, env or {}, groups, violation, unavailable),
+            name=f"agent-monitor-{proc.pid}", daemon=True)
+        guard.start()
         while True:
-            remaining = (
-                None if deadline is None else max(0, deadline - time.monotonic())
-            )
+            control.poll()
+            remaining = control.clock.remaining(timeout)
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(command, timeout)
             try:
-                stdout, stderr = proc.communicate(
-                    timeout=AGENT_HEARTBEAT_SECONDS
-                    if remaining is None
-                    else min(AGENT_HEARTBEAT_SECONDS, remaining)
-                )
+                stdout, stderr = proc.communicate(timeout=min(.1, remaining))
                 break
             except subprocess.TimeoutExpired as exc:
-                now = time.monotonic()
-                if deadline is not None and now >= deadline:
+                if control.clock.remaining(timeout) <= 0:
                     raise
-                # communicate() keeps draining both pipes across timeout retries.
-                # TimeoutExpired carries cumulative bytes, even with text=True.
+                now = time.monotonic()
                 sizes = (len(exc.output or b""), len(exc.stderr or b""))
                 if sizes != output_sizes:
-                    last_output_change = now
-                    output_sizes = sizes
-                print(
-                    f"[agent-heartbeat] elapsed={round(now - started)}s "
-                    f"process_running={proc.poll() is None} "
-                    f"stdout_bytes={sizes[0]} stderr_bytes={sizes[1]} "
-                    f"output_unchanged_seconds={round(now - last_output_change)}",
-                    flush=True,
-                )
+                    last_output_change, output_sizes = now, sizes
+                if now - last_heartbeat >= AGENT_HEARTBEAT_SECONDS:
+                    print(f"[agent-heartbeat] elapsed={round(now - started)}s "
+                        f"active={round(control.clock.active_seconds())}s "
+                        f"process_running={proc.poll() is None} "
+                        f"stdout_bytes={sizes[0]} stderr_bytes={sizes[1]} "
+                        f"output_unchanged_seconds={round(now - last_output_change)}", flush=True)
+                    last_heartbeat = now
     except subprocess.TimeoutExpired:
         timed_out = True
-        process_groups = groups | descendant_process_groups(proc.pid)
-        signal_process_groups(process_groups, signal.SIGKILL)
+        control.kill()
+        signal_process_groups(groups, signal.SIGKILL)
         stdout, stderr = proc.communicate()
     except BaseException:
-        process_groups = groups | descendant_process_groups(proc.pid)
-        signal_process_groups(process_groups, signal.SIGTERM)
-        try:
-            proc.communicate(timeout=5)
-        except subprocess.TimeoutExpired:
-            signal_process_groups(process_groups, signal.SIGKILL)
+        control.kill()
+        if proc is not None:
+            signal_process_groups(groups | descendant_process_groups(proc.pid), signal.SIGKILL)
             proc.communicate()
         raise
     finally:
         guard_stop.set()
-        guard.join(timeout=1)
-    # Reap surviving children even when the CLI leader exited successfully.
-    signal_process_groups(groups, signal.SIGKILL)
+        if guard is not None:
+            guard.join(timeout=1)
+        # Kill before closing so a late tool completion can never resume a survivor.
+        control.kill()
+        signal_process_groups(groups, signal.SIGKILL)
     returncode = proc.returncode
     if failures:
         returncode, message = failures[0]

@@ -155,11 +155,15 @@ transactions, source seals, and promotion audits. Direct HTTP replay uses durabl
 keys. An uncertain CLI submission without an ID needs reconciliation, not blind resubmission.
 
 Session throttling and output-limit recovery retain the Episode draft and observation history.
-Stage limits use wall-clock time, including authenticated blocking Runtime requests.
+Agent invocations and Workflow phases count active Agent time. A fully authenticated
+Runtime request suspends the owned Agent process tree; its queue and handler wait do
+not spend that allowance. Ordinary Agent execution, including arbitrary sleep, does.
 Agent invocations default to eight hours, framework baseline to eight hours, and Light
-Episodes to four hours. Explicit overrides apply within the remaining parent deadline.
-The baseline and Episode clocks survive restart; there is no default Campaign-wide cap.
-GPU, Wiki, and queue deadlines remain independently enforced.
+Episodes to four hours. Explicit overrides apply within the remaining parent allowance.
+Baseline and Episode records preserve used time across continuation and clean restart,
+excluding downtime. Old wall-clock records and an unfinished in-flight checkpoint
+require explicit reconciliation; they never grant a fresh budget. There is no default
+Campaign-wide cap. GPU, Wiki, queue and recovery-window deadlines remain elapsed-time limits.
 
 Capture is diagnostic; missing transcripts or usage counters remain explicit gaps.
 Canonical state never depends on an Agent-writable projection.

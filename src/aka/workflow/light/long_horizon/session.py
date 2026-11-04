@@ -135,12 +135,12 @@ class LongSessionRunner:
         self.source_inventory = source_inventory
 
     def run(self, *args, episode_timeout_seconds=None, resumed=False, **kwargs) -> SessionResult:
-        from aka.workflow.light.deadline import episode_deadline
-        deadline = episode_deadline(episode_timeout_seconds, kwargs.get("output_directory"), resumed=resumed)
-        if deadline is not None and deadline <= time.monotonic():
-            return SessionResult(-signal.SIGKILL, True, 0, "", 0, None,
-                completion_diagnosis="Episode deadline exhausted; no session started")
-        return self._run(*args, deadline=deadline, **kwargs)
+        from aka.workflow.light.deadline import episode_budget
+        with episode_budget(episode_timeout_seconds, kwargs.get("output_directory"), resumed=resumed) as budget:
+            if budget.is_set():
+                return SessionResult(-signal.SIGKILL, True, 0, "", 0, None,
+                    completion_diagnosis="Episode active-time budget exhausted; no session started")
+            return self._run(*args, budget=budget, **kwargs)
 
     def _run(
         self,
@@ -150,7 +150,7 @@ class LongSessionRunner:
         handoff_path: Path,
         handoff_resumes: int,
         completion_check: CompletionCheck,
-        deadline: float | None,
+        budget,
         reasoning_effort: str = "max",
         session_id: str = "",
         output_directory: Path | None = None,
@@ -179,7 +179,7 @@ class LongSessionRunner:
             selected_access = access
             if tool_session_factory is not None:
                 grant = current_session.enter_context(
-                    tool_session_factory(workspace, access=access, deadline=deadline)
+                    tool_session_factory(workspace, access=access, deadline=None)
                 )
                 environment.update(grant.environment)
                 selected_access = grant.filesystem_access
@@ -216,13 +216,13 @@ class LongSessionRunner:
             retry_resume = False
 
             while True:
-                remaining = float("inf") if deadline is None else deadline - time.monotonic()
+                remaining = budget.remaining()
                 if remaining <= 0:
                     if purpose == "rate_limit_recovery":
                         raise InfrastructureUnavailable("Rate-limited Episode exhausted its deadline; draft preserved")
                     timed_out = True
                     exit_status = exit_status or -signal.SIGKILL
-                    completion_diagnosis = "Episode deadline exhausted; no continuation started"
+                    completion_diagnosis = "Episode active-time budget exhausted; no continuation started"
                     break
                 cancel = getattr(self, "cancel_event", None)
                 if cancel is not None and cancel.is_set():
@@ -265,7 +265,7 @@ class LongSessionRunner:
                         "Correct the report fields indicated by Runtime feedback and resubmit "
                         "episode-report. Do not create Git commits or hand-write a handoff."
                     )
-                environment = {} if deadline is None else {"ATREX_AGENT_TIMEOUT_SECONDS": str(remaining)}
+                environment = {} if budget.seconds is None else {"ATREX_AGENT_TIMEOUT_SECONDS": str(remaining)}
                 if telemetry_attempt_prefix:
                     environment["ATREX_TELEMETRY_ATTEMPT_ID"] = f"{telemetry_attempt_prefix}-{attempt + 1}"
                 turn = native.invoke(
@@ -331,10 +331,10 @@ class LongSessionRunner:
                     print(f"[long-horizon] provider rate limit ({provider_error_code}); "
                           f"retry {rate_limit_retries} in {delay}s; same Episode and draft; "
                           "no optimization round consumed", flush=True)
-                    if ((deadline is not None and deadline <= time.monotonic()) or
+                    if (budget.is_set() or
                             (remaining_token_budget is not None and total_tokens >= remaining_token_budget)):
                         raise InfrastructureUnavailable("Rate-limited Episode reached its budget; draft preserved")
-                    wait = delay if deadline is None else min(delay, max(0, deadline - time.monotonic()))
+                    wait = delay  # No Agent is running during provider backoff.
                     if (cancel if cancel is not None else Event()).wait(wait):
                         from concurrent.futures import CancelledError
                         raise CancelledError("Search coordinator stopped rate-limit recovery")
@@ -355,8 +355,8 @@ class LongSessionRunner:
                 if failure_kind == "provider_error":
                     completion_diagnosis = f"Provider session failed: {provider_error_code}"
                 if timed_out:
-                    if deadline is not None and time.monotonic() >= deadline:
-                        completion_diagnosis = "Episode deadline exhausted; no continuation started"
+                    if budget.is_set():
+                        completion_diagnosis = "Episode active-time budget exhausted; no continuation started"
                         break
                     can_resume = (
                         bool(active_session_id)

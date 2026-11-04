@@ -1,5 +1,5 @@
 """Scoped local transport lifetime, independent of operation contents and results."""
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 import math
@@ -67,6 +67,8 @@ class _Registration:
     access: FilesystemAccess
     bindings: dict = field(repr=False)
     deadline: float | None
+    bound_once: bool = False
+    control: object | None = field(default=None, repr=False)
     operations: dict = field(default_factory=dict, repr=False)
     connections: set = field(default_factory=set, repr=False)
 
@@ -106,7 +108,10 @@ class ToolHost:
                     self.request.settimeout(None)
                     with owner._lock:
                         owner._check(token, registration)
+                        if registration.bound_once and registration.control is None:
+                            raise PermissionError("No active Agent invocation")
                         registration.operations[cancel] = done
+                        control = registration.control
                     def controls():
                         try:
                             while not done.is_set():
@@ -118,7 +123,10 @@ class ToolHost:
                     monitor = Thread(target=controls, daemon=True)
                     monitor.start()
                     context = AgentToolContext(registration.workspace, registration.access, cancel, registration.deadline)
-                    response = registration.bindings[selection["name"]].handle(payload, context)
+                    # Only a complete authenticated request can suspend its bound invocation.
+                    # Suspension ends after the handler, before sending a possibly blocking reply.
+                    with control.request() if control is not None else nullcontext():
+                        response = registration.bindings[selection["name"]].handle(payload, context)
                     if not isinstance(response, bytes):
                         raise TypeError()
                     send(self.wfile, "response", response)
@@ -192,6 +200,32 @@ class ToolHost:
         self._authenticate({"version": 1, "token": token, "workspace": str(workspace)})
         return {ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token,
                 "AKA_AGENT_TOOL_CLIENT_PATH": client_path}
+
+    @contextmanager
+    def bind_control(self, workspace, environment, control):
+        token, registration = self._authenticate({"version": 1,
+            "token": environment.get(TOKEN_ENV), "workspace": str(workspace)})
+        with self._lock:
+            self._check(token, registration)
+            if registration.control is not None or registration.operations:
+                raise RuntimeError("Agent tool grant already has active work")
+            registration.control = control
+            registration.bound_once = True
+        try:
+            yield
+        finally:
+            control.close()
+            with self._lock:
+                # Retain the closed controller until the next invocation binds;
+                # between turns a late request cannot launch unowned work.
+                pending = tuple(registration.operations.items())
+                for cancel, _ in pending:
+                    cancel.set()
+            for _, done in pending:
+                done.wait()
+            with self._lock:
+                if registration.control is control:
+                    registration.control = None
 
     def revoke(self, token):
         with self._lock:

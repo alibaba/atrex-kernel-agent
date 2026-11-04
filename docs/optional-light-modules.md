@@ -135,11 +135,28 @@ comparison/batching policy, not separate bench/warmup defaults. See
 
 ### Agent active-time limit and blocking Runtime calls
 
-The heading is retained for old links; the current limit is wall-clock time. Light defaults to a four-hour Episode deadline, configurable through `episode_timeout_seconds`.
-Blocked tools count against that deadline; restart and repair retain its original expiry.
-Agent invocations and framework baseline default to eight hours each. These are separate
-scopes, not a Campaign-wide eight-hour limit. `agent.timeout_seconds`, GPU execution,
-queue wait, Wiki and Workflow stage limits apply at their own scopes.
+Light defaults to a four-hour active-time allowance, configurable through
+`episode_timeout_seconds`. Agent invocations and framework baseline default to eight
+hours each. These are separate scopes, not a Campaign-wide eight-hour limit.
+
+The shared Agent pauses its owned process tree only after the host receives a complete,
+authenticated tool request. Queue and handler waits are excluded while that tree is
+stopped; overlapping requests pause once and cancellation prevents a later resume.
+Ordinary Agent execution, provider waits inside the running CLI and arbitrary sleep
+still count. Workflow backoff between invocations and host downtime do not count.
+A trusted custom process runner without an owned local tree receives no wait exclusion.
+
+Baseline and Episode records store the frozen allowance, used active seconds and an
+in-flight marker (schema 2). Continuations and clean restarts keep used time; exhausted
+records start no new invocation. The records are locked against concurrent writers.
+Old wall-clock records, missing resumed state and abrupt host death with an in-flight
+marker stop for reconciliation. Preserve the record, establish that old work has stopped,
+and reconcile its used time; do not delete the record to renew an allowance. Matching
+old installations remain the supported option for old workspaces.
+
+GPU execution, numerical-case, queue, Wiki and retry-recovery limits remain independently
+enforced elapsed-time limits. A stage allowance is never converted into a static tool
+grant expiry.
 
 ### Optional Epoch / Trajectory search
 

@@ -134,7 +134,6 @@ class ManagedCampaign(Campaign):
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude",
                      reasoning_effort="max", extra_environment=None, observation_directory=None, **legacy):
-        import time
         from aka.workflow.budgets import remaining_timeout
         timeout = remaining_timeout(timeout)
         environment = dict(extra_environment or {})
@@ -153,8 +152,7 @@ class ManagedCampaign(Campaign):
                 result.observation_errors)
         if role == "optimizer":
             self.start_runtime()
-            with self._supervisor_runtime.session(workspace, environment, access=access,
-                    deadline=time.monotonic() + timeout) as grant:
+            with self._supervisor_runtime.session(workspace, environment, access=access) as grant:
                 return invoke(grant.environment, grant.filesystem_access)
         return invoke(environment, access)
 
