@@ -20,7 +20,7 @@ from .execution.process import (
     spawn_session,
 )
 from .resources import shell_guard_path
-from .environment import HOST_TRANSPORT_PREFIXES as _HOST_TRANSPORT_PREFIXES, EXPLICIT_ROUTING, filter_environment, host_transport
+from .environment import HOST_TRANSPORT_PREFIXES as _HOST_TRANSPORT_PREFIXES, EXPLICIT_ROUTING, POLICY_ENVIRONMENT_PREFIX, filter_environment, host_transport
 
 
 DEFAULT_AGENT_TIMEOUT_SECONDS = 8 * 60 * 60
@@ -110,6 +110,7 @@ class Agent:
         unavailable=None,
         violation=None,
         host_environment=None,
+        policy_environment=None,
         shell_guard=None,
         session_name="",
         environment=None,
@@ -121,6 +122,7 @@ class Agent:
         self._unavailable = unavailable
         self._violation = violation
         self._host_environment = host_environment
+        self._policy_environment = policy_environment
         self._shell_guard = shell_guard
         self._session_name = session_name
         import os
@@ -295,6 +297,15 @@ class Agent:
             authority.update((name, values.get(name)) for name in state_names)
         if self._host_environment is not None:
             values = self._host_environment(values, explicit_environment)
+        policy_values = dict(self._policy_environment() if self._policy_environment is not None else {})
+        _validate_environment(policy_values)
+        if any(host_transport(name) for name in policy_values):
+            raise PermissionError("Agent process policy cannot project host transport credentials")
+        for name, value in policy_values.items():
+            if name in explicit_environment or name in authority and authority[name] != value:
+                raise PermissionError(f"Agent policy environment conflicts with owned {name}")
+        values.update(policy_values)
+        authority.update(policy_values)
         if scoped:
             permitted.update(authority)
             _validate_scoped_environment(values, permitted, authority)
@@ -377,7 +388,8 @@ class Agent:
             self._running += 1
         launch = None
         try:
-            if any(host_transport(name) and name not in context.authority for name in values):
+            if any((host_transport(name) or name.startswith(POLICY_ENVIRONMENT_PREFIX))
+                   and name not in context.authority for name in values):
                 raise PermissionError("Agent invocation cannot receive host transport environment")
             guard = self._guard_path()
             if guard is not None:

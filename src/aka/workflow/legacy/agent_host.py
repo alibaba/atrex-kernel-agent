@@ -6,9 +6,9 @@ from . import agent_policy
 
 
 def unavailable(environment):
-    state = environment.get("ATREX_ENVIRONMENT_STATE_FILE", "")
-    if state and (Path(state).is_file() or environment.get("ATREX_ENVIRONMENT_RESTART_SUPERVISED") != "1"
-                  and Path(state).with_name("restarting.json").is_file()):
+    # Recovery state is live host state; a process environment is not authority.
+    from aka.execution.recovery import environment_is_blocked
+    if environment_is_blocked():
         return (
             75,
             "Remote GPU environment became unavailable; terminated Agent for durable recovery",
@@ -19,11 +19,11 @@ def unavailable(environment):
 def process_policy(environment):
     from aka.contracts.agent import AgentProcessPolicy
     screen, state = agent_policy.protected_gateway_identity(environment)
-    protected = dict(environment, ATREX_PROTECTED_GATEWAY_SCREEN=screen, ATREX_PROTECTED_GATEWAY_STATE_DIR=state)
+    protected = {"ATREX_PROTECTED_GATEWAY_SCREEN": screen, "ATREX_PROTECTED_GATEWAY_STATE_DIR": state}
     return AgentProcessPolicy(
-        unavailable=lambda values: unavailable({**protected, **values}),
-        violation=lambda argv, values: violation(argv, {**values,
-            "ATREX_PROTECTED_GATEWAY_SCREEN": screen, "ATREX_PROTECTED_GATEWAY_STATE_DIR": state}),
+        unavailable=unavailable,
+        violation=lambda argv, values: violation(argv, {**values, **protected}),
+        environment=protected,
     )
 
 
@@ -46,10 +46,6 @@ def prepare_environment(values, explicit_environment=()):
     ):
         if name not in explicit_environment:
             values.pop(name, None)
-    screen, state = agent_policy.protected_gateway_identity(values)
-    values.update(
-        ATREX_PROTECTED_GATEWAY_SCREEN=screen, ATREX_PROTECTED_GATEWAY_STATE_DIR=state
-    )
     return values
 
 
@@ -72,14 +68,18 @@ def default_guard():
 
 
 def create_agent(options=AgentOptions(), *, shell_guard=None, **kwargs):
+    import os
     from aka.execution.processes import spawn_owned_session
+    environment = kwargs.get("environment")
+    policy = process_policy(os.environ if environment is None else environment)
 
     return Agent(
         options,
         spawn=spawn_owned_session,
-        unavailable=unavailable,
-        violation=violation,
+        unavailable=policy.unavailable,
+        violation=policy.violation,
         host_environment=prepare_environment,
+        policy_environment=lambda: policy.environment,
         shell_guard=default_guard() if shell_guard is None else shell_guard,
         **kwargs,
     )

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import ContextManager, Literal, Protocol
 from .filesystem import FilesystemAccess as AgentAccess, FilesystemMount as AgentMount
 from .execution import Cancellation
@@ -146,6 +147,11 @@ class AgentProcessPolicy:
     """Host callbacks evaluated while an Agent process is running."""
     unavailable: Callable[[Mapping[str, str]], tuple[int, str] | None] | None = None
     violation: Callable[[list[str], Mapping[str, str]], str | None] | None = None
+    # Host-owned values projected to shell guards and frozen per Agent session.
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
 
 
 @dataclass(frozen=True)

@@ -87,9 +87,23 @@ def apply(ctx, config):
         session_name=config.get("session_name", ""),
         unavailable=lambda environment: selected_process_policy(ctx, "unavailable", environment),
         violation=lambda argv, environment: selected_process_policy(ctx, "violation", argv, environment),
+        policy_environment=lambda: selected_policy_environment(ctx),
     )
     ctx.effect(agent.close, label="close Agent")
     ctx.provide(AGENT, agent)
+
+
+def selected_policy_environment(ctx):
+    from aka.contracts.agent import AgentProcessPolicy
+    values = {}
+    for entry in ctx.resolve("agent_process_policies"):
+        if not isinstance(entry.value, AgentProcessPolicy):
+            raise TypeError("Agent process policy must use the public contract")
+        for name, value in entry.value.environment.items():
+            if name in values and values[name] != value:
+                raise ValueError(f"Agent process policies disagree on {name}")
+            values[name] = value
+    return values
 
 
 def selected_process_policy(ctx, method, *args):

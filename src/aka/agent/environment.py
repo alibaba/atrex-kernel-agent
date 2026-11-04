@@ -6,6 +6,8 @@ HOST_TRANSPORT_PREFIXES = (
     "ATREX_GPU_WIKI_", "AKA_EXECUTION_", "AKA_GATEWAY_", "ATREX_AKA_RUNTIME_",
 )
 HOST_TRANSPORT_NAMES = frozenset({"ATREX_API_TOKEN", "ATREX_SERVER_URL", "ATREX_PRIVATE_REFERENCE_DIR"})
+# These are public guard targets, not credentials. Only a host policy may set them.
+POLICY_ENVIRONMENT_PREFIX = "ATREX_PROTECTED_GATEWAY_"
 EXPLICIT_ROUTING = frozenset({
     "ATREX_SANDBOX_GPU", "ATREX_SANDBOX_TIMEOUT", "ATREX_SANDBOX_PROFILE", "ATREX_SANDBOX_URL",
     "ATREX_SANDBOX_SSH", "ATREX_SANDBOX_SSH_INIT", "ATREX_SANDBOX_SSH_GPU",
@@ -25,5 +27,8 @@ def filter_environment(values, backend, *, explicit=()):
                   for name in DEFAULT_BACKEND_REGISTRY.create(runtime_id).environment_variables} - selected
     if any(host_transport(name) and name not in EXPLICIT_ROUTING or name in unselected for name in explicit):
         raise PermissionError("Agent cannot receive host transport or unselected backend environment")
+    if any(name.startswith(POLICY_ENVIRONMENT_PREFIX) for name in explicit):
+        raise PermissionError("Agent protection targets are owned by the host policy")
     return {name: value for name, value in values.items()
-            if (not host_transport(name) or name in explicit and name in EXPLICIT_ROUTING) and name not in unselected}
+            if (not host_transport(name) or name in explicit and name in EXPLICIT_ROUTING)
+            and name not in unselected and not name.startswith(POLICY_ENVIRONMENT_PREFIX)}
