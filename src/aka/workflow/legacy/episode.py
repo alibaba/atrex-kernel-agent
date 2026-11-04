@@ -30,7 +30,7 @@ from .protocol import read_handoff
 from .session import LongSessionRunner
 from .dependencies import EpisodeMeasurements, EpisodeEnvironment, Verifier
 from .store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
-from .episode_exchange import prepare as prepare_episode_exchange
+from .episode_exchange import prepare as prepare_episode_exchange, POLICY_REVIEW_REQUEST, policy_review_candidate
 from .telemetry import summarize_episode
 
 PROMPT_PATH = PROMPTS_DIR / "episode.md"
@@ -49,7 +49,7 @@ MEMORY_EXPERIMENT_FIELDS = (
 )
 MAX_MEMORY_EXPERIMENT_FIELD_CHARS = 2_000
 EPISODE_EVALUATIONS_PATH = Path(".atrex_long_horizon/evaluations.jsonl")
-FAST_POLICY_REVIEW_REQUEST_PATH = Path(".atrex_long_horizon/policy_review_request.json")
+FAST_POLICY_REVIEW_REQUEST_PATH = POLICY_REVIEW_REQUEST
 FAST_REASONING_EFFORT = "max"
 FULL_REASONING_EFFORT = "max"
 
@@ -394,25 +394,13 @@ class LongHorizonCampaign:
         stop_event: Event,
     ) -> None:
         """Review each atomically submitted fast candidate while its evaluator runs."""
-        request_path = worktree.path / FAST_POLICY_REVIEW_REQUEST_PATH
         reviewed: set[str] = set()
 
         def review_latest_request() -> None:
-            try:
-                payload = json.loads(request_path.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
+            candidate_commit = policy_review_candidate(
+                worktree.path, episode=worktree.episode, base_commit=worktree.base_commit)
+            if candidate_commit is None:
                 return
-            candidate_commit = (
-                payload.get("candidate_commit") if isinstance(payload, dict) else None
-            )
-            if (
-                not isinstance(payload, dict)
-                or payload.get("schema_version") != 1
-                or not isinstance(candidate_commit, str)
-                or not candidate_commit.strip()
-            ):
-                return
-            candidate_commit = candidate_commit.strip()
             if candidate_commit in reviewed:
                 return
             reviewed.add(candidate_commit)
@@ -469,6 +457,7 @@ class LongHorizonCampaign:
                 "FRAMEWORK": self.base_campaign.framework,
                 "BASE_COMMIT": worktree.base_commit,
                 "EPISODE_BRANCH": worktree.branch,
+                "POLICY_REVIEW_REQUEST_PATH_SHELL": json.dumps(str(FAST_POLICY_REVIEW_REQUEST_PATH)),
                 "JOURNAL_PATH": journal_path,
                 "JOURNAL_PATH_SHELL": json.dumps(str(journal_path)),
                 "HANDOFF_PATH": handoff_path,
@@ -1753,6 +1742,8 @@ class LongHorizonCampaign:
                 active, episode_mode=episode_mode
             )
             runtime = prepare_episode_exchange(worktree.path)
+            if not resumed:
+                (runtime / POLICY_REVIEW_REQUEST.name).unlink(missing_ok=True)
             journal_path = runtime / "journal.json"
             handoff_path = runtime / "handoff.json"
             if not resumed or not journal_path.is_file():

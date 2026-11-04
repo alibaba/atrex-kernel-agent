@@ -116,10 +116,10 @@ git add -- kernel.py
 if [ -f solution.json ]; then git add -- solution.json; fi
 git commit -m "v{{VERSION}} trial N: fast kernel candidate"
 candidate_commit=$(git rev-parse HEAD)
-printf '{"schema_version":1,"candidate_commit":"%s"}\n' "$candidate_commit" \
-  > .atrex_long_horizon/policy_review_request.json.tmp
-mv .atrex_long_horizon/policy_review_request.json.tmp \
-  .atrex_long_horizon/policy_review_request.json
+request={{POLICY_REVIEW_REQUEST_PATH_SHELL}}
+printf '{"schema_version":2,"episode":{{EPISODE}},"base_commit":"{{BASE_COMMIT}}","candidate_commit":"%s"}\n' "$candidate_commit" \
+  > "$request.tmp"
+mv "$request.tmp" "$request"
 ```
 
 Immediately run one official full-workload base-seed evaluator:
