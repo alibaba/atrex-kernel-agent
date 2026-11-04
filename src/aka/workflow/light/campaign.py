@@ -130,6 +130,9 @@ class ManagedCampaign(Campaign):
                 candidate = workspace / candidate
             if candidate.exists():
                 protected.append(candidate)
+        # A hidden subtree is already inaccessible. Do not also ask Agent to
+        # expose its private context store through a read-only overlay.
+        protected = [path for path in protected if not any(path.is_relative_to(root) for root in hidden)]
         return FilesystemAccess((FilesystemMount(workspace, workspace, True), *resources.mounts), tuple(dict.fromkeys(hidden)), tuple(dict.fromkeys(protected)))
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude",
