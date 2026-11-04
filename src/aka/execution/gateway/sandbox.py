@@ -1769,6 +1769,18 @@ def _observe_job_wait(job_id, job, started):
         "observed_at_ms": int(time.time() * 1000), "query_ok": job is not None})
 
 
+def _permanent_job_query_failure(args, job, status):
+    """Fail a query without claiming that the accepted job stopped or was rejected."""
+    from .protocol import FAILURE_PREFIX
+    diagnostic = {"failure_class": "request" if status == 400 else "authentication",
+        "reason": "original-job-query-failed", "http_status": status, "job_id": job["job_id"]}
+    emit_diagnostic(diagnostic)
+    # Do not use an admission-error marker: this job already has an identity.
+    # Keep response contents private; the owned fact channel carries the status.
+    return subprocess.CompletedProcess(args, 1, json.dumps(job),
+        FAILURE_PREFIX + json.dumps(diagnostic, sort_keys=True))
+
+
 def _wait_direct_job(*, url, kind, job_id, deadline, started, attempt_id=None,
                      profile=None, identity="", key=None):
     from aka.execution.outcomes import observe_attempt
@@ -1787,7 +1799,7 @@ def _wait_direct_job(*, url, kind, job_id, deadline, started, attempt_id=None,
             except (OSError, RuntimeError, ValueError) as error:
                 _observe_job_wait(job_id, None, started)
                 if isinstance(error, GatewayHTTPError) and error.status in {400, 401, 403}:
-                    break
+                    return _permanent_job_query_failure(["direct-gateway", kind, job_id], last, error.status)
                 time.sleep(2 if deadline is None else min(2, max(0, deadline - time.monotonic())))
                 continue
             last = job
@@ -2051,6 +2063,7 @@ def _resume_interrupted_agate_wait(
     started = time.monotonic() - elapsed
     deadline = None if remaining is None else time.monotonic() + remaining
     resumed = initial
+    last = initial_job or {"job_id": job_id, "status": "unknown"}
     while deadline is None or time.monotonic() < deadline:
         remaining = AGATE_WAIT_SLICE_SECONDS if deadline is None else deadline - time.monotonic()
         try:
@@ -2063,6 +2076,13 @@ def _resume_interrupted_agate_wait(
             )
         except (OSError, subprocess.TimeoutExpired) as error:
             resumed = subprocess.CompletedProcess(get_command, ENVIRONMENT_TEMPFAIL, "", type(error).__name__)
+        from .protocol import protocol_failure
+        failure = protocol_failure(resumed, lambda _: None)
+        if failure is not None and failure.get("http_status") in {400, 401, 403}:
+            _observe_job_wait(job_id, None, started)
+            failed = _permanent_job_query_failure(resumed.args, last, failure["http_status"])
+            return subprocess.CompletedProcess(failed.args, failed.returncode, failed.stdout,
+                "\n".join([*stderr_parts[:2], failed.stderr]))
         if resumed.stderr:
             stderr_parts = [*stderr_parts[:2], resumed.stderr.rstrip()]
         job = _job_response(resumed.stdout or "")
@@ -2070,6 +2090,8 @@ def _resume_interrupted_agate_wait(
             job = None
             resumed = subprocess.CompletedProcess(get_command, ENVIRONMENT_TEMPFAIL, "", "original-job-identity-mismatch")
         _observe_job_wait(job_id, job, started)
+        if job is not None:
+            last = job
         if job and job.get("status") in {"succeeded", "failed", "cancelled"}:
             break
         if not job:
@@ -2937,14 +2959,14 @@ def main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
 
 
 def _run_agate_once(*args, **kwargs):
-    from .protocol import protocol_failure
+    from .protocol import classify_gateway_outcome, protocol_failure
     from aka.execution.outcomes import observe_attempt
     agate = kwargs.get("agate", ())
     operation = agate[1] if len(agate) > 1 else "unknown"
     with backend_attempt(operation):
         process = _run_agate_once_unchecked(*args, **kwargs)
         observe_attempt(process, operation=operation)
-        diagnostic = protocol_failure(process, _submitted_job_id)
+        diagnostic = classify_gateway_outcome(process).failure_record() or protocol_failure(process, _submitted_job_id)
         if diagnostic is not None:
             emit_diagnostic(diagnostic)
             print("[sandbox] gateway_protocol_failure=" + json.dumps(diagnostic, sort_keys=True), file=sys.stderr, flush=True)
