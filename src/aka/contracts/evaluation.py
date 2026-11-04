@@ -145,17 +145,12 @@ class NumericalProbeResult:
         }
 
 
-# These are execution-policy defaults shared by the workflow configuration and
-# Light's native evaluator. The enclosing allocation is derived from the work
-# it contains; it is not an independent timeout users must keep in sync.
-# Some production Shapes spend more than five minutes in input materialization
-# plus the first JIT touch. Keep candidate construction/correctness distinct
-# from the shorter steady-state performance budget.
-DEFAULT_CANDIDATE_TIMEOUT = 600
-DEFAULT_PERFORMANCE_TIMEOUT = 300
-# One A or B run uses the same default execution budget as an ordinary
-# performance measurement. Operators may still override either limit.
-DEFAULT_ABBA_RUN_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
+# Legacy defaults. The local native harness owns its inner timing limits;
+# remote evaluators retain their own defaults unless explicitly overridden.
+DEFAULT_EVALUATION_TIMEOUT = 600
+DEFAULT_CANDIDATE_TIMEOUT = 20
+DEFAULT_PERFORMANCE_TIMEOUT = 120
+DEFAULT_ABBA_RUN_TIMEOUT = 120
 DEFAULT_ABBA_REPEATS = 2
 ABBA_SCHEDULING_OVERHEAD = 30
 MAX_TYPED_GATEWAY_JOB_TIMEOUT = 10_800
@@ -178,6 +173,7 @@ def derived_evaluation_timeout(
     if any(type(value) is not int or value <= 0 for value in values.values()):
         raise ValueError("evaluation timing inputs must be positive integers")
     return max(
+        DEFAULT_EVALUATION_TIMEOUT,
         candidate_timeout + performance_timeout,
         2 * repeats * per_run_timeout + ABBA_SCHEDULING_OVERHEAD,
     )

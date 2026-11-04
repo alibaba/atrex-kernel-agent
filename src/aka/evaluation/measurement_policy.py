@@ -1,18 +1,19 @@
 """Default timing budgets; the selected evaluator defines their units and statistics."""
 
-DEFAULT_BENCH_ITERS = 100
-DEFAULT_WARMUP_ITERS = 10
+DEFAULT_BENCH_ITERS = 20
+# Legacy leaves warmup to the selected evaluator unless explicitly requested.
+DEFAULT_WARMUP_ITERS = None
 
 
 def warmup_overrides(environment=None):
-    """Preserve an explicit warmup choice; otherwise freeze the common default."""
+    """Preserve an explicit warmup choice; otherwise use the evaluator default."""
     raw = (environment or {}).get("AKA_GATEWAY_WARMUP_ITERS")
-    if raw == "default":
+    if raw is None or raw == "default":
         return {}
     if raw is not None and type(raw) not in (int, str):
         raise ValueError("warmup_iters must be a non-negative integer or default")
     try:
-        value = DEFAULT_WARMUP_ITERS if raw is None else int(raw)
+        value = int(raw)
     except ValueError as error:
         raise ValueError("warmup_iters must be a non-negative integer or default") from error
     if value < 0:

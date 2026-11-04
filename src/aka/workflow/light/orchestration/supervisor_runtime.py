@@ -275,8 +275,7 @@ class SupervisorRuntime:
         self.evaluation_identity = getattr(services, "evaluation_identity", None)
         self.environment = dict(services.configuration.environment)
         from aka.execution.configuration import queue_wait_grace
-        self.gateway_queue_wait_grace = 0 if config.ssh else queue_wait_grace(
-            {"ATREX_SANDBOX_QUEUE_WAIT_GRACE": self.environment.get("ATREX_SANDBOX_QUEUE_WAIT_GRACE", "120")})
+        self.gateway_queue_wait_grace = 0 if config.ssh else queue_wait_grace(self.environment)
         self.environment["ATREX_SANDBOX_QUEUE_WAIT_GRACE"] = str(self.gateway_queue_wait_grace)
         self.measurement_repetitions = config.measurement_repetitions
         if self.measurement_repetitions not in {1, 3}:

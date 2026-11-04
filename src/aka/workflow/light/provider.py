@@ -19,7 +19,7 @@ class WorkflowOptions:
     goal_episodes: bool = False
     generate_memory: bool = False
     output_limit_recovery_retries: int = 2
-    episode_timeout_seconds: float = 14400
+    episode_timeout_seconds: float | None = None
     search: SearchOptions | dict | None = None
     wiki: bool = False
     wiki_options: dict | None = None
@@ -45,7 +45,8 @@ class WorkflowOptions:
         from aka.resources.wiki.config import WikiConfig
         WikiConfig(**(self.wiki_options or {}))
         from .deadline import episode_timeout
-        episode_timeout(self.episode_timeout_seconds)
+        if self.episode_timeout_seconds is not None:
+            episode_timeout(self.episode_timeout_seconds)
         if (type(self.output_limit_recovery_retries) is not int
                 or not 0 <= self.output_limit_recovery_retries <= 10):
             raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")

@@ -31,7 +31,7 @@ class WorkflowSettings:
     optimization_mode: str = "leaderboard"
     framework_baseline: str = "auto"
     gateway_candidate_recovery: str = "disabled"
-    framework_baseline_timeout: int = 28800
+    framework_baseline_timeout: int = 10800
     handoff_resumes: int = 2
     production_review_timeout: int = 600
     review_trace_mode: str = "errors"

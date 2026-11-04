@@ -31,7 +31,7 @@ Config = {"type": "object", "properties": {
 }, "additionalProperties": False}
 Defaults = {"startup": False, "numerical_validation": False, "goal_episodes": False, "generate_memory": False,
             "wiki": False, "research_records": False, "inherit_state": True, "queue_timeout": 60,
-            "output_limit_recovery_retries": 2, "episode_timeout_seconds": 14400, "search": {}}
+            "output_limit_recovery_retries": 2, "search": {}}
 
 
 def validate_config(config):

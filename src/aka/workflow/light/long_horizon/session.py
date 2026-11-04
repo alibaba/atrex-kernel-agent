@@ -134,10 +134,10 @@ class LongSessionRunner:
         self.usage_policy = usage_policy
         self.source_inventory = source_inventory
 
-    def run(self, *args, episode_timeout_seconds=14400, resumed=False, **kwargs) -> SessionResult:
+    def run(self, *args, episode_timeout_seconds=None, resumed=False, **kwargs) -> SessionResult:
         from aka.workflow.light.deadline import episode_deadline
         deadline = episode_deadline(episode_timeout_seconds, kwargs.get("output_directory"), resumed=resumed)
-        if deadline <= time.monotonic():
+        if deadline is not None and deadline <= time.monotonic():
             return SessionResult(-signal.SIGKILL, True, 0, "", 0, None,
                 completion_diagnosis="Episode deadline exhausted; no session started")
         return self._run(*args, deadline=deadline, **kwargs)
@@ -150,7 +150,7 @@ class LongSessionRunner:
         handoff_path: Path,
         handoff_resumes: int,
         completion_check: CompletionCheck,
-        deadline: float,
+        deadline: float | None,
         reasoning_effort: str = "max",
         session_id: str = "",
         output_directory: Path | None = None,
@@ -216,7 +216,7 @@ class LongSessionRunner:
             retry_resume = False
 
             while True:
-                remaining = deadline - time.monotonic()
+                remaining = float("inf") if deadline is None else deadline - time.monotonic()
                 if remaining <= 0:
                     if purpose == "rate_limit_recovery":
                         raise InfrastructureUnavailable("Rate-limited Episode exhausted its deadline; draft preserved")
@@ -265,7 +265,7 @@ class LongSessionRunner:
                         "Correct the report fields indicated by Runtime feedback and resubmit "
                         "episode-report. Do not create Git commits or hand-write a handoff."
                     )
-                environment = {"ATREX_AGENT_TIMEOUT_SECONDS": str(remaining)}
+                environment = {} if deadline is None else {"ATREX_AGENT_TIMEOUT_SECONDS": str(remaining)}
                 if telemetry_attempt_prefix:
                     environment["ATREX_TELEMETRY_ATTEMPT_ID"] = f"{telemetry_attempt_prefix}-{attempt + 1}"
                 turn = native.invoke(
@@ -331,10 +331,11 @@ class LongSessionRunner:
                     print(f"[long-horizon] provider rate limit ({provider_error_code}); "
                           f"retry {rate_limit_retries} in {delay}s; same Episode and draft; "
                           "no optimization round consumed", flush=True)
-                    if (deadline - time.monotonic() <= 0 or
+                    if ((deadline is not None and deadline <= time.monotonic()) or
                             (remaining_token_budget is not None and total_tokens >= remaining_token_budget)):
                         raise InfrastructureUnavailable("Rate-limited Episode reached its budget; draft preserved")
-                    if (cancel if cancel is not None else Event()).wait(min(delay, max(0, deadline - time.monotonic()))):
+                    wait = delay if deadline is None else min(delay, max(0, deadline - time.monotonic()))
+                    if (cancel if cancel is not None else Event()).wait(wait):
                         from concurrent.futures import CancelledError
                         raise CancelledError("Search coordinator stopped rate-limit recovery")
                     continuation = (
@@ -354,7 +355,7 @@ class LongSessionRunner:
                 if failure_kind == "provider_error":
                     completion_diagnosis = f"Provider session failed: {provider_error_code}"
                 if timed_out:
-                    if time.monotonic() >= deadline:
+                    if deadline is not None and time.monotonic() >= deadline:
                         completion_diagnosis = "Episode deadline exhausted; no continuation started"
                         break
                     can_resume = (

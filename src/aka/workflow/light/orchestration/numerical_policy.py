@@ -22,7 +22,7 @@ from concurrent.futures import CancelledError
 from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.task.problem.resources import native_harness_script
 from aka.evaluation.drivers import numerical_inputs as probe_algorithms
-from aka.workflow.light.measurement_policy import CANDIDATE_TIMEOUT
+from aka.contracts.evaluation import DEFAULT_CANDIDATE_TIMEOUT
 from aka.workflow.light.host.workspace import read_input
 from aka.resources.publication import publish
 from aka.workflow.light.host.projection import bounded_text, credential_values, redact_diagnostics
@@ -312,10 +312,8 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
         durable_write_json(request, {
             "suite": suite, "case_ids": [plan["case_id"]], "rotation": digest,
             "mode": "thorough", "per_case_timeout": 540,
-            # Model construction may JIT-compile before the first input receipt.
-            # Use the ordinary Evaluate budget, not the legacy harness's 20s
-            # default. This is part of the recorded request/dedup identity.
-            "candidate_timeout_s": CANDIDATE_TIMEOUT,
+            # Freeze the Legacy native-harness default in the probe identity.
+            "candidate_timeout_s": DEFAULT_CANDIDATE_TIMEOUT,
             "max_rel_l2": _fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2,
         })
 
