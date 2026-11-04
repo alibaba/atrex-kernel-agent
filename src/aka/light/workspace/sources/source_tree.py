@@ -349,7 +349,7 @@ class SourceTree:
         return (True, json.loads(raw)) if raw is not None else (False, None)
     def validate_restore(self, previous, target):
         if previous != target:raise ValueError('Source contract cannot change within a Campaign')
-    layout = Layout('kernel.py', replaceable_baseline=False, archived=True, auxiliary_metadata=('solution.json',))
+    layout = Layout('kernel.py', replaceable_baseline=False, archived=True)
     def validate_policy(self, policy):return validate_policy(policy)
     def validate(self, files, policy):return validate_files(files, policy)
     def collect(self, workspace, policy, *, validate=True):return collect(workspace, policy, validate=validate)
@@ -372,8 +372,4 @@ class SourceTree:
     def evidence_paths(self, workspace, policy):return self.declared_paths(workspace,policy)
 
     def typed_limitation(self, workspace, policy):return None
-    def language_hints(self, workspace):
-        path = workspace/'solution.json'
-        value = json.loads(path.read_text()) if path.is_file() else {}
-        hints = value.get('languages', [])
-        return [str(v) for v in hints] if isinstance(hints,list) else []
+    def language_hints(self, workspace):return []
