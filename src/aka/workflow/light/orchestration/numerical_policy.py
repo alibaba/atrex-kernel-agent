@@ -19,8 +19,8 @@ import time
 import traceback
 from concurrent.futures import CancelledError
 
-from aka.task.problem.native_harness import _fp4_correctness_max_rel_l2
-from aka.task.problem.resources import native_harness_script
+from aka.evaluation.drivers.native_harness import _fp4_correctness_max_rel_l2
+from aka.evaluation.resources import native_harness_script
 from aka.evaluation.drivers import numerical_inputs as probe_algorithms
 from aka.contracts.evaluation import DEFAULT_CANDIDATE_TIMEOUT
 from aka.workflow.light.host.workspace import read_input

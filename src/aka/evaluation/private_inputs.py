@@ -46,6 +46,16 @@ def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capa
         files.update(content)
         return replace(command, prepared_inputs=PreparedExecutionInputs(
             tuple(files[name] for name in sorted(files)), (), tuple(sorted(content))))
+    if evaluator and evaluation_input.adapter == "legacy-native-v1":
+        from .resources import evaluator_harness
+        from .measurement_policy import native_command
+        item = evaluator_harness(evaluation_input)
+        if any(entry.path == item.path for entry in command.input_files):
+            raise ValueError("native evaluation cannot override the selected harness")
+        data = item.source.read_bytes() if item.source is not None else item.text.encode("utf-8")
+        files[item.path] = ExecutionFile(item.path, data)
+        if evaluation_input.harness is None:
+            command = replace(command, command=native_command(command.command, command.environment))
     # Private Task members replace only matching public allowlist paths.
     if evaluator and private and inject_private:
         for name in _PRIVATE_FILES:
@@ -54,7 +64,7 @@ def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capa
                 raise ValueError("required private evaluator input is missing: " + name)
             if item is not None:
                 files[name] = item
-    private_paths = set(files)
+    private_paths = set(files) - {"test_kernel.py"}
     if kind == "profile" and private:
         shapes = json.loads(content["shapes.json"].content)
         if not isinstance(shapes, dict) or not shapes:

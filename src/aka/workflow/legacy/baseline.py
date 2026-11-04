@@ -38,7 +38,8 @@ class WorkflowBaseline:
         return self.preparation(True).evaluator_directive()
 
     def install_native_evaluator(self):
-        harness = self.campaign.problem.evaluation.harness
+        from aka.evaluation.resources import evaluator_harness
+        harness = evaluator_harness(self.campaign.problem.evaluation)
         if harness is None:
             if self.campaign.atrex_bench_root:
                 raise ValueError("Task has no native evaluator harness")

@@ -65,8 +65,10 @@ def _destination(workspace, relative):
 
 
 def prepare_numerical(request, configuration, evaluation_input, *, output_root):
-    if evaluation_input is None or evaluation_input.harness is None:
-        raise ValueError("numerical preparation requires the frozen Task harness")
+    from .resources import evaluator_harness
+    harness = evaluator_harness(evaluation_input)
+    if harness is None:
+        raise ValueError("numerical preparation requires a selected evaluator harness")
     probe = request.numerical_probe
     for identity in (probe.rotation, probe.candidate_identity):
         if len(identity) != 64 or any(char not in "0123456789abcdef" for char in identity):
@@ -124,7 +126,7 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
     if metadata_content is not None:
         trusted["metadata.json"] = PreparationFile("metadata.json", metadata_content, content_type="application/json")
     if evaluation_input is not None:
-        for item in (*evaluation_input.files, evaluation_input.harness):
+        for item in (*evaluation_input.files, harness):
             if item is not None and item.path not in trusted:
                 content = read(item.source) if item.source is not None else item.text.encode("utf-8")
                 trusted[item.path] = PreparationFile(item.path, content)

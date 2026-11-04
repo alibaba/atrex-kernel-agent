@@ -8,7 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from aka.resources.bundles import resource_path
 from aka.evaluation.resources import profile_driver_script
-from aka.task.problem.resources import native_harness_script
+from aka.evaluation.resources import native_harness_script
 from aka.workflow.legacy.review_rules.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
 from aka.contracts.evaluation import (
     DEFAULT_ABBA_REPEATS,

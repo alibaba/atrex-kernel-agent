@@ -264,14 +264,15 @@ class WorkflowServices:
 
     def numerical_feedback(self, workspace, *, standard_correctness_passed=False):
         from aka.workflow.legacy.numerical_review import supplemental_feedback
+        from aka.evaluation.resources import evaluator_harness
+        selected_harness = evaluator_harness(self.evaluation_input())
 
         return supplemental_feedback(
             self.campaign,
             workspace,
             standard_correctness_passed=standard_correctness_passed,
             experiment=self.baseline_experiment,
-            harness=(self.evaluation_input().harness.source
-                     if self.evaluation_input().harness is not None else None),
+            harness=(selected_harness.source if selected_harness is not None else None),
         )
 
     def baseline(self):

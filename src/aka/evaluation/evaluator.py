@@ -138,12 +138,8 @@ class LegacyEvaluator:
         if self.evaluation_input is not None:
             from aka.task.problem.resources import validate_resources
             validate_resources(self.evaluation_input)
-            item = self.evaluation_input.harness
-            if item is not None:
-                expected = item.source.read_bytes() if item.source is not None else item.text.encode("utf-8")
-                installed = request.workspace / item.path
-                if not installed.is_file() or installed.read_bytes() != expected:
-                    raise ValueError("candidate evaluator harness differs from frozen Task content")
+            from .resources import validate_harness
+            validate_harness(request.workspace, self.evaluation_input)
         if request.mode == "numerical":
             from .numerical_preparation import prepare_numerical
             return prepare_numerical(request, config, self.evaluation_input, output_root=VERIFY_DIR)
@@ -159,7 +155,7 @@ class LegacyEvaluator:
             return PreparedEvaluation(
                 (
                     CommandSpec(
-                        request.workspace, tuple(command), timeout=config.timeout
+                        request.workspace, tuple(command), timeout=config.timeout, environment=config.environment
                     ),
                 ),
                 1,
@@ -178,8 +174,10 @@ class LegacyEvaluator:
         schedule = verification_schedule(config.repeats)
         if self.candidate_workspace is None:
             raise ValueError("ABBA preparation requires an injected CandidateWorkspace")
+        from .resources import evaluator_harness
         batches, shape_ids = _verification_shape_batches(
-            request.workspace, config.private_reference_dir, config.shape_batch_size
+            request.workspace, config.private_reference_dir, config.shape_batch_size,
+            harness=evaluator_harness(self.evaluation_input)
         )
         relative_dir = f"{VERIFY_DIR}/{uuid.uuid4().hex}"
         inputs = [PreparationFile(
@@ -205,6 +203,9 @@ class LegacyEvaluator:
             command = ["python3", "test_kernel.py", "--version", "vlong", "--no-memory"]
             for shape_id in ids or []:
                 command += ["--shape-id", shape_id]
+            if self.evaluation_input is not None and self.evaluation_input.adapter == "legacy-native-v1" and self.evaluation_input.harness is None:
+                from .measurement_policy import native_command
+                command = list(native_command(command, config.environment))
             value = {
                 "schema_version": 1,
                 "schedule": schedule,
@@ -226,6 +227,7 @@ class LegacyEvaluator:
                     ),
                     timeout=config.timeout,
                     operation="dev",
+                    environment=config.environment,
                     num_gpus=num_gpus,
                 )
             )

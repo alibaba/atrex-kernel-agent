@@ -48,10 +48,14 @@ def _geomean(values: list[float]) -> float | None:
 
 
 def _verification_shape_batches(
-    workspace: Path, private_reference_dir: Path | None, batch_size: int
+    workspace: Path, private_reference_dir: Path | None, batch_size: int, *, harness=None
 ) -> tuple[list[list[str] | None], list[str]]:
-    harness = workspace / "test_kernel.py"
-    if not harness.is_file() or "--shape-id" not in harness.read_text(encoding="utf-8"):
+    if harness is not None:
+        text = harness.source.read_text(encoding="utf-8") if harness.source is not None else harness.text
+    else:
+        path = workspace / "test_kernel.py"
+        text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if "--shape-id" not in text:
         return [None], []
     shapes_path = (private_reference_dir or workspace) / "shapes.json"
     if not shapes_path.is_file():

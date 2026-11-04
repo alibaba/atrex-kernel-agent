@@ -49,6 +49,10 @@ def _content_inputs(workspace, reference, excluded=(), evaluation_input=None):
         if path.is_file():
             content["reference/" + name] = _bytes(path.read_bytes())
     if evaluation_input is not None:
+        from .resources import evaluator_harness
+        harness = evaluator_harness(evaluation_input)
+        if harness is not None:
+            content["evaluation/" + harness.path] = _bytes(harness.source.read_bytes() if harness.source is not None else harness.text.encode())
         for item in (*evaluation_input.files, evaluation_input.harness, evaluation_input.worker_requirements):
             if item is not None:
                 data = item.source.read_bytes() if item.source is not None else item.text.encode()

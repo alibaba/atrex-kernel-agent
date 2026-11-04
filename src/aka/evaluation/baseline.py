@@ -93,12 +93,14 @@ class BaselinePreparation:
 
     def install_native_evaluator(self) -> None:
         """Seed the immutable adapter used only by native Atrex-Bench shape campaigns."""
-        if self.resources.native_harness is None:
-            if self.inputs.native:
-                raise ValueError("Task has no native evaluator harness")
+        harness = self.resources.native_harness
+        if harness is None and self.inputs.native:
+            from .resources import native_harness_script
+            harness = WorkspaceFile("test_kernel.py", source=native_harness_script())
+        if harness is None:
             return
         from aka.task.candidate_workspace.content import install_files
-        install_files(self.inputs.workspace, (self.resources.native_harness,))
+        install_files(self.inputs.workspace, (harness,))
 
     def install_profile_driver(self) -> None:
         """Seed the immutable external profiling entry for every campaign layout.

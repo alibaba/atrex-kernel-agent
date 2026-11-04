@@ -36,6 +36,8 @@ def ncu_profile_script() -> Path:
 
 def contribute_resources(ctx):
     from aka.contracts.agent_resources import WorkspaceResourceContribution
+    ctx.contribute("workspace_resources", "evaluation-native-harness", WorkspaceResourceContribution(
+        "evaluation-native-harness", native_harness_script(), visibility="runtime"))
     resource = WorkspaceResourceContribution(
         "evaluation-numerical-driver",
         Path(__file__).with_name("drivers") / "remote_numerical.py",
@@ -48,3 +50,33 @@ def contribute_resources(ctx):
 
     ctx.contribute("workspace_resources", "execution-profile-driver", WorkspaceResourceContribution(
         "execution-profile-driver", Path(__file__).with_name("drivers") / "profile_driver.py", visibility="runtime"))
+
+
+def native_harness_script() -> Path:
+    """The Evaluation-owned, standalone Atrex-Bench script method."""
+    return Path(__file__).with_name("drivers") / "native_harness.py"
+
+
+def evaluator_harness(evaluation_input):
+    """Select a method adapter, preserving an explicitly frozen Task override."""
+    from aka.contracts.content import WorkspaceFile
+    if evaluation_input is None:
+        return None
+    if evaluation_input.harness is not None:
+        return evaluation_input.harness
+    if evaluation_input.adapter == "legacy-native-v1":
+        return WorkspaceFile("test_kernel.py", source=native_harness_script())
+    return None
+
+
+def validate_harness(workspace, evaluation_input):
+    """Reject altered installed adapters; native typed requests need no local copy."""
+    item = evaluator_harness(evaluation_input)
+    if item is None:
+        return
+    installed = workspace / item.path
+    expected = item.source.read_bytes() if item.source is not None else item.text.encode("utf-8")
+    if not installed.exists() and evaluation_input.harness is None:
+        return  # Evaluation can supply its own script as a prepared worker input.
+    if not installed.is_file() or installed.read_bytes() != expected:
+        raise ValueError("candidate evaluator harness differs from selected evaluation content")

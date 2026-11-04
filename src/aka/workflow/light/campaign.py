@@ -239,7 +239,8 @@ class ManagedCampaign(Campaign):
             saved = self.candidate_workspace.read_working(self.workspace, ("agent_problem.json",))
             public_files.append(WorkspaceFile("agent_problem.json",
                 text=saved.files["agent_problem.json"].decode("utf-8")))
-        harness = self.problem.evaluation.harness
+        from aka.evaluation.resources import evaluator_harness
+        harness = evaluator_harness(self.problem.evaluation)
         if harness is None:
             raise ValueError("Native V0 requires the frozen Task harness")
         runtime = self.problem_provider.runtime_files(self.problem)

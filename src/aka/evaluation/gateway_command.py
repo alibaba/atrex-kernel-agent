@@ -51,7 +51,8 @@ class GatewayCommandEvaluator:
                 method_inputs[name] = hashlib.sha256(item.content).hexdigest()
                 if name == "shapes.json" and not expected_shapes:
                     expected_shapes = tuple(json.loads(item.content))
-            harness = self.evaluation_input.harness
+            from .resources import evaluator_harness
+            harness = evaluator_harness(self.evaluation_input)
             if harness is not None and harness.path not in method_inputs:
                 content = harness.source.read_bytes() if harness.source is not None else harness.text.encode()
                 method_inputs[harness.path] = hashlib.sha256(content).hexdigest()
@@ -72,6 +73,16 @@ class GatewayCommandEvaluator:
                     kind if kind in {"profile", "check", "disassemble"} else "run", full_request=request, method_inputs=method_inputs,
                     workload_scope="full-task" if full_scope else "subset-or-custom" if expected_shapes else "unknown",
                     source_parameters=context.get("source_parameters"))
+            if identity.method == "legacy-eval/command" and self.evaluation_input is not None and self.evaluation_input.adapter == "legacy-native-v1":
+                from .measurement import _digest
+                step = prepared.steps[index]
+                closure = step.prepared_inputs
+                frozen_inputs = {item.path: hashlib.sha256(item.content).hexdigest()
+                    for item in (*closure.files, *closure.runtime_files)} if closure is not None else {}
+                parameters = {**identity.parameters, "command": list(step.command),
+                    "evaluation_method_inputs": method_inputs}
+                identity = replace(identity, parameters=parameters,
+                    input_digest=_digest({"inputs": frozen_inputs, "parameters": parameters}))
             frozen_identities.append(identity)
         identities = tuple(replace(identity,
             points=tuple(MeasurementPoint(point.side, point.revision, point.repeat + outer * (
@@ -187,6 +198,9 @@ class GatewayCommandEvaluator:
         explicit_environment = workload_environment(command)
         kind = requested_operation(command.operation, list(command.command))
         evaluator = is_test_kernel_command(list(command.command))
+        if evaluator and self.evaluation_input is not None and self.evaluation_input.adapter == "legacy-native-v1":
+            from .resources import validate_harness
+            validate_harness(command.workspace, self.evaluation_input)
         private = self.evaluation_input is not None and self.evaluation_input.private_reference_dir is not None
         options = command.profile_options
         profile_level = (options.level or "sol") if options is not None else "sol"

@@ -4,15 +4,10 @@ from pathlib import Path
 from aka.contracts.content import WorkspaceFile
 
 
-def native_harness_script() -> Path:
-    """Return the single packaged Atrex-Bench evaluator used by every runtime."""
-    return Path(str(files(__package__).joinpath("native_harness.py")))
-
-
 def validate_resources(evaluation):
     if evaluation is None:
         raise TypeError("Task has no evaluation content")
-    if evaluation.adapter in {"legacy-native-v1", "legacy-sol-v1"} and evaluation.harness is None:
+    if evaluation.adapter == "legacy-sol-v1" and evaluation.harness is None:
         raise ValueError("Task requires an explicit evaluator harness")
     for name, item in (("harness", evaluation.harness), ("worker requirements", evaluation.worker_requirements)):
         if item is None:
@@ -42,9 +37,10 @@ def validate_resources(evaluation):
 
 def selected_resources(directory, *, sol, native, native_harness=None, worker_requirements=None):
     package = files(__package__)
-    harness = (Path(native_harness) if native_harness is not None else native_harness_script()) if native else (
+    harness = (Path(native_harness) if native_harness is not None else None) if native else (
         Path(str(package.joinpath("sol_harness.py"))) if sol else directory / "test_kernel.py")
-    item = WorkspaceFile("test_kernel.py", source=Path(harness)) if (native or sol or harness.is_file()) else None
+    item = (WorkspaceFile("test_kernel.py", source=Path(harness))
+            if harness is not None and (native or sol or harness.is_file()) else None)
     requirements = (WorkspaceFile("worker-requirements.txt", source=Path(worker_requirements))
                     if worker_requirements is not None else WorkspaceFile("worker-requirements.txt", text=""))
     from aka.contracts.problem import EvaluationInput

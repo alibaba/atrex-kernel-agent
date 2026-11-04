@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Optimizer transport adapter for the official Atrex-Bench ``run_eval``.
+"""Evaluation-owned worker adapter for the official Atrex-Bench ``run_eval``.
 
 This file deliberately contains no candidate execution, correctness comparison,
 or timing implementation.  Native ``shapes.json`` campaigns copy it to
@@ -28,6 +28,13 @@ RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
 FP4_MAX_REL_L2 = 0.2
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
+
+# Native script method defaults. Keep these here so a copied worker script needs
+# only the standard library; host preparation imports this same definition.
+DEFAULT_WARMUP_ITERS = 10
+DEFAULT_BENCH_ITERS = 100
+DEFAULT_CANDIDATE_TIMEOUT = 20.0
+DEFAULT_PERFORMANCE_TIMEOUT = 120.0
 
 
 def _save_numerical_diagnostics(completed, result_paths):
@@ -509,10 +516,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--atol", type=float, default=1e-2)
     parser.add_argument("--rtol", type=float, default=0.05)
     parser.add_argument("--correctness-max-rel-l2", type=float, default=None)
-    parser.add_argument("--warmup", type=int, default=10)
-    parser.add_argument("--timed-runs", type=int, default=100)
-    parser.add_argument("--candidate-timeout-s", type=float, default=20.0)
-    parser.add_argument("--perf-timeout-s", type=float, default=120.0)
+    parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP_ITERS)
+    parser.add_argument("--timed-runs", type=int, default=DEFAULT_BENCH_ITERS)
+    parser.add_argument("--candidate-timeout-s", type=float, default=DEFAULT_CANDIDATE_TIMEOUT)
+    parser.add_argument("--perf-timeout-s", type=float, default=DEFAULT_PERFORMANCE_TIMEOUT)
     parser.add_argument("--shape-id", action="append", dest="shape_ids")
     return parser
 
@@ -651,6 +658,13 @@ def main(argv: list[str] | None = None) -> int:
                     f"atrex-bench run_eval exited with code {completed.returncode}"
                 )
 
+    result["measurement_conditions"] = {
+        "method": "atrex-bench/native-script",
+        "bench_iters": args.timed_runs, "warmup_iters": args.warmup,
+        "candidate_timeout_s": args.candidate_timeout_s,
+        "perf_timeout_s": args.perf_timeout_s,
+        "correctness_only": correctness_only,
+    }
     result = _mask_generalized_result(workspace, result)
     print(RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False), flush=True)
     return 0 if result["all_pass"] else 1
