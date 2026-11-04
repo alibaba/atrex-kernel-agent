@@ -2,10 +2,26 @@
 
 AKA's default `light` profile composes a coding Agent, managed CandidateWorkspace,
 private HTTP Tool Runtime, and Supervisor-owned optimization workflow. The Agent proposes
-implementations and evidence; the Supervisor owns evaluator inputs, acceptance, Git sealing,
-promotion, budgets, and recovery.
+implementations and evidence. Task owns trusted inputs, Evaluation owns measurement
+preparation and interpretation, Experiment owns records and recovery, and Workflow owns
+acceptance, Git sealing, promotion and phase budgets.
 
-![AKA architecture](../assets/aka-architecture-v0.4.0.png)
+```mermaid
+flowchart LR
+    B[Bootstrap and Core] --> W[Workflow]
+    W --> A[Agent]
+    W --> T[Task and CandidateWorkspace]
+    A -->|candidate and tool request| P[Experiment]
+    P -->|measurement request| V[Evaluation]
+    V -->|prepared commands| P
+    P -->|dispatch and recovery| X[Execution]
+    X --> G[GPU backend and official evaluator]
+    G -->|execution facts| X
+    X --> P
+    P -->|raw receipts| V
+    V -->|interpreted evidence| P
+    P -->|recorded outcome| W
+```
 
 [Launch and configuration](quickstart.md) · [Detailed module reference](optional-light-modules.md)
 
@@ -24,7 +40,8 @@ disposes owned providers when the invocation ends.
 | `observed` / `sandbox` | Legacy workflow with an Agent replacement | Capture-enabled native / Bubblewrap |
 
 Light requires the framework, legacy, and light distributions from a matching revision.
-The legacy package also supplies shared business implementations used by Light; installing it
+Shared Agent, Task, Evaluation, Experiment and Execution implementations belong to the framework
+package. The legacy package supplies orchestration components also used by Light; installing it
 does not select the Legacy workflow. Recorded continuations restore their frozen selection
 rather than adopting new-launch defaults.
 
@@ -35,17 +52,16 @@ src/aka/
 ├── core/                  # Composition, dependency injection, lifecycle
 ├── contracts/             # Shared service interfaces
 ├── bootstrap/             # Launch selection and continuation identity
-├── light/
-│   ├── agent/             # Sessions, capture, isolation, active-time accounting
-│   ├── workspace/         # Candidate layouts, drafts, snapshots, private Git
-│   ├── runtime/           # Authenticated HTTP tools and thin agent clients
-│   ├── evaluation/        # Native Eval/ABBA, profiling, result interpretation
-│   ├── experiment/        # Measurement identity, records, deduplication
-│   ├── execution/         # GPU dispatch, job checkpoints, recovery
-│   ├── wiki/              # Knowledge-provider execution and caching
-│   ├── acceptance/        # Correctness, numerical checks, verification, audits
-│   └── workflow/          # Baselines, Episodes, reports, budgets, search
-├── legacy/                # Shared providers and explicit Legacy workflow
+├── agent/                 # Sessions, capture and process isolation
+├── task/                  # Trusted inputs, candidate layouts and snapshots
+├── evaluation/            # Preparation, timing policy and result interpretation
+├── experiment/            # Measurement identity, records and safe retries
+├── execution/             # GPU transport, original-job queries and cancellation
+├── resources/             # Prompts, Skills and published runtime assets
+├── acceptance/            # Promotion requirements
+├── workflow/              # Stage budgets and selected business orchestration
+│   ├── legacy/            # Fast/Full Episodes
+│   └── light/             # Managed drafts, tool runtime and unified Episodes
 ├── observation/           # Workflow observation adapter
 └── dashboard/             # Optional viewer
 ```
@@ -139,8 +155,11 @@ transactions, source seals, and promotion audits. Direct HTTP replay uses durabl
 keys. An uncertain CLI submission without an ID needs reconciliation, not blind resubmission.
 
 Session throttling and output-limit recovery retain the Episode draft and observation history.
-Agent active time excludes authenticated blocking Runtime requests. GPU, Wiki, and queue
-deadlines remain independently enforced.
+Stage limits use wall-clock time, including authenticated blocking Runtime requests.
+Agent invocations default to eight hours, framework baseline to eight hours, and Light
+Episodes to four hours. Explicit overrides apply within the remaining parent deadline.
+The baseline and Episode clocks survive restart; there is no default Campaign-wide cap.
+GPU, Wiki, and queue deadlines remain independently enforced.
 
 Capture is diagnostic; missing transcripts or usage counters remain explicit gaps.
 Canonical state never depends on an Agent-writable projection.

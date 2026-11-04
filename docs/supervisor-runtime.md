@@ -104,7 +104,7 @@ See [Wiki providers](optional-light-modules.md#wiki-providers).
 
 Evaluation controls measurement repetitions. Light Workflow configuration controls
 queue/request timeouts and optional Wiki settings. Blocking authenticated Runtime requests pause the
-requesting agent tree. Explicit Episode deadlines use wall-clock time and include blocked requests.
+requesting agent tree. Episode deadlines default to four hours and include blocked requests as wall-clock time.
 The handler continues running and resumes the agent before sending its response.
 Cancellation and capability revocation terminate owned work rather than granting more authority.
 
@@ -114,7 +114,7 @@ whole-request limit. GPU allocation deadlines and Wiki execution budgets remain 
 See [module options](optional-light-modules.md#other-module-options) and
 [current deadline accounting](optional-light-modules.md#agent-active-time-limit-and-blocking-runtime-calls).
 
-Accepted jobs are polled by ID. Direct HTTP replay uses a persisted idempotency key.
+Accepted jobs are polled by ID. Direct HTTP replay requires a verified stable-key capability and preserves that key.
 An uncertain CLI submission without an accepted ID cannot be blindly repeated.
 The current [measurement recovery policy](measurement-records.md#failure-and-recovery-policy)
 defines which failed jobs can be replaced and how completed ABBA batches are retained.

@@ -77,16 +77,26 @@ Do not change labels or delete indexes to force a new random sample.
 
 | Evidence | Current behavior |
 | --- | --- |
-| Accepted job ID, collection interrupted | Poll the same accepted job; transient collection failures do not authorize duplicate submission |
-| Direct HTTP submit transport/5xx/408/429 or structured infrastructure failure | Replay with the same wire idempotency key, persisted before POST |
-| Confirmed failed infrastructure job | Persist its failure and use a replacement identity; backoff 5/10/20/40/60 seconds within the request deadline |
-| Unknown Agate CLI submission without an ID | Preserve uncertainty for reconciliation; there is no general CLI wire-idempotency replay |
-| Confirmed CLI 429/503 or structured infrastructure rejection | Retry within the defined budget; other no-ID 5xx/timeouts remain uncertain |
-| Explicit device-unavailable Eval result | Up to two replacement executions; exhaustion remains unavailable, not candidate failure |
-| Device-unavailable ABBA batch | Up to ten replacements with a durable budget and 60-second delay; keep complete sibling batches |
-| Candidate correctness/compilation failure | Preserve a completed rejection; source repair creates a different task |
-| Cancelled, unknown, malformed, contradictory, or incomplete result | Do not cache as a completed verdict or blindly replace the job |
-| Known pre-dispatch local queue timeout | Safe-to-retry HTTP 429; distinguish it from a post-dispatch uncertain outcome |
+| Proven not submitted, transient infrastructure failure | Experiment retries at most twice, after 5 and 10 seconds, within a 120-second recovery admission window |
+| Accepted job ID, collection interrupted | Query the original job; a read timeout does not authorize another submission |
+| Unknown submission without a job ID | Retain pending state; replay only with an explicitly verified stable-key capability |
+| Confirmed failed or terminated job | Preserve the result; remeasurement or backend change requires explicit opt-in |
+| Candidate correctness/compilation failure | Preserve the rejection; source repair creates a different task |
+| Cancelled, malformed, contradictory or incomplete result | Preserve uncertainty and job identity; do not record a passing verdict |
+
+Formal and development measurements share the Experiment retry policy. The 120-second
+window starts at the first infrastructure failure and controls retry admission, not GPU
+execution or normal queue waiting. Retry counts and origin persist for recorded steps.
+Workflow does not repeat failed GPU operations around this budget. Review-service outages
+have their separate Workflow policy.
+
+Default client waiting adds no independent total deadline. Explicit
+`ATREX_SANDBOX_QUEUE_WAIT_GRACE` bounds client waiting at allocation plus grace; its expiry
+retains the original job identity and does not establish remote termination. Backend queue,
+attempt and execution limits still apply. `gateway.retry_delays` is retired; configure
+`experiment.retry_delays` and `experiment.retry_budget_s`. An empty delay list disables
+submission retries. `gateway.warmup_iters` is also retired: set `--warmup` on the Evaluation
+request. Old retry-ledger formats are not automatically migrated.
 
 A terminal `command_timeout` follows its explicit error class. Infrastructure-class errors
 can recover; candidate/unknown errors do not become infrastructure merely because they mention

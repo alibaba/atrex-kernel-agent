@@ -121,7 +121,7 @@ Resources patch must retain desired bundles, such as `measurement-session` and
 ### Light measurement policy
 
 Ordinary evaluation defaults are shared across methods and entry points: `bench_iters=20`,
-`warmup_iters=10`, candidate timeout 20 seconds, and performance timeout 120 seconds.
+`warmup_iters=10`, candidate timeout 600 seconds, and performance timeout 300 seconds.
 Explicit request values and frozen historical requests retain their values. These inner
 limits are distinct from queue wait, the enclosing allocation and Workflow stage budgets.
 The official evaluator determines the units: eager/Triton timing uses duration budgets
@@ -135,9 +135,10 @@ comparison/batching policy, not separate bench/warmup defaults. See
 
 ### Agent active-time limit and blocking Runtime calls
 
-The heading is retained for old links; the current limit is wall-clock time. Light has
-no independent Episode deadline unless `episode_timeout_seconds` is explicitly set.
-Blocked tools count against an explicit deadline. `agent.timeout_seconds`, GPU execution,
+The heading is retained for old links; the current limit is wall-clock time. Light defaults to a four-hour Episode deadline, configurable through `episode_timeout_seconds`.
+Blocked tools count against that deadline; restart and repair retain its original expiry.
+Agent invocations and framework baseline default to eight hours each. These are separate
+scopes, not a Campaign-wide eight-hour limit. `agent.timeout_seconds`, GPU execution,
 queue wait, Wiki and Workflow stage limits apply at their own scopes.
 
 ### Optional Epoch / Trajectory search
@@ -168,12 +169,11 @@ prove namespace permissions or GPU availability. See [isolation](agent-workspace
 
 ## Infrastructure recovery
 
-Common Experiment infrastructure retries currently default to an empty schedule. A known
-remote job is queried before more work is considered; running or uncertain jobs do not
-justify a fresh allocation. Safe remeasurement requires explicit policy and proof that
-submission did not happen or the remote job terminated. Backend-proven idempotent replay
-is a separate capability. Workflow-specific outage/review loops still exist; it is
-incorrect to describe every retry in the application as disabled.
+Common Experiment retries allow two extra attempts after 5/10 seconds when execution
+facts prove a transient failure happened before submission. Recorded steps retain their
+120-second recovery admission window and counts. Known jobs are queried; uncertain jobs
+are not blindly replaced. Remeasurement and backend changes remain explicit opt-in.
+See [failure and recovery policy](measurement-records.md#failure-and-recovery-policy).
 
 The retired `reliable` execution selection is rejected with migration guidance. Choose
 an explicitly supported Execution provider; it does not silently select another transport.

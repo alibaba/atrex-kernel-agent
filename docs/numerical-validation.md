@@ -31,23 +31,30 @@ Reference non-finite outputs, invalid generation or incomplete receipts return t
 
 Each planner uses `--production-review-timeout` (default 600 seconds). A bounded plan recovered from a timeout remains untrusted until schema/evidence validation and execution. Without a usable plan, a timeout permits a recorded `skipped_planner_timeout` only after ordinary correctness passed, evidence is unchanged and no measured supplemental candidate failure remains. Malformed non-timeout responses do not receive this exemption.
 
-GPU probes use the private MeasurementStore and exact-task reuse. Python-backed probes use
-the remote numerical driver; native CUDA manifests use `aka.workflow.light.orchestration.typed_numerical`
+GPU probes use shared Experiment records and exact-request recovery. Python probes use
+the Evaluation-owned remote numerical driver; CUDA manifests use `aka.evaluation.typed_numerical`
 through Agate Eval so compilation and dependency binding stay evaluator-owned. The typed
 supplemental route currently requires one GPU.
 
-Confirmed service outages use the Supervisor's fixed 60-second outer retry wait and the
-current [Gateway recovery policy](measurement-records.md#failure-and-recovery-policy).
+Reviewer-service outages use the Workflow review policy. GPU recovery follows the
+shared [Experiment recovery policy](measurement-records.md#failure-and-recovery-policy).
 Known jobs are reconciled by ID; unknown CLI submissions are not blindly replaced.
 Nested requests retain the report's deadline and revocation. Missing receipts alone
 do not establish a device outage or a numerical counterexample.
 
-Probe preparation and interpretation belong to Evaluation. Ordinary candidate/performance
-defaults are 20/120 seconds; supplemental probes have their own preparation policy and
-must not be described as sharing a 600-second ordinary candidate default. The current
-[preparation implementation](../src/aka/evaluation/numerical_preparation.py) still uses
-explicit per-case/command limits. These limits are separate from the planner's Workflow
-review timeout and from evidence-completeness checks.
+Probe preparation, input generation, backend adapters and receipt interpretation belong to
+Evaluation. Workflow submits `NumericalProbeRequest` through Experiment and owns planner,
+repair and promotion decisions. The shared candidate limit is 600 seconds; performance
+uses 300 seconds. Numerical cases are correctness-only.
+
+Each numerical request defaults to 600 seconds **per case**; an explicit `timeout=1200`
+gives each case 1200 seconds. There is no 540/1140-second inner cutoff. A script case uses
+one execution step for its Shapes/seeds. CUDA manifests require typed Eval because the
+script evaluator accepts Python files only: their sequential Shape/seed steps share one
+persisted case deadline, including queue and recovery waits. Resume does not renew it.
+Case expiry or missing receipts is incomplete evidence, never PASS. This timeout is
+independent of the ordinary Eval/ABBA allocation and the Workflow planner deadline.
+
 
 ## Evidence and limits
 

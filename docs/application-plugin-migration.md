@@ -243,12 +243,13 @@ identities. Changing package versions, workflows or resource contents is not an 
 migration. Use a fresh workspace for an incompatible upgrade; retain the matching old
 installation if an old campaign must finish.
 
-When explicit retries are enabled, the common Experiment retry ledger requires
+The common Experiment retry ledger requires
 `schema_version=2`; base-era ledgers are
 rejected, and no automatic migration is provided. This restriction concerns continuation
 of old in-flight recoveries, not creation of new experiments. It is separate from the
-common infrastructure retry default, whose empty delay schedule does not retry transient
-failures. Workflow-specific loops may have their own policies.
+common infrastructure retry default: transient failures proven to precede submission permit
+two extra attempts after 5/10 seconds, within a 120-second recovery admission window.
+Workflow review-service loops have their own policies.
 
 The removed detached monitor and its restart-schema migration protocol are described in
 [the pre-migration guide](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/application-plugin-migration.md#legacy-recovery-records).

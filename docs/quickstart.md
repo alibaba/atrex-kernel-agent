@@ -69,9 +69,9 @@ can specify a worker alias different from the logical platform. Configure one en
 on the coordinator before launch: `ATREX_SANDBOX_PROFILE=prod` (or `pre`), or
 `ATREX_SANDBOX_URL=http://127.0.0.1:8000`. Clear the other endpoint selectors;
 URL, profile and SSH selections are mutually exclusive.
-For typed gateway jobs, set `ATREX_SANDBOX_QUEUE_WAIT_GRACE=120` in these examples:
-the current 14,400-second default exceeds the typed route's 10,800-second total limit.
-This is an explicit example override, not a change to the module default.
+Client waiting has no independent total deadline by default. The backend's queue and
+execution limits still apply. Set `ATREX_SANDBOX_QUEUE_WAIT_GRACE` only when an explicit
+client wait bound is required; expiry preserves the original job for reconciliation.
 
 All launch and optimization options belong to the same parser; do not insert `--`.
 Omitting `--profile` selects Light. Use `--profile light-sandbox` for Bubblewrap.

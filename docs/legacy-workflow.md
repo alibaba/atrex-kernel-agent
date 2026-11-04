@@ -157,7 +157,8 @@ unisolated fallback. A portable Python watchdog enforces `--timeout` even when G
 is absent.
 
 Infrastructure failures are distinct from candidate correctness failures. The current
-common retry schedule is empty; do not rely on the removed detached recovery monitor.
+common retry schedule allows two extra safe pre-submission attempts after 5/10 seconds;
+do not rely on the removed detached recovery monitor.
 Known remote jobs must be reconciled before any new execution. See
 [recovery compatibility](application-plugin-migration.md#recovery-compatibility).
 The earlier monitor, stop/recover scripts and restart handshake are retained as
@@ -343,15 +344,14 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --fast-episode-reviewers NAME    Repeat for each Fast reviewer
 --full-episode-reviewers NAME    Repeat for each Full reviewer
 --verify-repeats N               ABBA repeat pairs (default: 2)
---verify-run-timeout S           Per-run budget (default: 120)
+--verify-run-timeout S           ABBA performance budget (default: 300)
 --timeout S                      Explicit enclosing evaluation allocation
---framework-baseline-timeout S   Baseline wall-clock budget (default: 10800)
+--framework-baseline-timeout S   Baseline wall-clock budget (default: 28800)
 --setup-timeout S                Setup budget (default: 7200)
 ```
 
 Endpoint selection belongs to Execution: use `ATREX_SANDBOX_PROFILE`,
-`ATREX_SANDBOX_URL`, or the SSH environment shown above. For typed gateway examples,
-set `ATREX_SANDBOX_QUEUE_WAIT_GRACE=120`; see the current default-limit caveat in
+`ATREX_SANDBOX_URL`, or the SSH environment shown above. Client waiting adds no total deadline by default; see
 [Quick Start](quickstart.md#launch-light). Run help for all public settings.
 
 Run `aka optimize --repo-root "$PWD" --profile workflow --help` for the Legacy interface. Some Qoder models
