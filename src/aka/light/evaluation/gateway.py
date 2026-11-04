@@ -1004,6 +1004,9 @@ def _fp4_correctness_max_rel_l2(
 def _is_generalized_workspace(workspace: Path) -> bool:
     """Return whether production policy enables private exact-case handling."""
     state = read_json_object(workspace / MODE_STATE_FILENAME) or {}
+    visibility = state.get("evaluator_shape_visibility")
+    if visibility in {"hidden", "exposed"}:
+        return state.get("mode") == "production" and visibility == "hidden"
     return (
         state.get("mode") == "production"
         and (workspace / AGENT_PROBLEM_FILENAME).is_file()

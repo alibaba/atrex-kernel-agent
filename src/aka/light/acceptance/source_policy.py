@@ -54,8 +54,9 @@ def install_workspace_policy(
     agent_runtime: str | None = None,
     update_tracked_files: bool = True,
     source_checks_enabled: bool = True,
+    expose_evaluator_shapes: bool = True,
 ) -> None:
-    """Persist immutable mode, framework, and optional campaign runtime identity.
+    """Persist immutable mode, framework, shape visibility, and runtime identity.
 
     Existing workspaces without ``agent_runtime`` remain readable. Their first
     explicit post-upgrade runtime is adopted before a session starts; later
@@ -68,6 +69,11 @@ def install_workspace_policy(
     )
     if agent_runtime is not None and not requested_runtime:
         raise ValueError("agent_runtime must be a non-empty runtime id")
+    if type(expose_evaluator_shapes) is not bool:
+        raise TypeError("expose_evaluator_shapes must be a boolean")
+    requested_visibility = (
+        "exposed" if mode != "production" or expose_evaluator_shapes else "hidden"
+    )
 
     workspace.mkdir(parents=True, exist_ok=True)
     state_path = workspace / MODE_STATE_FILE
@@ -85,6 +91,27 @@ def install_workspace_policy(
                 f"recorded mode/framework={existing_mode}/{existing_framework}, "
                 f"requested={mode}/{framework}"
             )
+        existing_visibility = state.get("evaluator_shape_visibility")
+        if existing_visibility is None:
+            existing_visibility = (
+                "hidden"
+                if mode == "production" and (workspace / "agent_problem.json").is_file()
+                else "exposed"
+                if (workspace / "shapes.json").is_file() or mode != "production"
+                else requested_visibility
+            )
+            state["evaluator_shape_visibility"] = existing_visibility
+            state_changed = True
+        if existing_visibility not in {"hidden", "exposed"}:
+            raise RuntimeError(
+                f"invalid evaluator shape visibility: {existing_visibility!r}"
+            )
+        if existing_visibility != requested_visibility:
+            raise RuntimeError(
+                "workspace evaluator shape visibility mismatch: "
+                f"recorded={existing_visibility}, requested={requested_visibility}; "
+                "use a fresh campaign workspace to change shape visibility"
+            )
         existing_runtime = str(state.get("agent_runtime") or "").strip()
         if requested_runtime and existing_runtime and existing_runtime != requested_runtime:
             raise RuntimeError(
@@ -96,7 +123,11 @@ def install_workspace_policy(
             state["agent_runtime"] = requested_runtime
             state_changed = True
     else:
-        state = {"mode": mode, "framework": framework}
+        state = {
+            "mode": mode,
+            "framework": framework,
+            "evaluator_shape_visibility": requested_visibility,
+        }
         if requested_runtime:
             state["agent_runtime"] = requested_runtime
         state_changed = True

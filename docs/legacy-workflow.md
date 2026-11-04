@@ -58,7 +58,9 @@ python -m pip install --force-reinstall /tmp/aka-dist/*.whl
   containing `scripts/run_eval.py` and `src/atrex_bench`. An optional `agent_problem.json` may provide
   the generalized public contract using schema `atrex.agent_problem.v1`.
 
-Production native campaigns never expose detailed shapes to baseline or optimization sessions. If
+Production native campaigns expose detailed shapes and evaluator metadata by default. Runtime
+feedback remains compact but does not redact exact dimensions. Use
+`--no-expose-evaluator-shapes` to enable the generalized hidden-shape flow. In that flow, if
 `agent_problem.json` is supplied, AKA validates and copies it directly. Otherwise a separate clean AKA
 preprocessing session using the configured `--agent-cli` at maximum reasoning effort reads
 `reference.py`, `input.py`, and the evaluator-owned detailed shapes, derives the public
@@ -66,6 +68,10 @@ preprocessing session using the configured `--agent-cli` at maximum reasoning ef
 persists only that contract in the campaign workspace. Exact shapes and evaluator metadata are then
 injected privately during sandbox evaluation. Canonical memory retains real per-shape latency under
 opaque ids; set `PROFILE_SHAPE_ID` to one of those ids to profile that real shape privately.
+
+Shape visibility does not relax production source review, correctness, ABBA, or promotion policy.
+The visible and hidden settings use distinct retained Problem snapshots, so changing the setting
+cannot silently resume a workspace captured under the other visibility mode.
 
 Leaderboard mode always preserves legacy exact-shape behavior, even when the source operator also
 contains `agent_problem.json`; sandbox private-shape injection and generalized result masking are
@@ -227,9 +233,9 @@ verifying any deferred remote cleanup.
 1. **Resolve and isolate the campaign.** The Workflow validates the operator and explicitly selected
    resources, probes the runtime GPU architecture, and creates or resumes
    `kernel_opt_<name>_<framework>_<platform>/` below `--workspace` or the current directory.
-2. **Prepare production inputs.** Native production campaigns validate a supplied
-   `agent_problem.json` or derive one in a clean preprocessing session, then keep detailed evaluator
-   shapes private.
+2. **Prepare production inputs.** Native production campaigns install the detailed evaluator
+   contract by default. `--no-expose-evaluator-shapes` instead validates or derives
+   `agent_problem.json` and keeps exact shapes private.
 3. **Establish V0.** The supervisor commits the evaluator-owned reference wrapper, runs one official
    full-workload base-seed evaluation, and records canonical `memory/v0.json` without launching a
    coding Agent.

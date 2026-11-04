@@ -27,9 +27,9 @@ def parse_arguments(argv):
         help=(
             "The operator dir (SOL definition.json/workload.jsonl/reference.py, or native "
             "Atrex-Bench reference.py/input.py/shapes.json with optional agent_problem.json). "
-            "Production always optimizes from a generalized public contract: a provided "
-            "agent_problem.json is used directly, otherwise AKA derives one from the detailed "
-            "shapes before hiding them from optimization sessions."
+            "Production exposes the detailed evaluator contract by default. Use "
+            "--no-expose-evaluator-shapes to instead optimize from a provided or derived "
+            "agent_problem.json while keeping exact shapes private."
         ),
     )
     ap.add_argument(
@@ -153,6 +153,17 @@ def parse_arguments(argv):
         help="leaderboard preserves the permissive current CLAUDE.md flow; production keeps "
         "deterministic structure/state gates and requires an independent fail-closed full-candidate "
         "framework, compute-provenance, dependency, loader, and manifest review.",
+    )
+    ap.add_argument(
+        "--expose-evaluator-shapes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Expose native Atrex-Bench shapes.json and detailed evaluator metadata to the "
+            "Agent. Production source review and promotion gates remain enabled, and Runtime "
+            "results remain compact, but shape dimensions are not redacted (default: on; "
+            "use --no-expose-evaluator-shapes for the generalized hidden-shape flow)."
+        ),
     )
     ap.add_argument(
         "--framework",
@@ -441,7 +452,8 @@ def adapt_argv(argv):
     sandbox_hardware = args.sandbox_hardware or args.platform
     source = problem_request(args.op_dir, args.optimization_mode,
         workspace=args.workspace,
-        suffix=args.workspace_suffix or f"{args.framework}_{args.platform}")
+        suffix=args.workspace_suffix or f"{args.framework}_{args.platform}",
+        expose_evaluator_shapes=args.expose_evaluator_shapes)
     values = vars(args).copy()
     from aka.legacy.execution.configuration import configure_legacy_arguments
     configure_legacy_arguments(values)

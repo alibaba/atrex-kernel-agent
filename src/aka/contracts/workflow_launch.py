@@ -46,6 +46,8 @@ class WorkflowLaunch:
             )
         if type(settings.resume_framework_candidate) is not bool:
             raise TypeError("resume_framework_candidate must be a boolean")
+        if type(settings.expose_evaluator_shapes) is not bool:
+            raise TypeError("expose_evaluator_shapes must be a boolean")
         if 2 * runtime.verify_repeats * runtime.verify_run_timeout + 30 > runtime.timeout:
             raise ValueError("ABBA verification must fit the configured allocation timeout")
         if not 0 <= runtime.min_improvement_pct < 100:
@@ -87,7 +89,11 @@ def decode_launch(argv) -> WorkflowLaunch:
     if source.get("snapshot_directory") is not None:
         source["snapshot_directory"] = Path(source["snapshot_directory"])
     settings = request.pop("settings")
-    values.setdefault("provided_settings", tuple(settings))
+    serialized_settings = tuple(settings)
+    # Version-1 launches written before shape visibility became explicit used
+    # the historical hidden-shape behavior. Preserve it when resuming them.
+    settings.setdefault("expose_evaluator_shapes", False)
+    values.setdefault("provided_settings", serialized_settings)
     values.setdefault("provided_runtime", tuple(request.get("runtime", {})))
     for name in ("framework_baseline_reviewers", "fast_episode_reviewers", "full_episode_reviewers"):
         if name in settings:

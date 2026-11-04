@@ -20,13 +20,25 @@ class LegacyProblemProvider:
     native_harness: Path | None = None
     worker_requirements: Path | None = None
 
-    def load(self, directory: Path, *, optimization_mode=None, snapshot_directory: Path | None = None) -> LoadedProblem:
+    def load(
+        self,
+        directory: Path,
+        *,
+        optimization_mode=None,
+        snapshot_directory: Path | None = None,
+        expose_evaluator_shapes: bool = True,
+    ) -> LoadedProblem:
         """Preserve the original operator resolver's validation order and errors."""
         optimization_mode = optimization_mode or self.optimization_mode
+        if type(expose_evaluator_shapes) is not bool:
+            raise TypeError("expose_evaluator_shapes must be a boolean")
+        snapshot_mode = optimization_mode + (
+            ":expose-evaluator-shapes" if expose_evaluator_shapes else ""
+        )
         d = Path(directory).resolve()
         if snapshot_directory is not None and snapshot_directory.exists():
             from .snapshot import restore
-            return restore(snapshot_directory.resolve(), d, optimization_mode)
+            return restore(snapshot_directory.resolve(), d, snapshot_mode)
         if not d.is_dir():
             raise SystemExit(f"--op-dir not found: {d}")
         ref = d / "reference.py"
@@ -35,7 +47,11 @@ class LegacyProblemProvider:
         atrex_bench_root = ""
         provided_problem = has_agent_problem(d)
         shapes_path = d / "shapes.json"
-        generalized = should_use_generalized_problem(d, optimization_mode)
+        generalized = should_use_generalized_problem(
+            d,
+            optimization_mode,
+            expose_evaluator_shapes=expose_evaluator_shapes,
+        )
         if generalized and provided_problem:
             if not shapes_path.is_file():
                 raise SystemExit(
@@ -86,7 +102,7 @@ class LegacyProblemProvider:
         )
         if snapshot_directory is not None:
             from .snapshot import capture
-            return capture(problem, snapshot_directory, d, optimization_mode)
+            return capture(problem, snapshot_directory, d, snapshot_mode)
         return problem
 
     def content(self, problem: LoadedProblem, workspace: Path, *, generated_digest: str = "") -> ProblemContent:

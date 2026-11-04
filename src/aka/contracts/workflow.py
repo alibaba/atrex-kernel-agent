@@ -29,6 +29,7 @@ class WorkflowSettings:
     convert_after: int = 3
     agent_cli: str = "claude"
     optimization_mode: str = "leaderboard"
+    expose_evaluator_shapes: bool = True
     framework_baseline: str = "auto"
     gateway_candidate_recovery: str = "disabled"
     framework_baseline_timeout: int = 28800
@@ -55,6 +56,8 @@ class WorkflowSettings:
             raise ValueError(
                 "review_trace_mode must be one of: off, errors, all"
             )
+        if type(self.expose_evaluator_shapes) is not bool:
+            raise TypeError("expose_evaluator_shapes must be a boolean")
 
 
 @dataclass(frozen=True)
