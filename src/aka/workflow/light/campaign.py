@@ -133,7 +133,7 @@ class ManagedCampaign(Campaign):
         return FilesystemAccess((FilesystemMount(workspace, workspace, True), *resources.mounts), tuple(dict.fromkeys(hidden)), tuple(dict.fromkeys(protected)))
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude",
-                     reasoning_effort="max", extra_environment=None, **legacy):
+                     reasoning_effort="max", extra_environment=None, observation_directory=None, **legacy):
         import time
         environment = dict(extra_environment or {})
         role = environment.pop("ATREX_AGENT_WORKSPACE_ROLE", "optimizer")
@@ -144,7 +144,7 @@ class ManagedCampaign(Campaign):
         def invoke(values, selected_access):
             result = self.agent.runtime(agent_cli).run(AgentRunRequest(
                 workspace, prompt, timeout, reasoning_effort=reasoning_effort,
-                environment=values, access=selected_access))
+                environment=values, access=selected_access, observation_directory=observation_directory))
             return SessionResult(result.exit_status, result.timed_out,
                 result.terminal_usage.total_tokens or 0, result.stdout_tail, result.stderr_tail,
                 result.session_id, result.terminal_usage, result.events, result.capabilities,

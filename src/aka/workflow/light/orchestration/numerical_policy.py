@@ -191,11 +191,11 @@ def _validate_review(value, digest):
 
 
 def _request_review(campaign, workspace, files, digest, previous=None, *, state_root, cancel):
-    from aka.workflow.light.orchestration.supervisor_runtime import scrub_environment
-
     def review_once():
         cancel.check()
         timeout = campaign.production_review_timeout
+        review_id = uuid.uuid4().hex
+        observation_directory = state_root / "sessions" / review_id
         with tempfile.TemporaryDirectory(prefix="atrex-numerical-advice-") as temporary:
             root = Path(temporary).resolve()
             for name, source in files.items():
@@ -208,17 +208,17 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
             result = campaign._run_session(
                 root, PROMPT.read_text(), timeout=cancel.timeout(timeout),
                 agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
-                extra_environment={**{key: "" for key in os.environ.keys() - scrub_environment(dict(os.environ)).keys()},
-                    **campaign.agent_boundary_environment("numerical-review"),
-                    "ATREX_SESSION_CAPTURE_DIR": str(state_root / "sessions" / uuid.uuid4().hex)},
+                extra_environment=campaign.agent_boundary_environment("numerical-review"),
+                observation_directory=observation_directory,
             )
             campaign._account(result, "numerical supplemental-test planning")
             cancel.check()
             response = root / "numerical_review.json"
             record = {"evidence_digest": digest, "session_id": result.session_id,
                       "timeout_s": timeout, "exit_status": result.exit_status,
-                      "timed_out": result.timed_out, "response_written": response.is_file()}
-            record_path = state_root / f"numerical_planning-{uuid.uuid4().hex}.json"
+                      "timed_out": result.timed_out, "response_written": response.is_file(),
+                      "observations": observation_directory.relative_to(state_root).as_posix()}
+            record_path = state_root / f"numerical_planning-{review_id}.json"
             durable_write_json(record_path, record, indent=2)
             if _digest({name: root / name for name in files}) != digest:
                 raise ValueError("numerical reviewer modified supplied evidence")

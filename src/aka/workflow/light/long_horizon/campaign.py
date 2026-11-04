@@ -1845,7 +1845,6 @@ class LongHorizonCampaign:
             store.write_brief(episode, prompt)
             telemetry_environment = {
                 "ATREX_EPISODE_MODE": episode_mode,
-                "ATREX_SESSION_CAPTURE_DIR": str(store.episode_dir(episode) / "sessions"),
                 "ATREX_TELEMETRY_CAMPAIGN_ID": str(
                     getattr(self.base_campaign, "campaign_name", self.workspace.name)
                 ),
