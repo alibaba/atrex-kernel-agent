@@ -232,7 +232,9 @@ class AgentSkillsRegistryMixin:
         lock = workspace / STATE_DIR
         if lock.exists():
             protected.append(lock)
-        return FilesystemAccess(tuple(mounts), self._snapshot_hidden_paths(workspace), tuple(protected))
+        # Several discovery links can reference one Skill source. Revalidate
+        # every link above, then grant each read-only source only once.
+        return FilesystemAccess(tuple(dict.fromkeys(mounts)), self._snapshot_hidden_paths(workspace), tuple(protected))
 
     def catalog(self):
         return self.resource_result().catalog()
