@@ -568,6 +568,19 @@ class SupervisorRuntime:
             if self.workspace_provider.source_identity(original) != self.workspace_provider.source_identity(current):
                 raise RequestValidationError("Retained preparation source is damaged; query the original Job before recovery")
         scope = command.filesystem_access
+        capabilities = self.executor.capabilities
+        if scope is not None and not capabilities.filesystem_isolation:
+            from aka.contracts.execution import ExecutionFile, PreparedExecutionInputs, UnsupportedExecution
+            # The Agent scope has already authorized the physical snapshot.
+            # Remote execution consumes that closed view, not host mount paths.
+            if command.submission is None and command.prepared_inputs is None:
+                if not capabilities.prepared_inputs:
+                    raise UnsupportedExecution("selected executor cannot transport the authorized request inputs")
+                explicit = {item.path for item in command.input_files}
+                command = replace(command, prepared_inputs=PreparedExecutionInputs(tuple(
+                    ExecutionFile(name, data, mode) for name, data, mode in files if name not in explicit)))
+            command = replace(command, filesystem_access=None)
+            scope = None
         if scope is not None:
             from aka.contracts.filesystem import FilesystemAccess
             def project(path):
