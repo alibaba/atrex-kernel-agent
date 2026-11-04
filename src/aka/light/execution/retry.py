@@ -10,6 +10,7 @@ from concurrent.futures import CancelledError
 from pathlib import Path
 from threading import Event
 
+from aka.contracts.acceptance import ValidationBlocked
 from aka.legacy.task.persistence import durable_write_json
 from aka.light.agent.session_tail import read_regular_bytes
 
@@ -31,7 +32,7 @@ class ReviewerExecutionTimeout(RuntimeError):
     """A completed review session explicitly exceeded its execution deadline."""
 
 
-class RetryStateError(ValueError):
+class RetryStateError(ValidationBlocked):
     """Unverifiable private retry state; never silently reset a durable budget."""
 
 
@@ -191,7 +192,7 @@ def retry_review(workspace: Path, stage: str, operation, *, cancel: Event | None
                     "schema_version": 1, "stage": stage, "timeout_count": 0,
                 })
             return result
-    raise ValueError(
+    raise ValidationBlocked(
         "reviewer execution timed out twice for this evidence; "
         "validation blocked (increase the reviewer timeout to retry)"
     )

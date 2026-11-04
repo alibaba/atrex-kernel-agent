@@ -1042,14 +1042,23 @@ class LongHorizonCampaign:
         ):
             violation = "mandatory conversion candidate is not a committed Gluon kernel"
         if not violation:
-            policy_violations = main_adapter.candidate_policy_violations(
-                self.base_campaign,
-                worktree.path,
-                require_gluon=(
-                    conversion_pending
-                    or main_adapter.candidate_is_gluon(self.workspace)
-                ),
-            )
+            from aka.contracts.acceptance import ValidationBlocked
+            active["phase"] = "verifying"
+            active.pop("validation_blocker", None)
+            store.save_active(active)
+            try:
+                policy_violations = main_adapter.candidate_policy_violations(
+                    self.base_campaign,
+                    worktree.path,
+                    require_gluon=(
+                        conversion_pending
+                        or main_adapter.candidate_is_gluon(self.workspace)
+                    ),
+                )
+            except ValidationBlocked as exc:
+                active["validation_blocker"] = str(exc)
+                store.save_active(active)
+                raise
             if policy_violations:
                 violation = (
                     "production policy rejected candidate: "

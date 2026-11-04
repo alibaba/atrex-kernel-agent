@@ -21,9 +21,9 @@ _BUDGET = ContextVar("aka_agent_active_budget", default=None)
 
 def validate_timeout(value, name="episode_timeout_seconds"):
     if (isinstance(value, bool) or not isinstance(value, (int, float))
-            or not math.isfinite(value) or value <= 0):
-        raise ValueError(f"{name} must be finite and greater than zero")
-    return float(value)
+            or not math.isfinite(value) or value < 0):
+        raise ValueError(f"{name} must be finite and non-negative (zero disables the deadline)")
+    return math.inf if value == 0 else float(value)
 
 
 class ActiveBudget:

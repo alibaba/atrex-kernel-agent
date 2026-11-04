@@ -9,6 +9,10 @@ from typing import Protocol
 from .evaluation import VerificationResult
 
 
+class ValidationBlocked(RuntimeError):
+    """Validation has no verdict; retain the candidate for operator recovery."""
+
+
 @dataclass(frozen=True)
 class AcceptanceRequirements:
     min_improvement_pct: float = 0.0

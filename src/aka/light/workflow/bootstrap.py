@@ -218,8 +218,8 @@ class Campaign:
             )
         if self.problem_generation_timeout <= 0:
             raise ValueError("problem_generation_timeout must be positive")
-        if self.production_review_timeout <= 0:
-            raise ValueError("production_review_timeout must be positive")
+        if type(self.production_review_timeout) is not int or self.production_review_timeout < 0:
+            raise ValueError("production_review_timeout must be a non-negative integer (zero disables the deadline)")
 
     @property
     def campaign_name(self) -> str:

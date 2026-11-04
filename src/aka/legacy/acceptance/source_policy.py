@@ -1,6 +1,7 @@
 """Acceptance source_policy implementation and callable interface."""
 from __future__ import annotations
 
+from concurrent.futures import CancelledError
 from pathlib import Path
 from typing import Callable
 import ast
@@ -8,6 +9,8 @@ import json
 from aka.legacy.task.source.inspection import source_uses_gluon
 from aka.legacy.task.source.inspection import framework_key
 import subprocess
+
+from aka.contracts.acceptance import ValidationBlocked
 
 
 ProductionReviewer = Callable[[Path, str, bool], list[str]]
@@ -122,6 +125,8 @@ def production_kernel_violations(
         return ["production candidate requires supervisor policy review"]
     try:
         review_errors = production_reviewer(workspace, framework, require_gluon)
+    except (ValidationBlocked, CancelledError):
+        raise
     except Exception as exc:
         errors.append(
             "independent production policy review failed: "

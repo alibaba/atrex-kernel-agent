@@ -213,7 +213,7 @@ def parse_arguments(argv):
     )
     ap.add_argument(
         "--production-review-timeout", type=int, default=600,
-        help="Independent production dependency review timeout in seconds (default: 600).",
+        help="Independent production dependency review timeout in seconds; 0 disables the deadline (default: 600).",
     )
     ap.add_argument(
         "--review-trace-mode",

@@ -518,7 +518,7 @@ def _run_bounded(
         from aka.light.agent.claude_tools import foreground_command
         # Like Runtime, keep these calls foreground; the authenticated server
         # suspension remains authoritative if a shell backgrounds/disconnects.
-        command = foreground_command(command, cwd, limit)
+        command = foreground_command(command, cwd, min(limit, DEFAULT_TIMEOUT_SECONDS))
     launch, view = wrap_agent_command(
         command, cwd, environment_values, auxiliary_input_files=auxiliary_input_files,
     )

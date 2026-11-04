@@ -46,11 +46,12 @@ class WorkflowSettings:
         for name in (
             "setup_timeout",
             "framework_baseline_timeout",
-            "production_review_timeout",
         ):
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if type(self.production_review_timeout) is not int or self.production_review_timeout < 0:
+            raise ValueError("production_review_timeout must be a non-negative integer (zero disables the deadline)")
         if self.review_trace_mode not in {"off", "errors", "all"}:
             raise ValueError(
                 "review_trace_mode must be one of: off, errors, all"
