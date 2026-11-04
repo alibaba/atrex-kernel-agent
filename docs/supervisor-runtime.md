@@ -7,20 +7,19 @@ while credentials, private evaluator inputs, source snapshots, and records stay 
 
 ## Lifecycle and authority
 
-The `tool_runtime` provider injects Execution, Experiment, Acceptance, Journal, and Wiki
-services. A Session capability authorizes the exact draft and allowed operations. Every
-request checks authorization, workspace binding, deadlines, and revocation.
+The Workflow supplies scoped tool handlers to the shared Agent. Agent owns the
+Unix-socket ToolHost and enforces the Session binding; there is no separate `tool_runtime`
+composition entry or public HTTP server to launch.
 
 | Owner | Implementation |
 | --- | --- |
-| HTTP routing and capabilities | `aka.light.runtime.server` |
-| Provider composition | `aka.light.runtime.provider`, `services` |
-| Agent clients | `aka.light.runtime.client.sandbox`, `client.plugin` |
-| Measurement records and reuse | `aka.light.experiment` |
-| Native Eval/ABBA and public results | `aka.light.evaluation` |
-| Physical dispatch and recovery | `aka.light.execution` |
-| Knowledge lifecycle | `aka.light.wiki.service` |
-| Journal/report transaction | `aka.light.workflow.journal_service` |
+| Session tool transport | `aka.agent.tools.host`, `aka.agent.tools.client` |
+| Workflow handlers | `aka.workflow.light.host` |
+| Measurement identity and recovery | `aka.experiment` |
+| Native Eval/ABBA preparation and interpretation | `aka.evaluation` |
+| Physical dispatch and job queries | `aka.execution` |
+| Wiki resources and configuration | `aka.resources.wiki` |
+| Journal/report transaction | `aka.workflow.light.host.journal` |
 
 The Runtime stages the complete candidate selected by CandidateWorkspace, restores trusted
 evaluator inputs, and delegates through these services. It does not trust a candidate-provided
@@ -85,10 +84,9 @@ require operator repair; they are not reasons to alter the kernel or bypass vali
 
 ## Wiki
 
-Wiki is enabled by default and is independently configurable through the `wiki` provider
-and `tool_runtime.wiki_options`. The bundled catalog and schemas are package-owned;
-the local corpus comes from the selected checkout and is pinned on first query.
-A replacement provider can supply a remote knowledge service.
+GPU Wiki is selected as a Resources plugin in the Light profile. The optional routed
+Wiki service uses `workflow.wiki` and `workflow.wiki_options`; see
+[Wiki configuration](optional-light-modules.md#independent-wiki-execution).
 
 Agent tools use the mounted plugin client:
 
@@ -104,9 +102,9 @@ See [Wiki providers](optional-light-modules.md#wiki-providers).
 
 ## Deadlines, isolation and recovery
 
-`tool_runtime.config` controls measurement repetitions, queue/request timeouts,
-Wiki options, and agent suspension. Blocking authenticated Runtime requests pause the
-requesting agent tree; that time is excluded from its active-time budget.
+Evaluation controls measurement repetitions. Light Workflow configuration controls
+queue/request timeouts and optional Wiki settings. Blocking authenticated Runtime requests pause the
+requesting agent tree. Explicit Episode deadlines use wall-clock time and include blocked requests.
 The handler continues running and resumes the agent before sending its response.
 Cancellation and capability revocation terminate owned work rather than granting more authority.
 
@@ -114,7 +112,7 @@ The default queue timeout is 60 seconds per queue stage. An omitted request time
 uses the controller's derived queue/execution policy; an explicit positive value is the
 whole-request limit. GPU allocation deadlines and Wiki execution budgets remain separate.
 See [module options](optional-light-modules.md#other-module-options) and
-[active-time accounting](optional-light-modules.md#agent-active-time-limit-and-blocking-runtime-calls).
+[current deadline accounting](optional-light-modules.md#agent-active-time-limit-and-blocking-runtime-calls).
 
 Accepted jobs are polled by ID. Direct HTTP replay uses a persisted idempotency key.
 An uncertain CLI submission without an accepted ID cannot be blindly repeated.
@@ -128,7 +126,7 @@ See [workspace isolation](agent-workspace-isolation.md).
 
 ## Operator interfaces
 
-The installed host-side Gateway CLI is `python -m aka.light.evaluation.gateway`.
+The installed host-side Gateway CLI is `aka execution`.
 Its requests are operator-owned and do not automatically acquire a campaign's Session
 capability or measurement history. Agent clients outside a live Session fail explicitly.
 Use `--help` for host-side arguments rather than calling removed checkout scripts.

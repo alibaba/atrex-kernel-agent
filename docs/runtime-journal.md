@@ -14,10 +14,10 @@ have their own interfaces. Agents cannot select a private Journal path or anothe
 enabled. To add Direction/Experiment annotations:
 
 ```json
-{"api_version":1,"patches":[{"id":"light_journal","config":{"research_records":true}}]}
+{"api_version":1,"patches":[{"id":"workflow","config":{"startup":true,"research_records":true}}]}
 ```
 
-Pass the patch before `--` in `aka optimize --repo-root ... --patch ... -- ...`.
+Pass it with `--patch /path/to/options.json` in the native launch argument list.
 The setting is frozen per Episode. Older Journals without the setting retain enabled behavior;
 resume them with their original configuration. Legacy local append/finalize APIs belong to
 the Legacy workflow and must not be mixed with Light reports.
@@ -72,16 +72,16 @@ earlier recorded Episodes.
 At most three distinct Directions can be started in one Episode, and only one can be active
 at a time. Closing a Direction requires an explicit assessment and supporting Experiment IDs.
 Ancestry and Wiki attribution are validated claims, not proofs of benefit.
-See the [packaged Journal reference](../src/aka/light/workspace/resources/skills/runtime-records/references/journal.md)
+See the [packaged Journal reference](../src/aka/resources/skills/runtime-records/references/journal.md)
 for the enabled research schema and
-[record queries](../src/aka/light/workspace/resources/skills/runtime-records/references/records.md).
+[record queries](../src/aka/resources/skills/runtime-records/references/records.md).
 Edit only source files permitted by the selected layout; a default source-tree adapter is fixed.
 
 ## Lifecycle and failure paths
 
-`aka.light.runtime.server` authenticates and dispatches.
-`aka.light.workflow.journal_service` coordinates reporting, validation, and publication;
-`aka.light.workflow.journal` validates and persists the private Journal.
+`aka.agent.tools.host` authenticates and dispatches scoped tool calls.
+`aka.workflow.light.host.journal` coordinates reporting, validation, and publication;
+`aka.workflow.light.journal` validates and persists the private Journal.
 CandidateWorkspace performs sealing, while Acceptance and Workflow own verification and promotion.
 
 The report transaction validates citations, runs required candidate checks, seals exact source,

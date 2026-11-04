@@ -1,5 +1,7 @@
 # Evaluator outcomes across transport, cache, and version reports
 
+> Historical design and validation record, preserved from [revision 1abdf3f3](https://github.com/alibaba/atrex-kernel-agent/tree/1abdf3f36cbb7797fdedec7924ff40431975df7b). This is a documentation snapshot, not a runtime compatibility claim: commands and private module paths below describe earlier implementations. Reproduction requires the original implementation revisions named in the record. For current usage, see the [current guide](../measurement-records.md).
+
 A successful Dev allocation can contain a failed evaluator process. Earlier behavior treated that allocation as a completed evaluation, could cache unavailable results, lost diagnostic detail, and conflated objective-score ratios with latency ratios. The current contracts below separate transport success from evaluator verdicts and preserve bounded repair evidence.
 
 This document retains implementation-specific validation records. The before/after curve is tied to the revisions and environment listed below; its test counts are historical evidence, not a fresh validation of every subsequent checkout.

@@ -15,9 +15,9 @@ jobs. Journal annotations and promotion decisions are separate responsibilities.
 5. Retain raw outcomes and complete ABBA batch checkpoints.
 6. Validate the canonical result, seal its public projection, and publish the record.
 
-Current owners are `aka.light.experiment.store`, `records`, `provider`, and
-`abba_checkpoints`; `aka.light.execution.gateway_jobs` handles durable job recovery.
-The Tool Runtime owns authorization and the enclosing deadline.
+Current owners are `aka.experiment` for measurement lifecycle and recovery,
+`aka.evaluation` for preparation/interpretation, and `aka.execution` for remote jobs.
+The Agent ToolHost owns scoped transport; Workflow handlers supply request policy.
 
 ## Records and identity
 
@@ -103,10 +103,10 @@ satisfy a new completed-result cache check; completed candidate rejections remai
 
 ## Optional repeated measurement
 
-The default is one measurement. Set the Tool Runtime provider option explicitly for three:
+The default is one measurement. Set the Evaluation configuration explicitly for three, retaining Light comparison/batching:
 
 ```json
-{"api_version":1,"patches":[{"id":"tool_runtime","config":{"measurement_repetitions":3}}]}
+{"api_version":1,"patches":[{"id":"evaluation","config":{"measurement_repetitions":3,"comparison_method":"native-abba","shape_batch_size":1}}]}
 ```
 
 Three repetitions apply to full Evaluate and whole ABBA comparisons. Per-shape medians are

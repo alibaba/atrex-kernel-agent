@@ -11,7 +11,7 @@ promotion, budgets, and recovery.
 
 ## Entry point and composition
 
-`aka optimize --repo-root /path/to/aka -- ...` converts optimization arguments into a typed
+`aka optimize --repo-root /path/to/aka ...` converts optimization arguments into a typed
 Workflow request, then launches through Bootstrap and Core. A launch manifest selects a
 composition and startup target. Core validates configuration, assembles dependencies, and
 disposes owned providers when the invocation ends.
@@ -91,7 +91,7 @@ the remote GPU executor.
    enforce campaign limits, and export the retained source with verified version facts.
 
 The default report uses `gateway_record_ids`. Direction/Experiment annotations are enabled
-separately by `light_journal.research_records`; then a report selects a recorded Experiment.
+separately by `workflow.research_records`; then a report selects a recorded Experiment.
 Generated memory is also optional. With it disabled, committed `.atrex_versions/vN.json`
 facts still support versioning, reporting, and recovery.
 

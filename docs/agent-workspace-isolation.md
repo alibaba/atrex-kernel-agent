@@ -1,6 +1,6 @@
 # Agent workspace isolation
 
-The default `light` profile runs a native coding-agent process with capture on macOS/Linux.
+The default `light` profile runs a native coding-agent process on macOS/Linux.
 Select `light-sandbox` for coordinator-side Bubblewrap isolation on Linux.
 This is separate from the remote GPU executor. An explicit Bubblewrap selection fails
 when the host cannot provide it; it does not fall back to native execution.
@@ -8,57 +8,50 @@ when the host cannot provide it; it does not fall back to native execution.
 ## Launch and configuration
 
 ```bash
-aka optimize --repo-root "$PWD" --profile light-sandbox -- \
-  --op-dir /path/to/atrex-bench/operator \
+aka optimize --repo-root "$PWD" --profile light-sandbox \
+  --problem /path/to/atrex-bench/operator \
   --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
-  --workspace /path/to/new-runs
+  --workspace-base /path/to/new-runs
 ```
 
 The coordinator needs `bwrap` and permission to create the required user/mount/PID
 namespaces. A remote GPU gateway does not satisfy this local requirement.
 On macOS, use native Light or run the coordinator in an appropriately configured Linux VM.
 
-Configure custom isolation through the Agent provider, with a composition patch before `--`:
+Configure custom isolation through the Agent provider, with a composition patch passed through `--patch`:
 
 ```json
 {
   "api_version": 1,
   "patches": [{"id": "agent", "config": {
     "sandbox": "bwrap",
-    "capture": true,
     "bwrap_executable": "bwrap",
-    "proc_mode": "private",
-    "read_only_paths": ["/absolute/path/to/required/runtime"]
+    "proc_mode": "private"
   }}]
 }
 ```
 
-Replace the illustrative runtime path with an existing narrowly scoped directory, or omit it.
-A patch replaces the whole Agent configuration. Include both sandbox and capture settings
-when preserving `light-sandbox` behavior; the provider's standalone capture default is false.
-The former `--agent-sandbox`, `--bwrap-executable`, and `--agent-read-only-path` optimizer
-flags are not the installed configuration surface. The provider generates its internal
-environment from these options.
+A patch replaces the whole Agent configuration. Keep `sandbox: bwrap` to retain
+isolation. The shared Agent does not accept the old `capture` or `read_only_paths`
+configuration keys. Filesystem grants come from the prepared Session request.
 
 | Option | Meaning |
 | --- | --- |
 | `sandbox` | `none` or `bwrap` |
-| `capture` | Diagnostic capture, independent of filesystem isolation |
 | `bwrap_executable` | Bubblewrap executable, default `bwrap` |
-| `read_only_paths` | Explicit extra installation/runtime paths |
 | `proc_mode` | `private` procfs, or explicit `projected` compatibility view |
-| `timeout_seconds` | Per-invocation active-time ceiling; Workflow Episode budget is separate |
+| `timeout_seconds` | Per-invocation wall-clock ceiling; Workflow Episode budget is separate |
 
 ## Launch lifecycle
 
-`aka.light.agent.provider` owns the process policy. It prepares the Session Home before
+`aka.agent.provider` owns the process policy. It prepares the Session Home before
 native transcript discovery and Codex ledger observation, constructs the allowed filesystem
 view, passes environment values through an anonymous argument FD, and launches the owned
 process tree. Capture observes the same Home throughout Session resume and close.
 
 The managed draft keeps its absolute path. The controller worktree, Git common directory,
 private Journal, evaluator checkout, and Gateway credentials are not mounted into an isolated
-optimization Session. The Agent receives a scoped HTTP Runtime capability instead.
+optimization Session. The Agent receives scoped tools through the Agent-owned Unix socket instead.
 
 Same-Session resume retains its Home and sandbox selection. A changed Home/config root or
 sandbox mode requires a new Session. Recorded campaign continuations restore their frozen
@@ -81,7 +74,7 @@ Model credentials intentionally supplied to the Agent remain usable by it.
 
 Extra grants reject broad host-home roots, private state, symlink traversal, and unsafe
 overlap with workspace/Home boundaries. The Agent shares host networking for model and
-loopback Runtime access; this configuration supplies no network allowlist or cgroup quota.
+scoped tool access; this configuration supplies no network allowlist or cgroup quota.
 Native mode retains the operating-system authority of the launching user.
 
 ## Auxiliary sessions
@@ -113,7 +106,7 @@ view. It requires a compiler/development headers and ordinary namespace/bind per
 The installed, model-free compiler preflight is:
 
 ```bash
-python3 -m aka.light.agent.preflight
+python3 -c "from aka.agent.execution.proc_view import validate_runtime; validate_runtime()"
 ```
 
 Run it in the Linux environment that will actually launch the Agent. It checks the packaged
