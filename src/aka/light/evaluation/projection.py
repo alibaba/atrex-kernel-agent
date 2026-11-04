@@ -10,6 +10,10 @@ from aka.light.runtime.request_errors import error_response
 from aka.light.execution.gateway_jobs import submission_rejection
 from aka.light.evaluation.evaluation_feedback import project_feedback, merge_feedback, bound_performance_feedback
 from aka.light.evaluation.public_result import correctness_summary
+from aka.light.evaluation.response_policy import (
+    KNOWN_GATEWAY_ERROR_CLASSES,
+    known_gateway_error,
+)
 
 MAX_AGENT_PROFILE_KERNELS = 32
 MAX_AGENT_EVALUATION_SHAPES = 4096
@@ -32,7 +36,6 @@ _SOURCE_VIOLATION = re.compile(
     r"(?:Blocked import|Forbidden attribute access): [A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
     r"|Forbidden string literal matching: [A-Za-z_]\w*"
 )
-
 
 def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
     """Only public candidate-source rules, never raw validation/evaluator text."""
@@ -112,9 +115,15 @@ def bounded_error(value: Any) -> Any:
 
 
 def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
-    """The original error, not the private request or the full Gateway envelope."""
+    """Apply known recovery policies; preserve unknown Agate errors verbatim."""
     if "error" not in value:
         raise ValueError("Gateway error response omitted error")
+    if not known_gateway_error(value):
+        # Agate evolves independently of Runtime.  An unfamiliar error class or
+        # envelope must remain debuggable instead of being reduced to Runtime's
+        # current top-level allowlist.  The caller applies universal credential
+        # and controller-path redaction after this projection.
+        return dict(value)
     result = {key: value[key] for key in (
         "operation", "status", "job_id", "trace_id", "http_status", "batch", "outcome",
     ) if key in value and (value[key] is None or type(value[key]) in {str, int})}
@@ -130,9 +139,9 @@ def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
         )
     elif value.get("status") in {"cancelled", "canceled"}:
         result["next_action"] = "The job was cancelled; no Kernel verdict is available. Inspect the Record before starting new work."
-    elif isinstance(error, dict) and error.get("error_class") in {
-        "candidate", "code", "compilation", "correctness", "validation",
-    }:
+    elif isinstance(error, dict) and error.get("error_class") in (
+        KNOWN_GATEWAY_ERROR_CLASSES - {"infra"}
+    ):
         result["next_action"] = (
             "Inspect the returned error and saved Record. Repair the candidate source, probe or "
             "request identified by the diagnostic, then measure the changed task. "
@@ -164,8 +173,14 @@ def gateway_error_from_process(process: subprocess.CompletedProcess, operation: 
     error = payload.get("detail") if isinstance(payload, dict) and "detail" in payload else (
         payload if payload is not None else process.stderr or process.stdout or ""
     )
-    return gateway_error_result({"operation": operation, "status": "rejected",
-                                 "http_status": rejection.status, "error": error})
+    envelope = dict(payload) if isinstance(payload, dict) else {}
+    envelope.update(
+        operation=operation,
+        status="rejected",
+        http_status=rejection.status,
+        error=error,
+    )
+    return gateway_error_result(envelope)
 
 
 def gateway_errors_from_stdout(stdout: str) -> list[dict[str, Any]]:
@@ -199,12 +214,19 @@ def gateway_http_error_result(status: int, detail: str, operation: str) -> dict[
     except ValueError:
         body = detail
     error = body.get("error", body.get("detail", body)) if isinstance(body, dict) else body
-    return gateway_error_result({
-        "operation": operation, "http_status": status, "error": error,
-        "outcome": "failed" if operation == "env" else (
+    envelope = dict(body) if isinstance(body, dict) else {}
+    envelope.update(
+        operation=operation,
+        http_status=status,
+        error=error,
+    )
+    envelope.setdefault(
+        "outcome",
+        "failed" if operation == "env" else (
             "unknown" if status >= 500 and status != 503 else "rejected"
         ),
-    })
+    )
+    return gateway_error_result(envelope)
 
 
 def redact_diagnostics(value: Any, *, private_paths=(), private_values=()) -> Any:
@@ -855,50 +877,80 @@ def numerical_result(payload: dict) -> dict:
 
 def project_response(process: subprocess.CompletedProcess, *, generalized=False, wiki=False,
                      private_paths=(), private_values=(), public_dev=False, operation=None) -> dict:
-    """Keep legacy sentinels parseable, bound diagnostics, omit transport envelopes."""
+    """Project known result types and pass unfamiliar Agate output through verbatim.
+
+    Credential and private controller-path redaction is universal.  Hidden-shape
+    projection is intentionally limited to response types whose schema Runtime
+    understands; applying it to arbitrary future Agate output silently destroys
+    evidence and turns response handling into a brittle field-name blacklist.
+    """
     stdout, stderr = process.stdout or "", process.stderr or ""
     numerical = any(line.startswith(NUMERICAL_RESULT_PREFIX) for line in stdout.splitlines())
     projected = []
+    formatters = {
+        "[test_kernel] RESULT_JSON=": evaluation,
+        "[sandbox] PROFILE_JSON=": lambda value: profile_result(
+            value, generalized=generalized
+        ),
+        "[sandbox] CHECK_JSON=": _agent_check_result,
+        "[sandbox] DISASSEMBLE_JSON=": _agent_disassembly_result,
+        # compare() already emits abba()'s public metric projection.
+        "[sandbox] ABBA_JSON=": lambda value: (
+            dict(value, error=bounded_error(value["error"]))
+            if value.get("error")
+            else dict(value)
+        ),
+        "[sandbox] ENV_JSON=": dict,
+        NUMERICAL_RESULT_PREFIX: numerical_result,
+        SOURCE_ERROR_PREFIX: source_error_result,
+        GATEWAY_ERROR_PREFIX: gateway_error_result,
+    }
+    json_marker = re.compile(r"^(\[[^\]\r\n]+\]\s+[A-Za-z0-9_]+_JSON=)")
     for line in stdout.splitlines():
-        prefix = next((prefix for prefix in (
-            "[test_kernel] RESULT_JSON=", "[sandbox] PROFILE_JSON=",
-            "[sandbox] CHECK_JSON=", "[sandbox] DISASSEMBLE_JSON=",
-            "[sandbox] ABBA_JSON=",
-            "[sandbox] ENV_JSON=",
-            NUMERICAL_RESULT_PREFIX,
-            SOURCE_ERROR_PREFIX,
-            GATEWAY_ERROR_PREFIX,
-        ) if line.startswith(prefix)), None)
+        prefix = next(
+            (candidate for candidate in formatters if line.startswith(candidate)),
+            None,
+        )
+        if prefix is None:
+            match = json_marker.match(line)
+            prefix = match.group(1) if match else None
         if prefix:
             try:
                 raw = json.loads(line[len(prefix):])
                 if not isinstance(raw, dict):
                     raise ValueError("not an object")
                 raw = redact_diagnostics(raw, private_paths=private_paths, private_values=private_values)
-                formatter = {
-                    "[test_kernel] RESULT_JSON=": evaluation,
-                    "[sandbox] PROFILE_JSON=": lambda value: profile_result(value, generalized=generalized),
-                    "[sandbox] CHECK_JSON=": _agent_check_result,
-                    "[sandbox] DISASSEMBLE_JSON=": _agent_disassembly_result,
-                    # compare() already emits abba()'s public metric projection.
-                    "[sandbox] ABBA_JSON=": lambda value: dict(value, error=bounded_error(value["error"])) if value.get("error") else dict(value),
-                    "[sandbox] ENV_JSON=": dict,
-                    NUMERICAL_RESULT_PREFIX: numerical_result,
-                    SOURCE_ERROR_PREFIX: source_error_result,
-                    GATEWAY_ERROR_PREFIX: gateway_error_result,
-                }[prefix]
-                value = redact_diagnostics(formatter(raw), private_paths=private_paths, private_values=private_values)
-                if generalized and not wiki and not public_dev:
+                formatter = formatters.get(prefix)
+                known_projection = formatter is not None
+                if prefix == GATEWAY_ERROR_PREFIX:
+                    known_projection = known_gateway_error(raw)
+                value = formatter(raw) if formatter is not None else raw
+                value = redact_diagnostics(
+                    value,
+                    private_paths=private_paths,
+                    private_values=private_values,
+                )
+                if known_projection and generalized and not wiki and not public_dev:
                     value = redact_hidden_shapes(value)
                 projected.append(prefix + json.dumps(value, ensure_ascii=False))
             except (ValueError, TypeError, RecursionError, OverflowError):
-                projected.append(json.dumps({"error": "Gateway result could not be projected"}))
+                # A known marker with a future schema is also unknown input to
+                # this Runtime version.  Preserve it rather than replacing the
+                # only evidence with a projection error.
+                projected.append(
+                    redact_diagnostics(
+                        line,
+                        private_paths=private_paths,
+                        private_values=private_values,
+                    )
+                )
         else:
             line = redact_diagnostics(line, private_paths=private_paths, private_values=private_values)
-            projected.append(redact_hidden_shapes(line) if generalized and not wiki and not public_dev else line)
+            projected.append(line)
     stdout = "\n".join(projected) + ("\n" if projected else "")
-    if generalized and not wiki and not public_dev:
-        stderr = redact_hidden_shapes(stderr)
+    known_marker_present = any(
+        line.startswith(tuple(formatters)) for line in projected
+    )
     # Structured lines were redacted before JSON encoding. Re-running free-form
     # regexes over encoded JSON can eat delimiters and corrupt result markers.
     stderr = redact_diagnostics(stderr, private_paths=private_paths, private_values=private_values)
@@ -907,7 +959,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
         encoded = result[key].encode()
         if len(encoded) > limit and not (operation in {"evaluate", "same_allocation_abba"}
                 or numerical or "[test_kernel] RESULT_JSON=" in stdout or "[sandbox] ABBA_JSON=" in stdout):
-            if key == "stdout" and any(line.startswith("[") for line in projected):
+            if key == "stdout" and known_marker_present:
                 result[key] = json.dumps({"error": "Projected result exceeds context limit; narrow the request."}) + "\n"
                 result["exit_code"] = process.returncode or 2
             else:
