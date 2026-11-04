@@ -27,6 +27,8 @@ class EvaluationInput:
 
     The legacy adapter uses a flat bundle and a separately copied runtime.
     These paths describe owned content, not the original benchmark location.
+    A native harness is an optional frozen override; Evaluation supplies its
+    built-in method when absent. SOL still requires its Task-provided harness.
     """
     adapter: str
     directory: Path

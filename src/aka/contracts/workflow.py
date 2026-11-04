@@ -13,6 +13,10 @@ from .evaluation import (
 )
 
 
+DEFAULT_FRAMEWORK_BASELINE_TIMEOUT = 8 * 60 * 60
+DEFAULT_LIGHT_EPISODE_TIMEOUT = 4 * 60 * 60
+
+
 @dataclass(frozen=True)
 class WorkflowSettings:
     platform: str
@@ -31,7 +35,7 @@ class WorkflowSettings:
     optimization_mode: str = "leaderboard"
     framework_baseline: str = "auto"
     gateway_candidate_recovery: str = "disabled"
-    framework_baseline_timeout: int = 28800
+    framework_baseline_timeout: int = DEFAULT_FRAMEWORK_BASELINE_TIMEOUT
     handoff_resumes: int = 2
     production_review_timeout: int = 600
     review_trace_mode: str = "errors"

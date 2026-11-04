@@ -15,9 +15,9 @@ jobs. Journal annotations and promotion decisions are separate responsibilities.
 5. Retain raw outcomes and complete ABBA batch checkpoints.
 6. Validate the canonical result, seal its public projection, and publish the record.
 
-Current owners are `aka.light.experiment.store`, `records`, `provider`, and
-`abba_checkpoints`; `aka.light.execution.gateway_jobs` handles durable job recovery.
-The Tool Runtime owns authorization and the enclosing deadline.
+Current owners are `aka.experiment` for measurement lifecycle and recovery,
+`aka.evaluation` for preparation/interpretation, and `aka.execution` for remote jobs.
+The Agent ToolHost owns scoped transport; Workflow handlers supply request policy.
 
 ## Records and identity
 
@@ -77,16 +77,26 @@ Do not change labels or delete indexes to force a new random sample.
 
 | Evidence | Current behavior |
 | --- | --- |
-| Accepted job ID, collection interrupted | Poll the same accepted job; transient collection failures do not authorize duplicate submission |
-| Direct HTTP submit transport/5xx/408/429 or structured infrastructure failure | Replay with the same wire idempotency key, persisted before POST |
-| Confirmed failed infrastructure job | Persist its failure and use a replacement identity; backoff 5/10/20/40/60 seconds within the request deadline |
-| Unknown Agate CLI submission without an ID | Preserve uncertainty for reconciliation; there is no general CLI wire-idempotency replay |
-| Confirmed CLI 429/503 or structured infrastructure rejection | Retry within the defined budget; other no-ID 5xx/timeouts remain uncertain |
-| Explicit device-unavailable Eval result | Up to two replacement executions; exhaustion remains unavailable, not candidate failure |
-| Device-unavailable ABBA batch | Up to ten replacements with a durable budget and 60-second delay; keep complete sibling batches |
-| Candidate correctness/compilation failure | Preserve a completed rejection; source repair creates a different task |
-| Cancelled, unknown, malformed, contradictory, or incomplete result | Do not cache as a completed verdict or blindly replace the job |
-| Known pre-dispatch local queue timeout | Safe-to-retry HTTP 429; distinguish it from a post-dispatch uncertain outcome |
+| Proven not submitted, transient infrastructure failure | Experiment retries at most twice, after 5 and 10 seconds, within a 120-second recovery admission window |
+| Accepted job ID, collection interrupted | Query the original job; a read timeout does not authorize another submission |
+| Unknown submission without a job ID | Retain pending state; replay only with an explicitly verified stable-key capability |
+| Confirmed failed or terminated job | Preserve the result; remeasurement or backend change requires explicit opt-in |
+| Candidate correctness/compilation failure | Preserve the rejection; source repair creates a different task |
+| Cancelled, malformed, contradictory or incomplete result | Preserve uncertainty and job identity; do not record a passing verdict |
+
+Formal and development measurements share the Experiment retry policy. The 120-second
+window starts at the first infrastructure failure and controls retry admission, not GPU
+execution or normal queue waiting. Retry counts and origin persist for recorded steps.
+Workflow does not repeat failed GPU operations around this budget. Review-service outages
+have their separate Workflow policy.
+
+Default client waiting adds no independent total deadline. Explicit
+`ATREX_SANDBOX_QUEUE_WAIT_GRACE` bounds client waiting at allocation plus grace; its expiry
+retains the original job identity and does not establish remote termination. Backend queue,
+attempt and execution limits still apply. `gateway.retry_delays` is retired; configure
+`experiment.retry_delays` and `experiment.retry_budget_s`. An empty delay list disables
+submission retries. `gateway.warmup_iters` is also retired: set `--warmup` on the Evaluation
+request. Old retry-ledger formats are not automatically migrated.
 
 A terminal `command_timeout` follows its explicit error class. Infrastructure-class errors
 can recover; candidate/unknown errors do not become infrastructure merely because they mention
@@ -103,10 +113,10 @@ satisfy a new completed-result cache check; completed candidate rejections remai
 
 ## Optional repeated measurement
 
-The default is one measurement. Set the Tool Runtime provider option explicitly for three:
+The default is one measurement. Set the Evaluation configuration explicitly for three, retaining Light comparison/batching:
 
 ```json
-{"api_version":1,"patches":[{"id":"tool_runtime","config":{"measurement_repetitions":3}}]}
+{"api_version":1,"patches":[{"id":"evaluation","config":{"measurement_repetitions":3,"comparison_method":"native-abba","shape_batch_size":1}}]}
 ```
 
 Three repetitions apply to full Evaluate and whole ABBA comparisons. Per-shape medians are

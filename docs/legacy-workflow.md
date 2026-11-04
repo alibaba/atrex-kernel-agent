@@ -30,8 +30,8 @@ operator. NVIDIA report helpers are already vendored in the Execution package un
 The repository-native `gen-plan` skill freezes a concrete candidate proposal, then requests the
 configured independent, read-only Codex and Qoder reviews against the same proposal and bounded
 repository evidence. V1, fast episodes, and full episodes each have independent Codex and Qoder
-switches, all disabled by default. Enable the desired stage with its `--*-ask-codex` or
-`--*-ask-qoder` flag. A Codex- or Qoder-owned
+reviewer lists, empty by default. Use repeatable `--framework-baseline-reviewers`,
+`--fast-episode-reviewers`, or `--full-episode-reviewers` with `codex` or `qoder`. A Codex- or Qoder-owned
 episode performs an enabled matching review in the current session to avoid recursion. The campaign
 probes a reviewer only when
 it is first enabled for an episode mode, caches that decision under `.atrex_long_horizon/`, reuses it
@@ -51,7 +51,7 @@ python tools/build_distributions.py --output /tmp/aka-dist
 python -m pip install --force-reinstall /tmp/aka-dist/*.whl
 ```
 
-`--op-dir` supports two evaluator-owned layouts:
+`--problem` supports two evaluator-owned layouts:
 
 - SOL-ExecBench: `reference.py`, `definition.json`, and `workload.jsonl`.
 - Native Atrex-Bench: `reference.py`, `input.py`, and detailed `shapes.json`, inside a checkout
@@ -87,8 +87,8 @@ Open Claude Code, Codex, or Qoder in the repository and provide a concrete task 
 Use the installed `aka optimize --profile workflow` command with this checkout as `--repo-root` to start one Legacy optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
 ```
 
-The coding agent should resolve the requested values into optimization arguments after the mandatory
-`aka optimize --repo-root /path/to/checkout --profile workflow --` boundary, verify the local prerequisites, and launch
+The coding agent should resolve the requested values into one
+`aka optimize --repo-root /path/to/checkout --profile workflow` argument list, verify the local prerequisites, and launch
 that command. This prompt-driven path is a convenience
 layer over the same orchestrator, not a separate optimization workflow.
 
@@ -97,9 +97,9 @@ layer over the same orchestrator, not a separate optimization workflow.
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
-    --op-dir /path/to/sol-execbench/op \
-    --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
+aka optimize --repo-root "$PWD" --profile workflow \
+    --problem /path/to/sol-execbench/op \
+    --platform TARGET_GPU --hardware REMOTE_GPU --framework CuteDSL \
     --agent-cli qodercli \
     --max-iters 20 --token-budget 8000000 --target-util 90
 ```
@@ -112,121 +112,65 @@ to run `bwrap` and access only the intended GPU devices; do not attach cloud cre
 service secrets to it. Runtime trees outside `/usr` must be exposed explicitly as read-only binds:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
-    --op-dir /path/to/sol-execbench/op \
-    --platform H20 --sandbox-hardware H20 --framework Triton \
-    --sandbox-ssh user@gpu-host \
-    --sandbox-ssh-gpu 0 \
-    --sandbox-ssh-runtime-bind /opt/aka-venv \
-    --sandbox-ssh-init 'source /opt/aka-venv/bin/activate' \
-    --environment-poll-interval 60 \
-    --workspace /path/to/runs --max-iters 20
+export ATREX_SANDBOX_SSH=user@gpu-host
+export ATREX_SANDBOX_SSH_GPU=0
+export ATREX_SANDBOX_SSH_RUNTIME_BINDS='["/opt/aka-venv"]'
+export ATREX_SANDBOX_SSH_INIT='source /opt/aka-venv/bin/activate'
+unset ATREX_SANDBOX_URL ATREX_SANDBOX_PROFILE
+aka optimize --repo-root "$PWD" --profile workflow \
+    --problem /path/to/sol-execbench/op \
+    --platform H20 --hardware H20 --framework Triton \
+    --workspace-base /path/to/runs --max-iters 20
 ```
 
-`--sandbox-ssh-gpu` is required and selects one physical NVIDIA index. The runner resolves that index
+`ATREX_SANDBOX_SSH_GPU` is required and selects one physical NVIDIA index. The runner resolves that index
 to its GPU UUID, exposes only its device node plus common driver control nodes, and exports UUID-based
 `CUDA_VISIBLE_DEVICES`. MIG-enabled GPUs and MIG/UUID selectors fail closed because their capability
 nodes are not assigned yet. SSH mode also requires an explicit `--framework`; automatic parallel
 framework dispatch is rejected, and multi-shape ABBA batches are serialized on the assigned card.
 
-`--sandbox-ssh-runtime-bind REMOTE_PATH[=SANDBOX_PATH]` is repeatable. A single path preserves its
+`ATREX_SANDBOX_SSH_RUNTIME_BINDS` is a JSON array of `REMOTE_PATH[=SANDBOX_PATH]` strings. A single path preserves its
 location; the `source=destination` form can mount it elsewhere. The bind is read-only. For example, a
 venv below a hidden login home can be exposed at its original path with
-`--sandbox-ssh-runtime-bind /home/gpu/aka/.venv`, or remapped when it is relocatable.
+`ATREX_SANDBOX_SSH_RUNTIME_BINDS='["/home/gpu/aka/.venv"]'`, or remapped when it is relocatable.
 Broad system/home roots and credential directories are rejected on the source side. A source below
 `/home` must be a conventional `.venv`/`venv` root or a direct child of a Conda `envs` directory.
 Before each execution, the remote host resolves every source symlink; the resolved target must still
 pass the same denylist and be a directory.
 
-`--sandbox-ssh-init` defaults to empty and runs inside the isolated namespace. The default health
+`ATREX_SANDBOX_SSH_INIT` defaults to empty and runs inside the isolated namespace. The default health
 command checks PyTorch GPU allocation, arithmetic, synchronization, and device properties;
 override it when the remote stack uses a different runtime. The optimizer also checks the selected
 framework's installed tooling and, for SOL operators, the evaluator interpreter and dtype mapping.
 These workspace-independent checks run before seeding (even with `--arch`), after failed commands,
 and during recovery polling. They never import candidate code. Native operator contracts and
 complete workload coverage still require real evaluation; preflight is not a replacement for it.
-Avoid putting credentials in either shell command. `--sandbox-ssh` is mutually exclusive
-with `--sandbox-url` and `--sandbox-profile`.
+Avoid putting credentials in either shell command. `ATREX_SANDBOX_SSH` is mutually exclusive
+with `ATREX_SANDBOX_URL` and `ATREX_SANDBOX_PROFILE`.
 
 Each sandbox call uploads its explicit input allowlist to a new `/tmp/atrex-sandbox.*` directory,
 runs the requested evaluator or profiler inside mandatory Bubblewrap PID/IPC/UTS/network namespaces,
 downloads only requested `--sync` artifacts, and removes the remote directory. The namespace has no
 network, host home, inherited environment, or writable host filesystem; it sees only minimal read-only
 system paths, configured runtime binds, the assigned GPU device node, and its writable job directory. There is no
-unisolated fallback. A portable Python watchdog enforces `--sandbox-timeout` even when GNU `timeout`
+unisolated fallback. A portable Python watchdog enforces `--timeout` even when GNU `timeout`
 is absent.
 
-When preflight or SSH transport fails (including scp upload/download timeout), or a failed GPU command is followed by a failed health probe, the sandbox
-writes a private environment marker and returns temporary-failure status 75. The supervisor stops all
-active Agent/framework process groups without treating the failure as a bad candidate. It then starts
-`python -m aka.legacy.workflow.monitor_optimize_tasks` detached. Recovery state is stored below
-`<workspace>/.atrex_environment/<command-id>/`:
-
-- `failure.json`: the current failure stage and bounded diagnostic;
-- `cleanup-*.json`: remote workspaces that must be removed before restart;
-- `restart.json`: exact argument-array and working-directory metadata, mode `0600`;
-- `monitor.lock`, `monitor.pid`, and `monitor.log`: an OS advisory lock plus live poller status;
-- `restart-child.lock`, `restart.pid`, `restart.primary.pid`, and `restart.log`: diagnostic wrapper,
-  primary, and cleanup status during the supervised resume handoff; durable registry identities
-  remain the process authority;
-- `restart.ready` and `restart.ack`: the two-phase resume handshake; activation is accepted only
-  after the primary observes its matching `active.json` and acknowledges it;
-- `restart.exit.json` and `restart.complete.json`: the primary result and the later confirmation that
-  its process group and registered sessions were cleaned up;
-- `restarting.json` and `active.json`: initialization and ready-but-still-running ownership states;
-- `stopped.json` and `stop-requests/*.json`: a persistent operator stop plus immutable concurrent
-  requests that prevent an earlier resume from erasing a later stop;
-- `restart-processes/<handoff-id>/*.json`: PID-reuse-safe wrapper, primary, and independent cleanup
-  guardian identities for the optimizer and every controlled process session it starts;
-- `recover.sh`: an idempotent manual way to clear `stopped.json` and start the same single-instance
-  poller;
-- `stop-recovery.sh`: the verified stop path for rollback.
-
-The monitor probes every 60 seconds by default. One successful explicit GPU health check first drains
-all `cleanup-*.json` work, then spawns the original optimizer argv in the original working directory,
-and moves the failure marker through `restarting.json`. The campaign first publishes readiness; the
-monitor changes the marker to `active.json`, and the primary must then acknowledge that exact handoff.
-The monitor keeps supervising the active run until a durable exit and cleanup result arrives. A clean
-zero exit archives recovery; a fully cleaned non-zero exit restores a retryable failure and returns to
-health polling. An exit without cleanup completion waits only while a verified owner remains and then
-fails closed for manual process verification. Cleanup or spawn failures likewise retain the marker.
-If a monitor dies during `restarting.json`, a replacement monitor uses the child-owned advisory lock
-and the persistent session-owner identities to adopt a live handoff or request that every registered
-owner terminate its own process group before atomically restoring `failure.json`. Each wrapper, gated
-primary, and separate-session cleanup guardian is registered before the actual command can start. The
-guardian retains the inherited handoff lock through the completion commit and takes over same-group
-cleanup if its wrapper dies. The wrapper reports primary status before cleaning same-group leftovers.
-Protocol files are fsynced before atomic replacement, and critical directory-entry changes are
-directory-fsynced. The handoff timeout starts from the explicit
-`restart_handoff.started_at` value in the marker, never from a failure marker's older filesystem
-timestamp. Resolved environment-only settings, including the polling interval, are replayed into the
-child. PID files are diagnostic, removed by their matching owner, and never used as the lock or
-process-identity authority.
-The normal campaign resume path reuses its interrupted worktree and journal. Candidate compilation,
-correctness, timeout (status 124), and even explicit status 255 do not trigger this path when the
-independent health probe succeeds.
-
-To roll back the SSH transport, run `STATE_DIR/stop-recovery.sh` (or
-`python -m aka.legacy.workflow.monitor_optimize_tasks --state-dir STATE_DIR --stop`) and require a zero exit status
-before changing transport. Stop first publishes an immutable request; the live monitor observes it
-without signalling its diagnostic PID, or the stopper takes over through the advisory lock after the
-monitor exits. It terminates every identity-verified recovery process group, restores a
-durable failure marker when needed, leaves the persistent `stopped.json` tombstone in place, and
-reports success only after no owned process remains. This includes an optimizer that has already
-reached `active.json`. Resume waits for the lock whenever stop state is present and returns zero only
-after clearing its locked snapshot; a later stop request always wins. Do not signal the diagnostic PID
-from `monitor.pid` directly. Preserve the private recovery directory for
-diagnosis, then relaunch the same command with `--sandbox-url` or `--sandbox-profile`. Candidate Git
-state and canonical memory are transport-independent and require no rollback. Run `STATE_DIR/recover.sh`
-to re-enable automatic recovery. To clear a recovered marker without restarting, run
-`python -m aka.legacy.workflow.monitor_optimize_tasks --state-dir STATE_DIR --resume --once --no-restart` after
-verifying any deferred remote cleanup.
+Infrastructure failures are distinct from candidate correctness failures. The current
+common retry schedule allows two extra safe pre-submission attempts after 5/10 seconds;
+do not rely on the removed detached recovery monitor.
+Known remote jobs must be reconciled before any new execution. See
+[recovery compatibility](application-plugin-migration.md#recovery-compatibility).
+The earlier monitor, stop/recover scripts and restart handshake are retained as
+[historical operational instructions](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/legacy-workflow.md#isolated-openssh-gpu-host)
+as a documentation snapshot only. Reproducing that protocol requires the earlier
+implementation; the current installed command set does not provide the monitor.
 
 ### What happens after launch
 
 1. **Resolve and isolate the campaign.** The Workflow validates the operator and explicitly selected
    resources, probes the runtime GPU architecture, and creates or resumes
-   `kernel_opt_<name>_<framework>_<platform>/` below `--workspace` or the current directory.
+   `kernel_opt_<name>_<framework>_<platform>/` below `--workspace-base` or the current directory.
 2. **Prepare production inputs.** Native production campaigns validate a supplied
    `agent_problem.json` or derive one in a clean preprocessing session, then keep detailed evaluator
    shapes private.
@@ -249,7 +193,7 @@ verifying any deferred remote cleanup.
 7. **Recover or finalize.** A restarted supervisor reopens the registered episode worktree with its
    intermediate state. The campaign stops on mechanical budgets or target utilization, summarizes
    canonical memory, and emits a directly consumable `submission.json` for SOL campaigns.
-GPU evaluations and full-mode profiles run through `python -m aka.legacy.execution.cli` on `--sandbox-hardware`;
+GPU evaluations and full-mode profiles run through `aka execution` on `--hardware`;
 `memory/`, episode journals, worktrees, and Git stay local. `--platform` is required and names the
 logical target.
 
@@ -272,9 +216,9 @@ Omit `--agent-cli` to use Claude. Provider-specific settings can be supplied thr
 To use Codex, pass `--agent-cli codex`:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
-    --op-dir /path/to/sol-execbench/op \
-    --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
+aka optimize --repo-root "$PWD" --profile workflow \
+    --problem /path/to/sol-execbench/op \
+    --platform TARGET_GPU --hardware REMOTE_GPU --framework Triton \
     --agent-cli codex --max-iters 20 --token-budget 8000000
 ```
 
@@ -302,9 +246,9 @@ To use Pi, select it as the backend and optionally configure its provider and mo
 
 ```bash
 export ATREX_PI_SESSION_SETTINGS='{"provider":"anthropic","model":"claude-opus"}'  # optional
-aka optimize --repo-root "$PWD" --profile workflow -- \
-    --op-dir /path/to/sol-execbench/op \
-    --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
+aka optimize --repo-root "$PWD" --profile workflow \
+    --problem /path/to/sol-execbench/op \
+    --platform TARGET_GPU --hardware REMOTE_GPU --framework Triton \
     --agent-cli pi --max-iters 20 --token-budget 8000000
 ```
 
@@ -318,10 +262,10 @@ leaving provider credentials in Pi's normal auth/config files. `ATREX_PI_SESSION
 Omit `--framework` to run every framework supported by the detected GPU concurrently:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
-    --op-dir /path/to/sol-execbench/op \
-    --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
-    --workspace /path/to/runs --max-iters 20
+aka optimize --repo-root "$PWD" --profile workflow \
+    --problem /path/to/sol-execbench/op \
+    --platform TARGET_GPU --hardware REMOTE_GPU \
+    --workspace-base /path/to/runs --max-iters 20
 ```
 
 The runtime architecture is authoritative for vendor selection. NVIDIA dispatches Triton, CuteDSL, Cuda, and
@@ -339,11 +283,11 @@ libraries and evidence-backed framework changes are allowed. Use production mode
 framework-pure implementation:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
-    --op-dir /path/to/sol-execbench/op \
-    --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
+aka optimize --repo-root "$PWD" --profile workflow \
+    --problem /path/to/sol-execbench/op \
+    --platform TARGET_GPU --hardware REMOTE_GPU \
     --optimization-mode production --framework Triton \
-    --workspace /path/to/runs --max-iters 20
+    --workspace-base /path/to/runs --max-iters 20
 ```
 
 Production mode may omit `--framework`; like leaderboard mode, it auto-dispatches all frameworks supported
@@ -386,46 +330,31 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 ### Common options
 
 ```text
---max-iters N                    Hard cap on canonical versions/episodes
---fast-episodes N                Fast post-baseline episodes (default: 2; 0 disables)
---token-budget N                 Episode admission budget; in-flight turns may exceed it (0 = no cap)
---agent-cli CLI                  claude (default), qodercli, codex, or pi
---long-reviewer-session REVIEWER Reuse one reviewer session across episodes (codex, qoder)
---v1-ask-codex / --no-v1-ask-codex                 Configure ask-codex for V1 (default: off)
---v1-ask-qoder / --no-v1-ask-qoder                 Configure ask-qoder for V1 (default: off)
---fast-episode-ask-codex / --no-fast-episode-ask-codex
-                                                    Configure fast ask-codex (default: off)
---fast-episode-ask-qoder / --no-fast-episode-ask-qoder
-                                                    Configure fast ask-qoder (default: off)
---full-episode-ask-codex / --no-full-episode-ask-codex
-                                                    Configure full ask-codex (default: off)
---full-episode-ask-qoder / --no-full-episode-ask-qoder
-                                                    Configure full ask-qoder (default: off)
---optimization-mode MODE         leaderboard (default) or production
---framework DSL                  Explicit DSL; omit for automatic parallel dispatch
---framework-baseline MODE        auto (production only), always, or never
---framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 28800)
---target-util PCT                Peak-utilization short-circuit (default: 90)
---setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)
---sandbox-hardware GPU           Sandbox hardware selector or alias
---sandbox-ssh [USER@]HOST        Direct OpenSSH GPU executor
---sandbox-ssh-gpu INDEX          Assigned physical NVIDIA GPU (required for SSH)
---sandbox-ssh-init COMMAND       Remote environment activation before jobs/probes
---sandbox-ssh-runtime-bind PATH  Read-only runtime path inside the SSH namespace (repeatable)
---sandbox-health-command COMMAND GPU health probe used for failure classification
---environment-poll-interval S    Recovery probe interval (default: 60)
---sandbox-timeout S              Advanced override for the derived evaluation allocation
---workspace DIR                  Campaign parent directory (default: current directory)
---max-stall N                    Stop after N unpromoted episodes (0 = disabled)
---convert-after N                Triton stalls before mandatory Gluon conversion (default: 3)
---handoff-resumes N              Same-thread incomplete-handoff recovery turns (default: 2)
---verify-repeats N               Full-mode ABBA repeat pairs (default: 2)
---verify-run-timeout S           Full-mode evaluator budget per ABBA run (default: 300)
---min-improvement-pct PCT        Strict gain required in fast or full verification
---arch ARCH                      Override runtime architecture detection
+--problem DIR                   Evaluator-owned task input
+--workspace-base DIR            Parent of generated campaign directories
+--platform GPU                  Logical target platform
+--hardware GPU                  Execution worker selector
+--framework DSL                 Explicit framework; omit for automatic dispatch
+--agent-cli CLI                 claude, qodercli, codex, or pi
+--max-iters N                    Maximum canonical versions/episodes (default: 20)
+--token-budget N                 Episode admission budget (0: no cap)
+--optimization-mode MODE         leaderboard or production
+--framework-baseline MODE        auto, always, or never
+--framework-baseline-reviewers NAME  Repeat for each baseline reviewer
+--fast-episode-reviewers NAME    Repeat for each Fast reviewer
+--full-episode-reviewers NAME    Repeat for each Full reviewer
+--verify-repeats N               ABBA repeat pairs (default: 2)
+--verify-run-timeout S           ABBA performance budget (default: 300)
+--timeout S                      Explicit enclosing evaluation allocation
+--framework-baseline-timeout S   Baseline active-Agent-time budget (default: 28800)
+--setup-timeout S                Setup budget (default: 7200)
 ```
 
-Run `aka optimize --repo-root "$PWD" --profile workflow -- --help` for the Legacy interface. Some Qoder models
+Endpoint selection belongs to Execution: use `ATREX_SANDBOX_PROFILE`,
+`ATREX_SANDBOX_URL`, or the SSH environment shown above. Client waiting adds no total deadline by default; see
+[Quick Start](quickstart.md#launch-light). Run help for all public settings.
+
+Run `aka optimize --repo-root "$PWD" --profile workflow --help` for the Legacy interface. Some Qoder models
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
 
@@ -440,10 +369,10 @@ it advances campaign state, including failed, pivoted, blocked, and interrupted 
 The sandbox boundary can also be used directly for validation and profiling:
 
 ```bash
-python -m aka.legacy.execution.cli --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
-python -m aka.legacy.execution.cli --hardware REMOTE_GPU --sync profiles/v1 -- \
+aka execution --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+aka execution --hardware REMOTE_GPU --sync profiles/v1 -- \
   bash profiling/nvidia/profile_nvidia.sh kernel.py --output-dir profiles/v1 --source
-python -m aka.legacy.execution.cli --hardware H20 --ssh user@gpu-host \
+aka execution --hardware H20 --ssh user@gpu-host \
   --ssh-gpu 0 \
   --ssh-runtime-bind /opt/aka-venv --ssh-init 'source /opt/aka-venv/bin/activate' \
   --no-sync -- python test_kernel.py --no-memory

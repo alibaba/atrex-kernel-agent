@@ -1,0 +1,76 @@
+"""Authorize and snapshot endpoint inputs through pinned, no-follow descriptors."""
+from contextlib import contextmanager
+import os
+from pathlib import Path
+
+from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
+from aka.execution.input_snapshot import read_command_input as read_input
+from aka.execution import snapshot_command_inputs
+
+
+@contextmanager
+def pinned(path):
+    path = Path(path)
+    if (not path.is_absolute() or ".." in path.parts or not hasattr(os, "O_NOFOLLOW")
+            or not hasattr(os, "O_DIRECTORY")):
+        raise PermissionError("safe scoped input access is unavailable")
+    directory = os.open("/", os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for index, name in enumerate(path.parts[1:]):
+            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+            if index < len(path.parts) - 2:
+                flags |= os.O_DIRECTORY
+            child = os.open(name, flags, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        yield directory
+    finally:
+        os.close(directory)
+
+
+
+
+
+
+
+
+def client_access(access):
+    """Project existing grants into the Agent view, including source aliases."""
+    def restrictions(paths):
+        result = set(paths)
+        for path in paths:
+            physical = []
+            for mount in access.mounts:
+                if path.is_relative_to(mount.target):
+                    physical.append(mount.source / path.relative_to(mount.target))
+                elif mount.target.is_relative_to(path):
+                    physical.append(mount.source)
+            for source in physical:
+                for mount in access.mounts:
+                    if source.is_relative_to(mount.source):
+                        result.add(mount.target / source.relative_to(mount.source))
+                    elif mount.source.is_relative_to(source):
+                        result.add(mount.target)
+        return tuple(sorted(result, key=str))
+    readonly = (*access.read_only_paths, *(mount.target for mount in access.mounts if not mount.writable))
+    return FilesystemAccess(tuple(FilesystemMount(mount.target, mount.target, mount.writable)
+                                  for mount in access.mounts),
+                            restrictions(access.hidden_paths), restrictions(readonly))
+
+
+def access_data(access):
+    return {"mounts": [{"source": str(m.source), "target": str(m.target), "writable": m.writable}
+                       for m in access.mounts], "hidden_paths": list(map(str, access.hidden_paths)),
+            "read_only_paths": list(map(str, access.read_only_paths))}
+
+
+def decode_access(value):
+    return FilesystemAccess(tuple(FilesystemMount(Path(m["source"]), Path(m["target"]), m["writable"])
+                                  for m in value["mounts"]),
+                            tuple(map(Path, value["hidden_paths"])),
+                            tuple(map(Path, value["read_only_paths"])))
+
+
+def snapshot_inputs(workspace, access, selections, *, max_file_bytes=None):
+    return snapshot_command_inputs(workspace, selections, filesystem_access=access,
+                                   max_file_bytes=max_file_bytes)

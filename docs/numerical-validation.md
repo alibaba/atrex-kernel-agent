@@ -17,9 +17,9 @@ flowchart TD
 
 ## Contract and ownership
 
-- `aka.light.acceptance.numerical` snapshots the complete candidate artifact and trusted inputs outside the Agent workspace. Source layout and editable roots remain pinned; source, headers, and build settings follow the selected candidate contract. Hidden Shape definitions are not copied into the planner workspace, but original evaluator errors may quote case details. Its auxiliary session has no Runtime capability or GPU tools; Bubblewrap uses a dedicated read-only input allowlist when enabled.
+- `aka.workflow.light.orchestration.numerical_policy` snapshots the complete candidate artifact and trusted inputs outside the Agent workspace. Source layout and editable roots remain pinned; source, headers, and build settings follow the selected candidate contract. Hidden Shape definitions are not copied into the planner workspace, but original evaluator errors may quote case details. Its auxiliary session has no Runtime capability or GPU tools; Bubblewrap uses a dedicated read-only input allowlist when enabled.
 - The planner writes a declarative plan: at most three cases, actual nested tensor ABI paths, supported generators and public input constraints. It cannot provide Python, an evaluator, private Shape IDs or thresholds. Supported distributions include constant, uniform, log-uniform, sparse, alternating, ramp, packed bytes and near-constant. Unspecified input leaves retain the original generator's values.
-- `aka.light.acceptance.remote_numerical` executes up to three representative matching Shapes, two seeds and all declared ranks per case, using the canonical evaluator. Receipts bind case, selected Shapes, seeds, ranks and observed coverage. A complete failing workload can disprove correctness; a PASS requires all selected coverage. No eligible Shapes yields an explicit unsupported advisory, not a passing test.
+- `aka.evaluation.drivers.remote_numerical` executes up to three representative matching Shapes, two seeds and all declared ranks per case, using the canonical evaluator. Receipts bind case, selected Shapes, seeds, ranks and observed coverage. A complete failing workload can disprove correctness; a PASS requires all selected coverage. No eligible Shapes yields an explicit unsupported advisory, not a passing test.
 - Supplemental floating outputs use relative L2 `||candidate-reference||₂ / max(||reference||₂, 1e-12)`: non-FP4 threshold `1e-3`, FP4 threshold `0.2`. Structural, dtype, finite-value, mutation and exact non-floating checks remain evaluator-owned. Ordinary allclose/FP4 policy is unchanged.
 - Native `input.py`/`reference.py`/`shapes.json` is required for these constructors. SOL contracts without that ABI receive a recorded unsupported advisory. Their full-workload correctness remains required; Light native ABBA does not support SOL/SSH.
 
@@ -31,26 +31,30 @@ Reference non-finite outputs, invalid generation or incomplete receipts return t
 
 Each planner uses `--production-review-timeout` (default 600 seconds). A bounded plan recovered from a timeout remains untrusted until schema/evidence validation and execution. Without a usable plan, a timeout permits a recorded `skipped_planner_timeout` only after ordinary correctness passed, evidence is unchanged and no measured supplemental candidate failure remains. Malformed non-timeout responses do not receive this exemption.
 
-GPU probes use the private MeasurementStore and exact-task reuse. Python-backed probes use
-the remote numerical driver; native CUDA manifests use `aka.light.acceptance.typed_numerical`
+GPU probes use shared Experiment records and exact-request recovery. Python probes use
+the Evaluation-owned remote numerical driver; CUDA manifests use `aka.evaluation.typed_numerical`
 through Agate Eval so compilation and dependency binding stay evaluator-owned. The typed
 supplemental route currently requires one GPU.
 
-Confirmed service outages use the Supervisor's fixed 60-second outer retry wait and the
-current [Gateway recovery policy](measurement-records.md#failure-and-recovery-policy).
+Reviewer-service outages use the Workflow review policy. GPU recovery follows the
+shared [Experiment recovery policy](measurement-records.md#failure-and-recovery-policy).
 Known jobs are reconciled by ID; unknown CLI submissions are not blindly replaced.
 Nested requests retain the report's deadline and revocation. Missing receipts alone
 do not establish a device outage or a numerical counterexample.
 
-The probe request explicitly carries Light's ordinary Evaluate candidate timeout
-(`CANDIDATE_TIMEOUT`, currently 600 seconds), including model construction/JIT
-compilation. It must not rely on an evaluator-library fallback: the evaluator
-constructs the candidate before generating the first input receipt, so a shorter
-implicit initialization timeout can otherwise appear as zero observed probes.
-This policy is part of the recorded request identity. The case deadline and the
-full-coverage acceptance requirement are unchanged. Pre-receipt failures return
-the original evaluator failure when
-available, rather than attributing every missing receipt to the generator.
+Probe preparation, input generation, backend adapters and receipt interpretation belong to
+Evaluation. Workflow submits `NumericalProbeRequest` through Experiment and owns planner,
+repair and promotion decisions. The shared candidate limit is 600 seconds; performance
+uses 300 seconds. Numerical cases are correctness-only.
+
+Each numerical request defaults to 600 seconds **per case**; an explicit `timeout=1200`
+gives each case 1200 seconds. There is no 540/1140-second inner cutoff. A script case uses
+one execution step for its Shapes/seeds. CUDA manifests require typed Eval because the
+script evaluator accepts Python files only: their sequential Shape/seed steps share one
+persisted case deadline, including queue and recovery waits. Resume does not renew it.
+Case expiry or missing receipts is incomplete evidence, never PASS. This timeout is
+independent of the ordinary Eval/ABBA allocation and the Workflow planner deadline.
+
 
 ## Evidence and limits
 

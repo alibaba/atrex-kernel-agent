@@ -1,7 +1,7 @@
 # Quick Start
 
 The installed `aka optimize` command starts the default **Light** workflow: managed
-source drafts, private HTTP tools, unified Episodes, and Supervisor-owned promotion.
+source drafts, scoped Agent tools, unified Episodes, and Supervisor-owned promotion.
 The primary path is native Atrex-Bench evaluation through Agate. For SOL-ExecBench,
 OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workflow.md).
 
@@ -16,7 +16,7 @@ OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workf
 
 NVIDIA profiling requires the appropriate NCU tools on the worker; AMD and PPU profiling
 use their respective worker toolchains. Initialize only the reference-project submodules
-you select. GPU Wiki is enabled by default, but its corpus is resolved on the first query,
+you select. The Light resource profile includes GPU Wiki; its corpus is resolved on the first query,
 not by an unconditional startup scan. See [Wiki configuration](optional-light-modules.md#independent-wiki-execution).
 
 ## Install from a matching checkout
@@ -27,13 +27,12 @@ cd atrex-kernel-agent
 python3 -m pip install build
 python3 tools/build_distributions.py --output /tmp/aka-wheels \
   atrex-aka-framework atrex-aka-legacy atrex-aka-light
-python3 -m pip install --force-reinstall --no-index \
-  --find-links /tmp/aka-wheels atrex-aka-light
+python3 -m pip install --force-reinstall /tmp/aka-wheels/*.whl
 aka optimize --help
 ```
 
 Keep all three distributions and the resource checkout at the same revision. Their current
-package metadata uses `0.1.0`, so installing a changed checkout requires reinstalling its
+package metadata uses `0.2.0`, so installing a changed checkout requires reinstalling its
 wheels even when the version string has not changed. Missing Light is an installation error.
 See [installed startup](application-plugin-migration.md) for package and continuation details.
 
@@ -58,21 +57,25 @@ Use a new workspace when changing modes or migrating a campaign that exposed pri
 From the AKA checkout:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/atrex-bench/operator \
+aka optimize --repo-root "$PWD" \
+  --problem /path/to/atrex-bench/operator \
   --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
   --optimization-mode production \
-  --workspace "$HOME/aka-opt" --max-iters 20
+  --workspace-base "$HOME/aka-opt" --max-iters 20
 ```
 
-Replace the operator and platform with your workload and worker. `--sandbox-hardware`
-can specify a worker alias different from the logical platform. Use `--sandbox-profile prod`
-or `pre` to select an Agate endpoint profile, or `--sandbox-url URL` for an explicit endpoint;
-otherwise the configured endpoint is retained.
+Replace the operator and platform with your workload and worker. `--hardware`
+can specify a worker alias different from the logical platform. Configure one endpoint
+on the coordinator before launch: `ATREX_SANDBOX_PROFILE=prod` (or `pre`), or
+`ATREX_SANDBOX_URL=http://127.0.0.1:8000`. Clear the other endpoint selectors;
+URL, profile and SSH selections are mutually exclusive.
+Client waiting has no independent total deadline by default. The backend's queue and
+execution limits still apply. Set `ATREX_SANDBOX_QUEUE_WAIT_GRACE` only when an explicit
+client wait bound is required; expiry preserves the original job for reconciliation.
 
-Launch options (`--repo-root`, `--profile`, `--patch`) go **before** `--`.
-Optimization arguments go after it. Omitting `--profile` selects Light.
-Use `--profile light-sandbox` before the separator for Bubblewrap.
+All launch and optimization options belong to the same parser; do not insert `--`.
+Omitting `--profile` selects Light. Use `--profile light-sandbox` for Bubblewrap.
+`--workspace-base` is the parent directory; AKA creates the named campaign beneath it.
 
 To launch through a coding agent, ask it to translate the workload, worker, framework,
 workspace, mode, and budgets into this same installed command.
@@ -94,7 +97,7 @@ Version and token budgets apply per dispatched campaign.
 ## What happens after launch
 
 1. Resolve the selected providers, freeze the problem/runtime inputs, and create or resume
-   a campaign below `--workspace`.
+   a campaign below `--workspace-base`.
 2. Evaluate V0 from the selected initial source. Production normally enables a framework
    baseline V1 through `--framework-baseline auto`; an imported source tree uses its
    pinned seed. `always` and `never` explicitly select baseline behavior.
@@ -111,7 +114,7 @@ an accepted report is immutable. Subsequent draft edits cannot replace the seale
 
 ## Configure optional features
 
-Save a composition patch, then pass `--patch /path/to/options.json` before `--`:
+Save a composition patch, then pass `--patch /path/to/options.json`:
 
 ```json
 {
@@ -121,9 +124,8 @@ Save a composition patch, then pass `--patch /path/to/options.json` before `--`:
       "startup": true,
       "numerical_validation": true,
       "generate_memory": true,
-      "episode_timeout_seconds": 14400
-    }},
-    {"id": "light_journal", "config": {"research_records": true}}
+      "research_records": true
+    }}
   ]
 }
 ```
@@ -135,17 +137,17 @@ measurement records, report validation, and ABBA remain required with them disab
 A patch replaces the provider's **whole configuration**; omitted values take provider
 defaults. A Workflow patch used by `aka optimize` must retain `"startup": true` to
 provide the launch entry point. An Agent patch for `light-sandbox` should retain
-`"sandbox": "bwrap"` and `"capture": true` when those behaviors are desired.
+`"sandbox": "bwrap"` when isolation is desired. The shared Agent has no `capture` option.
 See [all module options](optional-light-modules.md#other-module-options).
 
 ### Candidate layouts
 
 New Light tasks use `source_tree`: a fixed `kernel.py` imports editable
 `impl/model.py`, and the agent may add source files under `impl/`.
-Native CUDA without a Python loader requires an explicit candidate patch:
+Native CUDA without a Python loader requires an explicit Workflow patch:
 
 ```json
-{"api_version":1,"patches":[{"id":"candidate","config":{"file_system":"cuda_manifest"}}]}
+{"api_version":1,"patches":[{"id":"workflow","config":{"startup":true,"file_system":"cuda_manifest"}}]}
 ```
 
 Use it with `--framework Cuda`. CUDA sources, headers, and `solution.json` form the
@@ -161,12 +163,11 @@ Use [Legacy](legacy-workflow.md) for campaigns needing that verification path.
 - `--token-budget` controls Episode admission from available usage receipts. It excludes
   baseline/auxiliary usage, can be exceeded by an in-flight invocation, and cannot account
   for tokens a provider does not report.
-- Light defaults to four hours of agent active time per optimization Episode. Blocking
-  Tool Runtime requests pause the agent and do not consume this allowance. The active-time
-  budget is shared across Session repairs within the running controller; it is not a
-  persisted allowance across controller restarts.
-- Framework baseline has its own eight-hour wall-clock default. GPU queue/execution and
-  Wiki deadlines are independent of agent active time.
+- Light Episodes default to a four-hour active-time allowance, configurable with
+  `workflow.episode_timeout_seconds`. Admitted authenticated tool waits and downtime
+  do not consume this allowance; continuation and clean restart retain used time.
+- `--framework-baseline-timeout` defaults to 28,800 seconds of active time. GPU queue/execution
+  budgets and shared Agent invocation limits are separate.
 - Resume with the original workspace, composition, source layout, and frozen resources.
   Accepted job IDs and completed ABBA batches are reconciled before further GPU execution.
 
@@ -191,5 +192,5 @@ Raw private stores and Session traces are not public submission artifacts. The o
 does not package complete multi-file source trees. Use the workflow's source-aware export
 for those candidates.
 
-Run `aka optimize --repo-root "$PWD" -- --help` for CLI syntax; the parser retains Legacy
+Run `aka optimize --repo-root "$PWD" --help` for current CLI syntax; the public settings include Legacy stage
 options, so use the [Light guide](optional-light-modules.md) for their workflow applicability.

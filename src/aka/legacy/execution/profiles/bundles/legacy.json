@@ -1,6 +1,0 @@
-{
-  "api_version": 1,
-  "entries": [
-    {"id": "executor", "name": "aka.legacy.execution.legacy.plugin", "required": true}
-  ]
-}

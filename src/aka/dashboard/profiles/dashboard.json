@@ -3,12 +3,14 @@
   "composition": "dashboard",
   "target": "startup",
   "tokens": [
-    "observation_source"
+    "observation_source", "workflow_export", "candidate"
   ],
   "required_services": [
-    "observation_source"
+    "observation_source", "workflow_export", "candidate"
   ],
   "token_definitions": {
-    "observation_source": "aka.dashboard.tokens:OBSERVATION_SOURCE"
+    "observation_source": "aka.dashboard.tokens:OBSERVATION_SOURCE",
+    "workflow_export": "aka.contracts.workflow_export:WORKFLOW_EXPORT",
+    "candidate": "aka.task.candidate_workspace.plugin:CANDIDATE"
   }
 }

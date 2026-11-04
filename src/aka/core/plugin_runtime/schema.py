@@ -66,7 +66,9 @@ def validate_schema(schema: dict, value: object, path: str = "input") -> None:
     elif kind in {"number", "integer"}:
         if (isinstance(value, float) and not math.isfinite(value)) or not schema.get(
             "minimum", -float("inf")
-        ) <= value <= schema.get("maximum", float("inf")):
+        ) <= value <= schema.get("maximum", float("inf")) or (
+            "exclusiveMinimum" in schema and value <= schema["exclusiveMinimum"]
+        ):
             raise PluginError(
                 "schema_validation", f"{path}: number outside allowed range"
             )
@@ -84,6 +86,7 @@ def check_schema(schema: object) -> None:
         "minLength",
         "minimum",
         "maximum",
+        "exclusiveMinimum",
     }
     if not isinstance(schema, dict) or set(schema) - allowed:
         raise PluginError("invalid_manifest", "unsupported schema keywords")
@@ -101,8 +104,8 @@ def check_schema(schema: object) -> None:
         "object": {"properties", "required", "additionalProperties"},
         "array": {"items"},
         "string": {"minLength"},
-        "integer": {"minimum", "maximum"},
-        "number": {"minimum", "maximum"},
+        "integer": {"minimum", "maximum", "exclusiveMinimum"},
+        "number": {"minimum", "maximum", "exclusiveMinimum"},
         "boolean": set(),
         "null": set(),
     }
@@ -118,7 +121,7 @@ def check_schema(schema: object) -> None:
         type(schema["minLength"]) is not int or schema["minLength"] < 0
     ):
         raise PluginError("invalid_manifest", "minLength must be a nonnegative integer")
-    for bound in ("minimum", "maximum"):
+    for bound in ("minimum", "maximum", "exclusiveMinimum"):
         if bound in schema and (
             type(schema[bound]) not in (int, float)
             or (isinstance(schema[bound], float) and not math.isfinite(schema[bound]))
@@ -126,6 +129,9 @@ def check_schema(schema: object) -> None:
             raise PluginError("invalid_manifest", "numeric bounds must be numbers")
     if schema.get("minimum", -float("inf")) > schema.get("maximum", float("inf")):
         raise PluginError("invalid_manifest", "minimum exceeds maximum")
+    if ("exclusiveMinimum" in schema and "maximum" in schema
+            and schema["exclusiveMinimum"] >= schema["maximum"]):
+        raise PluginError("invalid_manifest", "exclusiveMinimum must be less than maximum")
     properties = schema.get("properties", {})
     if not isinstance(properties, dict) or not isinstance(
         schema.get("required", []), list

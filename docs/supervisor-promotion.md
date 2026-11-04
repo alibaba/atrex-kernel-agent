@@ -31,11 +31,11 @@ Post-report draft edits do not change the sealed candidate.
 
 | Mechanism | Current owner |
 | --- | --- |
-| Draft construction and publication | `aka.light.workspace.episode` |
-| Report transaction | `aka.light.workflow.journal_service` |
-| Source snapshot and private Git sealing | `aka.light.workspace.sources`, `git` |
-| Recorded ABBA and scoring | `aka.light.acceptance.recorded_verifier`, `verifier` |
-| Promotion audit and repair | `aka.light.acceptance.promotion_audit`, `audit_recovery` |
+| Draft construction and publication | `aka.task.candidate_workspace` |
+| Report transaction | `aka.workflow.light.host.journal` |
+| Source snapshot and private Git sealing | `aka.task.source.formats`, `aka.task.candidate_workspace` |
+| Recorded ABBA and scoring | `aka.workflow.light.long_horizon.recorded_verifier`, `verifier` |
+| Promotion audit and repair | `aka.workflow.light.long_horizon.promotion_audit`, `audit_recovery` |
 
 ## Agent-visible workspace
 
@@ -91,7 +91,7 @@ Missing or corrupt evidence pauses recovery rather than resetting promotion stat
 Stop the campaign before applying the exact repair command printed by the error:
 
 ```bash
-python3 -m aka.light.acceptance.audit_recovery \
+python3 -m aka.workflow.light.long_horizon.audit_recovery \
   --workspace WORKSPACE --promotion-commit FULL_HEAD \
   restore --file /path/to/original-audit.json
 ```
@@ -100,7 +100,7 @@ If the audit is missing and no backup exists, the operator can explicitly record
 unverifiable audit rather than fabricate a successful gate:
 
 ```bash
-python3 -m aka.light.acceptance.audit_recovery \
+python3 -m aka.workflow.light.long_horizon.audit_recovery \
   --workspace WORKSPACE --promotion-commit FULL_HEAD \
   acknowledge-missing --reason 'Operator explanation'
 ```

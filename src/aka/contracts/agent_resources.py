@@ -5,7 +5,9 @@ from dataclasses import dataclass, field
 from copy import deepcopy
 from pathlib import Path
 import re
-from typing import Any, Literal
+from types import MappingProxyType
+from typing import Any, Literal, Mapping, Protocol
+from .filesystem import FilesystemAccess
 
 
 @dataclass(frozen=True)
@@ -121,3 +123,98 @@ class AgentResourceInstallation:
 
     def skill_catalog(self) -> list[dict[str, Any]]:
         return deepcopy(list(self._skills))
+
+
+class AgentResourceRegistry(Protocol):
+    def filesystem_access(self, workspace: Path) -> FilesystemAccess:
+        """Return locked, installed resource links and read-only content grants."""
+        ...
+
+
+@dataclass(frozen=True)
+class ResourcesSnapshot:
+    """Retained selected resources; storage locations do not define identity."""
+
+    directory: Path
+    identity: str
+    content_directory: Path | None = None
+
+
+@dataclass(frozen=True)
+class ResourceDirectoryFact:
+    path: str
+    mode: int
+
+
+@dataclass(frozen=True)
+class ResourceRootFacts:
+    root: Path
+    kind: Literal["file", "directory"]
+    mode: int
+    files: tuple[AgentResourceFile, ...]
+    directories: tuple[ResourceDirectoryFact, ...]
+
+
+@dataclass(frozen=True)
+class ResourcesSnapshotFacts:
+    """Verified retained content; no registry, runtime or filesystem grant."""
+
+    identity: str
+    selection_lock: Mapping[str, Any] = field(repr=False)
+    roots: tuple[ResourceRootFacts, ...]
+    absent_optional_roots: tuple[Path, ...]
+
+    def __post_init__(self):
+        object.__setattr__(self, "selection_lock", MappingProxyType(deepcopy(dict(self.selection_lock))))
+
+
+class ResourcesRegistry(AgentResourceRegistry, Protocol):
+    """Selected resource discovery, installation, calls and retained content."""
+
+    def export_snapshot(self, destination: Path, *,
+                        content_directory: Path | None = None) -> ResourcesSnapshot: ...
+
+    def install(self, workspace: Path) -> AgentResourceInstallation: ...
+    def installed_paths(self, workspace: Path) -> tuple[str, ...]:
+        """Validate this selection and return its immutable workspace-relative destinations.
+
+        Include the selection lock; external root grants remain filesystem_access.
+        """
+        ...
+    def refresh_custom_skills(self, workspace: Path, *, directory: str = "skills") -> None:
+        """Refresh validated custom discovery links while preserving reserved resources."""
+        ...
+
+    def resource_result(self, workspace: Path | None = None) -> AgentResourceInstallation: ...
+
+    def check_lock(self, workspace: Path) -> None: ...
+
+    def resource_snapshot(self) -> object:
+        """Return opaque selected-resource identity for a host-owned checkpoint."""
+        ...
+
+    def check_resource_snapshot(self, snapshot: object) -> None:
+        """Validate the selected resources against the recorded identity before mutation."""
+        ...
+
+    def resource_file(self, name: str, relative: str) -> Path:
+        """Read one member of exactly one selected declared resource root.
+
+        Mounted and runtime-only roots are eligible; missing, ambiguous or escaped
+        members fail without a fallback root or additional filesystem grant.
+        """
+        ...
+
+    def catalog(self) -> list[dict]: ...
+
+    def skill_catalog(self) -> list[dict]: ...
+
+    def instructions(self, phase: str, **values: str) -> str: ...
+
+    def environment(self, workspace: Path, campaign_name: str = "") -> dict[str, str]: ...
+
+    def call(self, name: str, request: object, workspace: Path,
+             *, cwd: Path | None = None, deadline: float | None = None,
+             cancel_event: object | None = None) -> object:
+        """Invoke a selected tool within its declared timeout and the caller's remaining grant."""
+        ...

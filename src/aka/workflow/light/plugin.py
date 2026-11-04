@@ -1,0 +1,64 @@
+"""Select the managed light Workflow without changing legacy behavior."""
+from aka.workflow.legacy.plugin import WORKFLOW
+from aka.contracts.workflow import DEFAULT_LIGHT_EPISODE_TIMEOUT
+
+name = "light"
+provide = ("workflow",)
+inject = ("agent", "problem", "source", "candidate", "executor", "execution_context",
+          "evaluator_factory", "evaluation_defaults", "experiment_factory", "measurement_parallelism", "workflow_observer",
+          "experiment_episode_evidence", "evaluation_episode_interpreter")
+identity_packages = ("aka.workflow.light", "aka.contracts", "aka.workflow.legacy",
+                     "aka.execution")
+Config = {"type": "object", "properties": {
+    "file_system": {"type": "string", "enum": ["single_file", "source_tree", "cuda_manifest"]},
+    "startup": {"type": "boolean"},
+    "numerical_validation": {"type": "boolean"},
+    "goal_episodes": {"type": "boolean"},
+    "generate_memory": {"type": "boolean"},
+    "output_limit_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
+    "episode_timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+    "wiki": {"type": "boolean"},
+    "wiki_options": {"type": "object"},
+    "research_records": {"type": "boolean"},
+    "inherit_state": {"type": "boolean"},
+    "request_timeout": {"type": "number", "minimum": 0.001},
+    "queue_timeout": {"type": "number", "minimum": 0.001},
+    "search": {"type": "object", "properties": {
+        "epochs": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "trajectories": {"type": "integer", "minimum": 1, "maximum": 64},
+        "episodes_per_trajectory": {"type": "integer", "minimum": 1, "maximum": 100},
+        "max_parallel_episodes": {"type": "integer", "minimum": 1, "maximum": 64},
+    }, "additionalProperties": False},
+}, "additionalProperties": False}
+Defaults = {"episode_timeout_seconds": DEFAULT_LIGHT_EPISODE_TIMEOUT, "startup": False, "numerical_validation": False, "goal_episodes": False, "generate_memory": False,
+            "wiki": False, "research_records": False, "inherit_state": True, "queue_timeout": 60,
+            "output_limit_recovery_retries": 2, "search": {}}
+
+
+def validate_config(config):
+    from .provider import WorkflowOptions
+    WorkflowOptions(**{key: value for key, value in config.items() if key != "startup"})
+
+
+def apply(ctx, config):
+    from aka.workflow.legacy.agent_host import process_policy
+    ctx.contribute("agent_process_policies", "workflow", process_policy(ctx.execution_context.environment))
+    from .provider import LightWorkflow, WorkflowOptions
+    workflow = LightWorkflow(ctx.agent, ctx.problem, ctx.source, ctx.candidate,
+                             executor=ctx.executor, execution_context=ctx.execution_context,
+                             experiment_factory=ctx.experiment_factory, evaluator_factory=ctx.evaluator_factory,
+                             evaluation_defaults=ctx.evaluation_defaults, measurement_parallelism=ctx.measurement_parallelism,
+                             workflow_observer=ctx.workflow_observer,
+                             episode_evidence_reader=ctx.experiment_episode_evidence,
+                             episode_evidence_interpreter=ctx.evaluation_episode_interpreter,
+                             options=WorkflowOptions(**{
+                                 key: value for key, value in config.items() if key != "startup"
+                             }))
+    ctx.effect(workflow.close, label="close light Workflow and private runtimes")
+    ctx.provide(WORKFLOW, workflow)
+    if config.get("startup", False):
+        from aka.workflow.legacy.startup import WorkflowStartup
+        ctx.provide("startup", WorkflowStartup(
+            workflow, configuration=config, observer=ctx.workflow_observer,
+            evaluation_defaults=ctx.evaluation_defaults, execution_environment=ctx.execution_context.environment,
+        ))

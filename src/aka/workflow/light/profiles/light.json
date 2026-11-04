@@ -1,0 +1,60 @@
+{
+  "extends": "aka.workflow.legacy:profiles/workflow.json",
+  "api_version": 2,
+  "token_definitions": {
+    "problem": "aka.task.problem.plugin:PROBLEM",
+    "source": "aka.task.source.plugin:SOURCE",
+    "candidate": "aka.task.candidate_workspace.plugin:CANDIDATE",
+    "agent": "aka.agent.plugin:AGENT",
+    "workflow": "aka.workflow.legacy.plugin:WORKFLOW",
+    "evaluator_factory": "aka.evaluation.plugin:EVALUATOR_FACTORY",
+    "workflow_observer": "aka.workflow.legacy.observer:WORKFLOW_OBSERVER",
+    "executor": "aka.execution.assembly:EXECUTOR",
+    "evaluation_defaults": "aka.evaluation.plugin:EVALUATION_DEFAULTS",
+    "execution_context": "aka.execution.plugin:EXECUTION_CONTEXT",
+    "measurement_parallelism": "aka.execution.plugin:MEASUREMENT_PARALLELISM",
+    "experiment_factory": "aka.experiment.plugin:EXPERIMENT_FACTORY",
+    "canonical_measurement_reader": "aka.workflow.legacy.canonical_reader_plugin:CANONICAL_MEASUREMENT_READER",
+    "experiment_episode_evidence": "aka.contracts.experiment:EXPERIMENT_EPISODE_EVIDENCE",
+    "evaluation_episode_interpreter": "aka.contracts.evaluation:EVALUATION_EPISODE_INTERPRETER"
+  },
+  "composition": "light",
+  "environment_values": {
+    "AKA_LEGACY_REPO_ROOT": "${aka:repo_root}"
+  },
+  "required_services": [
+    "problem",
+    "source",
+    "candidate",
+    "agent",
+    "evaluator_factory",
+    "workflow_observer",
+    "workflow",
+    "executor",
+    "evaluation_defaults",
+    "execution_context",
+    "measurement_parallelism",
+    "experiment_factory",
+    "canonical_measurement_reader",
+    "experiment_episode_evidence",
+    "evaluation_episode_interpreter"
+  ],
+  "tokens": [
+    "problem",
+    "source",
+    "candidate",
+    "agent",
+    "evaluator_factory",
+    "workflow_observer",
+    "workflow",
+    "executor",
+    "evaluation_defaults",
+    "execution_context",
+    "measurement_parallelism",
+    "experiment_factory",
+    "canonical_measurement_reader",
+    "experiment_episode_evidence",
+    "evaluation_episode_interpreter"
+  ],
+  "doc": "Opt-in AKA-light services with native Agent execution; the default Workflow profile is unchanged."
+}

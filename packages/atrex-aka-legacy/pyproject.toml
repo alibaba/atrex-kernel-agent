@@ -4,23 +4,19 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-legacy"
-version = "0.1.0"
-description = "AKA Task, Agent, Workflow and Execution implementations"
+version = "0.2.0"
+description = "Legacy AKA campaign Workflow"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-framework==0.1.0"]
+dependencies = ["atrex-aka-framework==0.2.0", "packaging>=23"]
 
 [project.entry-points."aka.commands"]
-optimize = "aka.legacy.compat.command:main"
+optimize = "aka.bootstrap.workflow_cli:main"
 workflow = "aka.bootstrap.workflow_cli:main"
-execution = "aka.legacy.execution.cli:main"
+execution = "aka.bootstrap.measurement_cli:main"
 
 [project.entry-points."aka.tokens"]
-agent = "aka.legacy.agent.plugin:AGENT"
-workflow = "aka.legacy.workflow.plugin:WORKFLOW"
-problem = "aka.legacy.task.problem.plugin:PROBLEM"
-source = "aka.legacy.task.source.plugin:SOURCE"
-candidate = "aka.legacy.task.candidate_workspace.plugin:CANDIDATE"
-evaluator_factory = "aka.legacy.evaluation.plugin:EVALUATOR_FACTORY"
+workflow = "aka.workflow.legacy.plugin:WORKFLOW"
+canonical_measurement_reader = "aka.workflow.legacy.canonical_reader_plugin:CANONICAL_MEASUREMENT_READER"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -28,10 +24,9 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka.legacy", "aka.legacy.*"]
+include = ["aka.workflow.legacy", "aka.workflow.legacy.*"]
 
 [tool.setuptools.package-data]
 "*" = ["*", "**/*"]
-"aka.legacy.execution" = ["profiles/*.json", "profiles/bundles/*.json"]
 
-"aka.legacy.workflow" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]
+"aka.workflow.legacy" = ["profiles/*.json", "profiles/compositions/*.json", "profiles/compositions/bundles/*.json"]

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal, Protocol
+from types import MappingProxyType
+from typing import ContextManager, Literal, Protocol
+from .filesystem import FilesystemAccess as AgentAccess, FilesystemMount as AgentMount
+from .execution import Cancellation
 
 UsageMeasurement = Literal["exact", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
@@ -140,6 +143,59 @@ class AgentRuntimeCapabilities:
 
 
 @dataclass(frozen=True)
+class AgentProcessPolicy:
+    """Host callbacks evaluated while an Agent process is running."""
+    unavailable: Callable[[Mapping[str, str]], tuple[int, str] | None] | None = None
+    violation: Callable[[list[str], Mapping[str, str]], str | None] | None = None
+    # Host-owned values projected to shell guards and frozen per Agent session.
+    environment: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self):
+        object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
+
+
+@dataclass(frozen=True)
+class AgentCapabilities:
+    filesystem_isolation: bool = False
+    tool_runtime: bool = False
+
+
+@dataclass(frozen=True)
+class AgentToolContext:
+    workspace: Path
+    filesystem_access: AgentAccess
+    cancel_event: Cancellation
+    deadline: float | None
+
+
+class AgentToolHandler(Protocol):
+    def handle(self, payload: bytes, context: AgentToolContext) -> bytes: ...
+
+
+@dataclass(frozen=True)
+class AgentToolBinding:
+    name: str
+    handler: AgentToolHandler
+
+
+class AgentToolSession(Protocol):
+    """Borrowed transport grant; implementations redact environment in representations."""
+    environment: Mapping[str, str]
+    filesystem_access: AgentAccess
+
+
+@dataclass(frozen=True)
+class AgentObservation:
+    session_id: str
+    runtime: str
+    status: str
+    updated_at: str | None
+    usage: dict[str, int | str | None]
+    events: tuple[dict, ...] = ()
+    resume_supported: bool = False
+
+
+@dataclass(frozen=True)
 class AgentRunRequest:
     workspace: Path
     prompt: str
@@ -148,6 +204,7 @@ class AgentRunRequest:
     session_id: str | None = None
     environment: Mapping[str, str | None] | None = None
     observation_directory: Path | None = None
+    access: AgentAccess | None = None
 
 
 @dataclass(frozen=True)
@@ -178,6 +235,21 @@ class AgentCheckpointSnapshot:
 
 
 class Agent(Protocol):
+    @property
+    def capabilities(self) -> "AgentCapabilities": ...
+    @property
+    def configuration_identity(self) -> str:
+        """Opaque identity of the frozen selection; contains no configuration values."""
+        ...
+    def close(self) -> None: ...
+    def tool_session(self, workspace: Path, *, access: AgentAccess,
+                     bindings: tuple[AgentToolBinding, ...],
+                     deadline: float | None = None) -> ContextManager[AgentToolSession]:
+        """Bind selected handlers to the caller's scope; revoke and cancel on exit."""
+        ...
+    def export_observations(self, workspace: Path, destination: Path) -> Path:
+        """Export normalized invocation records to a new caller-owned directory."""
+        ...
     def export_checkpoint(self, workspace: Path, destination: Path) -> AgentCheckpointSnapshot: ...
     def validate_checkpoint(self, snapshot: AgentCheckpointSnapshot, *, check_destinations: bool = False) -> None: ...
     def restore_checkpoint(self, snapshot: AgentCheckpointSnapshot) -> None: ...
@@ -193,6 +265,7 @@ class Agent(Protocol):
         session_id: str = "",
         environment: Mapping[str, str] | None = None,
         output_directory: Path | None = None,
+        access: AgentAccess | None = None,
     ) -> "AgentSession": ...
 
 
