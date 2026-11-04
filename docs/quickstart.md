@@ -52,7 +52,11 @@ diagnostic feedback.
 
 The default `--optimization-mode leaderboard` exposes the benchmark contract and allows
 the permissive optimization policy. Select `production` explicitly for production review.
-Use a new workspace when changing modes or Shape-visibility policy.
+Existing leaderboard workspaces retain their historical exposed snapshot key and
+resume without migration. Existing hidden production workspaces must be resumed
+with `--no-expose-evaluator-shapes`; the persisted workspace policy fails closed
+and names that flag if a new default would otherwise change visibility. Use a new
+workspace only when intentionally changing mode or Shape-visibility policy.
 
 ## Launch Light
 

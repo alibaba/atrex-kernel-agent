@@ -72,6 +72,9 @@ opaque ids; set `PROFILE_SHAPE_ID` to one of those ids to profile that real shap
 Shape visibility does not relax production source review, correctness, ABBA, or promotion policy.
 The visible and hidden settings use distinct retained Problem snapshots, so changing the setting
 cannot silently resume a workspace captured under the other visibility mode.
+Pre-upgrade leaderboard snapshots keep their historical exposed key. Pre-upgrade hidden production
+workspaces resume with `--no-expose-evaluator-shapes`; a mismatched resume fails before a new
+snapshot is captured and reports the matching visibility flag.
 
 Leaderboard mode always preserves legacy exact-shape behavior, even when the source operator also
 contains `agent_problem.json`; sandbox private-shape injection and generalized result masking are

@@ -457,6 +457,11 @@ class _Handler(BaseHTTPRequestHandler):
 class SupervisorRuntime:
     def __init__(self, config: RuntimeConfig, *, workspace_provider=None, services=None):
         self.config = config
+        from aka.light.evaluation.agate_native import audit_summary
+        logging.getLogger(__name__).warning(
+            "Agate native option audit: %s",
+            json.dumps(audit_summary(), sort_keys=True),
+        )
         from aka.light.runtime.services import builtin_services
         services = services if services is not None else builtin_services()
         self.executor, self.acceptance = services.executor, services.acceptance

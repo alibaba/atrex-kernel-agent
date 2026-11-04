@@ -111,6 +111,9 @@ from aka.legacy.execution.gateway.request_values import (
 )
 
 from aka.legacy.task.persistence import durable_write_json  # noqa: E402
+from aka.legacy.workflow.policy import (  # noqa: E402
+    workspace_uses_hidden_shapes as _is_generalized_workspace,
+)
 from aka.light.agent.home import open_private_directory  # noqa: E402
 from aka.light.agent.session_tail import read_regular_bytes  # noqa: E402
 from aka.light.execution.config import queue_wait_grace  # noqa: E402
@@ -413,7 +416,18 @@ def _run_environment_query(args: argparse.Namespace) -> int:
         url=args.url,
         profile=args.gateway_profile,
     )
-    if url:
+    from aka.light.evaluation.agate_native import cli_arguments
+    native_arguments = cli_arguments(args, "env")
+    use_cli = executable is not None
+    if not use_cli:
+        if not url:
+            raise SystemExit("sandbox: agate not found and no explicit --url was provided")
+        if native_arguments:
+            names = " ".join(native_arguments[::2])
+            raise ValueError(
+                f"Native Agate env options ({names}) require the installed agate CLI; "
+                "the direct HTTP fallback cannot represent them"
+            )
         path = "/v1/env"
         if args.env_gpu:
             encoded = urllib.parse.quote(args.env_gpu, safe="")
@@ -423,10 +437,10 @@ def _run_environment_query(args: argparse.Namespace) -> int:
         if args.env_force:
             path += "?force=true"
     else:
-        if executable is None:
-            raise SystemExit("sandbox: agate not found and no explicit --url was provided")
         command = [executable, "env"]
-        if args.gateway_profile:
+        if args.url:
+            command += ["--url", args.url]
+        elif args.gateway_profile:
             command += ["--profile", args.gateway_profile]
         if args.env_gpu:
             command.append(args.env_gpu)
@@ -441,6 +455,7 @@ def _run_environment_query(args: argparse.Namespace) -> int:
                 command.append("--limits")
         if args.env_force:
             command.append("--force")
+        command += native_arguments
         command.append("--json")
     deadline = time.monotonic() + args.timeout
     failures = 0
@@ -450,7 +465,7 @@ def _run_environment_query(args: argparse.Namespace) -> int:
             raise EvidenceUnavailable("Environment discovery timed out; no GPU job was submitted")
         retry_after = 0.0
         try:
-            if url:
+            if not use_cli:
                 value = _gateway_json(url, "GET", path, None, min(remaining, 120 if args.env_force else 30))
                 completed = subprocess.CompletedProcess([], 0, json.dumps(value), "")
             else:
@@ -1018,18 +1033,6 @@ def _fp4_correctness_max_rel_l2(
         FP4_MAX_REL_L2
         if _metadata_has_fp4_dtype(metadata) or _is_fp4_dtype(operator)
         else None
-    )
-
-
-def _is_generalized_workspace(workspace: Path) -> bool:
-    """Return whether production policy enables private exact-case handling."""
-    state = read_json_object(workspace / MODE_STATE_FILENAME) or {}
-    visibility = state.get("evaluator_shape_visibility")
-    if visibility in {"hidden", "exposed"}:
-        return state.get("mode") == "production" and visibility == "hidden"
-    return (
-        state.get("mode") == "production"
-        and (workspace / AGENT_PROBLEM_FILENAME).is_file()
     )
 
 
@@ -3503,6 +3506,8 @@ def build_typed_agate_command(
     command += ["--gpu", args.hardware]
     num_gpus = request.get("spec", {}).get("num_gpus", 1)
     if num_gpus > 1:
+        if kind != "run":
+            raise ValueError("Agate Profile CLI does not support multi-GPU requests")
         command += ["--num-gpus", str(num_gpus)]
     # The version selector belongs to Eval. Agate Profile rejects this option,
     # while still using the pinned evaluator files supplied through
@@ -3855,8 +3860,12 @@ def validate_evaluation_options(args: argparse.Namespace) -> None:
     """Reject ignored top-level evaluator controls before either entry point executes."""
     from aka.light.evaluation.agate_native import values as native_values
     native_values(args, args.kind)
-    if args.kind != "env" and any((args.frameworks, args.counters, args.limits)):
-        raise ValueError("--frameworks, --counters and --limits require --kind env")
+    if args.kind != "env" and any(
+        (args.env_force, args.frameworks, args.counters, args.limits)
+    ):
+        raise ValueError(
+            "--env-force/--force, --frameworks, --counters and --limits require --kind env"
+        )
     if args.profile_shape_id is not None:
         if args.kind != "profile":
             raise ValueError("--profile-shape-id requires --kind profile; use --shape-id for --kind run")
@@ -3883,12 +3892,14 @@ def validate_evaluation_options(args: argparse.Namespace) -> None:
 
 def _requires_typed_request(args: argparse.Namespace, *, private_profile_shape: bool = False) -> bool:
     """New explicit typed controls cannot be silently discarded by Dev fallback."""
+    from aka.light.evaluation.agate_native import values as native_values
     return any((_top_level_evaluation_options(args),
                 args.evaluation_input_path, args.evaluation_shapes_path, args.evaluation_mode,
                 args.kernel_name, args.profile_source,
                 args.profile_shape_id is not None and not private_profile_shape,
                 args.launch_skip is not None, args.launch_count is not None,
-                args.requirement, args.deps_mode))
+                args.requirement, args.deps_mode,
+                native_values(args, args.kind)))
 
 
 def _run_typed_gateway(

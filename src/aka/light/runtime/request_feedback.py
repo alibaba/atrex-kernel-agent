@@ -136,7 +136,10 @@ def gateway_schema(kind, parser):
                     "--profile-counter", "--top-kernels", "--include-raw-profile"},
         "check": {"--arch", "--sanitize", "--requirement", "--deps-mode"},
         "disassemble": {"--format", "--requirement", "--deps-mode"},
-        "dev": set(), "env": {"--env-gpu", "--env-capabilities", "--env-force"},
+        "dev": set(), "env": {
+            "--env-gpu", "--env-capabilities", "--env-force",
+            "--frameworks", "--counters", "--limits",
+        },
         "record-read": {"--record-id"}, "kernel-read": {"--kernel-id", "--output-path"},
         "kernel-records": {"--kernel-id"}, "kernel-pareto-frontier": set(),
     }
@@ -154,11 +157,12 @@ def gateway_schema(kind, parser):
             if flag not in allowed and not native_for_kind:
                 continue
             value_type = getattr(action, "agate_value_type", action.type)
-            type_name = getattr(value_type, "__name__", "")
-            item = {"type": "boolean" if action.nargs == 0 else
-                    "integer" if value_type is int or type_name in {
-                        "_shape_shards", "_positive_int", "_non_negative_int"
-                    } else "number" if value_type is float else "string"}
+            schema_type = getattr(action, "agate_schema_type", None)
+            item = {"type": schema_type or (
+                "boolean" if action.nargs == 0 else
+                "integer" if value_type is int else
+                "number" if value_type is float else "string"
+            )}
             if action.choices is not None:
                 item["enum"] = list(action.choices)
             if isinstance(action, argparse._AppendAction):

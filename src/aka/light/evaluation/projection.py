@@ -971,9 +971,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
             line = redact_diagnostics(line, private_paths=private_paths, private_values=private_values)
             projected.append(redact_hidden_shapes(line) if hide_shapes else line)
     stdout = "\n".join(projected) + ("\n" if projected else "")
-    known_marker_present = any(
-        line.startswith(tuple(formatters)) for line in projected
-    )
+    structured_marker_present = any(line.startswith("[") for line in projected)
     # Structured lines were redacted before JSON encoding. Re-running free-form
     # regexes over encoded JSON can eat delimiters and corrupt result markers.
     if hide_shapes:
@@ -984,7 +982,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
         encoded = result[key].encode()
         if len(encoded) > limit and not (operation in {"evaluate", "same_allocation_abba"}
                 or numerical or "[test_kernel] RESULT_JSON=" in stdout or "[sandbox] ABBA_JSON=" in stdout):
-            if key == "stdout" and known_marker_present:
+            if key == "stdout" and structured_marker_present:
                 result[key] = json.dumps({"error": "Projected result exceeds context limit; narrow the request."}) + "\n"
                 result["exit_code"] = process.returncode or 2
             else:

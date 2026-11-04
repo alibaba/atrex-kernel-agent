@@ -11,6 +11,9 @@ from aka.legacy.task.source.inspection import framework_key, source_uses_gluon
 from aka.legacy.workflow import policy as workflow_policy
 from aka.legacy.workflow.policy import (
     MODE_STATE_FILE, OPTIMIZATION_MODE_CHOICES, POLICY_BEGIN, POLICY_END,
+    historical_evaluator_shape_visibility,
+    requested_evaluator_shape_visibility,
+    visibility_mismatch_message,
 )
 
 
@@ -71,11 +74,10 @@ def install_workspace_policy(
         raise ValueError("agent_runtime must be a non-empty runtime id")
     if type(expose_evaluator_shapes) is not bool:
         raise TypeError("expose_evaluator_shapes must be a boolean")
-    requested_visibility = (
-        "exposed" if mode != "production" or expose_evaluator_shapes else "hidden"
-    )
-
     workspace.mkdir(parents=True, exist_ok=True)
+    requested_visibility = requested_evaluator_shape_visibility(
+        workspace, mode, expose_evaluator_shapes
+    )
     state_path = workspace / MODE_STATE_FILE
     state_changed = False
     if state_path.exists():
@@ -93,13 +95,7 @@ def install_workspace_policy(
             )
         existing_visibility = state.get("evaluator_shape_visibility")
         if existing_visibility is None:
-            existing_visibility = (
-                "hidden"
-                if mode == "production" and (workspace / "agent_problem.json").is_file()
-                else "exposed"
-                if (workspace / "shapes.json").is_file() or mode != "production"
-                else requested_visibility
-            )
+            existing_visibility = historical_evaluator_shape_visibility(workspace, mode)
             state["evaluator_shape_visibility"] = existing_visibility
             state_changed = True
         if existing_visibility not in {"hidden", "exposed"}:
@@ -107,11 +103,9 @@ def install_workspace_policy(
                 f"invalid evaluator shape visibility: {existing_visibility!r}"
             )
         if existing_visibility != requested_visibility:
-            raise RuntimeError(
-                "workspace evaluator shape visibility mismatch: "
-                f"recorded={existing_visibility}, requested={requested_visibility}; "
-                "use a fresh campaign workspace to change shape visibility"
-            )
+            raise RuntimeError(visibility_mismatch_message(
+                existing_visibility, requested_visibility
+            ))
         existing_runtime = str(state.get("agent_runtime") or "").strip()
         if requested_runtime and existing_runtime and existing_runtime != requested_runtime:
             raise RuntimeError(

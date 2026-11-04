@@ -30,10 +30,10 @@ class LegacyProblemProvider:
     ) -> LoadedProblem:
         """Preserve the original operator resolver's validation order and errors."""
         optimization_mode = optimization_mode or self.optimization_mode
-        if type(expose_evaluator_shapes) is not bool:
-            raise TypeError("expose_evaluator_shapes must be a boolean")
         snapshot_mode = optimization_mode + (
-            ":expose-evaluator-shapes" if expose_evaluator_shapes else ""
+            ":expose-evaluator-shapes"
+            if optimization_mode == "production" and expose_evaluator_shapes
+            else ""
         )
         d = Path(directory).resolve()
         if snapshot_directory is not None and snapshot_directory.exists():

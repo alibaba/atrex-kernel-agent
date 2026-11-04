@@ -3,13 +3,18 @@
 Agate owns the public spelling, types and enum values.  Light owns credentials,
 sources, timeouts, uploads and job recovery, so those options are never copied
 from the Agent-facing command line.  Updating the installed Agate package and
-restarting the Supervisor refreshes this catalog without a Light release.
+restarting the Supervisor refreshes the non-authority catalog without a Light
+release; sensitive-looking additions fail closed and are reported in the audit
+log for review before a first-class Light workflow may expose them.
 """
 from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
 from functools import lru_cache
+from importlib.metadata import PackageNotFoundError, version
+import logging
+import re
 from typing import Any
 
 
@@ -21,6 +26,10 @@ COMMAND_BY_KIND = {
     "disassemble": "disassemble",
     "env": "env",
 }
+
+
+LOGGER = logging.getLogger(__name__)
+_REFUSED_SENSITIVE: tuple[str, ...] = ()
 
 # Runtime authority or options whose native semantics conflict with the
 # Campaign's evaluator/source contract.  Long spellings are used because Light
@@ -34,6 +43,7 @@ BLOCKED = frozenset({
     "--workload-file", "--file", "--working-dir", "--exclude", "--init-kwargs",
     "--requirements", "--recycle", "--no-recycle", "--dev-timeout",
     "--backend", "--harness", "--atrex-bench-version", "--set", "--operator",
+    "--deps-mode", "--replay-policy",
     "--num-correctness-cases", "--bench-iters", "--mode", "--lock-clocks",
     # These select a different evaluator/source contract rather than tuning the
     # current operator request. They need first-class Runtime workflows.
@@ -41,6 +51,23 @@ BLOCKED = frozenset({
     "--workload-timeout", "--compile-timeout", "--iterations", "--warmup-runs",
     "--benchmark-reference", "--abba-repeats", "--json",
 })
+
+# Defense in depth for future Agate releases.  BLOCKED documents today's exact
+# authority-bearing flags; this pattern prevents a renamed or newly introduced
+# credential, endpoint, upload, image/setup, filesystem or scheduling control
+# from becoming Agent-visible before Light has reviewed and modeled it.
+SENSITIVE_OPTION = re.compile(
+    r"(?:^|[-_\s])(?:token|secret|credential|password|passwd|auth|api[-_ ]?key|"
+    r"access[-_ ]?key|url|endpoint|oss|bucket|upload|image|setup|command|entrypoint|"
+    r"file|path|directory|working[-_ ]?dir|scheduler|schedule|queue|priority)"
+    r"(?:$|[-_\s])",
+    re.IGNORECASE,
+)
+
+# Explicitly reviewed first-class controls may use words that the conservative
+# future-option filter rejects. Their forwarding is implemented and validated
+# by Light rather than delegated to an unknown wire field.
+MODELED_SENSITIVE_EXCEPTIONS = frozenset({"--frameworks", "--intent", "--note"})
 
 # Native spellings already implemented by Light.  build_parser registers both
 # spellings on one argparse action; discovery refreshes choices/help only.
@@ -50,6 +77,29 @@ ALIASES = {
     "--source": "--profile-source",
     "--fmt": "--format",
     "--force": "--env-force",
+}
+
+# Existing Light actions are only advertised as Agate-native for commands where
+# Light actually consumes and forwards them.  A same-spelled flag in another
+# Agate subcommand must not widen the local action's scope.
+EXISTING_ACTION_COMMANDS = {
+    "profile_level": frozenset({"profile"}),
+    "profile_counter": frozenset({"profile"}),
+    "profile_source": frozenset({"profile"}),
+    "profiler": frozenset({"profile"}),
+    "kernel_regex": frozenset({"profile"}),
+    "kernel_name": frozenset({"profile"}),
+    "launch_skip": frozenset({"profile"}),
+    "launch_count": frozenset({"profile"}),
+    "top_kernels": frozenset({"profile"}),
+    "disassembly_format": frozenset({"disassemble"}),
+    "arch": frozenset({"check"}),
+    "sanitize": frozenset({"check"}),
+    "env_force": frozenset({"env"}),
+    "frameworks": frozenset({"env"}),
+    "counters": frozenset({"env"}),
+    "limits": frozenset({"env"}),
+    "env": frozenset({"eval", "profile", "dev", "check", "disassemble"}),
 }
 
 
@@ -63,6 +113,7 @@ class NativeOption:
     value_type: Any
     metavar: Any
     help: str | None
+    schema_type: str
 
 
 def _action_kind(action: argparse.Action) -> str:
@@ -82,9 +133,53 @@ def _long_flag(action: argparse.Action) -> str | None:
     return next((value for value in values if not value.startswith("--no-")), None)
 
 
+def _schema_type(action: argparse.Action) -> str:
+    """Infer the public JSON scalar type without private callable names."""
+    if action.nargs == 0:
+        return "boolean"
+    if action.type is int:
+        return "integer"
+    if action.type is float:
+        return "number"
+    choices = tuple(action.choices or ())
+    if choices and all(type(item) is int for item in choices):
+        return "integer"
+    if choices and all(type(item) in {int, float} for item in choices):
+        return "number"
+    if callable(action.type):
+        # argparse type callables are pure single-token converters. Probe a
+        # neutral value so private helper renames do not change our schema.
+        try:
+            sample = action.type("1")
+        except (TypeError, ValueError, argparse.ArgumentTypeError):
+            sample = None
+        if type(sample) is int:
+            return "integer"
+        if type(sample) is float:
+            return "number"
+    return "string"
+
+
+def _looks_sensitive(flag: str, action: argparse.Action) -> bool:
+    if flag in MODELED_SENSITIVE_EXCEPTIONS:
+        return False
+    text = " ".join(
+        str(item or "") for item in (flag, action.dest, action.help)
+    )
+    return bool(SENSITIVE_OPTION.search(text))
+
+
+def _agate_version() -> str:
+    try:
+        return version("atrex-gateway-client")
+    except PackageNotFoundError:
+        return "unknown"
+
+
 @lru_cache(maxsize=1)
 def catalog() -> dict[str, NativeOption]:
     """Return safe options from the installed Agate parser, keyed by flag."""
+    global _REFUSED_SENSITIVE
     try:
         from atrex_gateway_client.cli import build_parser as agate_parser
     except (ImportError, ModuleNotFoundError):
@@ -97,6 +192,7 @@ def catalog() -> dict[str, NativeOption]:
     found: dict[str, NativeOption] = {}
     commands_for_flag: dict[str, set[str]] = {}
     raw: dict[str, argparse.Action] = {}
+    refused: set[str] = set()
     for command in set(COMMAND_BY_KIND.values()):
         subparser = choices.get(command)
         if subparser is None:
@@ -104,6 +200,9 @@ def catalog() -> dict[str, NativeOption]:
         for action in subparser._actions:
             flag = _long_flag(action)
             if flag is None or flag in BLOCKED:
+                continue
+            if _looks_sensitive(flag, action):
+                refused.add(flag)
                 continue
             commands_for_flag.setdefault(flag, set()).add(command)
             raw.setdefault(flag, action)
@@ -117,8 +216,28 @@ def catalog() -> dict[str, NativeOption]:
             value_type=action.type,
             metavar=action.metavar,
             help=None if action.help is argparse.SUPPRESS else action.help,
+            schema_type=_schema_type(action),
         )
+    LOGGER.info(
+        "Agate native option catalog version=%s exposed=%s refused_sensitive=%s",
+        _agate_version(),
+        sorted(found),
+        sorted(refused),
+    )
+    _REFUSED_SENSITIVE = tuple(sorted(refused))
     return found
+
+
+def audit_summary() -> dict[str, Any]:
+    """Return the versioned, non-secret catalog recorded at Supervisor start."""
+    exposed = catalog()
+    return {
+        "agate_version": _agate_version(),
+        "exposed": {
+            flag: sorted(option.commands) for flag, option in sorted(exposed.items())
+        },
+        "refused_sensitive": list(_REFUSED_SENSITIVE),
+    }
 
 
 def _existing_action(parser: argparse.ArgumentParser, flag: str) -> argparse.Action | None:
@@ -130,15 +249,39 @@ def extend_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
     for option in catalog().values():
         existing = _existing_action(parser, option.flag)
         if existing is not None:
-            # The Runtime action owns defaults and validation, while Agate owns
-            # the current enum and user-facing description.
+            supported = option.commands & EXISTING_ACTION_COMMANDS.get(
+                existing.dest, frozenset()
+            )
+            if not supported:
+                LOGGER.info(
+                    "Ignoring Agate option collision flag=%s local_dest=%s commands=%s",
+                    option.flag,
+                    existing.dest,
+                    sorted(option.commands),
+                )
+                continue
+            # The Runtime action owns defaults and validation.  Agate may
+            # refresh the enum only when that cannot invalidate Light's default.
             if option.choices is not None:
+                if (
+                    existing.default is not None
+                    and existing.default is not argparse.SUPPRESS
+                    and existing.default not in option.choices
+                ):
+                    LOGGER.warning(
+                        "Ignoring incompatible Agate enum flag=%s default=%r choices=%r",
+                        option.flag,
+                        existing.default,
+                        option.choices,
+                    )
+                    continue
                 existing.choices = option.choices
             if option.help:
                 existing.help = option.help
-            setattr(existing, "agate_commands", option.commands)
+            setattr(existing, "agate_commands", supported)
             setattr(existing, "agate_native_flag", option.flag)
             setattr(existing, "agate_value_type", option.value_type)
+            setattr(existing, "agate_schema_type", option.schema_type)
             continue
         dest = "agate_native__" + option.dest
         kwargs: dict[str, Any] = {
@@ -166,6 +309,7 @@ def extend_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
         setattr(action, "agate_commands", option.commands)
         setattr(action, "agate_native_flag", option.flag)
         setattr(action, "agate_value_type", option.value_type)
+        setattr(action, "agate_schema_type", option.schema_type)
     return parser
 
 
