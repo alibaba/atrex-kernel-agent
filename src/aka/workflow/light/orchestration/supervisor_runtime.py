@@ -417,8 +417,23 @@ class SupervisorRuntime:
         if capability.journal and capability.journal.view:
             with capability.journal.lock:
                 protected = capability.journal.view.prepare_session()
-            access = FilesystemAccess(access.mounts, (*access.hidden_paths, workspace / ".git"),
-                tuple(dict.fromkeys((*access.read_only_paths, *(workspace / path for path in protected)))))
+            hidden = tuple(dict.fromkeys((*access.hidden_paths, workspace / ".git")))
+            readonly = []
+            for path in sorted(set((*access.read_only_paths, *(workspace / path for path in protected))),
+                               key=lambda path: len(path.parts)):
+                if any(path.is_relative_to(root) for root in (*hidden, *readonly)):
+                    continue
+                resolved = path.resolve(strict=True)
+                if resolved != path:
+                    # Resource discovery links are protected by their already
+                    # declared read-only source mount, not by a symlink overlay.
+                    mount = max((mount for mount in access.mounts if resolved.is_relative_to(mount.target)),
+                                key=lambda mount: len(mount.target.parts), default=None)
+                    if mount is None or mount.writable:
+                        raise PermissionError("Readonly resource link lacks a read-only filesystem grant")
+                    continue
+                readonly.append(path)
+            access = FilesystemAccess(access.mounts, hidden, tuple(readonly))
             values["GIT_CEILING_DIRECTORIES"] = str(workspace.parent)
         key = uuid.uuid4().hex
         with self.lock:
