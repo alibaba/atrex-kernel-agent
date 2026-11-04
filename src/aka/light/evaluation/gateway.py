@@ -4151,7 +4151,7 @@ def _run_typed_gateway(
                 file=sys.stderr,
             )
             return None
-        if proc.stderr:
+        if proc.stderr and not generalized:
             print(proc.stderr.rstrip(), file=sys.stderr)
         job = parse_job_response(proc.stdout or "")
         if job is None:
@@ -4165,11 +4165,16 @@ def _run_typed_gateway(
                 )
                 return ENVIRONMENT_TEMPFAIL
             if kind == "run" and rejection is not None and rejection.retryable:
-                if proc.stderr:
+                if not generalized and proc.stderr:
                     print(proc.stderr.rstrip(), file=sys.stderr)
                 return ENVIRONMENT_TEMPFAIL
-            if proc.stdout:
+            if proc.stdout and not generalized:
                 print(proc.stdout.rstrip())
+            elif generalized:
+                print(
+                    "[sandbox] generalized gateway response unavailable; evaluator details withheld",
+                    file=sys.stderr,
+                )
             return proc.returncode or 2
         if job.get("status") != "succeeded" or not isinstance(job.get("result"), dict):
             infrastructure = (
@@ -4892,13 +4897,19 @@ def _main(argv: list[str] | None = None) -> int:
                     "install atrex-gateway-client first"
                 ) from exc
 
-    if proc.stderr:
+    hide_evaluator_details = evaluator_command and _is_generalized_workspace(workspace)
+    if proc.stderr and not hide_evaluator_details:
         print(proc.stderr.rstrip(), file=sys.stderr)
     try:
         job = json.loads(proc.stdout)
     except json.JSONDecodeError:
-        if proc.stdout:
+        if proc.stdout and not hide_evaluator_details:
             print(proc.stdout.rstrip())
+        elif hide_evaluator_details:
+            print(
+                "sandbox: generalized gateway response unavailable; evaluator details withheld",
+                file=sys.stderr,
+            )
         return proc.returncode or 2
 
     if _is_numerical_probe_command(args.command):
@@ -4931,9 +4942,9 @@ def _main(argv: list[str] | None = None) -> int:
         else:
             command_stdout = remote_stdout.rstrip("\n")
     except (RuntimeError, ValueError, tarfile.TarError) as exc:
-        if remote_stdout:
+        if remote_stdout and not hide_evaluator_details:
             print(remote_stdout.rstrip())
-        if remote_stderr:
+        if remote_stderr and not hide_evaluator_details:
             print(remote_stderr.rstrip(), file=sys.stderr)
         print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
         return int(result.get("exit_code") or proc.returncode or 2)
@@ -4941,7 +4952,7 @@ def _main(argv: list[str] | None = None) -> int:
         command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
         command_stdout = _hydrate_result_lines(workspace, command_stdout)
         _record_result_lines(workspace, command_stdout, gateway_kind="dev")
-    if _is_numerical_probe_command(args.command):
+    if hide_evaluator_details or _is_numerical_probe_command(args.command):
         projected = []
         for line in command_stdout.splitlines():
             if line.startswith(NUMERICAL_RESULT_PREFIX):
@@ -4958,12 +4969,14 @@ def _main(argv: list[str] | None = None) -> int:
                     # and remote exit code because one receipt is malformed.
                     continue
                 projected.append(line)
-            else:
+            elif not hide_evaluator_details or line.startswith(
+                (TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX)
+            ):
                 projected.append(line)
         command_stdout = "\n".join(projected)
     if command_stdout:
         print(command_stdout)
-    if remote_stderr:
+    if remote_stderr and not hide_evaluator_details:
         print(remote_stderr.rstrip(), file=sys.stderr)
     remote_rc = result.get("exit_code")
     if isinstance(remote_rc, int):

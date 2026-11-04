@@ -245,12 +245,37 @@ def redact_diagnostics(value: Any, *, private_paths=(), private_values=()) -> An
         value = value.replace(path, "<supervisor>")
     return _SECRET_TEXT.sub(lambda match: (match[1] or match[2]) + "<redacted>", value)
 
+_HIDDEN_SHAPE_KEYS = frozenset({
+    "shape",
+    "shapes",
+    "input_shape",
+    "output_shape",
+    "strides",
+    "init_kwargs",
+    "forward_kwargs",
+})
+
+
+def _hidden_shape_key(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    key = value.lower()
+    # Shape IDs are opaque handles, and per-shape metric maps do not expose the
+    # dimensions themselves.  Keep both useful for debugging hidden workloads.
+    if key.endswith(("shape_id", "shape_ids")) or key.endswith("_by_shape"):
+        return False
+    return key in _HIDDEN_SHAPE_KEYS or key.endswith(
+        ("_shape", "_shapes", "_dimensions", "_dims", "_strides")
+    )
+
+
 def redact_hidden_shapes(value):
     """Hide workload dimensions while retaining error text and scalar metrics."""
     if isinstance(value, dict):
-        return {key: "<hidden shape>" if key in {
-            "shape", "shapes", "input_shape", "output_shape", "strides", "init_kwargs", "forward_kwargs"
-        } else redact_hidden_shapes(item) for key, item in value.items()}
+        return {
+            key: "<hidden shape>" if _hidden_shape_key(key) else redact_hidden_shapes(item)
+            for key, item in value.items()
+        }
     if isinstance(value, list):
         return [redact_hidden_shapes(item) for item in value]
     if not isinstance(value, str):
@@ -879,12 +904,14 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                      private_paths=(), private_values=(), public_dev=False, operation=None) -> dict:
     """Project known result types and pass unfamiliar Agate output through verbatim.
 
-    Credential and private controller-path redaction is universal.  Hidden-shape
-    projection is intentionally limited to response types whose schema Runtime
-    understands; applying it to arbitrary future Agate output silently destroys
-    evidence and turns response handling into a brittle field-name blacklist.
+    Credential and private controller-path redaction is universal.  Exposed mode
+    preserves unfamiliar Agate evidence verbatim after that redaction.  Hidden-
+    shape mode is an explicit privacy boundary, so every Agent-visible response
+    path is additionally shape-redacted even when Runtime does not understand
+    the response schema.
     """
     stdout, stderr = process.stdout or "", process.stderr or ""
+    hide_shapes = generalized and not wiki and not public_dev
     numerical = any(line.startswith(NUMERICAL_RESULT_PREFIX) for line in stdout.splitlines())
     projected = []
     formatters = {
@@ -921,38 +948,36 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                     raise ValueError("not an object")
                 raw = redact_diagnostics(raw, private_paths=private_paths, private_values=private_values)
                 formatter = formatters.get(prefix)
-                known_projection = formatter is not None
-                if prefix == GATEWAY_ERROR_PREFIX:
-                    known_projection = known_gateway_error(raw)
                 value = formatter(raw) if formatter is not None else raw
                 value = redact_diagnostics(
                     value,
                     private_paths=private_paths,
                     private_values=private_values,
                 )
-                if known_projection and generalized and not wiki and not public_dev:
+                if hide_shapes:
                     value = redact_hidden_shapes(value)
                 projected.append(prefix + json.dumps(value, ensure_ascii=False))
             except (ValueError, TypeError, RecursionError, OverflowError):
                 # A known marker with a future schema is also unknown input to
                 # this Runtime version.  Preserve it rather than replacing the
                 # only evidence with a projection error.
-                projected.append(
-                    redact_diagnostics(
-                        line,
-                        private_paths=private_paths,
-                        private_values=private_values,
-                    )
+                line = redact_diagnostics(
+                    line,
+                    private_paths=private_paths,
+                    private_values=private_values,
                 )
+                projected.append(redact_hidden_shapes(line) if hide_shapes else line)
         else:
             line = redact_diagnostics(line, private_paths=private_paths, private_values=private_values)
-            projected.append(line)
+            projected.append(redact_hidden_shapes(line) if hide_shapes else line)
     stdout = "\n".join(projected) + ("\n" if projected else "")
     known_marker_present = any(
         line.startswith(tuple(formatters)) for line in projected
     )
     # Structured lines were redacted before JSON encoding. Re-running free-form
     # regexes over encoded JSON can eat delimiters and corrupt result markers.
+    if hide_shapes:
+        stderr = redact_hidden_shapes(stderr)
     stderr = redact_diagnostics(stderr, private_paths=private_paths, private_values=private_values)
     result = {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}
     for key, limit in (("stdout", 256 * 1024 if wiki else 384 * 1024), ("stderr", 16 * 1024)):
