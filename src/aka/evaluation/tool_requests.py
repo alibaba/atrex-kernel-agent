@@ -30,9 +30,11 @@ def parse_tool_arguments(argv):
         parser.add_argument(flag)
     parser.add_argument("--mode", dest="evaluation_mode", choices=("full", "correctness_only"))
     parser.add_argument("--correctness-max-rel-l2", type=float)
-    for flag in ("--multi-seed", "--timed-runs", "--shape-batch-size", "--comparison-repeats", "--comparison-run-timeout",
+    for flag in ("--multi-seed", "--timed-runs", "--warmup", "--shape-batch-size", "--comparison-repeats", "--comparison-run-timeout",
                  "--launch-skip", "--launch-count", "--top-kernels"):
         parser.add_argument(flag, type=int)
+    for flag in ("--candidate-timeout-s", "--perf-timeout-s"):
+        parser.add_argument(flag, type=float)
     for flag in ("--shape-id", "--profile-counter", "--requirement", "--input", "--sync"):
         parser.add_argument(flag, action="append", default=[])
     parser.add_argument("--env", "-e", action="append", default=[])
@@ -59,8 +61,8 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
                       defaults=None, filesystem_access=None):
     """Use only host-selected configuration and the supplied composition policy.
 
-    Unspecified method values preserve the shared Legacy producer's originals.
-    Light selects its six-case/timing policy explicitly through defaults.
+    Evaluation supplies shared timing defaults; explicit controls take precedence.
+    Workflows may select correctness cases through defaults.
     Endpoint, credentials, retries and execution availability stay with Execution.
     """
     from aka.execution.command_syntax import requested_operation
@@ -83,12 +85,14 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
     if args.baseline_path and (kind != "run" or args.evaluation_mode == "correctness_only"):
         raise ValueError("baseline comparison requires full run")
-    if args.command and (any(value is not None for value in (args.version, args.multi_seed, args.timed_runs)) or args.shape_id):
+    if args.command and (any(value is not None for value in (args.version, args.multi_seed, args.timed_runs, args.warmup, args.candidate_timeout_s, args.perf_timeout_s)) or args.shape_id):
         raise ValueError("top-level evaluator controls require an implicit canonical command")
+    if kind != "run" and any(value is not None for value in (args.warmup, args.candidate_timeout_s, args.perf_timeout_s)):
+        raise ValueError("timing controls require a Run request")
     command = tuple(args.command)
     sol = evaluation_input is not None and evaluation_input.adapter == "legacy-sol-v1"
     if not command and kind == "run" and sol:
-        if args.evaluation_mode == "correctness_only" or args.multi_seed is not None or args.timed_runs is not None or args.shape_id:
+        if args.evaluation_mode == "correctness_only" or args.multi_seed is not None or any(value is not None for value in (args.timed_runs, args.warmup, args.candidate_timeout_s, args.perf_timeout_s)) or args.shape_id:
             raise UnsupportedExecution("SOL's selected evaluator owns its complete workload correctness policy")
         command = ("python3", "test_kernel.py")
     elif not command and kind == "run":
@@ -101,6 +105,10 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             raise ValueError("correctness cases and timing iterations must be positive")
         command = ("python3", "test_kernel.py", "--version", args.version or "v0", "--multi-seed", str(cases - 1), "--timed-runs", str(timed))
         command += tuple(value for shape in args.shape_id for value in ("--shape-id", shape))
+        for flag, value in (("--warmup", args.warmup), ("--candidate-timeout-s", args.candidate_timeout_s),
+                            ("--perf-timeout-s", args.perf_timeout_s)):
+            if value is not None:
+                command += (flag, str(value))
     elif not command and kind == "profile":
         command = ("python3", "profile_driver.py")
     elif not command and kind == "dev":
@@ -181,14 +189,8 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
                 request.pop(field, None)
         if args.correctness_max_rel_l2 is not None:
             request["options"]["correctness_max_rel_l2"] = args.correctness_max_rel_l2
-        from .measurement_policy import warmup_overrides
-        timing_environment = dict(explicit)
-        from aka.execution.command_syntax import option_value
-        explicit_warmup = option_value(list(command), "--warmup", None)
-        if explicit_warmup is not None:
-            timing_environment["AKA_GATEWAY_WARMUP_ITERS"] = explicit_warmup
-        request["runner_overrides"].update(warmup_overrides(timing_environment))
-        request["runner_overrides"].update(defaults.get("runner_overrides", {}))
+        from .measurement_policy import runner_overrides
+        request["runner_overrides"].update(runner_overrides(command, explicit, defaults.get("runner_overrides")))
         if "lock_clocks" in defaults:
             request["options"]["lock_clocks"] = defaults["lock_clocks"]
         if args.baseline_path:

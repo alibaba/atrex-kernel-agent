@@ -149,8 +149,6 @@ class LegacyEvaluator:
             command = ["python", "test_kernel.py", "--version", f"v{request.version}"]
             if request.mode == "framework":
                 command += ["--multi-seed", "5"]
-                if config.native:
-                    command += ["--timed-runs", "5"]
             command.append("--no-memory")
             return PreparedEvaluation(
                 (

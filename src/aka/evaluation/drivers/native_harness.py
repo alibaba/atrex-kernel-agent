@@ -29,10 +29,10 @@ ATREX_BENCH_DIR = "atrex-bench"
 FP4_MAX_REL_L2 = 0.2
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 
-# Native script method defaults. Keep these here so a copied worker script needs
+# Shared Evaluation defaults. Keep these here so a copied worker script needs
 # only the standard library; host preparation imports this same definition.
 DEFAULT_WARMUP_ITERS = 10
-DEFAULT_BENCH_ITERS = 100
+DEFAULT_BENCH_ITERS = 20
 DEFAULT_CANDIDATE_TIMEOUT = 20.0
 DEFAULT_PERFORMANCE_TIMEOUT = 120.0
 

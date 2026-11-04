@@ -1074,7 +1074,7 @@ class Campaign:
         if self.atrex_bench_root:
             # Preserve the old native Gateway's implicit six-case/100-iteration
             # request. V0's source-only correctness prefetch remains separate.
-            command += ["--mode", "full", "--version", "v0", "--multi-seed", "5", "--timed-runs", "100"]
+            command += ["--mode", "full", "--version", "v0", "--multi-seed", "5"]
         response = self.measure_for_acceptance(self.workspace, command,
             execution_timeout=self.sandbox_timeout)
         test = subprocess.CompletedProcess(command, response["exit_code"], response["stdout"], response["stderr"])
@@ -2201,7 +2201,7 @@ class Campaign:
         try:
             argv = ["--kind", "run", "--no-sync"]
             if self.atrex_bench_root:
-                argv += ["--mode", "full", "--version", f"v{n}", "--multi-seed", "4", "--timed-runs", "100"]
+                argv += ["--mode", "full", "--version", f"v{n}", "--multi-seed", "4"]
             response = self.measure_for_acceptance(self.workspace, argv,
                 execution_timeout=self.sandbox_timeout)
             test = subprocess.CompletedProcess(argv, response["exit_code"], response["stdout"], response["stderr"])

@@ -2172,11 +2172,11 @@ def _typed_agate_command(
         command += ["--mode", str(request.get("mode") or "full"),
                     "--num-correctness-cases", str(options["num_correctness_cases"]),
                     "--bench-iters", str(options["bench_iters"])]
-        warmup = os.environ.get("AKA_GATEWAY_WARMUP_ITERS", "default")
-        if warmup == "default" and "warmup_iters" in request.get("runner_overrides", {}):
-            warmup = str(request["runner_overrides"]["warmup_iters"])
-        if warmup != "default":
-            command += ["--set", "warmup_iters=" + warmup]
+        # Evaluation has already resolved and frozen timing policy. Forward it
+        # verbatim; ambient host settings must not change a prepared measurement.
+        for key in ("warmup_iters", "candidate_timeout_s", "perf_timeout_s"):
+            if key in request.get("runner_overrides", {}):
+                command += ["--set", f"{key}={json.dumps(request['runner_overrides'][key], allow_nan=False)}"]
         if "abba" in request:
             from .requests import validate_native_abba
             validate_native_abba(request)

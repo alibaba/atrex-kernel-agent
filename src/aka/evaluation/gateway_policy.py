@@ -74,8 +74,6 @@ def _typed_workspace_limitation(
     unsupported_options = (
         "--seed",
         "--workspace",
-        "--candidate-timeout-s",
-        "--perf-timeout-s",
     )
     for option in unsupported_options:
         if _option_value(command, option) is not None:

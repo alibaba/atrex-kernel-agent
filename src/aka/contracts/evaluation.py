@@ -145,8 +145,8 @@ class NumericalProbeResult:
         }
 
 
-# Legacy defaults. The local native harness owns its inner timing limits;
-# remote evaluators retain their own defaults unless explicitly overridden.
+# Allocation and comparison budgets. Evaluation explicitly prepares inner timing
+# limits for both built-in script and typed requests.
 DEFAULT_EVALUATION_TIMEOUT = 600
 DEFAULT_CANDIDATE_TIMEOUT = 20
 DEFAULT_PERFORMANCE_TIMEOUT = 120
