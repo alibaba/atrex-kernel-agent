@@ -1,5 +1,6 @@
 """Own Legacy command evaluation and storage for one borrowed operation."""
 from contextlib import contextmanager
+from functools import partial
 from pathlib import Path
 
 from aka.contracts.execution import validate_executor
@@ -8,7 +9,9 @@ from .runner import LegacyExperiment, evaluation_stage
 
 
 class LegacyExperimentFactory:
-    def __init__(self, *, measurement_reader=None, records_root=None, command_evaluator=None):
+    def __init__(self, *, measurement_reader=None, records_root=None, command_evaluator=None, retry_policy=None):
+        from aka.contracts.execution_recovery import InfrastructureRetryPolicy
+        self.retry_policy = retry_policy if retry_policy is not None else InfrastructureRetryPolicy()
         self.measurement_reader = measurement_reader
         self.records_root = Path(records_root).expanduser().resolve() if records_root is not None else None
         if command_evaluator is not None and any(not callable(getattr(command_evaluator, method, None))
@@ -52,4 +55,4 @@ class LegacyExperimentFactory:
                 GatewayCommandEvaluator(measurement_reader=self.measurement_reader,
                     execution_capabilities=executor.capabilities, evaluation_input=evaluation_input),
             episode_evidence=episode_evidence,
-            retry=retry_infrastructure if purpose == "formal" else None, stage=evaluation_stage)
+            retry=partial(retry_infrastructure, policy=self.retry_policy), stage=evaluation_stage)

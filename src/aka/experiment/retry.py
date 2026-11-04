@@ -87,7 +87,7 @@ def _load(path, stage, policy):
 
 
 def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None, policy=None):
-    """Run once unless an explicit bounded schedule and Execution facts permit retry.
+    """Use the bounded default schedule only when Execution proves safe admission.
 
     An empty schedule dispatches once without a retry ledger; Experiment owns
     the attempt record and any decision to call again. For configured retries,

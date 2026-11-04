@@ -33,8 +33,8 @@ PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 # only the standard library; host preparation imports this same definition.
 DEFAULT_WARMUP_ITERS = 10
 DEFAULT_BENCH_ITERS = 20
-DEFAULT_CANDIDATE_TIMEOUT = 20.0
-DEFAULT_PERFORMANCE_TIMEOUT = 120.0
+DEFAULT_CANDIDATE_TIMEOUT = 600.0
+DEFAULT_PERFORMANCE_TIMEOUT = 300.0
 
 
 def _save_numerical_diagnostics(completed, result_paths):

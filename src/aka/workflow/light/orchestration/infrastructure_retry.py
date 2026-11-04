@@ -108,7 +108,8 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
     Stage identity must include the candidate/contract digest. This loop does not
     update campaign counters, finalize a journal, or start another coding session.
     """
-    cancel = cancel if cancel is not None else Event()
+    from aka.workflow.budgets import cancellation
+    cancel = cancellation(cancel) or Event()
     key = hashlib.sha256(stage.encode()).hexdigest()[:24]
     path = _state_path(workspace, "infrastructure", key)
     record = _load_retry_state(path, stage, "infrastructure")
@@ -130,6 +131,8 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
         try:
             result = operation()
         except InfrastructureUnavailable as exc:
+            if getattr(exc, "outcome", None) is not None or hasattr(exc, "retry_record"):
+                raise  # Experiment owns GPU recovery and its durable budget.
             now = time.time()
             reason = str(exc)
             record = {

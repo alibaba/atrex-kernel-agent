@@ -1,6 +1,7 @@
 """Assemble the shared Agent and its independently selected execution adapter."""
 
 from aka.core.keys import ServiceKey
+from .provider import DEFAULT_AGENT_TIMEOUT_SECONDS
 
 AGENT = ServiceKey("agent", "Agent", module="aka.contracts.agent", protocol_version=3)
 name = "agent"
@@ -23,7 +24,7 @@ Config = {
     },
     "additionalProperties": False,
 }
-Defaults = {"sandbox": "none", "bwrap_executable": "bwrap", "proc_mode": "private", "session_name": ""}
+Defaults = {"timeout_seconds": DEFAULT_AGENT_TIMEOUT_SECONDS, "sandbox": "none", "bwrap_executable": "bwrap", "proc_mode": "private", "session_name": ""}
 
 
 def options(config):
@@ -33,7 +34,7 @@ def options(config):
     return AgentOptions(
         config.get("sandbox", "none"),
         config.get("bwrap_executable", "bwrap"),
-        config.get("timeout_seconds"),
+        config.get("timeout_seconds", DEFAULT_AGENT_TIMEOUT_SECONDS),
         Path(config["state_directory"]) if config.get("state_directory") else None,
         config.get("proc_mode", "private"),
     )

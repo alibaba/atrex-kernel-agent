@@ -193,6 +193,8 @@ class WorkflowServices:
         s = self.settings
         bound = SandboxExecutor(self.executor, ExecutionContext(
             self._measurement_environment(), s.hardware, s.timeout, formal))
+        from aka.workflow.budgets import bound_executor
+        bound = bound_executor(bound)
         evaluator = self.create_evaluator(execution_capabilities=bound.capabilities)
         with self.experiment_factory.open(workspace=self.campaign.workspace,
                 purpose="formal" if formal else "development", executor=bound, evaluator=evaluator,

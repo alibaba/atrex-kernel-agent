@@ -91,6 +91,11 @@ class LegacyEvaluator:
 
     def prepare(self, request: EvaluationRequest) -> PreparedEvaluation:
         prepared = self._prepare(request)
+        if request.cancel_event is not None:
+            prepared = replace(prepared, steps=tuple(replace(step, cancel_event=request.cancel_event)
+                                                     for step in prepared.steps))
+        if getattr(prepared.context, "typed_numerical", False):
+            return prepared
         if getattr(prepared.context, "native", False):
             return prepared
         if request.mode in {"v0", "framework"} and self.configuration.hardware:
@@ -142,7 +147,8 @@ class LegacyEvaluator:
             validate_harness(request.workspace, self.evaluation_input)
         if request.mode == "numerical":
             from .numerical_preparation import prepare_numerical
-            return prepare_numerical(request, config, self.evaluation_input, output_root=VERIFY_DIR)
+            return prepare_numerical(request, replace(config, timeout=request.numerical_probe.timeout),
+                                     self.evaluation_input, output_root=VERIFY_DIR)
         if request.mode == "fast":
             return PreparedEvaluation((), 1, _Plan(request))
         if request.mode in {"v0", "framework"}:
@@ -260,7 +266,10 @@ class LegacyEvaluator:
         if getattr(plan, "gateway", None) is not None:
             return self._command_evaluator().observe_step(plan.gateway, index, result)
         assessment = self.diagnose_step(prepared, index, result)
-        if plan.native:
+        if getattr(plan, "typed_numerical", False):
+            artifacts = (plan.source_artifact,) if index == 0 else ()
+            return StepEvaluation(artifacts, assessment, workspace_files=result.files)
+        if getattr(plan, "native", False):
             source = (plan.candidate_source,) if index == 0 and plan.candidate_source is not None else ()
             return StepEvaluation((MeasurementArtifact(f"receipt-{index:04d}.json", result.stdout.encode(), "measurement_batch"), *source),
                 assessment, workspace_files=result.files)
@@ -281,6 +290,9 @@ class LegacyEvaluator:
         """Explain unavailable or partial facts before a host raises on transport."""
         if not prepared.measurement_identities or index >= len(prepared.measurement_identities):
             return None
+        if getattr(prepared.context, "typed_numerical", False):
+            from .typed_numerical import assess
+            return assess(prepared.context, index, result)
         if prepared.context.request.mode == "numerical":
             from .numerical_preparation import assess_numerical
             return assess_numerical(prepared.context, prepared.context.step_cases[index], result)
@@ -312,6 +324,9 @@ class LegacyEvaluator:
     ) -> VerificationResult:
         plan = prepared.context
         request = plan.request
+        if getattr(prepared.context, "typed_numerical", False):
+            from .typed_numerical import interpret
+            return interpret(prepared, results)
         if request.mode == "numerical":
             from .numerical_preparation import interpret_numerical
             return interpret_numerical(prepared, results)
@@ -321,7 +336,7 @@ class LegacyEvaluator:
             raise ValueError("evaluation requires one result per planned step")
         if request.mode == "fast":
             return self._fast_result(request)
-        if plan.native:
+        if getattr(plan, "native", False):
             from .native_abba import parse_native_abba, interpret_payloads
             payloads = []
             assessments = tuple(self.diagnose_step(prepared, index, result) for index, result in enumerate(results))

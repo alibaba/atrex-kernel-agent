@@ -9,7 +9,7 @@ from types import MappingProxyType
 from typing import Any, Iterable, Literal, Mapping, Protocol, Sequence, TYPE_CHECKING
 from aka.core.keys import ServiceKey
 
-from .execution import BackendCapabilities, CommandSpec, ExecutionFile, JobResult
+from .execution import BackendCapabilities, Cancellation, CommandSpec, ExecutionFile, JobResult
 from .workspace import CandidateWorkspace
 from .problem import EvaluationInput
 from .experiment_identity import ExperimentRef
@@ -148,12 +148,11 @@ class NumericalProbeResult:
 # Allocation and comparison budgets. Evaluation explicitly prepares inner timing
 # limits for both built-in script and typed requests.
 DEFAULT_EVALUATION_TIMEOUT = 600
-DEFAULT_CANDIDATE_TIMEOUT = 20
-DEFAULT_PERFORMANCE_TIMEOUT = 120
-DEFAULT_ABBA_RUN_TIMEOUT = 120
+DEFAULT_CANDIDATE_TIMEOUT = 600
+DEFAULT_PERFORMANCE_TIMEOUT = 300
+DEFAULT_ABBA_RUN_TIMEOUT = 300
 DEFAULT_ABBA_REPEATS = 2
 ABBA_SCHEDULING_OVERHEAD = 30
-MAX_TYPED_GATEWAY_JOB_TIMEOUT = 10_800
 
 
 def derived_evaluation_timeout(
@@ -163,7 +162,7 @@ def derived_evaluation_timeout(
     candidate_timeout: int = DEFAULT_CANDIDATE_TIMEOUT,
     performance_timeout: int = DEFAULT_PERFORMANCE_TIMEOUT,
 ) -> int:
-    """Return one allocation large enough for either Eval or A/B/B/A."""
+    """Return the compatibility allocation; slow compilation may need an override."""
     values = {
         "repeats": repeats,
         "per_run_timeout": per_run_timeout,
@@ -173,32 +172,9 @@ def derived_evaluation_timeout(
     if any(type(value) is not int or value <= 0 for value in values.values()):
         raise ValueError("evaluation timing inputs must be positive integers")
     return max(
-        DEFAULT_EVALUATION_TIMEOUT,
         candidate_timeout + performance_timeout,
         2 * repeats * per_run_timeout + ABBA_SCHEDULING_OVERHEAD,
     )
-
-
-def typed_gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
-    """Validate the deadline sent to Agate's typed-job API.
-
-    Agate rejects typed job deadlines above three hours.  Silently clamping a
-    larger local allocation can terminate a valid Eval/ABBA schedule before its
-    configured inner limits expire, so reject the impossible configuration
-    before submission instead.
-    """
-    if type(command_timeout) is not int or command_timeout <= 0:
-        raise ValueError("Gateway command timeout must be a positive integer")
-    if type(queue_wait_grace) is not int or queue_wait_grace < 0:
-        raise ValueError("Gateway queue wait grace must be a non-negative integer")
-    requested = command_timeout + queue_wait_grace
-    if requested > MAX_TYPED_GATEWAY_JOB_TIMEOUT:
-        raise ValueError(
-            "Configured Gateway allocation exceeds Agate's 10800-second typed-job limit: "
-            f"command timeout {command_timeout}s + queue grace {queue_wait_grace}s = "
-            f"{requested}s. Reduce the allocation, ABBA repeats/run timeout, or queue grace."
-        )
-    return requested
 
 
 @dataclass(frozen=True)
@@ -331,6 +307,7 @@ class EvaluationRequest:
     expected_shape_ids: frozenset[str] | None = None
     experiment_ref: ExperimentRef | None = None
     numerical_probe: NumericalProbeRequest | None = None
+    cancel_event: Cancellation | None = field(default=None, repr=False, compare=False)
 
     def __post_init__(self):
         if self.numerical_probe is not None and not isinstance(self.numerical_probe, NumericalProbeRequest):
@@ -364,8 +341,11 @@ class NumericalProbeRequest:
     rotation: str
     candidate_identity: str
     candidate_files: tuple[PreparationFile, ...]
+    timeout: int = DEFAULT_EVALUATION_TIMEOUT
 
     def __post_init__(self):
+        if type(self.timeout) is not int or self.timeout <= 0:
+            raise ValueError("numerical case timeout must be a positive integer")
         for value in (self.suite_json, self.rotation, self.candidate_identity):
             if not isinstance(value, str) or not value:
                 raise ValueError("numerical probe requires nonempty text identities and suite")
@@ -373,6 +353,17 @@ class NumericalProbeRequest:
         if not files or any(not isinstance(item, PreparationFile) for item in files):
             raise TypeError("numerical candidate files must use PreparationFile values")
         object.__setattr__(self, "candidate_files", files)
+
+
+@dataclass(frozen=True)
+class StepBudget:
+    """One elapsed budget shared by sequential prepared steps, including waits."""
+    key: str
+    seconds: int
+
+    def __post_init__(self):
+        if not self.key or type(self.seconds) is not int or self.seconds <= 0:
+            raise ValueError("step budget requires an identity and positive seconds")
 
 
 @dataclass(frozen=True)
@@ -390,8 +381,18 @@ class PreparedEvaluation:
     inputs: tuple[PreparationFile, ...] = ()
     fallback_steps: tuple[CommandSpec, ...] = ()
     measurement_identities: tuple[MeasurementIdentity, ...] = ()
+    step_budgets: tuple[StepBudget | None, ...] = ()
 
     def __post_init__(self):
+        budgets = tuple(self.step_budgets)
+        if budgets and (len(budgets) != len(self.steps) + len(self.fallback_steps) or self.max_parallelism != 1):
+            raise ValueError("shared step budgets require a sequential, aligned plan")
+        if any(item is not None and not isinstance(item, StepBudget) for item in budgets):
+            raise TypeError("step budgets must use StepBudget values")
+        if any(len({b.seconds for b in budgets if b is not None and b.key == item.key}) != 1
+               for item in budgets if item is not None):
+            raise ValueError("a shared step budget must have one duration")
+        object.__setattr__(self, "step_budgets", budgets)
         object.__setattr__(self, "steps", tuple(self.steps))
         object.__setattr__(self, "fallback_steps", tuple(self.fallback_steps))
         inputs = tuple(self.inputs)

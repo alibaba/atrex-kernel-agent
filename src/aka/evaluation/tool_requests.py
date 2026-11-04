@@ -212,11 +212,10 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             if baseline_archive is not None:
                 archives = (*archives, baseline_archive)
             request["abba"] = {"baseline": baseline_descriptor, "repeats": repeats // 2}
-            available = (configuration.timeout - 30) // (2 * repeats)
-            seconds = (min(configuration.per_run_timeout, available)
+            seconds = (configuration.per_run_timeout
                        if args.comparison_run_timeout is None else args.comparison_run_timeout)
-            if seconds <= 0 or seconds > available:
-                raise ValueError("comparison run timeout must be positive and fit the full ABBA allocation schedule")
+            if type(seconds) is not int or seconds <= 0:
+                raise ValueError("comparison performance timeout must be a positive integer")
             request["runner_overrides"]["perf_timeout_s"] = seconds
             operation = "same_allocation_abba"
     else:

@@ -6,6 +6,7 @@ from contextvars import copy_context
 from pathlib import Path
 from dataclasses import asdict, replace
 import subprocess
+import uuid
 import json
 from threading import Event
 from typing import TYPE_CHECKING, Callable
@@ -132,7 +133,8 @@ class LegacyExperiment:
                         sort_keys=True).encode()).hexdigest(), "cancellation": request.cancel_event is not None, "submission_sha256":
                     hashlib.sha256(request.submission).hexdigest() if request.submission is not None else None,
                     **handoff_identity(request)}
-        data = asdict(request)
+        data = asdict(replace(request, cancel_event=None))
+        data.pop("cancel_event", None)
         data.pop("experiment_ref", None)
         # Absent additions must not change historical request identities.
         data.pop("numerical_probe", None)
@@ -140,7 +142,7 @@ class LegacyExperiment:
             import hashlib
             probe = request.numerical_probe
             data["numerical_probe"] = {
-                "suite_json": probe.suite_json, "rotation": probe.rotation,
+                "suite_json": probe.suite_json, "timeout": probe.timeout, "rotation": probe.rotation,
                 "candidate_identity": probe.candidate_identity,
                 "candidate_files": [
                     {"path": item.path, "mode": item.mode, "sha256": hashlib.sha256(item.content).hexdigest()}
@@ -155,6 +157,9 @@ class LegacyExperiment:
 
     def _recorded(self, request, request_id, *, resume=None):
         records = self._records()
+        if isinstance(request, (EvaluationRequest, CommandSpec)) and request.cancel_event is not None and request.cancel_event.is_set():
+            from concurrent.futures import CancelledError
+            raise CancelledError("experiment cancelled before dispatch or recovery")
         if not isinstance(request, (EvaluationRequest, CommandSpec)):
             raise TypeError("recorded experiment requires EvaluationRequest or CommandSpec")
         if isinstance(request, EvaluationRequest) and self.evaluator is None:
@@ -168,7 +173,7 @@ class LegacyExperiment:
                     prepared = evaluator.prepare(request)
                     records.prepared(ref, (*prepared.steps, *prepared.fallback_steps),
                         () if isinstance(request, CommandSpec) else prepared.inputs,
-                        prepared.measurement_identities, resume=True)
+                        prepared.measurement_identities, resume=True, step_budgets=prepared.step_budgets)
                     return record, None
                 if resume is None:
                     raise ExperimentRecordError("experiment_incomplete", ref)
@@ -261,7 +266,15 @@ class LegacyExperiment:
                 references = result.job_references if result else ()
                 if not callable(query) or len(references) != 1:
                     raise ExperimentRecordError("experiment_pending", ref)
-                observed = query(references[0], timeout=options["timeout"] or command.timeout)
+                query_timeout = options["timeout"] or command.timeout
+                budget = prepared.step_budgets[index] if prepared.step_budgets else None
+                if budget is not None:
+                    import time
+                    remaining = records.step_deadline(ref, budget, prior_attempt=True) - time.time()
+                    if remaining <= 0:
+                        raise ExperimentRecordError("step_budget_exhausted", ref)
+                    query_timeout = min(query_timeout, remaining)
+                observed = query(references[0], timeout=query_timeout)
                 if observed.job_references != references:
                     raise ExperimentRecordError("job_identity_mismatch", ref)
                 if result is not None:
@@ -288,6 +301,11 @@ class LegacyExperiment:
                     continue  # Experiment explicitly schedules one missing measurement.
             if result is None or result.facts.disposition == "unknown":
                 raise ExperimentRecordError("experiment_pending", ref)
+            if self.retry is not None and result.transport_status == "infrastructure":
+                from .retry import _safe_to_retry
+                from aka.execution.transport import InfrastructureUnavailable
+                if _safe_to_retry(InfrastructureUnavailable("retained admission failure", result)):
+                    continue  # The existing retry ledger, not remeasurement, admits continuation.
             if result.transport_status in {"timed_out", "cancelled", "interrupted", "infrastructure"}:
                 result.require_transport()
             cached[index] = records.result_for(ref, attempt.attempt_id)
@@ -318,7 +336,8 @@ class LegacyExperiment:
         commands = (*prepared.steps, *prepared.fallback_steps)
         cached = {}
         if records is not None:
-            records.prepared(ref, commands, identities=prepared.measurement_identities, resume=resume is not None)
+            records.prepared(ref, commands, identities=prepared.measurement_identities, resume=resume is not None,
+                             step_budgets=prepared.step_budgets)
             if resume is not None:
                 cached = self._resume_results(records, ref, commands, evaluator, prepared, resume)
             for step in prepared.steps:
@@ -331,8 +350,9 @@ class LegacyExperiment:
                 if step.prepared_inputs is not None:
                     for item in (*step.prepared_inputs.files, *step.prepared_inputs.runtime_files):
                         records.publish_content(ref, item.content, "execution_input")
-        cancel = Event()
-        def attempt(index):
+        from .step_budget import BudgetCancellation
+        cancel = BudgetCancellation(float("inf"), command.cancel_event)
+        def execute_attempt(index):
             if index in cached:
                 result = cached[index]
                 self._observe_command(evaluator, prepared, index, commands[index], result, records, ref)
@@ -358,12 +378,14 @@ class LegacyExperiment:
                 if assessment is not None:
                     records.assessed(ref, attempt_id, assessment)
             self._observe_command(evaluator, prepared, index, command, result, records, ref)
-            try:
-                result.require_transport()
-            except BaseException:
-                cancel.set()
-                raise
+            result.require_transport()
             return result
+        def attempt(index):
+            if self.retry is None or index in cached:
+                return execute_attempt(index)
+            stage = (f"{ref.experiment_id}:step-{index}" if ref is not None else
+                     "command:" + uuid.uuid4().hex)
+            return self.retry(command.workspace, stage, lambda: execute_attempt(index), cancel=cancel)
         if prepared.max_parallelism == 1:
             results = tuple(copy_context().run(attempt, index) for index in range(len(prepared.steps)))
         else:
@@ -421,7 +443,7 @@ class LegacyExperiment:
         cached = {}
         if records is not None and resume is not None:
             records.prepared(ref, (*steps, *prepared.fallback_steps), prepared.inputs,
-                             prepared.measurement_identities, resume=True)
+                             prepared.measurement_identities, resume=True, step_budgets=prepared.step_budgets)
             cached = self._resume_results(records, ref, (*steps, *prepared.fallback_steps), self.evaluator, prepared, resume)
         self._write_inputs(request, prepared, records, ref)
         if records is not None:
@@ -434,12 +456,14 @@ class LegacyExperiment:
                     for item in (*command.prepared_inputs.files, *command.prepared_inputs.runtime_files):
                         records.publish_content(ref, item.content, "execution_input")
         if records is not None and resume is None:
-            records.prepared(ref, (*steps, *prepared.fallback_steps), prepared.inputs, prepared.measurement_identities)
+            records.prepared(ref, (*steps, *prepared.fallback_steps), prepared.inputs, prepared.measurement_identities,
+                             step_budgets=prepared.step_budgets)
         if not steps:
             if records is not None:
                 records.phase(ref, "interpret")
             return self._interpret(request, prepared, (), ref)
         cancel = Event()
+        budget_deadlines = {}
 
         def run_step(index: int) -> JobResult:
             command = steps[index]
@@ -452,6 +476,24 @@ class LegacyExperiment:
                                                  archive_result=False)
                 self._write_outputs(request, prepared, observed.artifacts, ref)
                 return result
+
+            from .step_budget import BudgetCancellation
+            step_cancel = BudgetCancellation(float("inf"), cancel, request.cancel_event, command.cancel_event)
+            budget = prepared.step_budgets[index] if prepared.step_budgets else None
+            if budget is not None:
+                import time
+                from .step_budget import BudgetCancellation
+                from concurrent.futures import CancelledError
+                if budget.key not in budget_deadlines:
+                    prior = (any(attempt.task_id == f"step-{other}" for attempt in records.get(ref).attempts
+                                 for other, item in enumerate(prepared.step_budgets)
+                                 if item is not None and item.key == budget.key) if records is not None else False)
+                    budget_deadlines[budget.key] = (records.step_deadline(ref, budget, prior_attempt=prior)
+                        if records is not None else time.time() + budget.seconds)
+                step_cancel = BudgetCancellation(budget_deadlines[budget.key], cancel, request.cancel_event, command.cancel_event)
+                if step_cancel.is_set():
+                    raise CancelledError("numerical case budget exhausted; remaining steps not submitted")
+            command = replace(command, cancel_event=step_cancel)
 
             archive_intent = records.intent(ref, index) if records is not None and command.source_archives else None
             def attempt():
@@ -481,8 +523,9 @@ class LegacyExperiment:
 
             if self.retry is None:
                 return attempt()
-            stage = prepared.retry_keys[index] if prepared.retry_keys else self.stage(request, index, command)
-            return self.retry(request.workspace, stage, attempt, cancel=cancel)
+            stage = (f"{ref.experiment_id}:step-{index}" if ref is not None else
+                     "unrecorded:" + uuid.uuid4().hex)
+            return self.retry(request.workspace, stage, attempt, cancel=step_cancel)
 
         pool = (ThreadPoolExecutor(max_workers=min(prepared.max_parallelism, len(steps)))
                 if prepared.max_parallelism != 1 else None)

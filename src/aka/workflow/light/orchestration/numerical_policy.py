@@ -22,13 +22,13 @@ from concurrent.futures import CancelledError
 from aka.evaluation.drivers.native_harness import _fp4_correctness_max_rel_l2
 from aka.evaluation.resources import native_harness_script
 from aka.evaluation.drivers import numerical_inputs as probe_algorithms
-from aka.contracts.evaluation import DEFAULT_CANDIDATE_TIMEOUT
 from aka.workflow.light.host.workspace import read_input
 from aka.resources.publication import publish
 from aka.workflow.light.host.projection import bounded_text, credential_values, redact_diagnostics
 from aka.core.filesystem import read_regular_bytes
 
-from aka.workflow.light.long_horizon.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
+from aka.evaluation.drivers.remote_numerical import MAX_REL_L2, validate_suite
+from aka.contracts.evaluation import EvaluationRequest, NumericalProbeRequest, PreparationFile
 from aka.workflow.light.orchestration.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.core.filesystem import durable_write_json
 from aka.workflow.light.orchestration.infrastructure_retry import (check_review_service, retry_infrastructure)
@@ -37,7 +37,8 @@ from importlib.resources import files
 from aka.resources.bundles import resource_path
 
 ROOT = Path(str(files("aka.workflow.light"))).resolve()
-DRIVER = ROOT / "long_horizon" / "remote_numerical.py"
+from aka.evaluation.drivers import remote_numerical
+DRIVER = Path(remote_numerical.__file__).resolve(strict=True)
 # Trusted package assets may be imported through a virtualenv's lib64 -> lib
 # alias. Canonicalize them here, not in _digest/read_input: candidate and
 # reviewer-owned evidence must still reject symlinks in every path component.
@@ -134,7 +135,15 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
                     return ""
                 return f"{SUPPLEMENTAL_PENDING_PREFIX}: trusted input.py/reference.py/shapes.json unavailable"
             publish(frozen, "test_kernel.py", HARNESS.read_bytes())
-            return supplemental_feedback(campaign, frozen, state_root=state_root,
+            frozen_files = {path.relative_to(frozen).as_posix(): path for path in frozen.rglob("*") if path.is_file()}
+            content_identity = _digest(frozen_files)
+            retained = state_root / "candidates" / content_identity
+            if not retained.exists():
+                retained.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(frozen, retained)
+            if _digest({name: retained / name for name in frozen_files}) != content_identity:
+                raise ValueError("retained numerical candidate snapshot changed")
+            return supplemental_feedback(campaign, retained, state_root=state_root,
                                          standard_correctness_passed=True, cancel=cancel, flow=flow)
 
 
@@ -256,133 +265,25 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
     return retry_infrastructure(campaign.workspace, stage, review_once, cancel=cancel)
 
 
-def _probe_status(batch, plan, suite, shapes):
-    """A complete receipt is required before labeling a result a counterexample."""
-    rows = batch.get("runs", [])
-    if batch.get("error") or len(rows) != 1:
-        return "needs_validation"
-    row = rows[0]
-    expected = len({json.dumps(shapes[sid].get("input_kwargs") or {}, sort_keys=True)
-                    for sid in plan["shape_ids"]}) * len(plan["seeds"]) * suite["world_size"]
-    if (row.get("case_id") != plan["case_id"]
-            or row.get("selection_digest") != plan["selection_digest"]
-            or row.get("shape_count") != len(plan["shape_ids"])
-            or row.get("seeds") != plan["seeds"]
-            or row.get("world_size") != suite["world_size"]
-            or row.get("expected_probes") != expected
-            or type(row.get("observed_probes")) is not int
-            or not 0 <= row["observed_probes"] <= expected
-            or not isinstance(row.get("result"), dict)):
-        return "needs_validation"
-    result = row["result"]
-    if row.get("input_error") or {"reference", "unknown"}.intersection(result.get("nonfinite_outputs", [])):
-        return "needs_validation"
-    # A single fully observed workload/seed can disprove correctness. Passing
-    # still requires every requested workload, seed and rank to finish.
-    if (0 < row.get("failed_probes", 0) <= row["observed_probes"]
-            and result.get("all_pass") is False):
-        return "needs_repair"
-    if row["observed_probes"] != expected:
-        return "needs_validation"
-    if row.get("passed") is True and row.get("exit_code") == 0 and result.get("all_pass") is True:
-        return "passed"
-    if result.get("all_pass") is False:
-        return "needs_repair"
-    return "needs_validation"
-
-
 def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, cancel):
     if suite["world_size"] != _world_size(workspace):
         raise ValueError("retained probe world_size differs from the trusted contract")
-    shapes = json.loads(shapes_path.read_text())
-    schedule = validation_schedule(suite, shapes, digest, "thorough")
-    from aka.task.source.formats import layout_at
-    if layout_at(workspace).typed_only:
-        from .typed_numerical import run
-        return run(campaign, workspace, suite, shapes, schedule, directory, cancel=cancel,
-                   max_rel_l2=_fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2)
-    results = []
-    for index, plan in enumerate(schedule):
-        cancel.check()
-        if plan.get("status") == "unsupported":
-            results.append({"case_id": plan["case_id"], "status": "unsupported",
-                            "diagnosis": plan["diagnosis"]})
-            continue
-        request = directory / f"request-{index:04d}.json"
-        durable_write_json(request, {
-            "suite": suite, "case_ids": [plan["case_id"]], "rotation": digest,
-            "mode": "thorough", "per_case_timeout": 540,
-            # Freeze the Legacy native-harness default in the probe identity.
-            "candidate_timeout_s": DEFAULT_CANDIDATE_TIMEOUT,
-            "max_rel_l2": _fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2,
-        })
-
-        # Only a private, bounded input snapshot enters the normal Dev record
-        # pipeline. Stable filenames preserve exact-request reuse across restarts.
-        with tempfile.TemporaryDirectory(prefix="probe-", dir=directory) as temporary:
-            probe = Path(temporary)
-            campaign.candidate_workspace.install_source(probe, campaign.candidate_workspace.read_source(workspace))
-            for name in ("solution.json", "input.py", "reference.py", "shapes.json",
-                         "metadata.json", "agent_problem.json", "config.json", "definition.json", "workload.jsonl"):
-                if (workspace / name).is_file():
-                    publish(probe, name, read_input(workspace, name))
-            publish(probe, "numerical_probe.py", DRIVER.read_bytes())
-            publish(probe, "numerical_inputs.py", PROBE_ALGORITHMS.read_bytes())
-            publish(probe, "probe-request.json", request.read_bytes())
-            response = retry_infrastructure(campaign.workspace,
-                f"numerical-probe:{digest}:{hashlib.sha256(request.read_bytes()).hexdigest()}",
-                lambda: campaign.measure_for_acceptance(probe, [
-                    "--kind", "dev", "--no-sync", "--input", "numerical_inputs.py", "--",
-                    "python3", "numerical_probe.py", "probe-request.json",
-                ], execution_timeout=600, parent=cancel.parent, reference_snapshot=probe), cancel=cancel)
-        durable_write_json(directory / f"response-{index:04d}.json", response)
-        batch, record_id = None, None
-        for line in response["stdout"].splitlines():
-            if line.startswith(PREFIX):
-                batch = json.loads(line[len(PREFIX):])
-            elif line.startswith("[sandbox] RECORD_JSON="):
-                record_id = json.loads(line.split("=", 1)[1]).get("gateway_record_id")
-        if not isinstance(batch, dict):
-            detail = response.get("stderr") or response.get("stdout") or "no executor output"
-            raise ValueError(
-                f"Recorded numerical probe produced no valid receipt (record={record_id}, "
-                f"exit={response.get('exit_code')}): {bounded_text(detail, limit=8192)}"
-            )
-        if response["exit_code"]:
-            batch["error"] = "probe transport did not complete"
-        status = _probe_status(batch, plan, suite, shapes)
-        # Include the original bounded errors in planner repair and Agent feedback.
-        # The Gateway has already projected/redacted the diagnostic fields.
-        rows = batch.get("runs", [])
-        result = (rows[0].get("result") or {}) if rows else {}
-        results.append({
-            "case_id": plan["case_id"], "status": status, "gateway_record_id": record_id,
-            "metrics": result.get("numerical_metrics", {}),
-            "nonfinite_outputs": result.get("nonfinite_outputs", []),
-            "expected_probes": rows[0].get("expected_probes") if rows else None,
-            "observed_probes": rows[0].get("observed_probes") if rows else None,
-            "failed_probes": rows[0].get("failed_probes", 0) if rows else 0,
-            "exit_code": rows[0].get("exit_code") if rows else None,
-            "diagnostics": batch.get("diagnostics", []),
-            "diagnosis": (
-                "non-finite output diagnostic has unknown roles; repair or verify the probe evaluator"
-                if "unknown" in result.get("nonfinite_outputs", []) else
-                "reference output is non-finite under the requested probe inputs; "
-                "repair the input distribution or packed encoding, preserving the original risk case"
-                if "reference" in result.get("nonfinite_outputs", []) else
-                "candidate output is non-finite while the reference output is finite"
-                if "candidate" in result.get("nonfinite_outputs", []) else
-                batch.get("error") or (rows[0].get("input_error", "") if rows else "")
-            ),
-        })
-    # Repair invalid reference inputs before asking the coding agent to act on
-    # any other failing case. All retained cases are measured again afterwards.
-    status = ("needs_validation" if any({"reference", "unknown"}.intersection(r.get("nonfinite_outputs", [])) for r in results)
-              else "needs_repair" if any(r["status"] == "needs_repair" for r in results)
-              else "needs_validation" if any(r["status"] == "needs_validation" for r in results)
-              else "advisory" if any(r["status"] == "unsupported" for r in results)
-              else "passed")
-    return {"status": status, "probes": results}
+    cancel.check()
+    source = campaign.candidate_workspace.read_source(workspace)
+    candidates = tuple(PreparationFile(name, content) for name, content in sorted(source.files.items())
+                       if content is not None)
+    rows = [{"path": item.path, "mode": item.mode, "sha256": hashlib.sha256(item.content).hexdigest()}
+            for item in candidates]
+    identity = hashlib.sha256(json.dumps(rows, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    probe = NumericalProbeRequest(json.dumps(suite, sort_keys=True, separators=(",", ":")),
+                                  digest, identity, candidates)
+    request = EvaluationRequest(workspace, mode="numerical", numerical_probe=probe, cancel_event=cancel)
+    request_id = "numerical:" + hashlib.sha256(json.dumps({
+        "candidate": identity, "rotation": digest, "suite": probe.suite_json, "timeout": probe.timeout,
+    }, sort_keys=True).encode()).hexdigest()
+    result = campaign._supervisor_runtime.measurements.numerical(request, request_id=request_id)
+    durable_write_json(directory / "evaluation.json", result)
+    return result
 
 
 def supplemental_feedback(campaign, workspace, *, state_root, standard_correctness_passed=False,

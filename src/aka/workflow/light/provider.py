@@ -8,7 +8,7 @@ from types import SimpleNamespace
 from weakref import WeakSet
 
 from aka.contracts.problem import LoadedProblem
-from aka.contracts.workflow import CampaignRequest, ProblemSource
+from aka.contracts.workflow import CampaignRequest, ProblemSource, DEFAULT_LIGHT_EPISODE_TIMEOUT
 from .search import SearchOptions
 
 
@@ -19,7 +19,7 @@ class WorkflowOptions:
     goal_episodes: bool = False
     generate_memory: bool = False
     output_limit_recovery_retries: int = 2
-    episode_timeout_seconds: float | None = None
+    episode_timeout_seconds: float | None = DEFAULT_LIGHT_EPISODE_TIMEOUT
     search: SearchOptions | dict | None = None
     wiki: bool = False
     wiki_options: dict | None = None

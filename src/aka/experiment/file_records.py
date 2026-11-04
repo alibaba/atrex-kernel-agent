@@ -326,7 +326,7 @@ class FileExperimentRecords:
             updated = transform(old)
             return self._save(replace(updated, record_version=old.record_version + 1, updated_at=_now()))
 
-    def prepared(self, ref, commands, inputs=(), identities=(), *, resume=False):
+    def prepared(self, ref, commands, inputs=(), identities=(), *, resume=False, step_budgets=()):
         from .command_identity import handoff_identity
         if identities and len(identities) > len(commands):
             raise ValueError("measurement identities do not match steps")
@@ -356,18 +356,50 @@ class FileExperimentRecords:
                          **handoff_identity(command, prepared_path_identities=generated_paths)}
                         if step.measurement_identity else plan[index]
                         for index, (step, command) in enumerate(zip(steps, commands))]
+        if step_budgets:
+            identity = {"plan": identity, "step_budgets": [
+                {"key": budget.key, "seconds": budget.seconds} if budget is not None else None
+                for budget in step_budgets]}
         digest = _digest(identity)
         if resume:
             with self._write_lock:
                 old = self.get(ref)
                 if not old.plan_digest or old.plan_digest != digest:
                     raise ExperimentRecordError("plan_identity_mismatch", ref)
-                if old.lifecycle == "terminal":
+                if old.lifecycle == "terminal" and old.phase == "complete":
                     return old
                 return self._save(replace(old, lifecycle="prepared", phase="execute", outcome=None,
                                          record_version=old.record_version + 1, updated_at=_now()))
         return self._update(ref, lambda old: replace(old, steps=steps, plan_digest=digest,
                                                     lifecycle="prepared", phase="execute"))
+
+    def step_deadline(self, ref, budget, *, prior_attempt=False):
+        """Reserve a shared case clock before its first physical submission."""
+        import math
+        import time
+        from aka.core.filesystem import read_regular_bytes, durable_write_json
+        path = self._directory(ref) / "step-budgets" / (_digest(budget.key) + ".json")
+        with self._write_lock:
+            try:
+                raw = read_regular_bytes(path, limit=4097)
+                if len(raw) > 4096:
+                    raise ValueError("oversized step budget")
+                value = json.loads(raw)
+            except FileNotFoundError:
+                if prior_attempt:
+                    raise ExperimentRecordError("step_budget_missing", ref)
+                now = time.time()
+                value = {"schema": 1, "key": budget.key, "seconds": budget.seconds,
+                         "started_at": now, "expires_at": now + budget.seconds}
+                durable_write_json(path, value)
+            if (not isinstance(value, dict) or value.get("schema") != 1
+                    or value.get("key") != budget.key or value.get("seconds") != budget.seconds
+                    or any(type(value.get(k)) not in (int, float) or not math.isfinite(value[k])
+                           for k in ("started_at", "expires_at"))
+                    or value["expires_at"] != value["started_at"] + budget.seconds
+                    or time.time() < value["started_at"]):
+                raise ExperimentRecordError("step_budget_invalid", ref)
+            return value["expires_at"]
 
     def intent(self, ref, index):
         attempt = ExperimentAttempt(uuid.uuid4().hex, f"step-{index}", "intent")

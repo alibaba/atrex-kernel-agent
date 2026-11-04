@@ -65,6 +65,10 @@ def _destination(workspace, relative):
 
 
 def prepare_numerical(request, configuration, evaluation_input, *, output_root):
+    if type(configuration.timeout) is not int or configuration.timeout <= 0:
+        raise ValueError("evaluation timeout must be a positive integer")
+    from .measurement_policy import runner_overrides
+    timing = runner_overrides(environment=configuration.environment)
     from .resources import evaluator_harness
     harness = evaluator_harness(evaluation_input)
     if harness is None:
@@ -132,6 +136,10 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
                 trusted[item.path] = PreparationFile(item.path, content)
     if "test_kernel.py" not in trusted:
         trusted["test_kernel.py"] = PreparationFile("test_kernel.py", read(request.workspace / "test_kernel.py"))
+    if "kernel.py" not in paths and "solution.json" in paths:
+        from .typed_numerical import prepare_typed
+        requirements, _ = _requirements(configuration, evaluation_input)
+        return prepare_typed(request, configuration, suite, shapes, schedule, trusted, limit, requirements)
     for item in sorted(trusted.values(), key=lambda item: item.path):
         _destination(request.workspace, item.path)
         snapshot(item, "trusted", trusted_manifest)
@@ -145,8 +153,9 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
     requirements, dependency_policy = _requirements(configuration, evaluation_input)
     parameters = {
         "comparison": {"metric": "relative_l2", "max_rel_l2": limit},
+        "runner_overrides": timing,
         "rotation": probe.rotation, "candidate_identity": probe.candidate_identity,
-        "suite_sha256": _sha(probe.suite_json.encode("utf-8")), "per_case_timeout": 540,
+        "suite_sha256": _sha(probe.suite_json.encode("utf-8")), "step_timeout": configuration.timeout,
         "metadata_present": metadata_content is not None,
         "metadata_sha256": _sha(metadata_content) if metadata_content is not None else None,
         "basename_fp4": basename_fp4, "world_size": suite["world_size"],
@@ -168,7 +177,8 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
     identities, steps, step_cases, retry_keys = [], [], [], []
     for index, plan in enumerate(schedule):
         value = {"suite": suite, "case_ids": [plan["case_id"]], "rotation": probe.rotation,
-            "mode": "thorough", "per_case_timeout": 540, "max_rel_l2": limit,
+            "mode": "thorough", "step_timeout": configuration.timeout, "max_rel_l2": limit,
+            "runner_overrides": timing,
             "candidate_identity": probe.candidate_identity, "candidate_manifest": candidate_manifest,
             "trusted_manifest": trusted_manifest}
         input_digest = _sha(_json({"inputs": frozen, "request": value, "runtime": task_runtime, "task": task_content}))
@@ -181,7 +191,7 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
             continue
         request_path = f"{directory}/request-{index:04d}.json"
         inputs.append(PreparationFile(request_path, _json(value), content_type="application/json"))
-        steps.append(CommandSpec(request.workspace, ("python3", driver.path, request_path), timeout=600, operation="dev"))
+        steps.append(CommandSpec(request.workspace, ("python3", driver.path, request_path), timeout=configuration.timeout, operation="dev"))
         step_cases.append(index)
         retry_keys.append(f"numerical-probe:{probe.rotation}:{plan['case_id']}")
     context = NumericalPlan(request, suite, shapes, schedule, tuple(step_cases), tuple(identities))
@@ -239,6 +249,10 @@ def interpret_numerical(prepared, results):
     probes = [{"case_id": case["case_id"], **(fact := probe_result(plan, index, observed.get(index))).as_dict(),
                "receipt_status": fact.receipt_status} for index, case in enumerate(plan.schedule)]
     assessments = tuple(assess_numerical(plan, index, observed.get(index)) for index in range(len(plan.schedule)))
+    return summarize_numerical(probes, assessments)
+
+
+def summarize_numerical(probes, assessments):
     reference_probes = [probe for probe in probes if {"reference", "unknown"}.intersection(probe["nonfinite_outputs"])]
     reference_failure = bool(reference_probes)
     status = ("needs_validation" if reference_failure else "needs_repair" if any(probe["status"] == "needs_repair" for probe in probes)

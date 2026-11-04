@@ -270,3 +270,21 @@ def interpret_numerical_output(
         exit_code=row.get("exit_code") if type(row.get("exit_code")) is int else None,
         diagnosis=diagnosis,
     )
+
+
+def decode_numerical_artifact(content):
+    value = json.loads(content)
+    if (not isinstance(value, dict)
+            or set(value) != {"schema", "summary", "probes", "measurements"}
+            or value["schema"] != "aka.evaluation.numerical-probe.v1"):
+        raise ValueError("invalid numerical interpreted artifact schema")
+    summary = value["summary"]
+    if (not isinstance(summary, dict)
+            or set(summary) != {"status", "reason", "expected_probes", "observed_probes", "failed_probes"}
+            or summary["status"] not in {"passed", "advisory", "needs_repair", "needs_validation"}
+            or not isinstance(summary["reason"], str) or not summary["reason"]
+            or any(summary[name] is not None and (type(summary[name]) is not int or summary[name] < 0)
+                   for name in ("expected_probes", "observed_probes", "failed_probes"))
+            or not isinstance(value["probes"], list) or not isinstance(value["measurements"], list)):
+        raise ValueError("invalid numerical interpreted summary")
+    return value

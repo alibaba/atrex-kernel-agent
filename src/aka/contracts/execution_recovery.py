@@ -61,9 +61,9 @@ class JobReference:
 
 @dataclass(frozen=True)
 class InfrastructureRetryPolicy:
-    """Opt-in schedule and total elapsed budget; an empty schedule disables retry."""
-    delays: tuple[float, ...] = ()
-    max_elapsed_s: float = 0
+    """Recovery admission window; never a GPU execution limit. Empty disables retry."""
+    delays: tuple[float, ...] = (5, 10)
+    max_elapsed_s: float = 120
 
     def __post_init__(self):
         delays = tuple(self.delays)

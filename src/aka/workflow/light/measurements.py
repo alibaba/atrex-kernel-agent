@@ -43,10 +43,30 @@ class SharedMeasurements:
 
     @contextmanager
     def _open(self):
-        with self.factory.open(workspace=self.namespace_workspace, purpose="development", executor=self.executor,
+        from aka.workflow.budgets import bound_executor
+        with self.factory.open(workspace=self.namespace_workspace, purpose="development", executor=bound_executor(self.executor),
                                evaluator=self.evaluator, evaluation_input=self.evaluation_input,
                                command_evaluator=self.command_evaluator) as experiment:
             yield experiment
+
+    def numerical(self, request, *, request_id):
+        """Run or resume the original public numerical experiment, then read its verdict."""
+        from aka.evaluation.numerical import decode_numerical_artifact
+        with self._open() as experiment:
+            try:
+                experiment.find(request_id)
+            except LookupError:
+                record = experiment.run_recorded(request, request_id=request_id)
+            else:
+                record = experiment.resume_recorded(request, request_id=request_id,
+                    recovery_timeout=request.numerical_probe.timeout, max_remeasurements=0)
+            if record.lifecycle != "terminal" or record.phase != "complete" or record.evaluation is None:
+                raise ValueError("original numerical experiment is pending")
+            artifacts = [item for item in record.artifacts if item.artifact_id == record.evaluation.artifact]
+            if len(artifacts) != 1:
+                raise ValueError("numerical experiment has no unique interpreted artifact")
+            value = decode_numerical_artifact(experiment.read_artifact(artifacts[0]))
+            return {**value['summary'], 'probes': value['probes'], 'experiment_ref': record.ref.as_dict()}
 
     def _record(self, experiment, record_id):
         if not isinstance(record_id, str) or RECORD_ID.fullmatch(record_id) is None:

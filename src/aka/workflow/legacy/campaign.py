@@ -887,37 +887,74 @@ class Campaign:
             self._pin_framework_baseline(baseline_commit, version=0)
             return
 
-        n = FRAMEWORK_BASELINE_VERSION
-        baseline_commit = self._v0_baseline_commit()
-        v0_blob = self._workspace_state.content_identity(baseline_commit, "kernel.py")
-        pre_head = self.candidate_workspace.current_revision(self.workspace)
-        self.evaluation.ensure_framework_baseline_solution_manifest()
+        from aka.workflow.budgets import baseline_budget
+        with baseline_budget(self):
+            n = FRAMEWORK_BASELINE_VERSION
+            baseline_commit = self._v0_baseline_commit()
+            v0_blob = self._workspace_state.content_identity(baseline_commit, "kernel.py")
+            pre_head = self.candidate_workspace.current_revision(self.workspace)
+            self.evaluation.ensure_framework_baseline_solution_manifest()
 
-        if action == "run":
-            self._link_runtime()
-            self._restore_framework_baseline_candidate(v0_blob)
-            self._sync_framework_baseline_live(
-                phase="framework_baseline_correctness_review"
-            )
-            self._ensure_framework_baseline_correctness_guidance()
-            self._sync_framework_baseline_live(phase="framework_baseline")
-            try:
-                res = self._run_framework_baseline_agent(
-                    n=n,
-                    label="framework baseline",
+            if action == "run":
+                self._link_runtime()
+                self._restore_framework_baseline_candidate(v0_blob)
+                self._sync_framework_baseline_live(
+                    phase="framework_baseline_correctness_review"
                 )
-            finally:
+                self._ensure_framework_baseline_correctness_guidance()
+                self._sync_framework_baseline_live(phase="framework_baseline")
+                try:
+                    res = self._run_framework_baseline_agent(
+                        n=n,
+                        label="framework baseline",
+                    )
+                finally:
+                    self._warn_restored_baseline_paths(baseline_commit)
+                if res.exit_status != 0 and res.tokens == 0:
+                    raise RuntimeError(
+                        "the framework baseline Agent exited without usable output; "
+                        f"inspect {framework_baseline_progress_path(self.workspace)}"
+                    )
+                recovery_used = False
+                problem = self.evaluation.framework_baseline_problem(
+                    v0_blob, baseline_commit, include_policy_review=False
+                )
+                if problem:
+                    self._recover_framework_baseline(
+                        problem, v0_blob, baseline_commit, pre_head
+                    )
+                    recovery_used = True
+                    self._warn_restored_baseline_paths(baseline_commit)
+                    problem = self.evaluation.framework_baseline_problem(
+                        v0_blob, baseline_commit, include_policy_review=False
+                    )
+            else:  # adopt: our own interrupted run already committed the kernel
+                recovery_used = False
+                self._sync_framework_baseline_live(phase="framework_baseline")
                 self._warn_restored_baseline_paths(baseline_commit)
-            if res.exit_status != 0 and res.tokens == 0:
-                raise RuntimeError(
-                    "the framework baseline Agent exited without usable output; "
-                    f"inspect {framework_baseline_progress_path(self.workspace)}"
+                problem = self.evaluation.framework_baseline_problem(
+                    v0_blob, baseline_commit, include_policy_review=False
                 )
-            recovery_used = False
-            problem = self.evaluation.framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
-            )
-            if problem:
+            result: Optional[dict] = None
+            if not problem:
+                result, problem = self._framework_baseline_external_gates(n)
+            numerical_repairs = 0
+            while (
+                problem
+                and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX)
+                and (
+                    not recovery_used
+                    or (
+                        problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX)
+                        and numerical_repairs < 2
+                    )
+                )
+            ):
+                # The implementation Agent intentionally runs only a bounded smoke subset.
+                # Ordinary failures retain one repair turn. Supplemental counterexamples
+                # get their own bounded repair budget even if bring-up already used it.
+                if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
+                    numerical_repairs += 1
                 self._recover_framework_baseline(
                     problem, v0_blob, baseline_commit, pre_head
                 )
@@ -926,98 +963,63 @@ class Campaign:
                 problem = self.evaluation.framework_baseline_problem(
                     v0_blob, baseline_commit, include_policy_review=False
                 )
-        else:  # adopt: our own interrupted run already committed the kernel
-            recovery_used = False
-            self._sync_framework_baseline_live(phase="framework_baseline")
-            self._warn_restored_baseline_paths(baseline_commit)
-            problem = self.evaluation.framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
-            )
-        result: Optional[dict] = None
-        if not problem:
-            result, problem = self._framework_baseline_external_gates(n)
-        numerical_repairs = 0
-        while (
-            problem
-            and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX)
-            and (
-                not recovery_used
-                or (
-                    problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX)
-                    and numerical_repairs < 2
+                if not problem:
+                    result, problem = self._framework_baseline_external_gates(n)
+            if problem:
+                # Undo any session-authored commits while retaining every worktree file.  A hard reset
+                # here used to erase the exact candidate and debugging experience needed by a restart.
+                current = self.candidate_workspace.current_revision(self.workspace)
+                if pre_head and current != pre_head:
+                    self._workspace_state.restore(pre_head, retain_working_files=True, expected_revision=current)
+                self._warn_restored_baseline_paths(baseline_commit)
+                self._capture_framework_baseline_rejection(problem)
+                self._record_framework_baseline_failure(problem)
+                self._sync_framework_baseline_live(
+                    phase="failed",
+                    state="blocked",
+                    accepted=False,
+                    outcome={"summary": problem, "next_directions": []},
                 )
-            )
-        ):
-            # The implementation Agent intentionally runs only a bounded smoke subset.
-            # Ordinary failures retain one repair turn. Supplemental counterexamples
-            # get their own bounded repair budget even if bring-up already used it.
-            if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
-                numerical_repairs += 1
-            self._recover_framework_baseline(
-                problem, v0_blob, baseline_commit, pre_head
-            )
-            recovery_used = True
-            self._warn_restored_baseline_paths(baseline_commit)
-            problem = self.evaluation.framework_baseline_problem(
-                v0_blob, baseline_commit, include_policy_review=False
-            )
-            if not problem:
-                result, problem = self._framework_baseline_external_gates(n)
-        if problem:
-            # Undo any session-authored commits while retaining every worktree file.  A hard reset
-            # here used to erase the exact candidate and debugging experience needed by a restart.
-            current = self.candidate_workspace.current_revision(self.workspace)
-            if pre_head and current != pre_head:
-                self._workspace_state.restore(pre_head, retain_working_files=True, expected_revision=current)
-            self._warn_restored_baseline_paths(baseline_commit)
-            self._capture_framework_baseline_rejection(problem)
-            self._record_framework_baseline_failure(problem)
-            self._sync_framework_baseline_live(
-                phase="failed",
-                state="blocked",
-                accepted=False,
-                outcome={"summary": problem, "next_directions": []},
-            )
-            outcome = (
-                "validation blocked"
-                if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX)
-                else "rejected"
-            )
-            raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
+                outcome = (
+                    "validation blocked"
+                    if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX)
+                    else "rejected"
+                )
+                raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
 
-        commit = self._commit_framework_baseline(n, result or {})
-        try:
-            mark_framework_baseline_accepted(
-                self.workspace,
-                commit=commit,
-                latency_us=(result or {}).get("latency_us_geomean"),
+            commit = self._commit_framework_baseline(n, result or {})
+            try:
+                mark_framework_baseline_accepted(
+                    self.workspace,
+                    commit=commit,
+                    latency_us=(result or {}).get("latency_us_geomean"),
+                )
+            except (OSError, RuntimeError) as exc:
+                print(
+                    "[orchestrator] WARNING: could not close the V1 crash record after "
+                    f"acceptance: {exc}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+            self._sync_framework_baseline_live(
+                phase="recorded",
+                state="candidate_ready",
+                accepted=True,
+                canonical_memory=f"memory/v{n}.json",
+                candidate_commit=commit,
+                outcome={
+                    "summary": f"accepted self-contained {self.framework} framework baseline",
+                    "next_directions": [],
+                },
             )
-        except (OSError, RuntimeError) as exc:
+            latency = ((read_memory(self.workspace, n) or {}).get("performance") or {}).get(
+                "latency_us"
+            )
             print(
-                "[orchestrator] WARNING: could not close the V1 crash record after "
-                f"acceptance: {exc}",
-                file=sys.stderr,
+                f"[orchestrator] framework baseline v{n} accepted: {self.framework} "
+                f"@ {commit[:8]} ({latency} us geomean)",
                 flush=True,
             )
-        self._sync_framework_baseline_live(
-            phase="recorded",
-            state="candidate_ready",
-            accepted=True,
-            canonical_memory=f"memory/v{n}.json",
-            candidate_commit=commit,
-            outcome={
-                "summary": f"accepted self-contained {self.framework} framework baseline",
-                "next_directions": [],
-            },
-        )
-        latency = ((read_memory(self.workspace, n) or {}).get("performance") or {}).get(
-            "latency_us"
-        )
-        print(
-            f"[orchestrator] framework baseline v{n} accepted: {self.framework} "
-            f"@ {commit[:8]} ({latency} us geomean)",
-            flush=True,
-        )
 
     def _framework_baseline_external_gates(self, n: int):
         try:
@@ -2202,6 +2204,8 @@ class Campaign:
         from dataclasses import replace
         from aka.contracts.filesystem import FilesystemMount
 
+        from aka.workflow.budgets import remaining_timeout
+        timeout = remaining_timeout(timeout)
         plugins = options.get("agent_plugins", True)
         access = options.get("access") or for_workspace(self, workspace, resources=plugins)
         # Agent grants its workspace implicitly. Execution receives the complete

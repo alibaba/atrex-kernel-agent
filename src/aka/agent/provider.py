@@ -23,6 +23,8 @@ from .resources import shell_guard_path
 from .environment import HOST_TRANSPORT_PREFIXES as _HOST_TRANSPORT_PREFIXES, EXPLICIT_ROUTING, filter_environment, host_transport
 
 
+DEFAULT_AGENT_TIMEOUT_SECONDS = 8 * 60 * 60
+
 _STANDARD_ENVIRONMENT = {
     "PATH", "PYTHONPATH", "HOME", "TERM", "LANG", "LANGUAGE", "TZ",
     "IS_SANDBOX", "ATREX_AGENT_CLI", "ATREX_AGENT_TIMEOUT_SECONDS", "ATREX_SESSION_SETTINGS",
@@ -72,7 +74,7 @@ def validate_timeout(value):
 class AgentOptions:
     sandbox: str = "none"
     bwrap_executable: str = "bwrap"
-    timeout_seconds: float | None = None
+    timeout_seconds: float | None = DEFAULT_AGENT_TIMEOUT_SECONDS
     state_directory: Path | None = None
     proc_mode: str = "private"
 
@@ -353,7 +355,7 @@ class Agent:
         limit = timeout if timeout is not None else self.options.timeout_seconds
         values = dict(env or {})
         remaining = values.get("ATREX_AGENT_TIMEOUT_SECONDS")
-        if timeout is None and remaining is not None:
+        if remaining is not None:
             try:
                 requested = float(remaining)
             except (ValueError, TypeError):

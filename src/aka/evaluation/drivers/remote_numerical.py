@@ -18,7 +18,6 @@ from pathlib import Path, PurePosixPath
 import stat
 import subprocess
 import sys
-import time
 
 if __package__:
     from .numerical_inputs import (
@@ -82,7 +81,6 @@ def _run_live(request_path, request=None):
             results = []
             diagnosis = ""
             nonfinite_outputs = set()
-            deadline = time.monotonic() + request["per_case_timeout"]
             for shape_id in plan["shape_ids"]:
                 for seed in plan["seeds"]:
                     receipts = request_path.parent / "receipts.jsonl"
@@ -112,22 +110,16 @@ def _run_live(request_path, request=None):
                         "--shape-id",
                         shape_id,
                     ]
-                    try:
-                        remaining = deadline - time.monotonic()
-                        if remaining <= 0:
-                            raise subprocess.TimeoutExpired(
-                                command, request["per_case_timeout"]
-                            )
-                        process = subprocess.run(
-                            command,
-                            cwd=root,
-                            capture_output=True,
-                            text=True,
-                            timeout=remaining,
-                        )
-                    except subprocess.TimeoutExpired:
-                        diagnosis = "supplemental evaluator exceeded its case timeout"
-                        break
+                    for key, flag in (("candidate_timeout_s", "--candidate-timeout-s"),
+                                      ("perf_timeout_s", "--perf-timeout-s"),
+                                      ("warmup_iters", "--warmup")):
+                        if key in request.get("runner_overrides", {}):
+                            command.extend((flag, str(request["runner_overrides"][key])))
+                    # The enclosing Execution step owns this case's deadline.
+                    # Subprocesses do not receive a second, shorter allocation.
+                    process = subprocess.run(
+                        command, cwd=root, capture_output=True, text=True,
+                    )
                     result = None
                     for line in process.stdout.splitlines():
                         if line.startswith("[test_kernel] RESULT_JSON="):
