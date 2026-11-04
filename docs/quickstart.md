@@ -140,8 +140,8 @@ See [all module options](optional-light-modules.md#other-module-options).
 
 ### Candidate layouts
 
-New Light tasks use `source_tree`: a fixed `kernel.py` imports editable
-`impl/model.py`, and the agent may add source files under `impl/`.
+New Light tasks use `source_tree`: `kernel.py` is the editable evaluator entry point
+and may either contain the full implementation or import optional helpers under `impl/`.
 Native CUDA without a Python loader requires an explicit candidate patch:
 
 ```json

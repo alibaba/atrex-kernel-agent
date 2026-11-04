@@ -39,7 +39,7 @@ Post-report draft edits do not change the sealed candidate.
 
 ## Agent-visible workspace
 
-The source layout is task-selected: `source_tree` has a fixed adapter and editable roots;
+The source layout is task-selected: `source_tree` has an editable entry point and optional roots;
 `cuda_manifest` has CUDA sources and a manifest; `single_file` has one Python candidate.
 The agent also sees public instructions, reserved HTTP clients, custom writable
 `skills/` and `tools/`, `scratch/`, eligible historical conversations, and optional

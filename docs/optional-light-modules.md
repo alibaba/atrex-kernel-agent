@@ -483,10 +483,11 @@ end-to-end run was performed for pooled search.
 ### Single-file and contracted source-tree Kernels
 
 The `candidate` module defaults to `source_tree`. Without import configuration,
-it freezes the initial implementation under editable `impl/model.py` and creates
-a fixed `kernel.py` adapter. Select `file_system=single_file` explicitly for the
-single-file layout or SOL/SSH. To import a package, configure the candidate module
-to snapshot a plain local directory (no Git required):
+the initial implementation remains an editable `kernel.py`. It may be the complete
+implementation or import optional helper files created under `impl/`; that directory
+is not required. Select `file_system=single_file` explicitly only for the legacy
+single-file layout or SOL/SSH. To import a package, configure the candidate module to
+snapshot a plain local directory (no Git required):
 
 ```json
 {
@@ -504,7 +505,7 @@ to snapshot a plain local directory (no Git required):
 Or use `"repository": "/absolute/path/to/git-checkout"` instead of `directory`
 to import an exact Git revision. These options are mutually exclusive.
 
-The manifest keeps Runtime's fixed-adapter and editable-root contract:
+The manifest identifies the evaluator entry point and additional editable roots:
 
 ```json
 {
@@ -521,10 +522,11 @@ The manifest keeps Runtime's fixed-adapter and editable-root contract:
 }
 ```
 
-`adapter.py` is resolved beside the manifest and copied unchanged as the fixed
+`adapter.py` is resolved beside the manifest and copied as the initial, editable
 `kernel.py` entry point. `source.archive_paths` selects files/directories relative
-to the supplied directory or repository. In **directory mode**, the Supervisor
-captures the current working bytes, including uncommitted and untracked files in
+to the supplied directory or repository. The manifest's declared editable roots are
+also writable; other imported files remain immutable. In **directory mode**, the
+Supervisor captures the current working bytes, including uncommitted and untracked files in
 those paths; it does not run Git or modify the original directory. No
 `source.revision` is required. If an existing manifest contains one, it is not used
 in directory mode; the sealed contract records `source_revision: null` and a
@@ -544,15 +546,15 @@ the supplied source directory does not need to be one.
 
 The imported seed and immutable-file hashes are pinned in the controller's
 `.atrex_source.json`; the Agent copy cannot change the authority.
-Only declared directories allow additions, modifications and deletions. Other
-imported files, including the adapter, must remain byte-identical. Source validation
+`kernel.py` and declared editable directories allow additions, modifications and
+deletions. Other imported files must remain byte-identical. Source validation
 rejects symlinks, special/binary files, new build artifacts and protected import
 shadowing. Limits: 4096 files, 16 MiB/file, 64 MiB total.
 
-The Agent sees the fixed adapter and package directories alongside `skills/`,
-`tools/` and `scratch/`. `WORKSPACE.md` explains the exact editable roots.
-Bubblewrap protects the policy and fixed files read-only; native mode is cooperative,
-but submission and sealing still validate the controller-owned contract.
+The Agent sees editable `kernel.py` and optional package directories alongside
+`skills/`, `tools/` and `scratch/`. `WORKSPACE.md` explains the exact editable roots.
+Bubblewrap protects the policy and immutable imported files read-only; native mode is
+cooperative, but submission and sealing still validate the controller-owned contract.
 Light reserves its root-level workspace names (public inputs, `README.md`, tools,
 Skills, scratch and controller metadata); a manifest colliding with them is rejected
 explicitly. Put package documentation inside its imported package directory.
@@ -600,7 +602,7 @@ on macOS. The Light sdist and wheel build successfully with the source/worker as
 
 ### Reusable workspace
 
-Managed Episodes expose the selected candidate layout (a fixed adapter plus editable roots,
+Managed Episodes expose the selected candidate layout (an editable entry point plus optional source roots,
 a native CUDA manifest tree, or one Python file), writable `skills/` and `tools/`, temporary `scratch/`,
 optional Supervisor-owned `memory/v*.json`, and public contracts/instructions. `WORKSPACE.md` states
 the selected inheritance policy. Each reusable directory has a writable README index; Agents

@@ -97,7 +97,7 @@ facts still support versioning, reporting, and recovery.
 
 ## Source and measurement identity
 
-New tasks default to `source_tree`, with a fixed Python adapter and editable `impl/`.
+New tasks default to `source_tree`, with an editable `kernel.py` and optional `impl/`.
 Explicit alternatives are `single_file` and `cuda_manifest`. Layout implementations own
 validation and packaging; Workflow uses their common artifact interface.
 

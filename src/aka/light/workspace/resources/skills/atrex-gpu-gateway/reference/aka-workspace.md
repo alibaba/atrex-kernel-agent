@@ -5,17 +5,17 @@ Use the file system pinned in `.atrex_file_system.json`. New tasks default to
 
 ## Source directory (default)
 
-Keep the fixed `kernel.py` adapter unchanged. Without an import configuration it
-imports `Model` from editable `impl/model.py`. Edit/add/delete implementation files
-under `impl/`; an imported package instead uses the `editable_roots` in
-`.atrex_source.json`. All source files travel together in a source archive.
+`kernel.py` is the editable evaluator entry point. It may contain the complete
+implementation or import optional helper files under `impl/`; `impl/` does not need
+to exist. For an imported package, `kernel.py` and the additional `editable_roots` in
+`.atrex_source.json` are writable. All source files travel together in a source archive.
 
 CUDA implementations may use separate `.cu`, `.cpp` and header files with a
 Python loader in the editable directory. Compile through the supported Torch
 extension API on Agate; use paths relative to the loader's `__file__`.
 Do not import `pathlib` or `os`, which Agate source validation rejects.
-The source-directory adapter supplies the Python `Model` entry point; an Agate
-native-CUDA manifest is not used in this mode. Do not replace the pinned adapter.
+`kernel.py` supplies the Python `Model` entry point; an Agate native-CUDA manifest is
+not used in this mode.
 `kernel-read` exports the entire source directory for `--baseline-path`.
 Use the managed Evaluate/Profile tools and submit the usual episode report.
 
