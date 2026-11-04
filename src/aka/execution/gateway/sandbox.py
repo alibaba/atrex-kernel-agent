@@ -89,7 +89,7 @@ from aka.execution.gateway.request_values import (
 )
 
 from aka.core.filesystem import durable_write_json  # noqa: E402
-from aka.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
+from aka.execution.configuration import client_wait_timeout, queue_wait_grace as configured_queue_wait_grace  # noqa: E402
 from aka.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
 
 from aka.execution.command_syntax import (
@@ -1715,7 +1715,7 @@ def _run_direct_job(
     kind: str,
     payload: dict[str, Any],
     timeout: int,
-    queue_wait_grace: int,
+    queue_wait_grace: int | None,
     on_submitted=None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit and wait for any public gateway job kind through HTTP."""
@@ -1726,13 +1726,15 @@ def _run_direct_job(
     endpoint, profile = _submission_route(url)
     identity = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     key = payload.get("idempotency_key")
-    deadline = time.monotonic() + timeout + queue_wait_grace
+    started = time.monotonic()
+    budget = client_wait_timeout(timeout, queue_wait_grace)
+    deadline = None if budget is None else started + budget
     emit_fact({"event": "attempt_started", "attempt_id": attempt_id, "operation": kind, "backend": "gateway"})
     emit_fact({"event": "submission_intent", "attempt_id": attempt_id, "request_identity": identity,
                "idempotency_key": key})
     try:
         accepted = _gateway_json(endpoint or url, "POST", f"/v1/jobs/{kind}", payload,
-                                 min(30, max(0, deadline - time.monotonic())))
+                                 30 if deadline is None else min(30, max(0, deadline - time.monotonic())))
     except GatewayHTTPError as error:
         try:
             native = json.loads(error.detail)
@@ -1751,24 +1753,58 @@ def _run_direct_job(
                "request_identity": identity, "idempotency_key": key})
     if on_submitted is not None:
         on_submitted(accepted)
+    return _wait_direct_job(url=endpoint or url, kind=kind, job_id=job_id,
+        deadline=deadline, started=started, attempt_id=attempt_id, profile=profile,
+        identity=identity, key=key)
+
+
+def _observe_job_wait(job_id, job, started):
+    """Publish observation data without inferring a queue state from a failed read."""
+    value = job or {}
+    emit_fact({"event": "job_wait", "identifier": job_id,
+        "wait_elapsed_ms": int((time.monotonic() - started) * 1000),
+        "status": value.get("status", "unknown"),
+        "execution_phase": value.get("execution_phase", "unknown"),
+        "phase_elapsed_ms": value.get("phase_elapsed_ms"),
+        "observed_at_ms": int(time.time() * 1000), "query_ok": job is not None})
+
+
+def _wait_direct_job(*, url, kind, job_id, deadline, started, attempt_id=None,
+                     profile=None, identity="", key=None):
+    from aka.execution.outcomes import observe_attempt
+    from .jobs import GatewayJobs
+    from aka.contracts.execution_recovery import JobReference
+    last = {"job_id": job_id, "status": "unknown"}
     try:
-        while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"gateway job {job_id} exceeded client timeout")
+        while deadline is None or time.monotonic() < deadline:
+            remaining = 40 if deadline is None else deadline - time.monotonic()
             wait_for = min(30.0, remaining)
-            job = _gateway_json(endpoint or url, "GET",
-                f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}", None, min(wait_for + 10, remaining))
+            try:
+                job = _gateway_json(url, "GET",
+                    f"/v1/jobs/{job_id}?wait=true&timeout={wait_for:.3f}", None, min(wait_for + 10, remaining))
+                if job.get("job_id") != job_id:
+                    raise ValueError("original-job-identity-mismatch")
+            except (OSError, RuntimeError, ValueError) as error:
+                _observe_job_wait(job_id, None, started)
+                if isinstance(error, GatewayHTTPError) and error.status in {400, 401, 403}:
+                    break
+                time.sleep(2 if deadline is None else min(2, max(0, deadline - time.monotonic())))
+                continue
+            last = job
+            _observe_job_wait(job_id, job, started)
             if job.get("status") in ("succeeded", "failed", "cancelled"):
-                process = subprocess.CompletedProcess(args=["direct-gateway", kind, job_id],
-                    returncode=0 if job.get("status") == "succeeded" else 1, stdout=json.dumps(job), stderr="")
+                process = subprocess.CompletedProcess(["direct-gateway", kind, job_id],
+                    0 if job.get("status") == "succeeded" else 1, json.dumps(job), "")
                 observe_attempt(process, operation=kind, attempt_id=attempt_id)
                 return process
-    except BaseException:
+        # Client waiting ends without cancelling or claiming the remote job failed.
+        emit_diagnostic({"failure_class": "infrastructure", "reason": "original-job-wait-incomplete"})
+        return subprocess.CompletedProcess(["direct-gateway", kind, job_id],
+            ENVIRONMENT_TEMPFAIL, json.dumps(last), "original-job-wait-incomplete")
+    except KeyboardInterrupt:
         emit_fact({"event": "cancel_requested", "identifier": job_id})
-        from aka.contracts.execution_recovery import JobReference
-        reference = JobReference("gateway", job_id, kind, endpoint or url, profile, identity, key)
-        jobs = GatewayJobs(endpoint=reference.endpoint, profile=profile, http=_gateway_json)
+        reference = JobReference("gateway", job_id, kind, url, profile, identity, key)
+        jobs = GatewayJobs(endpoint=url, profile=profile, http=_gateway_json)
         _observe_cancel_cleanup(jobs.cancel(reference, timeout=10), job_id, kind, attempt_id)
         raise
 
@@ -1778,7 +1814,7 @@ def _run_direct_gateway(
     url: str,
     hardware: str,
     timeout: int,
-    queue_wait_grace: int,
+    queue_wait_grace: int | None,
     env_items: list[str],
     files: dict[str, Path],
     command: str,
@@ -1955,8 +1991,8 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
     raise KeyboardInterrupt
 
 
-def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
-    """Reserve queue grace inside the typed-job deadline without clamping."""
+def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int | None = None) -> int:
+    """Keep the backend attempt budget independent of client queue tolerance."""
     from .requests import effective_budget, hard_limit, typed_gateway_job_timeout
     limit = hard_limit(os.environ, "run")
     requested = typed_gateway_job_timeout(command_timeout, queue_wait_grace, limit=limit)
@@ -1964,10 +2000,12 @@ def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int) -> int:
 
 
 def _dev_gateway_job_timeout(command_timeout: int) -> int:
-    """Retain the main Dev allocation ceiling and any stricter backend limit."""
+    """Forward the requested Dev budget; reject a declared incompatible limit."""
     from .requests import effective_budget, hard_limit
     limit = hard_limit(os.environ, "dev")
-    return effective_budget(command_timeout, limit=min(600, limit) if limit is not None else 600).effective
+    if limit is not None and command_timeout > limit:
+        raise ValueError(f"Dev timeout {command_timeout}s exceeds backend limit {limit}s")
+    return effective_budget(command_timeout, limit=limit).effective
 
 
 def _resume_interrupted_agate_wait(
@@ -1976,7 +2014,7 @@ def _resume_interrupted_agate_wait(
     url: str,
     gateway_profile: str | None,
     command_timeout: int,
-    wait_budget: int,
+    wait_budget: int | None,
     elapsed: float,
     initial: subprocess.CompletedProcess[str],
 ) -> subprocess.CompletedProcess[str]:
@@ -1995,9 +2033,13 @@ def _resume_interrupted_agate_wait(
     job_id = (
         initial_job.get("job_id") if initial_job else _submitted_job_id(initial)
     )
-    remaining = int(wait_budget - elapsed)
-    if not job_id or remaining <= 0:
+    remaining = None if wait_budget is None else wait_budget - elapsed
+    if not job_id:
         return initial
+    if remaining is not None and remaining <= 0:
+        emit_diagnostic({"failure_class": "infrastructure", "reason": "original-job-wait-incomplete"})
+        return subprocess.CompletedProcess(initial.args, ENVIRONMENT_TEMPFAIL, initial.stdout,
+            (initial.stderr or "") + "\noriginal-job-wait-incomplete")
 
     get_command = [executable, "get"]
     if url:
@@ -2006,35 +2048,39 @@ def _resume_interrupted_agate_wait(
         get_command += ["--profile", gateway_profile]
     note = f"submitted job_id={job_id}; polling..."
     stderr_parts = [part.rstrip() for part in (initial.stderr, note) if part]
-    deadline = time.monotonic() + remaining
+    started = time.monotonic() - elapsed
+    deadline = None if remaining is None else time.monotonic() + remaining
     resumed = initial
-    while (remaining := int(deadline - time.monotonic())) > 0:
-        resumed = subprocess.run(
-            [
-                *get_command,
-                "--http-timeout",
-                str(MAX_HTTP_REQUEST_TIMEOUT),
-                "--wait-timeout",
-                str(min(AGATE_WAIT_SLICE_SECONDS, remaining)),
-                "--job-timeout",
-                str(command_timeout),
-                "--wait",
-                job_id,
-            ],
-            capture_output=True,
-            text=True,
-        )
+    while deadline is None or time.monotonic() < deadline:
+        remaining = AGATE_WAIT_SLICE_SECONDS if deadline is None else deadline - time.monotonic()
+        try:
+            resumed = subprocess.run(
+                [*get_command, "--http-timeout", str(min(40, remaining)),
+                 "--wait-timeout", str(min(AGATE_WAIT_SLICE_SECONDS, remaining)),
+                 "--wait", job_id],
+                capture_output=True, text=True,
+                timeout=min(AGATE_WAIT_SLICE_SECONDS, remaining) + 15,
+            )
+        except (OSError, subprocess.TimeoutExpired) as error:
+            resumed = subprocess.CompletedProcess(get_command, ENVIRONMENT_TEMPFAIL, "", type(error).__name__)
         if resumed.stderr:
-            stderr_parts.append(resumed.stderr.rstrip())
+            stderr_parts = [*stderr_parts[:2], resumed.stderr.rstrip()]
         job = _job_response(resumed.stdout or "")
+        if job is not None and job.get("job_id") != job_id:
+            job = None
+            resumed = subprocess.CompletedProcess(get_command, ENVIRONMENT_TEMPFAIL, "", "original-job-identity-mismatch")
+        _observe_job_wait(job_id, job, started)
         if job and job.get("status") in {"succeeded", "failed", "cancelled"}:
             break
         if not job:
-            time.sleep(min(2, max(0, deadline - time.monotonic())))
+            time.sleep(2 if deadline is None else min(2, max(0, deadline - time.monotonic())))
+    if (_job_response(resumed.stdout or "") or {}).get("status") not in {"succeeded", "failed", "cancelled"}:
+        emit_diagnostic({"failure_class": "infrastructure", "reason": "original-job-wait-incomplete"})
     return subprocess.CompletedProcess(
         args=resumed.args,
-        returncode=resumed.returncode,
-        stdout=resumed.stdout,
+        returncode=(resumed.returncode if (_job_response(resumed.stdout or "") or {}).get("status")
+                    in {"succeeded", "failed", "cancelled"} else ENVIRONMENT_TEMPFAIL),
+        stdout=resumed.stdout or json.dumps({"job_id": job_id, "status": "unknown"}),
         stderr="\n".join(stderr_parts),
     )
 
@@ -2046,7 +2092,7 @@ def _run_agate_once_unchecked(
     url: str,
     gateway_profile: str | None,
     command_timeout: int,
-    wait_budget: int,
+    wait_budget: int | None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit one agate job, then wait while keeping its id available for cleanup."""
     wait_started = time.monotonic()
@@ -2068,7 +2114,7 @@ def _run_agate_once_unchecked(
     lock_path = Path(tempfile.gettempdir()) / f"atrex-agate-submit-{os.getuid()}-{key}.lock"
     with lock_path.open("a") as admission:
         fcntl.flock(admission, fcntl.LOCK_EX)
-        remaining = wait_budget - (time.monotonic() - wait_started)
+        remaining = MAX_HTTP_REQUEST_TIMEOUT if wait_budget is None else wait_budget - (time.monotonic() - wait_started)
         if remaining <= 0:
             return subprocess.CompletedProcess(agate, ENVIRONMENT_TEMPFAIL, "", INFRASTRUCTURE_MARKER)
         try:
@@ -2109,7 +2155,7 @@ def _run_agate_with_cancel_retry(
     url: str,
     gateway_profile: str | None,
     command_timeout: int,
-    wait_budget: int,
+    wait_budget: int | None,
 ) -> subprocess.CompletedProcess[str]:
     """Submit once; Experiment owns any new measurement attempt."""
     return _run_agate_once(agate=agate, executable=executable, url=url,
@@ -2122,7 +2168,7 @@ def _typed_agate_command(
     workspace: Path,
     kind: str,
     request: dict[str, Any],
-    queue_wait_grace: int,
+    queue_wait_grace: int | None,
     reference_dir: Path | None = None,
     *, requirements_file: Path | None = None, init_kwargs_file: Path | None = None,
 ) -> list[str]:
@@ -2186,7 +2232,7 @@ def _typed_agate_command(
     elif kind == "profile" and "bench_iters" in options:
         command += ["--bench-iters", str(options["bench_iters"])]
     command += ["--http-timeout", str(MAX_HTTP_REQUEST_TIMEOUT),
-                "--wait-timeout", str(args.timeout + queue_wait_grace)]
+                "--wait-timeout", str(AGATE_WAIT_SLICE_SECONDS)]
     if kind in {"run", "profile"}:
         command += ["--job-timeout", str(_gateway_job_timeout(args.timeout, queue_wait_grace))]
     if kind == "check":
@@ -2296,7 +2342,8 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
     except ValueError as exc:
         raise SystemExit(f"sandbox: {exc}") from exc
     from .requests import effective_budget
-    effective_budget(args.timeout + (0 if args.ssh else queue_wait_grace), scope="wait")
+    from .requests import wait_budget_records
+    wait_budget_records(args.timeout if args.ssh else client_wait_timeout(args.timeout, queue_wait_grace))
     if args.ssh:
         effective_budget(args.timeout, scope="command")
     if args.max_input_file_mb <= 0 or args.max_output_file_mb <= 0 or (args.max_output_file_bytes is not None and args.max_output_file_bytes <= 0):
@@ -2565,7 +2612,7 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
             "--http-timeout",
             str(MAX_HTTP_REQUEST_TIMEOUT),
             "--wait-timeout",
-            str(args.timeout + queue_wait_grace),
+            str(AGATE_WAIT_SLICE_SECONDS),
             "--job-timeout",
             str(_dev_gateway_job_timeout(args.timeout)),
         ]
@@ -2750,7 +2797,7 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                     url=args.url,
                     gateway_profile=args.gateway_profile,
                     command_timeout=_dev_gateway_job_timeout(args.timeout),
-                    wait_budget=args.timeout + queue_wait_grace,
+                    wait_budget=client_wait_timeout(args.timeout, queue_wait_grace),
                 )
             except FileNotFoundError as exc:
                 raise SystemExit(

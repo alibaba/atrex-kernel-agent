@@ -4,7 +4,7 @@ from pathlib import Path
 import sys
 from dataclasses import replace
 from aka.contracts.execution import BackendCapabilities, JobResult, ResourceIdentity
-from aka.execution.configuration import queue_wait_grace
+from aka.execution.configuration import queue_wait_grace, client_wait_timeout
 from aka.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
 
 
@@ -13,6 +13,8 @@ class GatewayExecutor(GatewayRecoveryMixin):
     sandbox_cli_endpoint_environment = True
     def __init__(self, configuration=None):
         self.configuration = dict(configuration or {})
+        if {"retry_delays", "warmup_iters"}.intersection(self.configuration):
+            raise ValueError("gateway timing/retry policy fields are retired; use Evaluation requests and Experiment retry configuration")
         self.environment = os.environ.copy()
         recovery_policy(self.configuration)
         if "requirements_file" in self.configuration:
@@ -112,15 +114,12 @@ class GatewayExecutor(GatewayRecoveryMixin):
         environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(
             [package_root, *environment.get("PYTHONPATH", "").split(os.pathsep)]))
         mapping = {"url":"ATREX_SANDBOX_URL", "profile":"ATREX_SANDBOX_PROFILE",
-                   "warmup_iters":"AKA_GATEWAY_WARMUP_ITERS", "retry_delays":"AKA_GATEWAY_RETRY_DELAYS",
                    "dev_dependencies":"AKA_GATEWAY_DEV_DEPENDENCIES"}
         mapping.update({"recovery_retry_delays":"AKA_GATEWAY_RECOVERY_RETRY_DELAYS",
                         "recovery_retry_budget_s":"AKA_GATEWAY_RECOVERY_RETRY_BUDGET_S"})
         for key, env in mapping.items():
             if key in self.configuration:
                 value = self.configuration[key]
-                if key == "warmup_iters" and value == "default":
-                    continue
                 import json
                 environment[env] = json.dumps(value) if isinstance(value, list) else str(value)
         if command.requirements:
@@ -128,19 +127,23 @@ class GatewayExecutor(GatewayRecoveryMixin):
             environment["AKA_GATEWAY_DEV_DEPENDENCIES"] = json.dumps(command.requirements)
 
         grace = queue_wait_grace(environment)
+        wait_timeout = client_wait_timeout(command.timeout, grace)
+        if wait_timeout is not None:
+            wait_timeout += 240  # Let the launcher return the retained Job before watchdog cleanup.
+        from .requests import wait_budget_records
         from aka.execution.outcomes import run_owned
         from aka.execution.prepared_inputs import payload as prepared_payload
         def decorate(result):
             return replace(result, environment_snapshot=support.environment,
                 environment_identity=support.environment.identity, environment_support=support,
-                budgets=(*result.budgets, effective_budget(command.timeout + grace + 240,
+                budgets=(*result.budgets, *wait_budget_records(wait_timeout,
                     scope="local-wait", emit=False)))
         def observed(result):
             if command.on_observation is not None:
                 command.on_observation(decorate(result))
         try:
             result = run_owned(argv, environment=environment, workspace=command.workspace,
-                timeout=command.timeout + grace + 240, resource=self.resource_identity,
+                timeout=wait_timeout, resource=self.resource_identity,
                 hardware=command.hardware, cancel_event=command.cancel_event, input_payload=input_payload,
                 prepared_input_payload=prepared_payload(command.prepared_inputs, command.input_files),
                 on_observation=observed if command.on_observation is not None else None)

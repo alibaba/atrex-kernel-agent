@@ -5,6 +5,8 @@ import sys
 from pathlib import Path
 import tempfile
 from . import sandbox as transport
+from aka.execution.configuration import client_wait_timeout
+from .requests import wait_budget_records
 from .returned_files import emit
 from aka.execution.outcomes import emit_fact, emit_diagnostic
 from .requests import NATIVE_ABBA, operation_request, prepared_operation, effective_budget, hard_limit, typed_gateway_job_timeout
@@ -21,7 +23,7 @@ def run_prepared(args, workspace, sync_paths, grace):
 def submit_prepared(args, workspace, grace, prepared):
     kind = prepared_operation(prepared, args.kind)
     request = operation_request(prepared["request"], kind)
-    effective_budget(args.timeout + grace, scope="wait")
+    wait_budget_records(client_wait_timeout(args.timeout, grace))
     if kind in {"run", "profile"}:
         limit = hard_limit(os.environ, kind)
         requested = typed_gateway_job_timeout(args.timeout, grace, limit=limit)
@@ -64,7 +66,7 @@ def submit_prepared(args, workspace, grace, prepared):
                 process = transport._run_agate_with_cancel_retry(agate=argv, executable=executable,
                     url=args.url, gateway_profile=args.gateway_profile,
                     command_timeout=transport._gateway_job_timeout(args.timeout, grace),
-                    wait_budget=args.timeout + grace)
+                    wait_budget=client_wait_timeout(args.timeout, grace))
     except SourceArchiveError as error:
         emit_diagnostic({"failure_class": "infrastructure", "reason": error.code,
                          **({"http_status": error.status} if error.status is not None else {})})

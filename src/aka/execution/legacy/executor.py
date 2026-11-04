@@ -186,10 +186,13 @@ class LegacyExecutor(GatewayRecoveryMixin):
         else:
             uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
             grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
-            effective_timeout = timeout + grace + 240
+            from aka.execution.configuration import client_wait_timeout
+            effective_timeout = timeout if uses_ssh else client_wait_timeout(timeout, grace)
+            if effective_timeout is not None:
+                effective_timeout += 240  # Launcher reports client expiry before watchdog cleanup.
         from aka.execution.outcomes import run_owned
         from aka.execution.prepared_inputs import payload as prepared_payload
-        from aka.execution.gateway.requests import effective_budget
+        from aka.execution.gateway.requests import wait_budget_records
         try:
             result = run_owned(cmd, environment=environment, workspace=workspace,
                 timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
@@ -200,7 +203,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
             if isinstance(getattr(error, "execution_outcome", None), JobResult):
                 error.execution_outcome = replace(error.execution_outcome,
                     budgets=(*error.execution_outcome.budgets,
-                        effective_budget(effective_timeout, scope="local-wait", emit=False)))
+                        *wait_budget_records(effective_timeout, scope="local-wait", emit=False)))
             raise
         return replace(result, budgets=(*result.budgets,
-            effective_budget(effective_timeout, scope="local-wait", emit=False)))
+            *wait_budget_records(effective_timeout, scope="local-wait", emit=False)))

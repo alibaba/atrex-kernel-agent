@@ -276,7 +276,8 @@ class SupervisorRuntime:
         self.environment = dict(services.configuration.environment)
         from aka.execution.configuration import queue_wait_grace
         self.gateway_queue_wait_grace = 0 if config.ssh else queue_wait_grace(self.environment)
-        self.environment["ATREX_SANDBOX_QUEUE_WAIT_GRACE"] = str(self.gateway_queue_wait_grace)
+        if self.gateway_queue_wait_grace is not None:
+            self.environment["ATREX_SANDBOX_QUEUE_WAIT_GRACE"] = str(self.gateway_queue_wait_grace)
         self.measurement_repetitions = config.measurement_repetitions
         if self.measurement_repetitions not in {1, 3}:
             raise ValueError("measurement_repetitions must be 1 or 3")
@@ -320,7 +321,9 @@ class SupervisorRuntime:
     def request_timeout_seconds(self) -> float:
         if self.config.request_timeout is not None:
             return self.config.request_timeout
-        return 2 * (self.config.timeout + self.gateway_queue_wait_grace) + 120
+        # Preserve this Workflow request deadline independently of Execution waiting.
+        grace = 14_400 if self.gateway_queue_wait_grace is None else self.gateway_queue_wait_grace
+        return 2 * (self.config.timeout + grace) + 120
 
     def close(self):
         with self.lock:

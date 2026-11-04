@@ -42,7 +42,7 @@ class SandboxRequest:
 class ExecutionHooks:
     spawn: Callable[..., subprocess.Popen[str]]
     check_environment: Callable[[], None]
-    queue_wait_grace: Callable[[Mapping[str, str]], int]
+    queue_wait_grace: Callable[[Mapping[str, str]], int | None]
 
 
 _transport_arguments = ContextVar("aka_execution_transport_arguments", default=())

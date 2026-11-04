@@ -13,18 +13,18 @@ NATIVE_ABBA = "same_allocation_abba"
 MAX_TYPED_GATEWAY_JOB_TIMEOUT = 10_800
 
 
-def typed_gateway_job_timeout(command_timeout, queue_wait_grace, *, limit=None):
+def typed_gateway_job_timeout(command_timeout, queue_wait_grace=None, *, limit=None):
     """Reject typed-job deadlines that cannot contain the requested allocation."""
     if type(command_timeout) is not int or command_timeout <= 0:
         raise ValueError("Gateway command timeout must be a positive integer")
-    if type(queue_wait_grace) is not int or queue_wait_grace < 0:
+    if queue_wait_grace is not None and (type(queue_wait_grace) is not int or queue_wait_grace < 0):
         raise ValueError("Gateway queue wait grace must be a non-negative integer")
     maximum = min(MAX_TYPED_GATEWAY_JOB_TIMEOUT, limit) if limit is not None else MAX_TYPED_GATEWAY_JOB_TIMEOUT
-    requested = command_timeout + queue_wait_grace
+    requested = command_timeout
     if requested > maximum:
         raise ValueError(
             f"Gateway allocation exceeds the {maximum}-second typed-job limit: "
-            f"command timeout {command_timeout}s + queue grace {queue_wait_grace}s = {requested}s")
+            f"attempt timeout {command_timeout}s")
     return requested
 
 
@@ -114,6 +114,11 @@ def effective_budget(requested, *, scope="job", fallback=600, limit=None, emit=T
     if emit:
         emit_fact({"event": "budget", **asdict(budget)})
     return budget
+
+
+def wait_budget_records(timeout, *, scope="wait", emit=True):
+    """An absent client deadline must not be reported as a 600-second fallback."""
+    return () if timeout is None else (effective_budget(timeout, scope=scope, emit=emit),)
 
 
 def bound_limits(environment, support):

@@ -217,6 +217,17 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
         elif record.get("event") == "budget":
             budgets.append(ExecutionBudget(**{key: record[key] for key in
                 ("scope", "requested", "effective", "hard_limit", "reason") if key in record}))
+    # Only the latest observation per Job belongs in each public snapshot.
+    waiting = {record["identifier"]: record for record in records if record.get("event") == "job_wait"}
+    for record in waiting.values():
+        successful = next((item for item in reversed(records) if item.get("event") == "job_wait"
+            and item.get("identifier") == record["identifier"] and item.get("query_ok")), None)
+        if successful is not None:
+            record = {**record, "last_successful_query_at_ms": successful["observed_at_ms"]}
+        records_diagnostics.append(ExecutionDiagnostic("observation", "gateway-job-wait", {
+            key: value for key, value in record.items() if key not in {"event", "attempt_id"}
+            and type(value) in (str, int, bool)
+        }))
     for record in records:
         if record.get("event") != "attempt":
             continue
@@ -258,7 +269,7 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
             ([outcome.primary_diagnostic] if outcome.primary_diagnostic else [])
             + list(outcome.secondary_diagnostics)))
     diagnostics += tuple(item for item in records_diagnostics if item not in diagnostics)
-    rank = {"cancelled": 0, "authentication": 1, "request": 2, "timeout": 3, "infrastructure": 4}
+    rank = {"cancelled": 0, "authentication": 1, "request": 2, "timeout": 3, "infrastructure": 4, "observation": 99}
     diagnostics = tuple(sorted(diagnostics, key=lambda item: rank.get(item.category, 4)))
     has_result = bool(outcome and outcome.has_result) or any(record.get("event") == "result_available" for record in records)
     if attempts and attempts[-1].disposition == "terminal" and attempts[-1].exit_code is not None:
@@ -373,7 +384,7 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
             process = subprocess.Popen(argv, env=environment, start_new_session=True, pass_fds=descriptors, **options)
         else:
             process = spawn(argv, role="sandbox", environment=environment, inherited_descriptors=descriptors, **options)
-        deadline = time.monotonic() + timeout
+        deadline = None if timeout is None else time.monotonic() + timeout
         while True:
             if channel.forward_error is not None:
                 raise channel.forward_error
@@ -381,7 +392,7 @@ def run_owned(argv, *, environment, workspace, timeout, resource, hardware="",
                 cancelled = True
                 status = "cancelled"
                 break
-            remaining = deadline - time.monotonic()
+            remaining = .25 if deadline is None else deadline - time.monotonic()
             if remaining <= 0:
                 status = "timed_out"
                 break

@@ -304,7 +304,12 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
         raise UnsupportedExecution("source archives require a confirmed HTTP gateway route")
     key = request.get("idempotency_key")
     kind = 'profile' if args.kind == 'profile' else 'eval'
-    deadline = time.monotonic() + args.timeout + grace
+    from aka.execution.configuration import client_wait_timeout
+    started = time.monotonic()
+    wait_timeout = client_wait_timeout(args.timeout, grace)
+    wait_deadline = None if wait_timeout is None else started + wait_timeout
+    # Upload has its own finite operational budget; it must not bound GPU waiting.
+    deadline = started + (args.timeout if wait_timeout is None else wait_timeout)
     json_call = lambda method, path, payload, timeout: transport._gateway_json(
         endpoint, method, path, payload, timeout)
     with retained_upload(workspace, request, archives, route=(endpoint, profile), key=key, kind=kind) as state:
@@ -345,20 +350,14 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
             emit_fact({"event": "submitted", "identifier": identifier, "operation": kind,
                        "backend": "gateway", "endpoint": endpoint, "profile": profile,
                        "request_identity": identity, "idempotency_key": key})
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise SourceArchiveError("query-budget-exhausted")
-            result = jobs.query(reference, timeout=remaining)
-            process = subprocess.CompletedProcess(["original-source-job", identifier],
-                result.returncode, result.stdout, result.stderr)
-            observe_attempt(process, operation="query")
-            return process
+            return transport._wait_direct_job(url=endpoint, kind=kind, job_id=identifier,
+                deadline=wait_deadline, started=started, profile=profile, identity=identity, key=key)
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise SourceArchiveError("upload-budget-exhausted")
         state.begin_submission()
         return transport._run_direct_job(url=endpoint, kind=kind, payload=wire,
-            timeout=remaining, queue_wait_grace=0, on_submitted=state.submitted)
+            timeout=remaining, queue_wait_grace=None if grace is None else 0, on_submitted=state.submitted)
 
 
 def replay_archived(jobs, command, *, idempotency_key, retry):

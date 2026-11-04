@@ -14,9 +14,11 @@ Config = {"type":"object", "properties":{
     "recovery_retry_delays":{"type":"array", "items":{"type":"number", "minimum":0}},
     "recovery_retry_budget_s":{"type":"number", "minimum":0},
     "dev_dependencies":{"type":"array", "items":{"type":"string"}}, "profiling": PROFILING_CONFIG}, "additionalProperties":False}
-Defaults = {"warmup_iters":"default", "retry_delays":[], "dev_dependencies":[], "profiling":[],
+Defaults = {"dev_dependencies":[], "profiling":[],
             "idempotent_replay":False, "recovery_retry_delays":[], "recovery_retry_budget_s":0}
 def validate_config(config):
+    if "retry_delays" in config:
+        raise ValueError("gateway.retry_delays is retired; configure experiment.retry_delays and retry_budget_s")
     validate_profiling(config["profiling"])
     from aka.execution.job_recovery import recovery_policy
     recovery_policy(config)
@@ -24,9 +26,9 @@ def validate_config(config):
         raise ValueError("stable-key replay requires a verified explicit gateway URL")
     if config.get("url") and config.get("profile"):
         raise ValueError("gateway url and profile are mutually exclusive")
-    warmup = config["warmup_iters"]
-    if warmup != "default" and (not warmup.isdecimal()):
-        raise ValueError("warmup_iters must be default or a non-negative integer")
+    if "warmup_iters" in config:
+        raise ValueError("gateway.warmup_iters is retired; set --warmup on the Evaluation request")
+
 def apply(ctx, config):
     contribute(ctx, config["profiling"])
     from pathlib import Path

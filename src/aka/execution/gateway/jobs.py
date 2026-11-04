@@ -210,15 +210,16 @@ class GatewayJobs:
         self._require(reference)
         if type(timeout) not in (int, float) or not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("query timeout must be positive")
-        elapsed_budget = min(timeout, retry.max_elapsed_s) if retry.delays else timeout
+        elapsed_budget = timeout
         wait_budgets, wait_diagnostics = client_wait_budget("query-wait", timeout, elapsed_budget)
         deadline = self.clock() + elapsed_budget
         attempts = []
         diagnostics = []
         result = None
+        recovery_deadline = None
         for index in range(len(retry.delays) + 1):
             remaining = deadline - self.clock()
-            if remaining <= 0:
+            if remaining <= 0 or recovery_deadline is not None and self.clock() >= recovery_deadline:
                 break
             try:
                 job = self._read(reference, remaining)
@@ -243,9 +244,11 @@ class GatewayJobs:
             diagnostics.extend(result.diagnostics)
             if result.transport_status != "infrastructure" or result.facts.disposition == "terminal":
                 break
+            if recovery_deadline is None:
+                recovery_deadline = self.clock() + retry.max_elapsed_s
             if index < len(retry.delays):
                 delay = retry.delays[index]
-                if delay >= deadline - self.clock():
+                if delay >= min(deadline, recovery_deadline) - self.clock():
                     break
                 self.sleep(delay)
         if result is None:
@@ -315,7 +318,7 @@ class GatewayJobs:
         if prepared["request"].get("idempotency_key") not in (None, idempotency_key):
             raise ValueError("replay cannot change the prepared idempotency key")
         payload["idempotency_key"] = idempotency_key
-        elapsed_budget = min(command.timeout, retry.max_elapsed_s) if retry.delays else command.timeout
+        elapsed_budget = command.timeout
         budgets, budget_diagnostics = client_wait_budget("replay-wait", command.timeout, elapsed_budget)
         if kind in {"run", "profile"}:
             runtime = effective_budget(command.timeout, limit=hard_limit(command.environment, kind), emit=False)
@@ -329,9 +332,10 @@ class GatewayJobs:
             deadline = self.clock() + elapsed_budget
         attempts, diagnostics = [], []
         last = None
+        recovery_deadline = None
         for index in range(len(retry.delays) + 1):
             remaining = deadline - self.clock()
-            if remaining <= 0:
+            if remaining <= 0 or recovery_deadline is not None and self.clock() >= recovery_deadline:
                 break
             if command.cancel_event is not None and command.cancel_event.is_set():
                 last = JobResult(1, resource=ResourceIdentity("gateway"), transport_status="cancelled",
@@ -363,8 +367,10 @@ class GatewayJobs:
                     command.on_observation(last)
                 if category != "infrastructure" or index == len(retry.delays):
                     break
+                if recovery_deadline is None:
+                    recovery_deadline = self.clock() + retry.max_elapsed_s
                 delay = retry.delays[index]
-                if delay >= deadline - self.clock():
+                if delay >= min(deadline, recovery_deadline) - self.clock():
                     break
                 self.sleep(delay)
                 continue

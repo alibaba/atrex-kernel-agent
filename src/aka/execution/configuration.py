@@ -4,7 +4,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 import json
 
-DEFAULT_QUEUE_WAIT_GRACE = 14_400
+DEFAULT_QUEUE_WAIT_GRACE = None
 
 _WORKLOAD_RESERVED_KEYS = frozenset(("ATREX_PRIVATE_REFERENCE_DIR", "ATREX_EVAL_SHAPE_BATCH_SIZE"))
 _WORKLOAD_RESERVED_PREFIXES = ("AGATE_", "ATREX_SANDBOX_", "AKA_GATEWAY_", "AKA_EXECUTION_", "AKA_EXPERIMENT_COMMAND_", "AKA_AGENT_TOOL_")
@@ -27,15 +27,25 @@ def validate_workload_environment(environment):
         raise ValueError("transport configuration cannot be supplied as workload environment")
 
 
-def queue_wait_grace(environment: Mapping[str, str]) -> int:
+def queue_wait_grace(environment: Mapping[str, str]) -> int | None:
     name = "ATREX_SANDBOX_QUEUE_WAIT_GRACE"
+    if name not in environment:
+        return DEFAULT_QUEUE_WAIT_GRACE
     try:
-        value = int(environment.get(name, str(DEFAULT_QUEUE_WAIT_GRACE)))
+        value = int(environment[name])
     except ValueError as exc:
         raise ValueError(f"{name} must be an integer") from exc
     if value < 0:
         raise ValueError(f"{name} must be non-negative")
     return value
+
+
+def client_wait_timeout(command_timeout, grace):
+    """No client deadline by default; retain an explicitly configured wait allowance.
+
+    The legacy grace setting limits client waiting only, never the server job.
+    """
+    return None if grace is None else command_timeout + grace
 
 
 def legacy_settings(environment=None):
