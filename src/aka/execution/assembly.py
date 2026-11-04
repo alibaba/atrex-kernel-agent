@@ -7,7 +7,7 @@ from typing import Any, Mapping, Sequence
 from aka.contracts.execution import Executor, validate_executor
 from aka.contracts.agent_resources import AgentSkill, WorkspaceResourceContribution
 from aka.core.boot import boot, compose
-from aka.core.errors import BootFailure
+from aka.core.errors import BootFailure, CompositionError
 from aka.core.keys import ServiceKey
 
 EXECUTOR = ServiceKey("executor", "Executor", module="aka.contracts.execution", protocol_version=2)
@@ -63,6 +63,11 @@ class ExecutionComposition:
 def compose_execution(*, profile: str = "legacy", profiles_dir: Path = PROFILES_DIR,
                       patch_files: Sequence[Path] = (),
                       patches: Sequence[Mapping[str, Any]] = ()) -> ExecutionComposition:
+    if profile == "reliable" and Path(profiles_dir).resolve() == PROFILES_DIR.resolve():
+        raise CompositionError("execution profile:reliable",
+            "The bundled reliable profile has been removed. Select legacy explicitly for new work "
+            "and configure its supported recovery capabilities; restore frozen campaigns with their "
+            "original installation instead of rewriting their selection.")
     composition = compose(profile, profiles_dir=profiles_dir,
         patch_files=patch_files, patches=patches)
     report = boot(composition, tokens=(EXECUTOR,), required_services=(EXECUTOR.name,))
