@@ -40,7 +40,7 @@ configuration keys. Filesystem grants come from the prepared Session request.
 | `sandbox` | `none` or `bwrap` |
 | `bwrap_executable` | Bubblewrap executable, default `bwrap` |
 | `proc_mode` | `private` procfs, or explicit `projected` compatibility view |
-| `timeout_seconds` | Per-invocation wall-clock ceiling; Workflow Episode budget is separate |
+| `timeout_seconds` | Per-invocation active-time ceiling; admitted authenticated tool waits are excluded; Workflow Episode budget is separate |
 
 ## Launch lifecycle
 

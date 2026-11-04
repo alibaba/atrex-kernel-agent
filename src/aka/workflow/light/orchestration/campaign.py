@@ -1072,8 +1072,8 @@ class Campaign:
         failed_memory_path.unlink(missing_ok=True)
         command = ["--kind", "run", "--no-sync"]
         if self.atrex_bench_root:
-            # Preserve the old native Gateway's implicit six-case/100-iteration
-            # request. V0's source-only correctness prefetch remains separate.
+            # Preserve six correctness cases; timed iterations use the shared
+            # Evaluation default. V0's source-only correctness prefetch stays separate.
             command += ["--mode", "full", "--version", "v0", "--multi-seed", "5"]
         response = self.measure_for_acceptance(self.workspace, command,
             execution_timeout=self.sandbox_timeout)

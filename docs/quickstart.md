@@ -163,9 +163,10 @@ Use [Legacy](legacy-workflow.md) for campaigns needing that verification path.
 - `--token-budget` controls Episode admission from available usage receipts. It excludes
   baseline/auxiliary usage, can be exceeded by an in-flight invocation, and cannot account
   for tokens a provider does not report.
-- Light has no independent Episode wall-clock cap by default. An explicit
-  `workflow.episode_timeout_seconds` sets a wall-clock cap; blocked tool time counts.
-- `--framework-baseline-timeout` defaults to 10,800 seconds. GPU queue/execution
+- Light Episodes default to a four-hour active-time allowance, configurable with
+  `workflow.episode_timeout_seconds`. Admitted authenticated tool waits and downtime
+  do not consume this allowance; continuation and clean restart retain used time.
+- `--framework-baseline-timeout` defaults to 28,800 seconds of active time. GPU queue/execution
   budgets and shared Agent invocation limits are separate.
 - Resume with the original workspace, composition, source layout, and frozen resources.
   Accepted job IDs and completed ABBA batches are reconciled before further GPU execution.
