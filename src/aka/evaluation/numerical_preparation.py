@@ -174,7 +174,7 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
             for path in sorted((runtime / subdirectory).rglob("*")):
                 if path.is_file() and "__pycache__" not in path.parts:
                     task_runtime[path.relative_to(runtime).as_posix()] = _sha(read(path))
-    identities, steps, step_cases, retry_keys = [], [], [], []
+    identities, steps, step_cases = [], [], []
     for index, plan in enumerate(schedule):
         value = {"suite": suite, "case_ids": [plan["case_id"]], "rotation": probe.rotation,
             "mode": "thorough", "step_timeout": configuration.timeout, "max_rel_l2": limit,
@@ -193,9 +193,8 @@ def prepare_numerical(request, configuration, evaluation_input, *, output_root):
         inputs.append(PreparationFile(request_path, _json(value), content_type="application/json"))
         steps.append(CommandSpec(request.workspace, ("python3", driver.path, request_path), timeout=configuration.timeout, operation="dev"))
         step_cases.append(index)
-        retry_keys.append(f"numerical-probe:{probe.rotation}:{plan['case_id']}")
     context = NumericalPlan(request, suite, shapes, schedule, tuple(step_cases), tuple(identities))
-    return PreparedEvaluation(tuple(steps), 1, context, tuple(retry_keys),
+    return PreparedEvaluation(tuple(steps), 1, context,
         output_directory=Path(directory), inputs=tuple(inputs),
         measurement_identities=tuple(identities[index] for index in step_cases))
 

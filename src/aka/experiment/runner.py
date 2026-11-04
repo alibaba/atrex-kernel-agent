@@ -27,7 +27,6 @@ class LegacyExperiment:
         self, executor: Executor, evaluator: Evaluator | None = None, *,
         retry: Callable | None = None,
         check_result: Callable[[JobResult], None] | None = None,
-        stage: Callable[[EvaluationRequest, int, CommandSpec], str] | None = None,
         records=None,
         purpose: str = "development",
         command_evaluator=None,
@@ -37,7 +36,6 @@ class LegacyExperiment:
         self.evaluator = evaluator
         self.retry = retry
         self.check_result = check_result
-        self.stage = stage
         self.records = records
         self.purpose = purpose
         if command_evaluator is None:
@@ -47,8 +45,6 @@ class LegacyExperiment:
         self.episode_evidence = episode_evidence
         if purpose not in {"development", "formal"}:
             raise ValueError("unsupported experiment purpose")
-        if retry is not None and stage is None:
-            raise ValueError("an injected retry requires a stage identity")
 
     def run_command(self, command: CommandSpec) -> JobResult:
         if self.records is not None:
@@ -652,14 +648,3 @@ class LegacyExperiment:
             result = replace(result, artifact=paths[result.artifact])
         self._retain_episode(request.workspace, result.episode_evaluations)
         return result
-
-
-def evaluation_stage(request, index, command):
-    """Stable retry identity for an arbitrary selected Evaluator command."""
-    import hashlib
-    import json
-    digest = hashlib.sha256(json.dumps({
-        "command": command.command, "hardware": command.hardware, "operation": command.operation,
-        "timeout": command.timeout, "artifacts": command.artifacts,
-    }, sort_keys=True).encode()).hexdigest()
-    return f"evaluation:{request.mode}:{request.base_commit}:{request.candidate_commit}:{index}:{digest}"

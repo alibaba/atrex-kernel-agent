@@ -5,7 +5,7 @@ from pathlib import Path
 
 from aka.contracts.execution import validate_executor
 from .file_records import FileExperimentRecords
-from .runner import LegacyExperiment, evaluation_stage
+from .runner import LegacyExperiment
 
 
 class LegacyExperimentFactory:
@@ -55,4 +55,4 @@ class LegacyExperimentFactory:
                 GatewayCommandEvaluator(measurement_reader=self.measurement_reader,
                     execution_capabilities=executor.capabilities, evaluation_input=evaluation_input),
             episode_evidence=episode_evidence,
-            retry=partial(retry_infrastructure, policy=self.retry_policy), stage=evaluation_stage)
+            retry=partial(retry_infrastructure, policy=self.retry_policy))

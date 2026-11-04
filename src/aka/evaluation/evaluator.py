@@ -128,12 +128,6 @@ class LegacyEvaluator:
             return prepared
         if request.mode in {"v0", "framework"} and getattr(prepared.context, "gateway", None) is None:
             prepared = replace(prepared, steps=prepared.steps * self.configuration.measurement_repetitions)
-        if request.mode == "abba":
-            config = self.configuration
-            prepared = replace(prepared, retry_keys=tuple(
-                f"abba:{request.base_commit}:{request.candidate_commit}:"
-                f"{max(1, config.repeats)}:{config.shape_batch_size}:{Path(command.command[-2]).name}"
-                for command in prepared.steps))
         from .measurement import legacy_identities
         return replace(prepared, measurement_identities=legacy_identities(
             prepared, self.configuration, self.evaluation_input))

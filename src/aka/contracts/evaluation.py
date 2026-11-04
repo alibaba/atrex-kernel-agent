@@ -376,7 +376,6 @@ class PreparedEvaluation:
     steps: tuple[CommandSpec, ...]
     max_parallelism: int
     context: object
-    retry_keys: tuple[str, ...] = ()
     output_directory: Path | None = None
     inputs: tuple[PreparationFile, ...] = ()
     fallback_steps: tuple[CommandSpec, ...] = ()
