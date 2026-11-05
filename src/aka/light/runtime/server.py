@@ -457,6 +457,11 @@ class _Handler(BaseHTTPRequestHandler):
 class SupervisorRuntime:
     def __init__(self, config: RuntimeConfig, *, workspace_provider=None, services=None):
         self.config = config
+        from aka.light.evaluation.agate_native import audit_summary
+        logging.getLogger(__name__).warning(
+            "Agate native option audit: %s",
+            json.dumps(audit_summary(), sort_keys=True),
+        )
         from aka.light.runtime.services import builtin_services
         services = services if services is not None else builtin_services()
         self.executor, self.acceptance = services.executor, services.acceptance
@@ -810,7 +815,12 @@ class SupervisorRuntime:
                                     publish(capability.journal.view.worktree,
                                             ".atrex_long_horizon/policy_review_request.json",
                                             json.dumps({"schema_version": 1, "kernel_id": kernel["kernel_id"]}).encode())
-                    (staged / ".orchestrator_mode.json").write_text(json.dumps({"mode": self.config.optimization_mode}))
+                    (staged / ".orchestrator_mode.json").write_text(json.dumps({
+                        "mode": self.config.optimization_mode,
+                        "evaluator_shape_visibility": (
+                            "hidden" if self.config.private_reference_dir else "exposed"
+                        ),
+                    }))
                     # The canonical driver is trusted code, not a mutable Agent input.
                     if self.config.atrex_bench_root:
                         shutil.copy2(ATREX_BENCH_HARNESS, staged / "test_kernel.py")

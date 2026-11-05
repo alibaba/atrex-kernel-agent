@@ -70,7 +70,7 @@ Bubblewrap starts from an empty root with selected read-only system/runtime file
 devices, private temporary directories, and its selected proc view. It mounts:
 
 - The managed draft, permitted editable source roots, custom Skills/tools, and scratch.
-- Public contracts, fixed source adapters, reserved clients/Skills, and eligible history read-only.
+- Public contracts, immutable imported sources, reserved clients/Skills, and eligible history read-only.
 - A writable Session-specific Provider Home outside the candidate Git tree.
 - Minimal CLI installation files and explicitly validated extra grants.
 

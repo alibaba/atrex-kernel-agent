@@ -79,8 +79,8 @@ through `python -m aka.legacy.execution.cli`.
 
 1. `kernel.py` differs from the V0 wrapper and implements the GPU computation directly in `{{FRAMEWORK}}`.
 2. The complete candidate passes the supervisor's read-only production-policy review: dependencies are
-   used only for accepted framework/runtime/toolchain/support roles, compute provenance is self-authored,
-   and `solution.json` accurately declares the implementation.
+   used only for accepted framework/runtime/toolchain/support roles and compute provenance is self-authored.
+   If this candidate format includes `solution.json`, it accurately declares the implementation.
 3. For a Triton campaign: **plain Triton only.** Gluon is a later orchestrator-owned escalation.
 4. No immutable ground-truth file was modified.
 5. The bounded smoke command passes after the final edit. The supervisor independently checks the complete
@@ -92,9 +92,9 @@ Read, in this order: workspace `README.md` (goal, platform `{{PLATFORM}}`, frame
 arch `{{ARCH}}`), `memory/v0.json` (the PyTorch per-workload latencies), `baseline_report.md`, the current
 wrapper `kernel.py`, immutable `reference.py` / `input.py`, and either public `agent_problem.json` or
 legacy `shapes.json` for the actual math, dtypes, layouts, and domain you must cover. Never locate or
-infer hidden evaluator cases for a generalized problem. For native Atrex-Bench, the supervisor has already
-created the minimal `solution.json` schema; update its dependency roles to match the implementation, but do
-not spend time searching for a different manifest format. Then reconcile the supervisor-provided Codex and
+infer hidden evaluator cases for a generalized problem. Treat `solution.json` as format-specific: update it
+only when it already exists in the candidate workspace. A Source Tree is `kernel.py` plus optional `impl/**`
+and does not use or require `solution.json`; do not create one. Then reconcile the supervisor-provided Codex and
 Qoder correctness reviews above before the first edit to `kernel.py`; the immutable reference remains the
 source of truth when reviewer advice conflicts.
 
@@ -137,8 +137,8 @@ evaluator-facing entry point (`Model` / `run`) exactly as the harness expects. P
   pointer/scalar role, width, and signedness as the CUDA kernel declaration. Construct `kernelParams` as a
   native `ctypes.c_void_p` array of addresses and keep its typed backing objects alive through the launch;
   nested tuple packing is not a portable contract across worker `cuda-python` versions.
-- Update `solution.json` so its languages, dependencies, sources, and entry point accurately describe
-  the reviewed implementation.
+- If `solution.json` already exists for the selected candidate format, update its languages, dependencies,
+  sources, and entry point accurately. Do not create it for a Source Tree.
 
 **Bounded smoke validation** — after the final implementation edit, run only:
 ```bash

@@ -179,6 +179,7 @@ class Campaign:
     optimization_mode: str = (
         "leaderboard"  # permissive contest flow or strict production gate
     )
+    expose_evaluator_shapes: bool = True
     framework_baseline: str = (
         "auto"  # auto = production only; always | never override it
     )
@@ -220,6 +221,8 @@ class Campaign:
             raise ValueError("problem_generation_timeout must be positive")
         if self.production_review_timeout <= 0:
             raise ValueError("production_review_timeout must be positive")
+        if type(self.expose_evaluator_shapes) is not bool:
+            raise TypeError("expose_evaluator_shapes must be a boolean")
 
     @property
     def campaign_name(self) -> str:
@@ -232,6 +235,7 @@ class Campaign:
         op_dir = Path(self.kernel_demo).resolve().parent
         use_generalized = (
             self.optimization_mode == "production"
+            and not self.expose_evaluator_shapes
             and not is_sol_op(op_dir)
             and (op_dir / "shapes.json").is_file()
         )
@@ -879,6 +883,7 @@ class Campaign:
             self.framework,
             agent_runtime=self.agent_cli,
             source_checks_enabled=self.source_checks_enabled,
+            expose_evaluator_shapes=self.expose_evaluator_shapes,
         )
 
     def _evaluator_directive(self) -> str:
@@ -973,9 +978,9 @@ class Campaign:
             cwd=str(self.workspace.parent),
             check=True,
         )
-        # Production native tasks always expose a generalized public contract. Exact shapes and
-        # release metadata remain in the source operator directory and are injected only at the
-        # sandbox boundary. A missing public contract is authored before the baseline session.
+        # Production native tasks expose the detailed contract by default. The explicit hidden
+        # shape setting arrives as a generalized Problem while retaining production candidate
+        # and promotion policy.
         generalized = self.private_reference_dir is not None
         for name in agent_visible_operator_files(op_dir, generalized=generalized):
             source = op_dir / name

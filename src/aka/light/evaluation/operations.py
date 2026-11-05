@@ -29,6 +29,8 @@ def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         arch=args.arch, sanitize=args.sanitize, disassembly_format=args.disassembly_format,
         requirements=args.requirement or (), deps_mode=args.deps_mode,
     )
+    from aka.light.evaluation.agate_native import apply_request
+    request = apply_request(request, args, args.kind)
     if args.dry_run:
         print(json.dumps({"kind": args.kind, "candidate_bytes": len(request["candidate"].encode())}))
         return 0

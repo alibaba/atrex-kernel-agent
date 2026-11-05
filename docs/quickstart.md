@@ -43,15 +43,20 @@ A native Atrex-Bench operator contains `reference.py`, `input.py`, and `shapes.j
 inside a checkout with `scripts/run_eval.py` and `src/atrex_bench`.
 The operator directory and AKA's `--repo-root` are separate inputs.
 
-In production mode, a supplied `agent_problem.json` provides the generalized public contract.
-Otherwise a trusted preprocessing session derives it from the evaluator-owned inputs.
-Optimization sessions receive the public contract; detailed shapes and generators stay private
-and are injected by the Supervisor during evaluation. Diagnostic feedback retains useful
-case identifiers and errors with private dimensions redacted.
+Production exposes the complete native Atrex-Bench contract by default. Optimization sessions can
+read `shapes.json` and evaluator metadata; Runtime feedback remains compact but retains exact
+dimensions. Production source review and promotion gates remain enabled. Pass
+`--no-expose-evaluator-shapes` to use a supplied or automatically derived `agent_problem.json`, keep
+detailed shapes private, inject them only during evaluation, and redact private dimensions from
+diagnostic feedback.
 
 The default `--optimization-mode leaderboard` exposes the benchmark contract and allows
 the permissive optimization policy. Select `production` explicitly for production review.
-Use a new workspace when changing modes or migrating a campaign that exposed private shapes.
+Existing leaderboard workspaces retain their historical exposed snapshot key and
+resume without migration. Existing hidden production workspaces must be resumed
+with `--no-expose-evaluator-shapes`; the persisted workspace policy fails closed
+and names that flag if a new default would otherwise change visibility. Use a new
+workspace only when intentionally changing mode or Shape-visibility policy.
 
 ## Launch Light
 
@@ -140,8 +145,8 @@ See [all module options](optional-light-modules.md#other-module-options).
 
 ### Candidate layouts
 
-New Light tasks use `source_tree`: a fixed `kernel.py` imports editable
-`impl/model.py`, and the agent may add source files under `impl/`.
+New Light tasks use `source_tree`: `kernel.py` is the editable evaluator entry point
+and may either contain the full implementation or import optional helpers under `impl/`.
 Native CUDA without a Python loader requires an explicit candidate patch:
 
 ```json

@@ -96,6 +96,9 @@ from aka.legacy.execution.gateway.request_values import (
 )
 
 from aka.legacy.task.durable import durable_write_json  # noqa: E402
+from aka.legacy.workflow.policy import (
+    workspace_uses_hidden_shapes as _is_generalized_workspace,
+)
 from aka.legacy.execution.configuration import queue_wait_grace as configured_queue_wait_grace  # noqa: E402
 from aka.legacy.execution.configuration import distributed_evaluation_world_size as _distributed_evaluation_world_size
 from aka.legacy.execution.health import DEFAULT_SSH_HEALTH_COMMAND, combined_health_command
@@ -1054,15 +1057,6 @@ def _fp4_correctness_max_rel_l2(
         FP4_MAX_REL_L2
         if _metadata_has_fp4_dtype(metadata) or _is_fp4_dtype(operator)
         else None
-    )
-
-
-def _is_generalized_workspace(workspace: Path) -> bool:
-    """Return whether production policy enables private exact-case handling."""
-    state = _json_object(workspace / MODE_STATE_FILENAME) or {}
-    return (
-        state.get("mode") == "production"
-        and (workspace / AGENT_PROBLEM_FILENAME).is_file()
     )
 
 

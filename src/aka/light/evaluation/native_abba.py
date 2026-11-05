@@ -349,6 +349,8 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         workspace, args.hardware, args.timeout, args.env, command, "run", evaluation_mode="full",
         requirements=args.requirement or (), deps_mode=args.deps_mode,
     )
+    from .agate_native import apply_request
+    request = apply_request(request, args, "run")
     request["abba"] = {"baseline": None, "repeats": args.comparison_repeats // 2}
     from .source_transport import attach, ARCHIVES
     attach(request, workspace, side="baseline", source=baseline.snapshot)

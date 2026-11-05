@@ -87,7 +87,12 @@ def decode_launch(argv) -> WorkflowLaunch:
     if source.get("snapshot_directory") is not None:
         source["snapshot_directory"] = Path(source["snapshot_directory"])
     settings = request.pop("settings")
-    values.setdefault("provided_settings", tuple(settings))
+    serialized_settings = tuple(settings)
+    # Version-1 launches written before shape visibility became explicit used
+    # hidden shapes in production and exposed shapes in leaderboard.  False is
+    # therefore required for production compatibility and a no-op in leaderboard.
+    settings.setdefault("expose_evaluator_shapes", False)
+    values.setdefault("provided_settings", serialized_settings)
     values.setdefault("provided_runtime", tuple(request.get("runtime", {})))
     for name in ("framework_baseline_reviewers", "fast_episode_reviewers", "full_episode_reviewers"):
         if name in settings:

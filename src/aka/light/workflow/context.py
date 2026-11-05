@@ -72,6 +72,7 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
         workspace, campaign.optimization_mode, campaign.framework,
         update_tracked_files=False,
         source_checks_enabled=campaign.source_checks_enabled,
+        expose_evaluator_shapes=campaign.expose_evaluator_shapes,
     )
 
 

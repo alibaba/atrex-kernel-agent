@@ -1,4 +1,4 @@
-"""Pinned adapter plus editable source directories; independent file-system implementation."""
+"""Editable ``kernel.py`` plus optional implementation sources."""
 from __future__ import annotations
 import hashlib,json,os,stat,subprocess,tarfile,time
 from pathlib import Path
@@ -9,6 +9,27 @@ from .common import (POLICY, MAGIC, MAX_FILE, MAX_TOTAL, MAX_SNAPSHOT, PROTECTED
 def pack(files, policy):
     from .storage import pack as encode
     return encode(files, policy)
+
+
+def default_tree(files):
+    """Normalize one editable ``kernel.py`` into the source-tree contract."""
+    if not isinstance(files, dict) or set(files) != {"kernel.py"}:
+        raise ValueError("Default source-tree initialization requires exactly kernel.py")
+    policy = {
+        "schema_version": 1,
+        "source_revision": None,
+        "seed_digest": "sha256:" + hashlib.sha256(json.dumps(
+            {name: data.decode() for name, data in sorted(files.items())},
+            sort_keys=True,
+        ).encode()).hexdigest(),
+        "package_root": ".",
+        # ``impl`` is an allowed future root, not a required initial directory.
+        "editable_roots": ["kernel.py", "impl"],
+        "immutable_files": {},
+        "runtime_requirements": [],
+    }
+    validate_files(files, policy)
+    return policy, files
 
 def validate_import_options(options):
     if (not isinstance(options, dict)
@@ -38,10 +59,14 @@ def validate_policy(policy):
         raise ValueError("Source contract requires editable_roots")
     for root in policy["editable_roots"]:
         relative(root)
-        if not source_name(root) or root == "kernel.py":
-            raise ValueError("Editable root collides with workspace infrastructure or the fixed adapter")
-    if not isinstance(policy["immutable_files"], dict) or "kernel.py" not in policy["immutable_files"]:
-        raise ValueError("Source contract must pin its kernel.py adapter")
+        if not source_name(root):
+            raise ValueError("Editable root collides with workspace infrastructure")
+    if not isinstance(policy["immutable_files"], dict):
+        raise ValueError("Source contract immutable_files must be an object")
+    kernel_editable = editable(policy, "kernel.py")
+    kernel_immutable = "kernel.py" in policy["immutable_files"]
+    if kernel_editable == kernel_immutable:
+        raise ValueError("Source contract must make kernel.py either editable or immutable")
     for name, digest in policy["immutable_files"].items():
         relative(name)
         if not source_name(name) or not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -58,6 +83,8 @@ def validate_policy(policy):
 
 def validate_files(files, policy):
     validate_policy(policy)
+    if "kernel.py" not in files:
+        raise ValueError("Source tree requires kernel.py")
     if len(files) > 4096 or sum(len(data) for data in files.values()) > MAX_TOTAL:
         raise ValueError("Source tree exceeds 4096 files / 64 MiB")
     for name, data in files.items():
@@ -108,11 +135,14 @@ def collect(workspace, policy, *, validate=True):
     return validate_files(files, policy) if validate else files
 
 def instructions(policy):
-    return ("\n## Kernel source tree\nThe fixed kernel.py adapter and bundled source form one Kernel. "
+    entry = ("Editable kernel.py and optional implementation sources form one Kernel. "
+             "kernel.py is the evaluator entry point and may contain the complete implementation. "
+             if editable(policy, "kernel.py") else
+             "The fixed kernel.py adapter and bundled implementation sources form one Kernel. ")
+    return ("\n## Kernel source tree\n" + entry +
             "Edit/add/delete source only inside editable_roots: " + json.dumps(policy["editable_roots"]) +
-            ". All other imported files are fixed; do not change, remove or rename them. "
-            "Do not rewrite the adapter or replace the package with a single-file implementation. "
-            "Keep notes/tools and temporary builds in tools/, skills/ and scratch/. "
+            ". Paths listed as immutable must stay unchanged. "
+            "Keep probes and temporary build outputs in scratch/. "
             "Evaluate, Profile, Check, Disassemble, sealed reports and broadcasts bind the entire tree. "
             "kernel-read writes a directory for tree Kernels; pass that directory to --baseline-path.\n")
 
@@ -235,17 +265,18 @@ def import_tree(manifest_path, repository=None, *, directory=None):
     files = (_git_sources(Path(repository).expanduser().resolve(), revision, paths)
              if repository is not None else _directory_sources(directory, paths))
     if "kernel.py" in files:
-        raise ValueError("Imported source collides with the fixed adapter")
+        raise ValueError("Imported source collides with the task entry point")
     files["kernel.py"] = read_regular_bytes(manifest_path.parent / relative(manifest["adapter"]), limit=MAX_FILE + 1)
     roots = [relative(p) for p in manifest["editable_roots"]]
     for root in roots:
         if not any(name.startswith(root + "/") for name in files):
             raise ValueError("editable_roots must name imported source directories")
+    editable_roots = ["kernel.py", *roots]
     policy = {"schema_version": 1, "source_revision": revision, "seed_digest": "sha256:" + hashlib.sha256(
         json.dumps({k: v.decode() for k, v in sorted(files.items())}, sort_keys=True).encode()).hexdigest(),
-        "package_root": relative(spec.get("package_root", "."), dot=True), "editable_roots": roots,
+        "package_root": relative(spec.get("package_root", "."), dot=True), "editable_roots": editable_roots,
         "immutable_files": {k: hashlib.sha256(v).hexdigest() for k, v in files.items()
-                            if not any(k.startswith(p + "/") for p in roots)},
+                            if k != "kernel.py" and not any(k.startswith(p + "/") for p in roots)},
         "runtime_requirements": manifest.get("runtime_requirements", [])}
     if policy["package_root"] != ".":
         raise ValueError("Native Eval archives require package_root='.', matching Runtime; no Dev fallback")
@@ -304,14 +335,9 @@ class SourceTree:
             if len(content.files) != 1 or content.files[0].path != 'kernel.py':
                 raise ValueError('Default source-tree initialization requires one kernel.py; use source_tree import configuration for a package')
             entry = content.files[0]
-            files = {'impl/model.py': entry.source.read_bytes() if entry.source is not None else entry.text.encode(),
-                     'impl/__init__.py': b'', 'kernel.py': b'from impl.model import Model\n'}
-            policy = {'schema_version': 1, 'source_revision': None,
-                      'seed_digest': 'sha256:' + hashlib.sha256(json.dumps(
-                          {k: v.decode() for k, v in sorted(files.items())}, sort_keys=True).encode()).hexdigest(),
-                      'package_root': '.', 'editable_roots': ['impl'],
-                      'immutable_files': {'kernel.py': hashlib.sha256(files['kernel.py']).hexdigest()},
-                      'runtime_requirements': []}
+            policy, files = default_tree({
+                'kernel.py': entry.source.read_bytes() if entry.source is not None else entry.text.encode()
+            })
             return pack(files, policy)
         artifact = Artifact(initial_snapshot(options, state_root=state_root, seed=seed))
         return SourceContent(tuple(WorkspaceFile(name, text=data.decode())
@@ -323,7 +349,7 @@ class SourceTree:
         return (True, json.loads(raw)) if raw is not None else (False, None)
     def validate_restore(self, previous, target):
         if previous != target:raise ValueError('Source contract cannot change within a Campaign')
-    layout = Layout('kernel.py', replaceable_baseline=False, archived=True, auxiliary_metadata=('solution.json',))
+    layout = Layout('kernel.py', replaceable_baseline=False, archived=True)
     def validate_policy(self, policy):return validate_policy(policy)
     def validate(self, files, policy):return validate_files(files, policy)
     def collect(self, workspace, policy, *, validate=True):return collect(workspace, policy, validate=validate)
@@ -346,8 +372,4 @@ class SourceTree:
     def evidence_paths(self, workspace, policy):return self.declared_paths(workspace,policy)
 
     def typed_limitation(self, workspace, policy):return None
-    def language_hints(self, workspace):
-        path = workspace/'solution.json'
-        value = json.loads(path.read_text()) if path.is_file() else {}
-        hints = value.get('languages', [])
-        return [str(v) for v in hints] if isinstance(hints,list) else []
+    def language_hints(self, workspace):return []

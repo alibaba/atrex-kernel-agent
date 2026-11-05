@@ -136,7 +136,8 @@ def from_revision(workspace: Path, revision: str) -> Artifact:
 def review_paths(workspace: Path) -> list[Path]:
     artifact = read(workspace)
     names = set(artifact.files)
-    names.update(n for n in (storage.POLICY, 'solution.json', SELECTION) if (workspace / n).is_file())
+    names.update(n for n in (storage.POLICY, SELECTION, *artifact.layout.auxiliary_metadata)
+                 if (workspace / n).is_file())
     return [workspace / n for n in sorted(names)]
 
 
@@ -148,7 +149,8 @@ def commit_paths(workspace: Path, *, normalize: bool = False) -> list[str]:
     names = set(artifact.files)
     if previous:
         names.update(previous.files)
-    names.update(n for n in (storage.POLICY, 'solution.json', SELECTION) if (workspace / n).is_file())
+    names.update(n for n in (storage.POLICY, SELECTION, *artifact.layout.auxiliary_metadata)
+                 if (workspace / n).is_file())
     return sorted(names)
 
 
