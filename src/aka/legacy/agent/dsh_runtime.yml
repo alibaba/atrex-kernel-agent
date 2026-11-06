@@ -1,4 +1,9 @@
 # Adapter-owned compatibility settings, applied after the headless profile.
+- insert:
+    - id: aka-contributions
+      name: './dsh_bridge.mjs'
+      disabled: !!js "!process.env.ATREX_AKA_CONTRIBUTIONS"
+
 - id: agent-default-model
   config:
     provider: !!js process.env.AKA_DSH_PROVIDER

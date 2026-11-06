@@ -267,6 +267,12 @@ diagnostic on read. This does not waive candidate correctness or promotion gates
 
 ### Other module options
 
+The Tool Runtime's `contribution_modules` setting selects portable modules
+(`measurement` by default). `instruction_overrides` customizes individual owned
+instructions while retaining their shared tool implementations. See
+[portable tools and instructions](portable-contributions.md) for DSH/Codex usage
+and composition examples.
+
 Provider configuration uses the existing Core composition patch format. For example, pass `--patch /path/to/options.json` before the `--` separator:
 
 ```json

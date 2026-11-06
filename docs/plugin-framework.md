@@ -25,6 +25,11 @@ Core imports neither the optimization application nor Execution. The local tool/
 `aka.legacy.resources.plugin_runtime` and `aka.light.runtime.plugins` serve a separate
 purpose; see [local plugins](plugins.md).
 
+Managed Light also exposes [portable contributions](portable-contributions.md).
+Modules provide tool metadata and owned instructions through neutral contracts;
+the application composition binds handlers, and Harness adapters present the same
+selection through native tools or workspace clients.
+
 ## Plugin declaration and lifetime
 
 A plugin module declares a stable `name` matching its module name (underscores become

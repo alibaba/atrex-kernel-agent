@@ -93,6 +93,10 @@ used by AKA's other coding agents. The selected AKA profile controls which tools
 are available. Skills come from the managed workspace, and GPU requests stay in
 the foreground while AKA tracks their progress.
 
+Managed Light presents selected [portable Measurement contributions](portable-contributions.md)
+as native DSH tools. Their schemas and module-owned instructions share the same
+definitions used by Codex's workspace client.
+
 With Session capture enabled, AKA records the conversation, tool activity,
 native Session family, and reported token usage. Available counters retain their
 input, output, and cache categories; incomplete samples carry a partial or
@@ -241,5 +245,6 @@ The [pull request](https://github.com/alibaba/atrex-kernel-agent/pull/134) recor
 the source and wheel validation results. Test scripts stay local in keeping with
 the repository's convention.
 
-Linux Bubblewrap validation remains a maintainer sign-off item. Custom Cordis
-extensions can build on this adapter in a later phase.
+Linux Bubblewrap validation remains a maintainer sign-off item. The
+[portable contribution plugin](portable-contributions.md) builds on this adapter
+through DSH's documented tool and system-prompt APIs and has its own validation checks.

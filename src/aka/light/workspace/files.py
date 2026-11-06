@@ -54,7 +54,7 @@ def snapshot(source: Path, destination: Path, *, custom_tools: bool = False) -> 
         for name in files:
             path = Path(current) / name
             relative = path.relative_to(source)
-            if relative.as_posix() in {"tools/sandbox.py", "tools/plugin.py"}:
+            if relative.as_posix() in {"tools/sandbox.py", "tools/plugin.py", "tools/aka.py"}:
                 continue
             if relative.parts[0] in skipped or path.suffix in {".pyc", ".ncu-rep", ".sqlite", ".jsonl"}:
                 # SOL workload is a required public execution contract.

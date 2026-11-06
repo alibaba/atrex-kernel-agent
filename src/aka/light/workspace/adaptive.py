@@ -49,7 +49,7 @@ Store reusable scripts here. Maintain an index below: path, purpose, invocation,
 dependencies and important limitations. Update this README whenever you add,
 change or remove a custom tool. Use `scratch/` for temporary inputs and outputs.
 
-`sandbox.py` and `plugin.py` are Supervisor-installed HTTP clients: do not modify,
+`sandbox.py`, `plugin.py`, and `aka.py` are Supervisor-installed HTTP clients: do not modify,
 replace or duplicate them. Your other scripts are writable. To execute a custom
 GPU probe, use the GPU measurement Skill, for example:
 `python3 tools/sandbox.py --kind dev --no-sync -- python3 tools/probe.py`.
@@ -69,7 +69,7 @@ def reserved_paths(plugin_registry) -> tuple[str, ...]:
     names = set(SKILL_MANIFEST) | set(RETIRED_SKILL_NAMES)
     for plugin in plugin_registry.plugins:
         names.update(plugin.manifest.get("skills", {}))
-    return ("tools/sandbox.py", "tools/plugin.py", *(f"skills/{name}" for name in sorted(names)))
+    return ("tools/sandbox.py", "tools/plugin.py", "tools/aka.py", *(f"skills/{name}" for name in sorted(names)))
 
 
 def is_reserved(relative: str, reserved: tuple[str, ...]) -> bool:

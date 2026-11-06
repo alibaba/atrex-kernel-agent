@@ -214,6 +214,7 @@ INPUT_SKIP_PATHS = {
     # below the gateway worker's per-argument limit.
     "tools/sandbox.py",
     "tools/plugin.py",
+    "tools/aka.py",
     "tools/local_gateway.py",
     "tools/memory_manager.py",
     # The durable host-side monitor is never invoked inside a GPU worker.  It

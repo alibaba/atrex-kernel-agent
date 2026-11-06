@@ -481,6 +481,8 @@ def run_bounded(
     from aka.light.runtime.server import session_environment
 
     with session_environment(cwd, environment, session_control=control) as environment:
+        from aka.light.agent.contributions import project_command
+        command = project_command(command, environment)
         if command and Path(command[0]).name == "dsh":
             from aka.legacy.agent.dsh import runtime_connection_environment
             # Managed credentials exist only inside session_environment. The

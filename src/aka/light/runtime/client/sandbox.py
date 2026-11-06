@@ -105,7 +105,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
+def proxy_command(path: str, payload: dict, *, record_read=False, raw_json=False) -> int:
     url, token = os.environ.get(RUNTIME_URL_ENV, ""), os.environ.get(RUNTIME_TOKEN_ENV, "")
     # DSH intentionally scrubs credential-named ambient variables from shell
     # children. The Agent adapter creates this private, invocation-scoped file;
@@ -190,6 +190,11 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError("response exceeds limit")
         result = json.loads(raw)
+        if raw_json:
+            if not isinstance(result, dict):
+                raise ValueError("response must be a JSON object")
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False, sort_keys=True))
+            return 0
         if (isinstance(result, dict) and isinstance(result.get("operation"), str)
                 and result.get("status") in {"completed", "failed", "cancelled"}
                 and isinstance(result.get("result"), dict)):

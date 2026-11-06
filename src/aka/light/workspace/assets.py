@@ -146,6 +146,7 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     for name in ("tools", "skills", "reference", "reference-projects", "gpu-wiki"):
         _remove_legacy_link(workspace / name)
     publish(workspace, "tools/sandbox.py", resource("tools/sandbox.py").read_bytes())
+    publish(workspace, "tools/aka.py", resource("tools/aka.py").read_bytes())
     publish(workspace, "tools/plugin.py", resource("tools/plugin.py").read_bytes())
     if plugin_registry is None:
         from aka.light.runtime.catalog import PluginRegistry

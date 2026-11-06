@@ -298,7 +298,7 @@ def wrap_agent_command(
                 if not isinstance(protected, list) or any(
                     not isinstance(name, str) or not name or name == "." or "\\" in name
                     or Path(name).is_absolute() or ".." in Path(name).parts
-                    or not (name in {"tools/sandbox.py", "tools/plugin.py", "WORKSPACE.md"}
+                    or not (name in {"tools/sandbox.py", "tools/plugin.py", "tools/aka.py", "WORKSPACE.md"}
                             or len(Path(name).parts) == 2 and Path(name).parts[0] == "skills"
                             or name in {POLICY, SELECTION} or source_name(name))
                     for name in protected

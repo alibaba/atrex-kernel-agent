@@ -44,6 +44,7 @@ for name in ("__init__", "analyze_reports", "disasm", "envelope", "extract_stall
     SHARED[f"tools/ncu_helpers/{name}.py"] = f"execution/profiling/nvidia/ncu_helpers/{name}.py"
 
 OWNED = {
+    "tools/aka.py": "runtime/client/aka.py",
     "tools/sandbox.py": "runtime/client/sandbox.py",
     "tools/plugin.py": "runtime/client/plugin.py",
     "tools/session_shell_guard.sh": "agent/session_shell_guard.sh",

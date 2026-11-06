@@ -183,7 +183,7 @@ class EpisodeWorkspace:
             "# Workspace contract\n\n" + policy + source_instructions(policy_at(self.worktree, committed=True)) + "\n\n"
             "Put reusable methods in skills/<name>/SKILL.md and reusable scripts in tools/. "
             "Update the corresponding README.md whenever you add, change or remove contents. "
-            "Installed Skills and tools/sandbox.py and tools/plugin.py are reserved; do not edit them. "
+            "Installed Skills and tools/sandbox.py, tools/plugin.py, and tools/aka.py are reserved; do not edit them. "
             "Only custom files and READMEs enter reusable snapshots.\n\n"
             "scratch/ is temporary: a new Episode starts empty; resuming this Episode keeps it. "
             "If present, memory/v*.json contains optional Supervisor-generated summaries, not editable Agent memory. "
