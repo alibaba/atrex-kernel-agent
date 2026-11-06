@@ -23,9 +23,14 @@ def prepare_runtime_connection(environment):
     url, token = environment.get("ATREX_AKA_RUNTIME_URL"), environment.get("ATREX_AKA_RUNTIME_TOKEN")
     if url and token:
         root = session_root(environment).parent.resolve() / "aka-connections"
-        root.mkdir(parents=True, exist_ok=True, mode=0o700)
         if root.is_symlink():
             raise ValueError("DSH Session connection directory must not be a symlink")
+        root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        directory = os.open(root, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        try:
+            os.fchmod(directory, 0o700)
+        finally:
+            os.close(directory)
         descriptor, filename = tempfile.mkstemp(prefix="session-", suffix=".json", dir=root)
         try:
             with os.fdopen(descriptor, "w") as output:

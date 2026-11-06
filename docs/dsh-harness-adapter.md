@@ -98,10 +98,12 @@ native Session family, and reported token usage. Available counters retain their
 input, output, and cache categories; incomplete samples carry a partial or
 unavailable measurement label.
 
-AKA launches DSH with its unattended permission preset. The coordinator isolation
-option remains part of AKA's configuration. See
-[Agent workspace isolation](agent-workspace-isolation.md) for Linux Bubblewrap
-requirements and installation grants for custom launchers.
+AKA launches DSH with its unattended permission preset. Current integration
+coverage uses the native coordinator runner. DSH with Linux Bubblewrap
+coordinator isolation still needs end-to-end validation of the connection-file
+and tool-call path; treat that combination as experimental pending maintainer
+sign-off. See [Agent workspace isolation](agent-workspace-isolation.md) for
+Bubblewrap requirements and installation grants for custom launchers.
 
 ## Troubleshooting
 
@@ -138,24 +140,106 @@ Successful completion requires both a zero process exit status and a matching
 DSH `final` event with `reason.kind=completed`. Native checkpoints retain the
 selected Session family and its latest log generation. Usage accounting combines
 reported root steps with newly observed child attempts and excludes prior
-Session history.
+Session history. Exact capture accounting requires current native evidence as
+well as complete root step counters. Missing native evidence leaves the observed
+total available with a `partial` label and a `dsh_step_usage_incomplete` warning.
 
-The protocol was verified with DSH `0.2.2-alpha.2`. Run the automated checks from
-the AKA checkout:
+### Session lifecycle
 
-```sh
-PYTHONPATH=src python3 -m unittest discover -s tests -v
+DSH allocates the native identity. AKA learns it from the opening `session`
+event, then uses that identity to select the native ledger and Session family.
+The transitions below name the code responsible for launch, continuation, and
+checkpoint restore.
+
+```mermaid
+stateDiagram-v2
+  [*] --> Launching: fresh_session_command
+  Launching --> Observed: session_id_from_stream / opening session event
+  Observed --> Persisted: native_session_files / latest family logs
+  Persisted --> Resuming: resume_session_command / --session-id
+  Persisted --> Checkpointed: capture_native_session / export_checkpoint
+  Checkpointed --> Restored: restore_checkpoint
+  Restored --> Resuming: resume_session_command
+  Resuming --> Observed: matching native identity
+  Observed --> Completed: validated_exit_status / completed final
+  Launching --> Failed: terminal_failure
+  Observed --> Failed: terminal_failure
+  Completed --> [*]
+  Failed --> [*]
 ```
 
-The opt-in integration check launches the installed DSH CLI against local model
-and Runtime fixtures. It exercises editing, Skills, tool calls, capture, token
-accounting, credential handoff, and native Session continuation:
+### Failure classification and recovery
 
-```sh
-AKA_RUN_DSH_INTEGRATION=1 PYTHONPATH=src python3 -m unittest discover -s tests -v
+`dsh.terminal_failure` classifies the headless stream. Light's
+`LongSessionRunner.run` first accepts an already valid Supervisor handoff as
+authoritative; otherwise it applies the recovery paths below. Each continuation
+retains the Episode's draft and accounts for tokens already consumed.
+
+```mermaid
+flowchart TD
+  F["dsh.terminal_failure"] --> OK["Matching final / completed"]
+  F --> PE["provider_error: startup, provider, or incomplete stream"]
+  F --> OL["output_limit: max-tokens"]
+  F --> RL["rate_limit: recognized provider code"]
+  OK --> H["LongSessionRunner.run: validate handoff; bounded same-session repair"]
+  PE --> S["Record provider diagnosis and stop the failed invocation"]
+  OL --> G{"Usage known, exit 1, recovery and Episode budgets remain?"}
+  G -->|yes| N["recovery_prompt: fresh context, same Episode draft"]
+  G -->|no| S
+  RL --> B["Back off 5s to 60s within Episode budgets"]
+  B --> R["Resume native Session when available; otherwise open a fresh context"]
 ```
 
-The fixtures use synthetic credentials and loopback services. Integration
-coverage currently exercises the native coordinator runner; Linux Bubblewrap
-validation is tracked separately. Custom Cordis extensions can build on this
-adapter in a later phase.
+An absent or mismatched final event maps to
+`provider_error / dsh_incomplete_stream`. The failed invocation stops with its
+diagnosis and retained draft. A timeout or external termination follows the
+runner's existing bounded continuation rules when a resumable identity and
+budget remain. Output-limit recovery allows two fresh contexts by default;
+rate-limit recovery uses the same Episode and its active-time and token budgets.
+
+### Runtime connection lifecycle
+
+The managed runner binds the connection after the Runtime capability exists.
+The client reads a regular file through a bounded, no-follow descriptor and
+validates the loopback URL before making a request.
+
+```mermaid
+sequenceDiagram
+  participant P as run_bounded
+  participant R as Runtime session_environment
+  participant C as runtime_connection_environment
+  participant D as DSH shell child
+  participant T as tools/sandbox.py
+  P->>R: Mint invocation-owned url and token
+  R-->>P: Capability environment
+  P->>C: prepare_runtime_connection
+  C->>C: Tighten directory to 0700; create 0600 file
+  P->>D: Pass ATREX_AKA_RUNTIME_CONNECTION_FILE path
+  D->>T: Invoke existing AKA client
+  T->>T: Check descriptor, size, JSON, and loopback origin
+  T->>R: Authenticated tool request
+  Note over P,C: Return, exception, or timeout unwinds the context
+  P->>C: finally: release_runtime_connection / unlink
+```
+
+The adapter's prepare/release hooks provide the same cleanup around unmanaged
+Agent invocations. A coordinator killed with `SIGKILL` can leave a
+`session-*.json` file under `$DSH_HOME/aka-connections`, since forced process
+termination skips cleanup. The directory is private (`0700`) and each file is
+private (`0600`). After confirming the owning invocation has stopped, remove its
+leftover file. Cleanup is invocation-specific so concurrent runs keep their own
+connections.
+
+### Verification evidence
+
+The protocol was verified with DSH `0.2.2-alpha.2`. Local checks cover launch,
+native continuation and checkpoints, failure classification, accounting,
+provider-home preparation, connection-file handling, and shared execution
+recovery. A check using the installed DSH CLI exercises editing, Skills, tools,
+capture, and continuation against synthetic credentials and loopback services.
+The [pull request](https://github.com/alibaba/atrex-kernel-agent/pull/134) records
+the source and wheel validation results. Test scripts stay local in keeping with
+the repository's convention.
+
+Linux Bubblewrap validation remains a maintainer sign-off item. Custom Cordis
+extensions can build on this adapter in a later phase.

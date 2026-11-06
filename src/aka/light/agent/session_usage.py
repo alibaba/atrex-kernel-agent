@@ -379,7 +379,7 @@ class UsageAccumulator:
             self.terminal = self.dsh.total()
             children = [row["usage"] for row in responses if row["native"]]
             total = sum_token_usages([self.terminal, *children]) if children else self.terminal
-            exact = finished and not self.missing and total.measurement == "exact"
+            exact = finished and not self.missing and self.native_seen and total.measurement == "exact"
             basis = "dsh_root_steps_and_native_child_attempts"
             if not exact:
                 warnings.append("dsh_step_usage_incomplete")
