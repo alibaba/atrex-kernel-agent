@@ -113,7 +113,7 @@ def start_session_capture(command: list[str], cwd: Path, environment: dict[str, 
     if environment.get("ATREX_SESSION_CAPTURE", "1").strip() == "0":
         return None
     backend = environment.get("ATREX_AGENT_CLI") or (Path(command[0]).name if command else "")
-    if backend not in {"claude", "codex", "qodercli", "pi"}:
+    if backend not in {"claude", "codex", "qodercli", "pi", "dsh"}:
         return None
     # Outside the Git workspace: traces must not enter baseline/candidate commits.
     configured = environment.get("ATREX_SESSION_CAPTURE_DIR")
@@ -281,6 +281,13 @@ class SessionCapture:
             text = self._chunks["stdout"][self._stdout_cursor]
             self._stdout_cursor += 1
             self._feed_usage("provider/stdout.stream-json", text)
+            if self.backend == "dsh":
+                from aka.legacy.agent.dsh import session_id_from_stream
+                identity = session_id_from_stream(text)
+                if identity:
+                    self.session_id = identity
+                    if self._host_transcripts:
+                        self._host_transcripts.session_id = identity
             if self.backend == "codex":
                 from aka.light.agent.runtime.codex_ledger import codex_thread_id_from_stream
 

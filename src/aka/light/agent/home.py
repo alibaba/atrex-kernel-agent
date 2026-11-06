@@ -27,11 +27,13 @@ STATE_FILES = {
         ".qodersec/.config-version",
     ),
     "pi": (".pi/agent/auth.json", ".pi/agent/settings.json", ".pi/agent/models.json"),
+    "dsh": (".dsh/.env", ".dsh/.credentials.yaml", ".dsh/cordis.patch.yml"),
 }
 CONFIG_ROOTS = {
     "claude": ("CLAUDE_CONFIG_DIR", ".claude"),
     "codex": ("CODEX_HOME", ".codex"),
     "pi": ("PI_CODING_AGENT_DIR", ".pi/agent"),
+    "dsh": ("DSH_HOME", ".dsh"),
 }
 HOST_HOME_ENV = "ATREX_AGENT_HOST_HOME"
 PREPARED_ENV = "ATREX_AGENT_PREPARED_HOME"
@@ -113,7 +115,14 @@ def _git_identity(workspace: Path, environment: dict[str, str]) -> dict[str, str
 
 
 def _seed_provider(backend: str, host_home: Path, home: Path, environment: dict[str, str]) -> None:
-    for relative in STATE_FILES[backend]:
+    relatives = STATE_FILES[backend]
+    if backend == "dsh":
+        from aka.legacy.agent.dsh import settings_values
+        profile = settings_values(environment.get("ATREX_DSH_SESSION_SETTINGS")
+                                  or environment.get("ATREX_SESSION_SETTINGS", "")).get("profile", "headless")
+        relatives = (*relatives, f".dsh/profiles/{profile}/package.json",
+                     f".dsh/profiles/{profile}/cordis.patch.yml")
+    for relative in relatives:
         source = host_home / relative
         variable, prefix = CONFIG_ROOTS.get(backend, ("", ""))
         if variable and environment.get(variable) and relative.startswith(prefix + "/"):

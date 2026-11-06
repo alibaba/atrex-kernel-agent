@@ -169,6 +169,7 @@ class CliAgentRuntime(SharedCliAgentRuntime):
         from aka.light.agent.home import PREPARED_ENV, prepare_agent_environment
 
         environment = prepare_agent_environment(request.workspace, environment, session_id)
+        environment = self._adapter.prepare_environment(environment, reasoning_effort=request.reasoning_effort)
         codex_observer = None
         codex_temporary_home = None
         pre_observation_errors: tuple[str, ...] = ()
@@ -215,7 +216,13 @@ class CliAgentRuntime(SharedCliAgentRuntime):
             if codex_temporary_home is not None:
                 codex_temporary_home.close()
             raise
+        finally:
+            self._adapter.release_environment(environment)
         observation_errors: tuple[str, ...] = pre_observation_errors
+        exit_status = self._adapter.validated_exit_status(stdout, exit_status)
+        if self.id == "dsh":
+            from aka.legacy.agent.dsh import session_id_from_stream
+            session_id = session_id_from_stream(stdout)
         try:
             events, terminal_usage = self._adapter.normalize_stream(stdout)
         except Exception as exc:

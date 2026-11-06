@@ -17,10 +17,11 @@ _CLI_PACKAGES = frozenset(
         "@openai/codex",
         "@qoder-ai/qodercli",
         "@mariozechner/pi-coding-agent",
+        "@deepseek-ai/dsh",
     }
 )
 _PACKAGE_NAME = re.compile(r"(?:@[a-zA-Z0-9_.-]+/)?[a-zA-Z0-9_-][a-zA-Z0-9_.-]*\Z")
-_PROVIDER_ROOTS = (".claude", ".codex", ".qoder", ".qodersec", ".pi")
+_PROVIDER_ROOTS = (".claude", ".codex", ".qoder", ".qodersec", ".pi", ".dsh")
 
 
 def _absolute(path: Path) -> Path:

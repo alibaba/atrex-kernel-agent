@@ -9,6 +9,7 @@ describe the versions and environments identified in those documents.
 | Guide | Scope |
 | --- | --- |
 | [Quick Start](quickstart.md) | Install matching packages, prepare an operator, launch Light, inspect outputs |
+| [Using DSH](dsh-harness-adapter.md) | Choose DSH as the coding agent, reuse a provider profile, and follow Session progress |
 | [Architecture Design](design.md) | Current modules, authority boundaries, Episode lifecycle, promotion |
 | [Light modules and profiles](optional-light-modules.md) | Provider options, Wiki, search, source imports, budgets, recovery |
 | [Installed startup](application-plugin-migration.md) | CLI/profile selection, package ownership, frozen continuations |

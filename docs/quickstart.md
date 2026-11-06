@@ -8,7 +8,7 @@ OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workf
 ## Prerequisites
 
 - Python 3.10+, `bash`, `git`, and `torch` on the coordinator.
-- An authenticated coding CLI on `PATH`: `claude`, `qodercli`, `codex`, or `pi`.
+- An authenticated coding CLI on `PATH`: `claude`, `qodercli`, `codex`, `pi`, or `dsh`.
 - A configured Agate endpoint and GPU worker with the workload's framework and GPU stack.
 - A native Atrex-Bench operator in its owning Bench checkout.
 - For coordinator isolation: Linux, Bubblewrap, and permission to create the required
@@ -84,9 +84,12 @@ workspace, mode, and budgets into this same installed command.
 
 ### Agent backends and frameworks
 
-Use `--agent-cli codex`, `qodercli`, or `pi` to change the coding backend.
+Use `--agent-cli codex`, `qodercli`, `pi`, or `dsh` to change the coding backend.
+The [DSH guide](dsh-harness-adapter.md) walks through headless setup, provider
+settings, and Session progress.
 Provider settings use `ATREX_CLAUDE_SESSION_SETTINGS`, `ATREX_QODER_SESSION_SETTINGS`,
-`ATREX_CODEX_SESSION_SETTINGS`, or `ATREX_PI_SESSION_SETTINGS`, with
+`ATREX_CODEX_SESSION_SETTINGS`, `ATREX_PI_SESSION_SETTINGS`, or
+`ATREX_DSH_SESSION_SETTINGS`, with
 `ATREX_SESSION_SETTINGS` as the generic fallback. Keep credentials in the provider's
 supported login/configuration mechanism.
 
