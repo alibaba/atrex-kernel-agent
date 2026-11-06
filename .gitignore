@@ -15,8 +15,12 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# Local and temporary test scripts
-tests/
+# Local and temporary test scripts; retain the DSH adapter contract checks.
+tests/*
+!tests/test_dsh_adapter.py
+!tests/test_dsh_integration.py
+!tests/test_gateway_environment.py
+!tests/test_gateway_replay.py
 
 # Distribution build artifacts
 build/

@@ -96,9 +96,23 @@ def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionReje
     return None
 
 
+def replay_forbidden(job: object) -> bool:
+    """An infra label never overrides explicit unknown-outcome/replay evidence."""
+    if not isinstance(job, dict):
+        return False
+    policy = job.get("replay_policy")
+    if policy is not None and policy not in ("allow", "legacy"):
+        return True
+    error = job.get("error") if isinstance(job.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    return (job.get("execution_state") == "unknown"
+            or error.get("reason") == "dev_submission_ambiguous"
+            or any(row.get("retry_advice") == "never" for row in (job, error, details)))
+
+
 def retry_kind(job: object) -> str | None:
     """Match Runtime: only explicitly failed infra Jobs are resubmitted."""
-    if not isinstance(job, dict) or job.get("status") != "failed":
+    if not isinstance(job, dict) or job.get("status") != "failed" or replay_forbidden(job):
         return None
     error = job.get("error") or {}
     if not isinstance(error, dict):
@@ -297,13 +311,14 @@ def execute_job(
     A fresh invocation starts by reading the durable accepted Job ID when one
     exists.  That old Job receives exactly one non-waiting recovery probe.  A
     terminal result is returned directly; a missing, unreadable, queued or
-    running old Job causes one bounded fresh submission.  This deliberately
+    running old Job may cause one bounded fresh submission unless the saved
+    evidence forbids replay. This deliberately
     favors bounded recovery latency over remote GPU efficiency: the polling
     abstraction has no authenticated ownership/cancellation handle, so it cannot
     safely cancel the saved Job before replacing it, and one recovery may leave
-    that Job running concurrently.  Newly submitted Jobs still receive the
-    complete poll budget.  A prior CLI submission without a confirmed ID also
-    gets one bounded fresh submission on the later invocation.
+    that Job running concurrently. Newly submitted Jobs still receive the
+    complete poll budget. A prior CLI submission without a confirmed ID must
+    be reconciled before another non-idempotent submission.
 
     Explicit ``error_class=infra`` terminal failures are retried only while both
     ``max_infra_retries`` and the current wait deadline allow another attempt.
@@ -357,6 +372,10 @@ def execute_job(
     def retry_wait(*, previous_job_id: str | None = None) -> bool:
         """Start one fresh wait window by resubmitting the Agate task once."""
         nonlocal deadline, state, wire_key, wait_retries
+        data = state.get("process")
+        if isinstance(data, dict) and replay_forbidden(job_from_process(subprocess.CompletedProcess(
+                [], data.get("returncode", 1), data.get("stdout", ""), data.get("stderr", "")))):
+            return False
         if wait_retries >= max_wait_retries:
             return False
         wait_retries += 1
@@ -384,27 +403,11 @@ def execute_job(
             rejection = submission_rejection(subprocess.CompletedProcess(
                 [], data["returncode"], data["stdout"], data["stderr"]))
         if rejection is None and not idempotent_submission:
-            # A previous CLI invocation returned without a confirmed Job ID.
-            # There is no ID to collect, so a later identical Runtime call gets
-            # one bounded fresh submission instead of remaining permanently
-            # stuck on an unrecoverable checkpoint.  Count this as the call's
-            # wait recovery so it cannot also create another replacement after
-            # the new Job exhausts its polling window.
-            if wait_retries >= max_wait_retries:
-                raise EvidenceUnavailable(
-                    "Prior Gateway submission has no confirmed job ID and automatic resubmission is disabled"
-                )
-            wait_retries += 1
-            state = save("retry_pending")
-            print(
-                "[sandbox] Prior CLI submission has no confirmed job ID; "
-                "resubmitting the saved request once",
-                file=sys.stderr,
-                flush=True,
+            raise EvidenceUnavailable(
+                "Prior Gateway submission has no confirmed job ID; reconcile its outcome before resubmitting"
             )
-        # A definitive rejection follows the normal rejection path.  A bare
-        # pre-POST marker or unparseable CLI response takes the bounded fresh
-        # submission path above.
+        # A definitive rejection follows the normal rejection path. A missing
+        # response is not evidence that the prior POST did not execute.
 
     while True:
         remaining = deadline - time.monotonic()
@@ -481,6 +484,11 @@ def execute_job(
                     raise
                 job = job_from_process(process)
                 if not job or job.get("status") not in {"succeeded", "failed", "cancelled", "canceled"}:
+                    if (isinstance(job, dict) and isinstance(job.get("job_id"), str)
+                            and job["job_id"]):
+                        # Keep newly reported replay restrictions for both the
+                        # current wait recovery and a later invocation.
+                        state = save("accepted", process)
                     poll_rejection = submission_rejection(process)
                     if poll_rejection is not None and poll_rejection.status == 404:
                         missing_job_id = saved_job_id()
@@ -496,6 +504,8 @@ def execute_job(
                     # Job before resubmitting the Agate task.
                     return process
                 state = save("terminal", process)
+            if replay_forbidden(job):
+                return process
             kind = retry_classifier(job)
             diagnostic = (embedded_device_failure(job)
                           if max_device_retries is not None and isinstance(job, dict) else None)
