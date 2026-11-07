@@ -172,7 +172,7 @@ class Campaign:
     sandbox_url: str = ""  # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int | None = None
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
-    agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
+    agent_cli: str = "claude"  # episode backend selected from the Agent registry
     agent_sandbox: str = "none"  # opt-in coordinator isolation, independent of GPU transport
     bwrap_executable: str = "bwrap"
     agent_read_only_paths: tuple[str, ...] = ()

@@ -14,7 +14,7 @@ from aka.contracts.agent import Agent, NativeInvocation
 from aka.light.workflow.models import EpisodeHandoff, InvocationObservation, SessionResult
 from aka.light.workflow.protocol import handoff_diagnosis, read_handoff
 from aka.light.workflow.output_limit import recovery_prompt
-from aka.light.agent.runtime.adapter import ClaudeAdapter, PiAdapter
+from aka.light.agent.runtime.adapter import DEFAULT_BACKEND_REGISTRY
 from aka.light.execution.retry import InfrastructureUnavailable
 
 CompletionCheck = Callable[[EpisodeHandoff], str]
@@ -96,8 +96,7 @@ class LongSessionRunner:
                 or not 0 <= output_limit_recovery_retries <= 10):
             raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")
         session_id = session_id or str(uuid.uuid4())
-        is_codex = self.agent_cli == "codex"
-        active_session_id = "" if is_codex else session_id
+        active_session_id = "" if self.agent_cli in {"codex", "dsh"} else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         native = self.agent.open_session(
@@ -198,10 +197,9 @@ class LongSessionRunner:
                 stderr_parts.append(stderr)
                 active_session_id = turn.session_id or active_session_id
                 failure_kind, provider_error_code = (
-                    ClaudeAdapter().classify_terminal_failure(stdout, active_session_id)
-                    if self.agent_cli == "claude" else
-                    PiAdapter().classify_terminal_failure(stdout, active_session_id)
-                    if self.agent_cli == "pi" else (None, None)
+                    DEFAULT_BACKEND_REGISTRY.create(self.agent_cli).classify_terminal_failure(
+                        stdout, active_session_id,
+                    ) if self.agent_cli in DEFAULT_BACKEND_REGISTRY.ids else (None, None)
                 )
                 if failure_kind:
                     exit_status = exit_status or 1
