@@ -9,6 +9,7 @@ describe the versions and environments identified in those documents.
 | Guide | Scope |
 | --- | --- |
 | [Quick Start](quickstart.md) | Install matching packages, prepare an operator, launch Light, inspect outputs |
+| [Using DSH](dsh-harness-adapter.md) | Choose DSH as the coding agent, reuse a provider profile, and follow Session progress |
 | [Architecture Design](design.md) | Current modules, authority boundaries, Episode lifecycle, promotion |
 | [Light modules and profiles](optional-light-modules.md) | Provider options, Wiki, search, source imports, budgets, recovery |
 | [Installed startup](application-plugin-migration.md) | CLI/profile selection, package ownership, frozen continuations |
@@ -27,6 +28,7 @@ describe the versions and environments identified in those documents.
 | [Session observability](session-observability.md) | Capture configuration, transcripts, usage and failure boundaries |
 | [Core plugin framework](plugin-framework.md) | Composition, service contracts, lifecycle and ownership |
 | [Local plugins](plugins.md) | Skill/tool extensions and distinct Light/Legacy invocation paths |
+| [Portable contributions](portable-contributions.md) | Shared Measurement tools and module-owned instructions for DSH and Codex |
 | [GPU Wiki](../gpu-wiki/README.md) | Current structured stores and standalone knowledge interfaces |
 | [Dashboard](optimization-dashboard.md) | Optional viewer, current memory-history and multi-file export limitations |
 | [Community local gateway](local_gateway.md) | Local source-archive Eval/ABBA and Legacy request compatibility |

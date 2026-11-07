@@ -64,6 +64,7 @@ from aka.light.wiki.service import WikiService
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
 TOKEN_ENV = "ATREX_AKA_RUNTIME_TOKEN"
+CONTRIBUTIONS_ENV = "ATREX_AKA_CONTRIBUTIONS"
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 DISPATCH_RETRY_SECONDS = 5
 ROOT = Path(__file__).resolve().parents[1]
@@ -186,7 +187,7 @@ def filter_options(argv: list[str], owned: frozenset[str], forbidden: frozenset[
 def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if
             not key.startswith(("AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_", "ATREX_GPU_WIKI_"))
-            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, JOB_ROOT_ENV, BATCH_ROOT_ENV,
+            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, CONTRIBUTIONS_ENV, "ATREX_AKA_RUNTIME_CONNECTION_FILE", JOB_ROOT_ENV, BATCH_ROOT_ENV,
                             ABBA_BATCH_ROOT_ENV,
                             "ATREX_AKA_MEASUREMENT_REPETITIONS",
                             "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT",
@@ -218,6 +219,8 @@ class RuntimeConfig:
     wiki_options: WikiConfig = field(default_factory=WikiConfig)
     # Selected aka.contracts.wiki.WikiProvider; None selects the built-in local store.
     wiki_provider: object | None = field(default=None, compare=False, repr=False)
+    contribution_modules: tuple[str, ...] = ("measurement",)
+    instruction_overrides: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         if type(self.pause_agent_during_requests) is not bool:
@@ -336,7 +339,8 @@ class _Handler(BaseHTTPRequestHandler):
             self.reply(401, failure("Missing or revoked Session capability", repairable=False,
                                    code="session_unavailable", next_action="Ask the operator to resume or restart the Session. Do not change credentials or bypass the Runtime."))
             return
-        if self.path not in {"/v1/gateway/execute", "/v1/wiki/query", "/v1/journal/execute", "/v1/plugins/execute"}:
+        if self.path not in {"/v1/gateway/execute", "/v1/wiki/query", "/v1/journal/execute", "/v1/plugins/execute",
+                             "/v1/contributions/catalog", "/v1/contributions/invoke"}:
             self.reply(404, failure("Unknown endpoint"))
             return
         try:
@@ -382,7 +386,7 @@ class _Handler(BaseHTTPRequestHandler):
 
                     with owner.request_lock(
                         capability, deadline, self.request_id,
-                        before_wait=check_running if self.path == "/v1/gateway/execute" else None,
+                        before_wait=check_running if self.path in {"/v1/gateway/execute", "/v1/contributions/invoke"} else None,
                     ):
                         with owner.lock:
                             if owner.closed or owner.capabilities.get(token) is not capability:
@@ -455,7 +459,7 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 class SupervisorRuntime:
-    def __init__(self, config: RuntimeConfig, *, workspace_provider=None, services=None):
+    def __init__(self, config: RuntimeConfig, *, workspace_provider=None, services=None, contributions=None):
         self.config = config
         from aka.light.evaluation.agate_native import audit_summary
         logging.getLogger(__name__).warning(
@@ -506,6 +510,24 @@ class SupervisorRuntime:
         publish(plugin_lock, ".atrex_plugins/lock.json", json.dumps(self.plugins.snapshot()).encode())
         self.wiki = WikiService((self.audit_root or self.root) / "wiki", config.wiki_options,
                                 self.plugins.snapshot(), provider=self.wiki_provider)
+        from aka.light.runtime.contribution_composition import compose
+        self.contributions = contributions if contributions is not None else compose(
+            self.execute, modules=config.contribution_modules,
+            instruction_overrides=config.instruction_overrides)
+        self.contribution_catalog = self.contributions.catalog()
+        encoded = json.dumps(self.contribution_catalog, sort_keys=True).encode()
+        if len(encoded) > 65536:
+            raise ValueError("contribution catalog exceeds 64 KiB")
+        # Resume retains the selected definitions, including instruction overrides.
+        snapshot_root = self.audit_root or self.root
+        from aka.light.agent.session_tail import read_regular_bytes
+        try:
+            previous = read_regular_bytes(snapshot_root / "contributions.json", limit=65537)
+        except FileNotFoundError:
+            previous = encoded
+        if previous != encoded:
+            raise ValueError("contribution selection changed; use the Campaign's recorded composition or start a new Campaign")
+        publish(snapshot_root, "contributions.json", encoded)
         self.server = _Server(("127.0.0.1", 0), _Handler)
         self.server.owner = self
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
@@ -638,7 +660,8 @@ class SupervisorRuntime:
                 raise RuntimeError("Supervisor Runtime is closed")
             capability.journal = self.journals.get(workspace)
         values = scrub_environment(environment)
-        values.update({URL_ENV: self.url, TOKEN_ENV: token})
+        values.update({URL_ENV: self.url, TOKEN_ENV: token,
+                       CONTRIBUTIONS_ENV: json.dumps(self.contribution_catalog)})
         if capability.journal and capability.journal.view:
             from aka.light.workspace.episode import EPISODE_WORKSPACE_ENV
             from aka.light.workspace.adaptive import PROTECTED_PATHS_ENV
@@ -748,6 +771,17 @@ class SupervisorRuntime:
                 reuse_completed=False, reuse_correctness=False, candidate_source: bytes | None = None,
                 execution_timeout: int | None = None, reference_snapshot: Path | None = None,
                 prepare_identity_only: bool = False) -> dict | None:
+        if route == "/v1/contributions/catalog":
+            with _validating_request():
+                if request:
+                    raise ValueError("catalog request must be empty")
+            return self.contributions.catalog()
+        if route == "/v1/contributions/invoke":
+            with _validating_request():
+                self.contributions.resolve(request)
+                if prepare_identity_only:
+                    return self.contributions.prepare(capability, request)
+            return self.contributions.invoke(capability, request)
         if prepare_identity_only and route != "/v1/gateway/execute":
             return None
         if route == "/v1/plugins/execute":

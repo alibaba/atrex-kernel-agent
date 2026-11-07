@@ -121,7 +121,7 @@ def parse_arguments(argv):
         "--agent-cli",
         choices=AGENT_CLI_CHOICES,
         default="claude",
-        help="Coding CLI used for optimization episodes: claude, qodercli, codex, or pi "
+        help="Coding CLI used for optimization episodes: claude, qodercli, codex, pi, or dsh "
         "(default: claude).",
     )
     ap.add_argument(
@@ -428,6 +428,13 @@ def parse_arguments(argv):
         )
         try:
             pi_settings_args(pi_settings)
+        except ValueError as exc:
+            ap.error(str(exc))
+    if args.agent_cli == "dsh":
+        from aka.legacy.agent.dsh import settings_values
+        try:
+            settings_values(os.environ.get("ATREX_DSH_SESSION_SETTINGS")
+                            or os.environ.get("ATREX_SESSION_SETTINGS", ""))
         except ValueError as exc:
             ap.error(str(exc))
     if args.agent_cli == "qodercli" and args.token_budget > 0:

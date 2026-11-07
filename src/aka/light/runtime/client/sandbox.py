@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import argparse
 import os
+import stat
 import sys
 import urllib.error
 import urllib.parse
@@ -30,6 +31,7 @@ from pathlib import Path
 
 RUNTIME_URL_ENV = "ATREX_AKA_RUNTIME_URL"
 RUNTIME_TOKEN_ENV = "ATREX_AKA_RUNTIME_TOKEN"
+RUNTIME_CONNECTION_ENV = "ATREX_AKA_RUNTIME_CONNECTION_FILE"
 # Wire contract with the Supervisor; keep this client independent of its modules.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
@@ -103,8 +105,30 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
+def proxy_command(path: str, payload: dict, *, record_read=False, raw_json=False) -> int:
     url, token = os.environ.get(RUNTIME_URL_ENV, ""), os.environ.get(RUNTIME_TOKEN_ENV, "")
+    # DSH intentionally scrubs credential-named ambient variables from shell
+    # children. The Agent adapter creates this private, invocation-scoped file;
+    # other backends retain their existing environment transport.
+    if (not url or not token) and os.environ.get(RUNTIME_CONNECTION_ENV):
+        try:
+            descriptor = os.open(os.environ[RUNTIME_CONNECTION_ENV],
+                                 os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(descriptor, "rb") as source:
+                if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                    raise ValueError("connection must be a regular file")
+                raw = source.read(16385)
+            if len(raw) > 16384:
+                raise ValueError("connection is too large")
+            connection = json.loads(raw)
+            if (not isinstance(connection, dict) or set(connection) != {"url", "token"}
+                    or any(not isinstance(value, str) or not value for value in connection.values())):
+                raise ValueError("invalid Session connection")
+            url, token = connection["url"], connection["token"]
+        except (OSError, ValueError, UnicodeError):
+            client_error("session_unavailable", "The Session connection file is unavailable or invalid.",
+                         "Ask the operator to launch or resume the Session; do not invent credentials.")
+            return 75
     if not url or not token:
         client_error("session_unavailable", "This tool requires a live Supervisor Session.",
                      "Ask the operator to launch or resume the Session. Do not invent credentials or bypass the Runtime.")
@@ -166,6 +190,11 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
         if len(raw) > MAX_RESPONSE_BYTES:
             raise ValueError("response exceeds limit")
         result = json.loads(raw)
+        if raw_json:
+            if not isinstance(result, dict):
+                raise ValueError("response must be a JSON object")
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False, sort_keys=True))
+            return 0
         if (isinstance(result, dict) and isinstance(result.get("operation"), str)
                 and result.get("status") in {"completed", "failed", "cancelled"}
                 and isinstance(result.get("result"), dict)):

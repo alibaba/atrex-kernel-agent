@@ -18,6 +18,8 @@ class ManagedRuntimeFactory:
     wiki_options: dict | None = None
     services: object | None = None
     wiki_provider: object | None = None
+    contribution_modules: tuple[str, ...] = ("measurement",)
+    instruction_overrides: dict[str, str] | None = None
 
     @property
     def research_records(self) -> bool:
@@ -32,5 +34,7 @@ class ManagedRuntimeFactory:
             wiki_options=WikiConfig(**(self.wiki_options or {})),
             wiki_provider=self.wiki_provider,
             request_timeout=self.request_timeout if self.request_timeout is not None else configuration.request_timeout,
-            queue_timeout=self.queue_timeout), workspace_provider=workspace_provider,
+            queue_timeout=self.queue_timeout,
+            contribution_modules=tuple(self.contribution_modules),
+            instruction_overrides=dict(self.instruction_overrides or {})), workspace_provider=workspace_provider,
             services=self.services)

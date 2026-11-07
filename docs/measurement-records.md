@@ -79,7 +79,8 @@ Do not change labels or delete indexes to force a new random sample.
 | --- | --- |
 | Accepted job ID, collection interrupted | Poll the same accepted job; transient collection failures do not authorize duplicate submission |
 | Direct HTTP submit transport/5xx/408/429 or structured infrastructure failure | Replay with the same wire idempotency key, persisted before POST |
-| Confirmed failed infrastructure job | Persist its failure and use a replacement identity; backoff 5/10/20/40/60 seconds within the request deadline |
+| Confirmed failed infrastructure job that permits replay | Persist its failure and use a replacement identity; backoff 5/10/20/40/60 seconds within the request deadline |
+| `execution_state=unknown`, `replay_policy=never`, or `retry_advice=never` | Preserve the original ID and evidence for reconciliation; an infrastructure label cannot authorize replacement, including after restart or a collection timeout |
 | Unknown Agate CLI submission without an ID | Preserve uncertainty for reconciliation; there is no general CLI wire-idempotency replay |
 | Confirmed CLI 429/503 or structured infrastructure rejection | Retry within the defined budget; other no-ID 5xx/timeouts remain uncertain |
 | Explicit device-unavailable Eval result | Up to two replacement executions; exhaustion remains unavailable, not candidate failure |

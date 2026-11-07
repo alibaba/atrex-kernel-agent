@@ -11,7 +11,7 @@ def hook_output(payload, timeout_ms):
     value = payload.get("tool_input")
     if not isinstance(value, dict) or not isinstance(value.get("command"), str):
         return None
-    if not any(name in value["command"] for name in ("tools/sandbox.py", "tools/plugin.py")):
+    if not any(name in value["command"] for name in ("tools/sandbox.py", "tools/plugin.py", "tools/aka.py")):
         return None
     return {"hookSpecificOutput": {
         "hookEventName": "PreToolUse", "permissionDecision": "allow",

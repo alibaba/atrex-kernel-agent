@@ -15,8 +15,11 @@ __pycache__/
 *.egg-info/
 .pytest_cache/
 
-# Local and temporary test scripts
-tests/
+# Local and temporary test scripts; retain portable contribution checks.
+tests/*
+!tests/test_contributions.py
+!tests/test_measurement_integration.py
+!tests/test_dsh_contributions.mjs
 
 # Distribution build artifacts
 build/

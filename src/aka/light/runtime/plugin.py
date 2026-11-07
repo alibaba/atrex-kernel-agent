@@ -6,11 +6,13 @@ name = "runtime"
 provide = ("tool_runtime",)
 inject = ("executor", "light_experiments", "light_acceptance", "light_journal", "wiki")
 identity_packages = ("aka.light.runtime", "aka.light.evaluation", "aka.light.workspace", "aka.light.wiki",
-                     "aka.contracts.wiki")
+                     "aka.contracts.wiki", "aka.light.measurement", "aka.contracts.contributions")
 Config = {"type": "object", "properties": {
     "measurement_repetitions": {"type": "integer", "enum": [1, 3]},
     "pause_agent_during_requests": {"type": "boolean"},
     "wiki": {"type": "boolean"},
+    "contribution_modules": {"type": "array", "items": {"type": "string", "enum": ["measurement"]}},
+    "instruction_overrides": {"type": "object", "additionalProperties": {"type": "string", "minLength": 1}},
     "wiki_options": {"type": "object", "properties": {
         "model": {"type": "string"}, "effort": {"type": "string", "enum": ["low", "medium", "high", "max"]},
         "settings_file": {"type": "string"}, "base_url": {"type": "string"},
@@ -26,6 +28,8 @@ Defaults = {
     "measurement_repetitions": 1,
     "pause_agent_during_requests": True,
     "wiki": True,
+    "contribution_modules": ["measurement"],
+    "instruction_overrides": {},
     "queue_timeout": 60,
 }
 

@@ -27,7 +27,7 @@ def _agent_runtime_directive(
     pause_agent_during_requests: bool = True,
     knowledge_skills=("KernelWiki",),
 ) -> str:
-    root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
+    root = ".agents" if agent_cli in {"codex", "pi", "dsh"} else ".qoder" if agent_cli == "qodercli" else ".claude"
     extra = ", PPU profiling" if is_ppu else ""
     knowledge = "".join(f", `{name}`" for name in knowledge_skills) if wiki else ""
     suspension = (
@@ -146,6 +146,7 @@ def link_runtime(workspace: Path, atrex_bench_root: Path | None = None, *, is_pp
     for name in ("tools", "skills", "reference", "reference-projects", "gpu-wiki"):
         _remove_legacy_link(workspace / name)
     publish(workspace, "tools/sandbox.py", resource("tools/sandbox.py").read_bytes())
+    publish(workspace, "tools/aka.py", resource("tools/aka.py").read_bytes())
     publish(workspace, "tools/plugin.py", resource("tools/plugin.py").read_bytes())
     if plugin_registry is None:
         from aka.light.runtime.catalog import PluginRegistry
