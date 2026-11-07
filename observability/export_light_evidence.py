@@ -92,7 +92,7 @@ def export_evidence(workspace: Path, record_id: str, output: Path) -> dict:
             "operation": record.get("operation"),
             "created_at": record.get("created_at"),
             "cacheable": record.get("cacheable"),
-            "kernel": record.get("kernels", {}).get("candidate"),
+            "kernel": (record.get("kernels") or {}).get("candidate"),
             "agate_job_ids": sorted({row["job_id"] for row in rows if row["job_id"]}),
             "agate_job_count": len(rows),
             "files": {
@@ -128,7 +128,7 @@ def main(argv=None) -> int:
     try:
         value = export_evidence(options.workspace, options.gateway_record_id, options.output)
     except (OSError, ValueError, KeyError, TypeError) as error:
-        print(f"export-light-evidence: {error}", file=__import__("sys").stderr)
+        print(f"export-light-evidence: {error}", file=sys.stderr)
         return 1
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
     return 0

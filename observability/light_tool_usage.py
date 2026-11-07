@@ -6,7 +6,6 @@ import argparse
 from collections import Counter, defaultdict
 import json
 from pathlib import Path
-import re
 import sys
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -17,6 +16,7 @@ from observability.common import (
     add_output_arguments,
     discover_scopes,
     emit,
+    KIND_PATTERN,
     load_snapshot,
     main_error,
     observed_at,
@@ -25,14 +25,11 @@ from observability.common import (
 )
 
 
-KIND = re.compile(r"--kind(?:=|\s+)([a-zA-Z0-9_-]+)")
-
-
 def _tool(operation: object, argv: object) -> str:
     values = [str(item) for item in argv] if isinstance(argv, list) else []
     text = " ".join(values)
     if operation == "gateway":
-        match = KIND.search(text)
+        match = KIND_PATTERN.search(text)
         return match.group(1) if match else "gateway"
     if operation in {"journal", "wiki", "plugin"} and values:
         return values[0]
@@ -55,25 +52,63 @@ def _duration(value: object) -> float | None:
     return None
 
 
+def _stream_duration(*streams: object) -> float | None:
+    """Return the first structured duration without letting later streams erase it."""
+    for stream in streams:
+        if not isinstance(stream, str):
+            continue
+        for line in stream.splitlines():
+            payload = line.split("=", 1)[-1] if "_JSON=" in line else line
+            try:
+                parsed = json.loads(payload)
+            except ValueError:
+                continue
+            if (duration := _duration(parsed)) is not None:
+                return duration
+    return None
+
+
+def _structured_success(content: object) -> tuple[bool | None, str]:
+    """Read an explicit result status; never infer failure from prose substrings."""
+    if not isinstance(content, str):
+        return None, "unavailable"
+    candidates = []
+    payloads = [content, *content.splitlines()]
+    for line in payloads:
+        payload = line.split("=", 1)[-1] if "_JSON=" in line else line
+        try:
+            value = json.loads(payload)
+        except ValueError:
+            continue
+        if isinstance(value, dict):
+            candidates.append(value)
+    for value in candidates:
+        exit_code = value.get("exit_code")
+        if type(exit_code) is int:
+            return exit_code == 0, "structured_exit_code"
+        success = value.get("success")
+        if type(success) is bool:
+            return success, "structured_success"
+        ok = value.get("ok")
+        if type(ok) is bool:
+            return ok, "structured_ok"
+        status = str(value.get("status") or "").casefold()
+        if status in {"completed", "succeeded", "success", "passed", "pass", "reused"}:
+            return True, "structured_status"
+        if status in {"failed", "failure", "error", "cancelled", "canceled", "rejected"}:
+            return False, "structured_status"
+        if isinstance(value.get("error"), dict) or value.get("error_class"):
+            return False, "structured_error"
+    return None, "unavailable"
+
+
 def _audit_calls(scope) -> list[dict]:
     rows = []
     for path in sorted(scope.audit_root.glob("request-*.json")):
         value = read_json(path, default={})
         if not isinstance(value, dict):
             continue
-        duration = None
-        for stream in (value.get("stdout"), value.get("stderr")):
-            if not isinstance(stream, str):
-                continue
-            for line in stream.splitlines():
-                payload = line.split("=", 1)[-1] if "_JSON=" in line else line
-                try:
-                    parsed = json.loads(payload)
-                except ValueError:
-                    continue
-                duration = _duration(parsed)
-                if duration is not None:
-                    break
+        duration = _stream_duration(value.get("stdout"), value.get("stderr"))
         rows.append(
             {
                 "scope": scope.label,
@@ -83,6 +118,7 @@ def _audit_calls(scope) -> list[dict]:
                 "tool": _tool(value.get("operation"), value.get("argv")),
                 "operation_family": value.get("operation"),
                 "success": value.get("exit_code") == 0,
+                "success_basis": "audit_exit_code",
                 "exit_code": value.get("exit_code"),
                 "duration_seconds": duration,
                 "gateway_record_id": value.get("gateway_record_id"),
@@ -105,6 +141,7 @@ def _audit_calls(scope) -> list[dict]:
                 "tool": value.get("tool") or "wiki",
                 "operation_family": "wiki_receipt",
                 "success": value.get("status") in {"completed", "reused"},
+                "success_basis": "wiki_receipt_status",
                 "exit_code": None,
                 "duration_seconds": value.get("total_latency_ms") / 1000.0
                 if type(value.get("total_latency_ms")) in {int, float}
@@ -137,7 +174,7 @@ def _session_calls(scope) -> list[dict]:
                 continue
             if event.get("kind") == "tool_call":
                 text = str(event.get("content") or "")
-                match = KIND.search(text)
+                match = KIND_PATTERN.search(text)
                 tool = match.group(1) if match else str(event.get("tool_name") or "unknown")
                 row = {
                     "scope": scope.label,
@@ -148,17 +185,15 @@ def _session_calls(scope) -> list[dict]:
                     "tool": tool,
                     "sequence": event.get("sequence"),
                     "success": None,
+                    "success_basis": "unavailable",
                 }
                 rows.append(row)
                 if row["tool_id"]:
                     pending[row["tool_id"]] = row
             elif event.get("kind") == "tool_result" and event.get("tool_id") in pending:
-                content = str(event.get("content") or "")
-                lowered = content.casefold()
-                pending[event["tool_id"]]["success"] = not any(
-                    marker in lowered
-                    for marker in ("traceback", "error", "failed", '"exit_code": 1', '"exit_code": 2')
-                )
+                success, basis = _structured_success(event.get("content"))
+                pending[event["tool_id"]]["success"] = success
+                pending[event["tool_id"]]["success_basis"] = basis
     return rows
 
 
@@ -196,7 +231,8 @@ def snapshot(workspace: Path) -> dict:
         "session_attribution": attributed,
         "attribution_note": (
             "Audit receipts contain authoritative outcomes but not Session/Episode IDs. "
-            "Session transcripts contain attribution but cannot be safely joined to every audit receipt on current main."
+            "Session transcripts contain attribution but cannot be safely joined to every audit receipt on current main. "
+            "Session success is reported only when the tool result carries a structured status; otherwise it is null."
         ),
     }
 

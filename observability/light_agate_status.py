@@ -44,7 +44,9 @@ def _error(job: object, response: object) -> dict | None:
                 except ValueError:
                     continue
                 if isinstance(parsed, dict):
-                    candidates.extend([parsed.get("error"), parsed])
+                    candidates.append(parsed.get("error"))
+                    if parsed.get("error_class") or parsed.get("code"):
+                        candidates.append(parsed)
     value = next((item for item in candidates if isinstance(item, dict)), None)
     if value is None:
         return None

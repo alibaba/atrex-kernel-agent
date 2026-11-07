@@ -38,6 +38,14 @@ def _usage(value: object) -> dict:
     }
 
 
+def _summed_session_usage(rows: list[dict]) -> dict:
+    usage = {}
+    for key in TOKEN_KEYS:
+        values = [row["usage"].get(key) for row in rows if type(row["usage"].get(key)) is int]
+        usage[key] = sum(values) if values else None
+    return usage | {"reasoning_tokens": None, "measurement": "session_capture_fallback"}
+
+
 def _session_rows(scope) -> list[dict]:
     rows = []
     root = scope.workspace / ".atrex_long_horizon" / "episodes"
@@ -110,6 +118,7 @@ def snapshot(workspace: Path) -> dict:
     for scope in discover_scopes(workspace):
         public = load_snapshot(scope)
         candidates = {candidate.episode: candidate for candidate in public.candidates if candidate.episode is not None}
+        episode_facts = {episode.episode: episode for episode in public.episodes}
         scope_sessions = _session_rows(scope)
         sessions.extend(scope_sessions)
         session_by_episode: dict[int, list[dict]] = {}
@@ -121,8 +130,11 @@ def snapshot(workspace: Path) -> dict:
                 incidents["output_truncation"] += 1
             if "rate_limit" in text or "throttl" in text:
                 incidents["rate_limit"] += 1
+        telemetry_episodes = set()
         for telemetry in telemetry_documents(scope):
             episode = telemetry.get("episode")
+            if isinstance(episode, int):
+                telemetry_episodes.add(episode)
             phase_tokens = telemetry.get("phase_tokens") if isinstance(telemetry.get("phase_tokens"), dict) else {}
             terminal = _usage(phase_tokens.get("terminal_usage"))
             invocations = telemetry.get("invocations") if isinstance(telemetry.get("invocations"), list) else []
@@ -172,6 +184,49 @@ def snapshot(workspace: Path) -> dict:
                     ),
                 }
             )
+        for episode, episode_sessions in sorted(session_by_episode.items()):
+            if episode in telemetry_episodes:
+                continue
+            terminal = _summed_session_usage(episode_sessions)
+            candidate = candidates.get(episode)
+            latency = finite_positive(candidate.result.latency_us) if candidate else None
+            earlier = [
+                item for item in public.candidates
+                if item.promoted and candidate is not None and item.version < candidate.version
+            ]
+            prior = (
+                finite_positive(max(earlier, key=lambda item: item.version).result.latency_us)
+                if earlier else None
+            )
+            improvement = (prior - latency) if prior and latency else None
+            total = terminal.get("total_tokens")
+            fact = episode_facts.get(episode)
+            episodes.append(
+                {
+                    "scope": scope.label,
+                    "trajectory": scope.trajectory,
+                    "episode": episode,
+                    "version": candidate.version if candidate else None,
+                    "status": fact.status if fact else "running_or_interrupted",
+                    "accepted": fact.accepted if fact else False,
+                    "resume_count": None,
+                    "invocation_count": None,
+                    "usage": terminal,
+                    "control_tokens": None,
+                    "measurement": "session_capture_fallback",
+                    "reason_codes": ["telemetry_summary_unavailable"],
+                    "session_count": len(episode_sessions),
+                    "wall_seconds": sum(row["wall_seconds"] or 0.0 for row in episode_sessions) or None,
+                    "active_seconds": None,
+                    "agate_wait_seconds": None,
+                    "latency_improvement_us": improvement,
+                    "latency_improvement_us_per_million_tokens": (
+                        improvement * 1_000_000 / total
+                        if improvement is not None and isinstance(total, int) and total > 0
+                        else None
+                    ),
+                }
+            )
         for episode in public.episodes:
             if episode.status == "invalid_handoff":
                 incidents["invalid_handoff"] += 1
@@ -181,6 +236,7 @@ def snapshot(workspace: Path) -> dict:
         )
         incidents["session_restart"] += sum(max(0, count - 1) for count in counts.values())
 
+    episodes.sort(key=lambda row: (row["scope"], row["episode"] if isinstance(row["episode"], int) else -1))
     startup_sessions = [row for row in sessions if row["stage"] != "episode"]
     token_totals = {
         key: (
@@ -209,6 +265,10 @@ def snapshot(workspace: Path) -> dict:
             ),
             "cache_read_tokens": "available when the Agent backend reports usage",
             "cache_write_tokens": "available when the Agent backend reports usage",
+            "episode_fallback": (
+                "when telemetry.summary.json is absent, totals use the sum of that Episode's "
+                "captured Session usage and mark measurement=session_capture_fallback"
+            ),
         },
         "attempt_unit": "one Light Episode",
         "average_tokens_per_attempt": sum(episode_totals) / len(episode_totals) if episode_totals else None,

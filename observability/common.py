@@ -24,7 +24,6 @@ from aka.light.evaluation.provider import result_from_response  # noqa: E402
 from aka.light.experiment.store import (  # noqa: E402
     MeasurementStore,
     RECORD_ID,
-    read_json as measurement_json,
 )
 from aka.light.runtime.paths import supervisor_campaign_root  # noqa: E402
 from aka.light.workflow.search import read_state as read_search_state  # noqa: E402
@@ -44,6 +43,7 @@ TERMINAL_EPISODE_STATUSES = frozenset(
     }
 )
 TERMINAL_CAMPAIGN_PHASES = frozenset({"completed", "failed", "interrupted", "stopped"})
+KIND_PATTERN = re.compile(r"--kind(?:=|\s+)([a-zA-Z0-9_-]+)")
 
 
 @dataclass(frozen=True)
@@ -78,7 +78,7 @@ def read_json(path: Path, *, default: Any = None, limit: int = 64 * 1024 * 1024)
         if path.stat().st_size > limit:
             raise ValueError(f"JSON exceeds {limit} bytes: {path}")
         return json.loads(path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    except (OSError, ValueError):
         return default
 
 

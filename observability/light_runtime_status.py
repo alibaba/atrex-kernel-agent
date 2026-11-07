@@ -17,6 +17,7 @@ if str(REPOSITORY_ROOT) not in sys.path:
 from observability.common import (
     TERMINAL_CAMPAIGN_PHASES,
     TERMINAL_EPISODE_STATUSES,
+    KIND_PATTERN,
     add_output_arguments,
     age_seconds,
     discover_scopes,
@@ -34,9 +35,6 @@ from observability.common import (
 AGATE_KINDS = frozenset(
     {"run", "evaluate", "same_allocation_abba", "abba", "profile", "check", "disassemble", "dev"}
 )
-KIND = re.compile(r"--kind(?:=|\s+)([a-zA-Z0-9_-]+)")
-
-
 def _episode_rows(snapshot) -> list[dict]:
     active = snapshot.progress.episode if snapshot.progress.writer_active else None
     rows = []
@@ -146,7 +144,7 @@ def _tool_phase(tool: object, content: object) -> tuple[str, str | None]:
     text = f"{name} {rendered}".casefold()
     if any(marker in text for marker in ("wiki-query", "wiki_query", "/v1/wiki/", "gpu wiki")):
         return "waiting_wiki", name
-    match = KIND.search(rendered)
+    match = KIND_PATTERN.search(rendered)
     kind = match.group(1).casefold() if match else ""
     if kind in AGATE_KINDS or re.search(r"(?:^|[ /])agate(?: |$).*(?:eval|profile|check|disassemble|dev|get)", text):
         return "waiting_agate", kind or name

@@ -25,19 +25,53 @@ python3 observability/light_runtime_status.py "$CAMPAIGN" --json
 python3 observability/light_runtime_status.py "$CAMPAIGN" --compact
 ```
 
-脚本会自动发现顶层 Campaign 和 pooled search 的 `t01`、`t02`、`t03` 等轨迹工作区。
-输出中的 `scope=campaign` 表示顶层工作区，`scope=t01` 等表示具体轨迹。
+脚本会自动发现顶层 Campaign 和 pooled search 的 `t0001`、`t0002`、`t0003` 等轨迹工作区。
+输出中的 `scope=campaign` 表示顶层工作区，`scope=t0001` 等表示具体轨迹。
 
 | 计划分类 | 脚本 |
 |---|---|
 | 运行状态 | `light_runtime_status.py` |
 | 性能与正确性 | `light_performance.py` |
+| 已接受与已测最佳 latency | `light_latency_status.py` |
 | 接受与晋升 | `light_acceptance.py` |
 | Agate 调用与故障 | `light_agate_status.py` |
 | Token 与时间 | `light_token_time.py` |
 | Runtime Tool 使用 | `light_tool_usage.py` |
 | 源码与可复现性 | `export_light_evidence.py`、`export_light_source.py` |
 | GPU Wiki | `light_wiki_usage.py` |
+
+### 数据流与命令边界
+
+```mermaid
+flowchart LR
+    workflow["Workflow export<br/>progress / episodes / candidates"]
+    measurements["Measurement store<br/>records / kernels / jobs"]
+    search["Pooled-search state<br/>trajectory ownership"]
+    audit["Audit and trusted-job receipts"]
+    sessions["Session captures<br/>conversation / token usage"]
+    wiki["GPU Wiki receipts and journals"]
+
+    workflow --> runtime["light_runtime_status.py"]
+    workflow --> performance["light_performance.py"]
+    workflow --> latency["light_latency_status.py"]
+    workflow --> acceptance["light_acceptance.py"]
+    workflow --> tokens["light_token_time.py"]
+    measurements --> performance
+    measurements --> latency
+    measurements --> acceptance
+    measurements --> agate["light_agate_status.py"]
+    measurements --> exports["export_light_evidence.py<br/>export_light_source.py"]
+    search --> runtime
+    audit --> agate
+    audit --> tools["light_tool_usage.py"]
+    sessions --> runtime
+    sessions --> tokens
+    sessions --> tools
+    wiki --> wiki_status["light_wiki_usage.py"]
+```
+
+每个入口只读取持久化数据，不提交、取消或修改 Agate 任务。多个独立入口便于在巡检脚本中按需采样，
+而不强制加载与当前问题无关的较大数据源。
 
 ## 2. 运行状态
 
@@ -77,9 +111,9 @@ python3 observability/light_runtime_status.py "$CAMPAIGN" --stale-after 900
 
 ```text
 Scope  Campaign Phase  Episode  Done  Health    Stale(s)  Active Sessions
-t01    exploring       3        2     healthy   18.4      1
-t02    exploring       2        1     stalled   742.1     1
-t03    completed       5        5     completed  30.2     0
+t0001  exploring       3        2     healthy   18.4      1
+t0002  exploring       2        1     stalled   742.1     1
+t0003  completed       5        5     completed  30.2     0
 ```
 
 第二张表逐个展示活跃 Session，并明确它属于哪个 Stage／Episode、当前 Agent Phase 及该阶段已持续多久：
@@ -87,8 +121,8 @@ t03    completed       5        5     completed  30.2     0
 ```text
 Active Agent Sessions
 Scope  Stage               Episode  Session       Backend  Agent Phase    Tool      Phase(s)  Health
-t01    episode             3        run-a1b2c3    claude   thinking       —         18.4      active
-t02    framework_baseline  0        session-xyz   claude   waiting_agate  run       742.1     stalled
+t0001  episode             3        run-a1b2c3    claude   thinking       —         18.4      active
+t0002  framework_baseline  0        session-xyz   claude   waiting_agate  run       742.1     stalled
 ```
 
 Agent Phase 的含义：
@@ -107,6 +141,29 @@ Agent Phase 的含义：
 阶段由当前 `run-*/conversation.jsonl` 中“已发出但尚未出现 tool result”的最后一个工具调用判断；
 Session 身份来自同一 invocation 的 `token-usage.json`。正式 Episode 使用其 Episode 目录；启动阶段
 使用 Supervisor 写入的 `memory/live.json` 区分 `bootstrap` 和 `framework_baseline`，不按时间猜测关联。
+
+状态推导对应 `light_runtime_status.py` 的 `_conversation_phase`、`_tool_phase` 和 scope health 逻辑：
+
+```mermaid
+flowchart TD
+    update["Read Workflow progress and latest update"] --> terminal{"Campaign terminal?"}
+    terminal -- yes --> terminal_state["completed / failed / interrupted / stopped"]
+    terminal -- no --> writer{"Writer active?"}
+    writer -- no --> inactive[inactive]
+    writer -- yes --> stale{"Age exceeds --stale-after?"}
+    stale -- yes --> stalled[stalled]
+    stale -- no --> healthy[healthy]
+
+    transcript["Read pending tool call from conversation.jsonl"] --> pending{"Pending call?"}
+    pending -- no --> thinking[thinking]
+    pending -- yes --> wiki_call{"Wiki call?"}
+    wiki_call -- yes --> waiting_wiki[waiting_wiki]
+    wiki_call -- no --> agate_call{"Agate-backed kind?"}
+    agate_call -- yes --> waiting_agate[waiting_agate]
+    agate_call -- no --> runtime_call{"Runtime Tool?"}
+    runtime_call -- yes --> executing_runtime[executing_runtime_tool]
+    runtime_call -- no --> executing_tool[executing_tool]
+```
 
 只看活跃 Session：
 
@@ -161,8 +218,8 @@ accepted_best           123.450000   012345...      gateway-abcd...  verified
 best_passing_full_eval  119.820000   kernel-abcd... gateway-1234...  full_eval_record
 
 Scope  Episode  Version  Promoted  State  Latency(us)
-t01    1        2        True      pass   141.200000
-t01    2        3        False     rejected 138.700000
+t0001  1        2        True      pass   141.200000
+t0001  2        3        False     rejected 138.700000
 ```
 
 `accepted_best.gateway_record_id` 是该候选终态晋升时引用的 ABBA/Evaluate Record。
@@ -249,8 +306,8 @@ latency 和源码 SHA256。
 
 ```text
 Scope  Episode  Version  Gate  Promoted  Latency(us)  Improve(%)  Reason
-t01    1        2        PASS  True      141.200000   8.42        promotion gate passed
-t01    2        3        FAIL  False     150.700000  -6.73        correctness mismatch
+t0001  1        2        PASS  True      141.200000   8.42        promotion gate passed
+t0001  2        3        FAIL  False     150.700000  -6.73        correctness mismatch
 ```
 
 只看晋升：
@@ -300,6 +357,25 @@ python3 observability/light_agate_status.py "$CAMPAIGN" --json
 - `running_or_interrupted`：没有形成完整 Record。
 
 错误类别为 `infrastructure`、`candidate`、`policy`、`protocol` 或 `unknown`。
+
+`light_agate_status.py` 与 `light_acceptance.py` 的终态分类关系如下：
+
+```mermaid
+flowchart TD
+    record["Read logical call and physical jobs"] --> complete{"Record complete?"}
+    complete -- no --> running[running_or_interrupted]
+    complete -- yes --> error{"Structured terminal error?"}
+    error -- yes --> failed["failed<br/>infrastructure / candidate / policy / protocol / unknown"]
+    error -- no --> cacheable{"cacheable=true?"}
+    cacheable -- no --> not_cacheable[completed_not_cacheable]
+    cacheable -- yes --> completed[completed]
+
+    completed --> gate{"Correctness and promotion gate pass?"}
+    gate -- no --> rejected["rejected<br/>retain incumbent"]
+    gate -- yes --> evidence{"Attempt Record and accepted Git source agree?"}
+    evidence -- yes --> verified["promoted<br/>verification_evidence=verified"]
+    evidence -- no --> unverified["do not claim verified evidence<br/>preserve declared Record ID and reason"]
+```
 
 `summary.operation_counts` 只统计有完整 Measurement Record 身份的逻辑调用。启动阶段的 trusted
 任务没有 `gateway_record_id`，因此单独计入 `trusted_operation_counts`，并与普通 Record job 一起
@@ -394,13 +470,16 @@ wait time，所以这两项为 `null`；已结束 Session 的墙钟时间仍可�
 Bootstrap 和 Framework Baseline Session 来自 workspace 同级的 `.atrex-session-traces`，以
 `episode=0` 和相应的 `stage` 返回；它们计入 `totals` 和 `startup_totals`，但不计入
 “每个 Episode／Attempt 平均 Token”，避免把启动成本伪装成优化 Attempt。
+如果运行中或中断的 Episode 已有 Session capture、但尚未生成 `telemetry.summary.json`，脚本会将
+该 Episode 的 Session token 相加并标记 `measurement=session_capture_fallback`。因此 Campaign
+`totals` 不会漏掉这类 Episode，同时已有 telemetry 的 Episode 不会再重复计算 Session token。
 
 预期表格：
 
 ```text
 Scope  Episode  Tokens  Wall(s)  Accepted  Improve us/Mtok  Sessions
-t01    1        120000  1820.4   True      8.9286           1
-t01    2        160000  2314.8   False     0.0000           2
+t0001  1        120000  1820.4   True      8.9286           1
+t0001  2        160000  2314.8   False     0.0000           2
 ```
 
 ## 7. Runtime Tool 使用
@@ -433,6 +512,9 @@ wiki-query   4      4        0        1.0000  1.8     4
 `calls[]` 来自 Runtime 审计记录，结果和退出码更权威；`session_attribution[]` 来自 Session
 事件，能够给出 Session、Episode 和轨迹。当前主线没有持久化两者之间的稳定关联 ID，因此脚本
 不会把两份记录按相近时间强行拼接成同一次调用。
+Session 事件只有在工具结果包含结构化 `exit_code`、`success`、`ok`、`status` 或 error envelope
+时才填充 `success`；纯文本结果返回 `null` 和 `success_basis=unavailable`，不会用 `error`、
+`failed` 等普通单词猜测成败。聚合成功率只使用 Runtime 审计记录中的权威退出码。
 
 ## 8. 源码与可复现性
 
@@ -506,8 +588,8 @@ python3 observability/light_wiki_usage.py "$CAMPAIGN" --json
 
 ```text
 Scope  Tool        Status     Cache  Total(ms)  Knowledge  Adopted  Query
-t01    wiki-query  completed  False  1820       3          True     PPU shared-memory bank conflict
-t02    wiki-query  completed  True   24         0          False    async copy alignment
+t0001  wiki-query  completed  False  1820       3          True     PPU shared-memory bank conflict
+t0002  wiki-query  completed  True   24         0          False    async copy alignment
 ```
 
 `adopted=true` 表示后续 Experiment Journal 明确引用了该 query 或知识条目；它不等同于已经

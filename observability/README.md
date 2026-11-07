@@ -16,6 +16,7 @@ supports `--json` or `--compact` for machine-readable output.
 |---|---|
 | Campaign, trajectory, Episode and Session status | `light_runtime_status.py` |
 | Performance, correctness and per-Shape winners | `light_performance.py` |
+| Accepted and best passing full-Eval latency | `light_latency_status.py` |
 | Candidate gates, rejection reasons and promotions | `light_acceptance.py` |
 | Agate jobs, retries, batches, timeouts and errors | `light_agate_status.py` |
 | Session/Episode tokens, wall time and token efficiency | `light_token_time.py` |

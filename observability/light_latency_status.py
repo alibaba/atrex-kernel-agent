@@ -310,9 +310,8 @@ def best_passing_in_store(store: MeasurementStore, owner: Path) -> list[dict]:
 
             latency = finite_latency(result.get("latency_us_geomean"))
             if latency is None:
-                numeric = [value for value in values if value is not None]
                 latency = math.exp(
-                    sum(math.log(value) for value in numeric) / len(numeric)
+                    sum(math.log(value) for value in values) / len(values)
                 )
 
             identity = record["kernels"]["candidate"]
