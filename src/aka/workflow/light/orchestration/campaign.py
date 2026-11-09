@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
+from aka.contracts.execution import ExecutionPending, ExecutionUnavailable
+from aka.contracts.evaluation import EvaluationUnavailable
 from aka.resources.bundles import resource_path as resource
 
 from aka.workflow.light.orchestration.constants import (
@@ -131,6 +133,14 @@ _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
     "PRE_SMOKE_CHECKS:",
     "RECOMMENDED_CORRECTNESS_FIRST_DESIGN:",
 )
+
+
+VALIDATION_UNAVAILABLE_PREFIX = "validation unavailable:"
+CANDIDATE_COMPILE_PREFIX = "candidate compilation failed:"
+
+
+def _validation_blocked(problem: str) -> bool:
+    return problem.startswith((SUPPLEMENTAL_PENDING_PREFIX, VALIDATION_UNAVAILABLE_PREFIX))
 
 
 def _runtime_timeout_from_environment(name: str, default: float | None = None) -> float | None:
@@ -1242,7 +1252,7 @@ class Campaign:
             if not problem:
                 result, problem = self._framework_baseline_external_gates(n)
             numerical_repairs = 0
-            while problem and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) and (
+            while problem and not _validation_blocked(problem) and (
                 not recovery_used or (problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX) and numerical_repairs < 2)
             ):
                 # The implementation Agent intentionally runs only a bounded smoke subset.
@@ -1279,7 +1289,7 @@ class Campaign:
                     accepted=False,
                     outcome={"summary": problem, "next_directions": []},
                 )
-                outcome = "validation blocked" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "rejected"
+                outcome = "validation blocked" if _validation_blocked(problem) else "rejected"
                 raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
 
             commit = self._commit_framework_baseline(n, result or {})
@@ -2177,6 +2187,12 @@ class Campaign:
                 ]
             try:
                 result, validation_problem = validation_future.result()
+            except (ExecutionPending, ExecutionUnavailable, EvaluationUnavailable) as exc:
+                # The Experiment retains the original execution identity. A missing
+                # verdict cannot authorize candidate repair or a fresh submission.
+                result, validation_problem = None, (
+                    f"{VALIDATION_UNAVAILABLE_PREFIX} {type(exc).__name__}: {exc}"
+                )
             except Exception as exc:
                 result, validation_problem = (
                     None,
@@ -2208,7 +2224,7 @@ class Campaign:
                 execution_timeout=self.sandbox_timeout)
             test = subprocess.CompletedProcess(argv, response["exit_code"], response["stdout"], response["stderr"])
         except (OSError, subprocess.SubprocessError) as exc:
-            return None, f"combined validation failed to run: {exc}"
+            return None, f"{VALIDATION_UNAVAILABLE_PREFIX} combined validation failed to run: {exc}"
         self._print_v0_evaluator_output(test)
         if test.returncode != 0:
             from aka.workflow.light.host.projection import source_error_from_stdout
@@ -2216,13 +2232,29 @@ class Campaign:
             if source_error is not None:
                 error = source_error["error"]
                 return None, " ".join((error["message"], "; ".join(error["violations"]), error["next_action"]))
-            return None, f"combined validation command failed (exit={test.returncode})"
         try:
             result = _test_result_from_stdout(test.stdout)
         except (RuntimeError, json.JSONDecodeError) as exc:
-            return None, f"combined validation produced no usable result: {exc}"
+            return None, f"{VALIDATION_UNAVAILABLE_PREFIX} combined validation produced no usable result: {exc}"
         if result.get("all_pass") is not True:
+            diagnostics = []
+            compile_failure = False
+            for row in result.get("actionable_diagnostics", []) + result.get("diagnostics", []):
+                if isinstance(row, dict):
+                    message = row.get("message") or row.get("error")
+                    if isinstance(message, str) and message:
+                        compile_failure = compile_failure or row.get("stage") == "compile"
+                        diagnostics.append(f"{row.get('stage') or 'candidate'}: {message}")
+            if diagnostics:
+                # Keep the actual compiler/import/runtime failure in the repair
+                # prompt, rather than asking the Agent to fix unmeasured numerics.
+                prefix = CANDIDATE_COMPILE_PREFIX if compile_failure else "combined candidate validation failed:"
+                return None, prefix + " " + "\n".join(dict.fromkeys(diagnostics))
+            if test.returncode != 0:
+                return None, f"combined validation command failed (exit={test.returncode})"
             return None, "combined multi-seed correctness validation failed"
+        if test.returncode != 0:
+            return None, f"{VALIDATION_UNAVAILABLE_PREFIX} passing result has a failed command exit ({test.returncode})"
 
         latency = result.get("latency_us_geomean")
         if (
@@ -2314,7 +2346,9 @@ class Campaign:
         memory["masked"] = False
         memory["git_commit_hash"] = None
         memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
-        memory["correctness"] = {"status": "UNKNOWN" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "FAIL"}
+        blocked = _validation_blocked(problem)
+        compile_failure = problem.startswith(CANDIDATE_COMPILE_PREFIX)
+        memory["correctness"] = {"status": "UNKNOWN" if blocked or compile_failure else "FAIL"}
         memory["optimization"] = {
             "action_category": FRAMEWORK_BASELINE_CATEGORY,
             "action_description": f"rejected {self.framework} baseline attempt",
@@ -2325,11 +2359,15 @@ class Campaign:
             memory["pitfalls_and_fixes"] = pitfalls
         pitfalls.append(
             {
-                "error_type": "production_policy"
+                "error_type": "infrastructure" if blocked else "candidate_compile" if compile_failure else "production_policy"
                 if "self-contained" in problem
                 else "correctness",
                 "error_message": problem,
-                "lesson": f"the next attempt must land a compliant, correctness-passing {self.framework} kernel",
+                "lesson": ("recover the retained Experiment and original Job result before candidate acceptance; "
+                           "do not infer a correctness failure or resubmit unknown execution"
+                           if blocked else "repair the reported candidate compiler/import error before numerical validation"
+                           if compile_failure else
+                           f"the next attempt must land a compliant, correctness-passing {self.framework} kernel"),
             }
         )
         save_version_record(self.workspace, n, memory, generate_memory=self.generate_memory)

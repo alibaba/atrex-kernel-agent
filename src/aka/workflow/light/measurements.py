@@ -114,10 +114,13 @@ class SharedMeasurements:
         identities = {self.workspace_provider.source_identity(source) for source in sources}
         if len(identities) != 1:
             raise ExperimentRecordError("source_binding_mismatch", record.ref)
+        artifact_digests = {artifact.sha256 for artifact in artifacts}
         for identity in self._identities(record):
             expected = identity.parameters.get("candidate_source_sha256")
             artifact_digest = identity.parameters.get("candidate_source_artifact_sha256")
-            if (expected not in identities or artifact_digest not in {artifact.sha256 for artifact in artifacts}):
+            source_identity = identity.parameters.get("candidate_source_identity")
+            if (expected not in artifact_digests or artifact_digest not in artifact_digests
+                    or source_identity is not None and source_identity not in identities):
                 raise ExperimentRecordError("source_binding_mismatch", record.ref)
         return sources[0]
 
@@ -161,7 +164,16 @@ class SharedMeasurements:
         if source is None:
             known = valid = False
         passed = selected.gate == "PASS" and valid if selected is not None and known and settled else None
-        result = {"all_pass": passed, "correct": passed, "mode": mode,
+        feedback = {}
+        if record.kind == "command" and record.phase == "complete":
+            from aka.evaluation.tool_results import canonical_result
+            receipt = experiment.command_result(record.ref)
+            operation_name = "evaluate" if operation == "run" else operation
+            public = canonical_result({"exit_code": receipt.returncode,
+                "stdout": receipt.stdout, "stderr": receipt.stderr}, {"operation": operation_name})["result"]
+            feedback = {key: public[key] for key in ("failures", "actionable_diagnostics", "diagnostics",
+                "feedback_truncation", "diagnostic_truncation") if key in public}
+        result = {**feedback, "all_pass": passed, "correct": passed, "mode": mode,
                   "error": selected.error if selected is not None else None,
                   "latency_us_by_shape": dict(selected.candidate_latency_us_by_shape) if selected is not None else {},
                   "latency_us_geomean": selected.candidate_latency_us if selected is not None else None,

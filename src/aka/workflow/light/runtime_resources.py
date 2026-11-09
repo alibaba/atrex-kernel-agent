@@ -55,4 +55,7 @@ def agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool 
     return (f"- `{root}/skills/` contains the selected module Skills. "
             "Use `python -m aka.resources.cli list` to discover installed tools, "
             "measurement methods and optional knowledge/profiling capabilities. "
-            "Read their supplied Skills for request schemas and examples.")
+            "Read their supplied Skills for request schemas and examples. "
+            "Before choosing DSL imports, run `python3 tools/sandbox.py --kind env`. "
+            "Its `task_worker_requirements` field lists the selected Task's per-Job dependency pins "
+            "and API compatibility notes; these may differ from the base image or local Python.")

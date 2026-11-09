@@ -694,7 +694,14 @@ class SupervisorRuntime:
                     query = EnvironmentQuery(hardware=args.env_gpu or configuration.hardware,
                         fresh=args.env_force)
                     facts = self.executor.query_environment(query)
-                    return {"exit_code": 0, "stdout": json.dumps(facts.as_dict(), allow_nan=False)+"\n", "stderr": ""}
+                    environment_facts = facts.as_dict()
+                    requirements = getattr(evaluation_input, "worker_requirements", None)
+                    if requirements is not None:
+                        environment_facts["task_worker_requirements"] = (
+                            requirements.source.read_text(encoding="utf-8")
+                            if requirements.source is not None else requirements.text
+                        )
+                    return {"exit_code": 0, "stdout": json.dumps(environment_facts, allow_nan=False)+"\n", "stderr": ""}
                 if args.dry_run:
                     return {"exit_code": 0, "stdout": json.dumps({"operation": converted.kind, "prepared": True})+"\n", "stderr": ""}
                 for path in converted.request.artifacts:
