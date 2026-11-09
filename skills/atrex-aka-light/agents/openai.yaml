@@ -1,0 +1,4 @@
+interface:
+  display_name: "Atrex AKA Light"
+  short_description: "Launch, resume, and inspect AKA Light campaigns"
+  default_prompt: "Use $atrex-aka-light to launch or inspect an AKA Light campaign."
