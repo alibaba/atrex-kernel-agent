@@ -82,7 +82,11 @@ class GatewayExecutor(GatewayRecoveryMixin):
                     self._selected_job_transport = bound._selected_job_transport
         from aka.execution.environment_query import command_query, require_supported
         support = self._environment_backend(command.environment).check(command_query(command), discover=False)
-        require_supported(support, require_known=command.operation == NATIVE_ABBA or bool(command.source_archives))
+        # The archive transport is validated by this adapter and the formal
+        # submission API. Older discovery responses omit its feature/CUDA fields;
+        # preserve those unknown observations without asserting remote support.
+        # Same-allocation ABBA still requires affirmative backend proof.
+        require_supported(support, require_known=command.operation == NATIVE_ABBA)
         if type(command.timeout) is not int or command.timeout <= 0:
             raise ValueError("execution timeout must be a positive integer")
         argv = [sys.executable, "-m", "aka.execution.gateway.entrypoint",

@@ -257,6 +257,7 @@ class GatewayCommandEvaluator:
         portable_only = capabilities is not None and not capabilities.prepared_requests
         profile_controls = kind == "profile" and PROFILE_ENVIRONMENT_KEYS.intersection(explicit_environment)
         limitation = ("selected executor uses the portable runner" if portable_only else
+            "closed request inputs require the portable runner" if command.prepared_inputs is not None else
             "PROFILE_* controls require the portable profile runner" if profile_controls else
             "custom dev options" if command.input_files else
             _typed_workspace_limitation(command.workspace, list(command.command), kind, reference_dir=reference, reference_content=reference_content, private=private))

@@ -36,45 +36,47 @@ launch paths, evaluator entry points, and `solution.json` declarations. Judge ac
   `not_applicable`.
 - If evidence is incomplete or ambiguous, reject it as `unresolved`.
 
-Write exactly one file, `dependency_review.json`, with this schema:
+Write exactly one file, `dependency_review.json`. The example below is a valid all-allow
+result, not a completed review. Choose one literal value for each decision and category
+according to the rules below; never output a list of alternatives or a string containing `|`:
 
 ```json
 {
   "schema_version": 2,
-  "verdict": "allow | reject",
+  "verdict": "allow",
   "checks": [
     {
       "id": "framework_compliance",
-      "decision": "allow | reject",
-      "category": "framework_compliant | alternate_framework | unresolved",
+      "decision": "allow",
+      "category": "framework_compliant",
       "reason": "concise evidence-based reason",
       "evidence": ["candidate/kernel.py:line"]
     },
     {
       "id": "compute_provenance",
-      "decision": "allow | reject",
-      "category": "self_authored_compute | prebuilt_compute | torch_compute | hidden_dispatch | external_code | unresolved",
+      "decision": "allow",
+      "category": "self_authored_compute",
       "reason": "concise evidence-based reason",
       "evidence": ["candidate/kernel.py:line"]
     },
     {
       "id": "dependency_inventory",
-      "decision": "allow | reject",
-      "category": "inventory_complete | unresolved",
+      "decision": "allow",
+      "category": "inventory_complete",
       "reason": "explain why the inventory below is complete",
       "evidence": ["candidate/kernel.py:line", "candidate/solution.json:field"]
     },
     {
       "id": "external_code_loading",
-      "decision": "allow | reject",
-      "category": "no_external_code | external_code | hidden_dispatch | unresolved",
+      "decision": "allow",
+      "category": "no_external_code",
       "reason": "trace any loader to its implementation source",
       "evidence": ["candidate/kernel.py:line"]
     },
     {
       "id": "solution_manifest",
-      "decision": "allow | reject",
-      "category": "manifest_consistent | not_applicable | manifest_mismatch | unresolved",
+      "decision": "allow",
+      "category": "manifest_consistent",
       "reason": "compare the manifest with the implementation",
       "evidence": ["candidate/solution.json:field or candidate/kernel.py:line"]
     }
@@ -82,8 +84,8 @@ Write exactly one file, `dependency_review.json`, with this schema:
   "dependencies": [
     {
       "name": "dependency name",
-      "decision": "allow | reject",
-      "category": "toolchain_plumbing | framework_runtime | support_utility | prebuilt_compute | alternate_framework | hidden_dispatch | external_code | unresolved",
+      "decision": "allow",
+      "category": "support_utility",
       "reason": "how this dependency is actually used",
       "evidence": ["candidate/kernel.py:line or candidate/solution.json:field"]
     }
@@ -93,6 +95,14 @@ Write exactly one file, `dependency_review.json`, with this schema:
 ```
 
 Rules:
+
+- Allowed `decision` and `verdict` values are exactly `allow` and `reject`.
+- For `framework_compliance`, allow `framework_compliant`; reject `alternate_framework` or `unresolved`.
+- For `compute_provenance`, allow `self_authored_compute`; reject `prebuilt_compute`, `torch_compute`, `hidden_dispatch`, `external_code`, or `unresolved`.
+- For `dependency_inventory`, allow `inventory_complete`; reject `unresolved`.
+- For `external_code_loading`, allow `no_external_code`; reject `external_code`, `hidden_dispatch`, or `unresolved`.
+- For `solution_manifest`, allow `manifest_consistent` or `not_applicable`; reject `manifest_mismatch` or `unresolved`.
+- For dependencies, allow `toolchain_plumbing`, `framework_runtime`, or `support_utility`; reject `prebuilt_compute`, `alternate_framework`, `hidden_dispatch`, `external_code`, or `unresolved`.
 
 - Return every check ID shown above exactly once and no extra check IDs.
 - List every discovered non-stdlib dependency exactly once.

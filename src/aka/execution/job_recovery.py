@@ -70,7 +70,7 @@ class GatewayRecoveryMixin:
         from .gateway.requests import bound_limits
         backend = self._environment_backend() if hasattr(self, "request") else self._environment_backend(command.environment)
         support = backend.check(command_query(command), discover=False)
-        require_supported(support, require_known=command.operation == "same_allocation_abba" or bool(command.source_archives))
+        require_supported(support, require_known=command.operation == "same_allocation_abba")
         def decorate(result):
             return replace(result, environment_snapshot=support.environment,
                            environment_identity=support.environment.identity, environment_support=support)

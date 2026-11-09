@@ -170,9 +170,26 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     provisional = replace(provisional, num_gpus=request["spec"].get("num_gpus", 1),
         languages=tuple(request["spec"].get("languages", ())))
     native_manifest = source.files.get('kernel.py') is None
+    private_profile = (kind == 'profile' and evaluation_input is not None
+                       and evaluation_input.private_reference_dir is not None and not native_manifest)
+    profile_options = ProfileOptions(args.profile_level, args.profiler, tuple(args.profile_counter),
+                                     args.kernel_regex, args.top_kernels) if private_profile else None
+    from .command_inputs import nondefault_profile
+    portable_profile = (private_profile and candidate_archive is None and not nondefault_profile(profile_options)
+        and not any(value is not None for value in (args.input_path, args.shapes_path, args.kernel_name,
+                                                    args.launch_skip, args.launch_count))
+        and not args.profile_source)
+    if portable_profile:
+        if args.profile_shape_id:
+            if args.profile_shape_id not in request['reference']['shapes']:
+                raise ValueError('Profile Shape is outside the selected Task input')
+            provisional = replace(provisional, environment={**provisional.environment,
+                'PROFILE_SHAPE_ID': args.profile_shape_id})
+        return ToolRequest(kind, replace(provisional, requirements=tuple(requirements),
+                                        profile_options=profile_options), args)
     if native_manifest and kind in {'check', 'disassemble'}:
         raise ValueError('Compiled manifests support Evaluate and Profile; use Evaluate correctness_only for a build/correctness check')
-    if candidate_archive is not None and not native_manifest and kind in {"profile", "check", "disassemble"}:
+    if (candidate_archive is not None or private_profile) and not native_manifest and kind in {"profile", "check", "disassemble"}:
         from .diagnostic_preparation import command as diagnostic_command
         return ToolRequest(kind, diagnostic_command(provisional, request, source, kind, args, requirements), args)
     request["candidate"] = descriptor
