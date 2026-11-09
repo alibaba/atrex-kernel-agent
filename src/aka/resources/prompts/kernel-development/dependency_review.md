@@ -32,8 +32,9 @@ launch paths, evaluator entry points, and `solution.json` declarations. Judge ac
   paths, and `solution.json`. Include the selected framework and PyTorch when present. An empty list is
   valid only when there truly are no non-stdlib dependencies.
 - Check `solution.json` semantics when present: languages, dependencies and entry point must describe
-  the reviewed implementation. If it is absent and not required by the candidate format, use
-  `not_applicable`.
+  the reviewed implementation. If it is absent and not required by the candidate format,
+  set this check's `decision` to `allow` and its `category` to `not_applicable`.
+  `not_applicable` is a category, never a `decision` or a `verdict`.
 - If evidence is incomplete or ambiguous, reject it as `unresolved`.
 
 Write exactly one file, `dependency_review.json`. The example below is a valid all-allow
@@ -95,6 +96,21 @@ according to the rules below; never output a list of alternatives or a string co
 ```
 
 Rules:
+
+For an absent optional manifest, the `solution_manifest` check has the shape below.
+Use it as one row in the complete result, retaining every other required check and
+dependency. Cite a supplied candidate file and explain why the manifest is optional;
+do not use this category for a present manifest or a required missing manifest.
+
+```json
+{
+  "id": "solution_manifest",
+  "decision": "allow",
+  "category": "not_applicable",
+  "reason": "No solution.json is supplied, and this candidate format does not require one.",
+  "evidence": ["candidate/kernel.py:1"]
+}
+```
 
 - Allowed `decision` and `verdict` values are exactly `allow` and `reject`.
 - For `framework_compliance`, allow `framework_compliant`; reject `alternate_framework` or `unresolved`.
