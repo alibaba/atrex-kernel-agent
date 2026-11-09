@@ -481,6 +481,13 @@ def run_bounded(
     from aka.light.runtime.server import session_environment
 
     with session_environment(cwd, environment, session_control=control) as environment:
+        if command and Path(command[0]).name == "dsh":
+            from aka.legacy.agent.dsh import runtime_connection_environment
+            # Managed credentials exist only inside session_environment. The
+            # adapter's earlier environment hook cannot bridge them yet.
+            with runtime_connection_environment(environment) as dsh_environment:
+                return _run_bounded(command, cwd, timeout, dsh_environment,
+                                    auxiliary_input_files=auxiliary_input_files, session_control=control)
         if environment.get("ATREX_EPISODE_WORKSPACE") and command[:2] == ["codex", "exec"]:
             command = [*command[:2], "--skip-git-repo-check", *command[2:]]
         return _run_bounded(command, cwd, timeout, environment,

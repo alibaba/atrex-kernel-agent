@@ -83,7 +83,7 @@ def normalize_stream(
 class NativeSession(LegacyNativeSession):
     _HOME_BINDING_KEYS = (
         "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR",
-        "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
+        "PI_CODING_AGENT_DIR", "DSH_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
         "XDG_DATA_HOME", "XDG_STATE_HOME", HOST_HOME_ENV, PREPARED_ENV,
         "ATREX_AGENT_SANDBOX",
     )
@@ -122,6 +122,12 @@ class NativeSession(LegacyNativeSession):
             if environment.get(key) != value:
                 raise ValueError(f"Cannot change {key} inside an open Agent session")
         return environment
+
+    def _normalize_stream(self, stdout):
+        if self.runtime_id != "dsh":
+            return super()._normalize_stream(stdout)
+        return normalize_stream(self.runtime_id, stdout, session_id=self._session_id,
+                                adapter=self._runtime._adapter)
 
     def invoke(self, prompt, *, resume=False, reasoning_effort="max", environment=None):
         if self._check_open is not None:

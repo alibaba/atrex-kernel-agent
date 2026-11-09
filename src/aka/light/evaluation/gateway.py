@@ -493,8 +493,13 @@ def _run_environment_query(args: argparse.Namespace) -> int:
                     raise GatewayResponseError("Environment service returned malformed JSON") from exc
             if request_is_infrastructure(completed):
                 raise GatewayResponseError("Environment service unavailable")
-            if not isinstance(value, dict):
-                raise GatewayResponseError("Environment service returned a non-object response")
+            # `agate env --json` lists devices as an array; a single-device
+            # query (and capabilities) returns an object. Both are successful
+            # discovery responses, rather than a reason to retry this GET.
+            device_list = (not args.env_gpu and isinstance(value, list)
+                           and all(isinstance(device, dict) for device in value))
+            if not isinstance(value, dict) and not device_list:
+                raise GatewayResponseError("Environment service returned an invalid response")
             break
         except InvalidURL:
             raise GatewayConfigurationError("Invalid Gateway URL.", next_action=(
