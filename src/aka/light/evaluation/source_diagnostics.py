@@ -12,6 +12,7 @@ import csv
 import ctypes
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -332,11 +333,15 @@ def _collect_ppu(request, root, deadline, log, target):
         if fmt not in ('auto', 'ptx', 'sass'):
             raise DiagnosticError('capability', 'PPU CUDA toolchains expose PTX or SASS')
         fmt = 'ptx' if fmt == 'auto' else fmt
+        libraries = sorted((root / 'candidate/.build').glob('*.so'))
         if fmt == 'ptx':
-            text = '\n'.join(path.read_text() for path in sorted((root / '.caches').rglob('*.ptx')))
+            text = '\n'.join([
+                *(path.read_text() for path in sorted((root / '.caches').rglob('*.ptx'))),
+                *(_execute([_tool('cuobjdump'), '--dump-ptx', str(path)], root, deadline, log)
+                  for path in libraries)])
         else:
             text = '\n'.join(_execute([_tool('cuobjdump'), '--dump-sass', str(path)], root, deadline, log)
-                             for path in sorted((root / '.caches').rglob('*.cubin')))
+                             for path in [*sorted((root / '.caches').rglob('*.cubin')), *libraries])
         if not text:
             raise DiagnosticError('collection', f'The PPU compiler produced no {fmt} artifacts')
         return {'format': fmt, 'exports': {fmt + '.txt': _export(text)}}
@@ -386,17 +391,24 @@ def _collect_amd(request, root, deadline, log, target):
     command = [_tool('rocprofv3'), '--kernel-trace', '--marker-trace', '--output-format', 'csv',
                '--output-directory', str(directory)]
     counters = parameters.get('counters') or []
+    if parameters.get('level') == 'deep' and not counters:
+        raise DiagnosticError('capability', 'AMD deep profiling requires explicit rocprofv3 counters')
     if counters:
         command += ['--pmc', *counters]
     if parameters.get('source'):
         raise DiagnosticError('capability', 'rocprofv3 does not provide NCU source correlation')
     _execute([*command, '--', *target], root, deadline, log)
-    kernels, exports = [], {}
+    dispatches = {}
     pattern = parameters.get('kernel_regex')
     if parameters.get('kernel_name'):
         pattern = '^' + re.escape(parameters['kernel_name']) + '$'
-    for path in sorted(directory.rglob('*.csv')):
-        exports[str(path.relative_to(directory))] = _export(path.read_text())
+    def dispatch_key(path, row):
+        return (path.parent, path.name.split('_')[0], row.get('Agent_Id'), row.get('Dispatch_Id'))
+
+    # roctx pause/resume scopes kernel_trace, but counter_collection also
+    # contains input generation and warmup. Join counters onto scoped dispatches;
+    # never turn counter rows into extra measured kernels.
+    for path in sorted(directory.rglob('*_kernel_trace.csv')):
         with path.open() as stream:
             for row in csv.DictReader(stream):
                 name = row.get('Kernel_Name') or row.get('KernelName')
@@ -404,18 +416,34 @@ def _collect_amd(request, root, deadline, log, target):
                     continue
                 start, end = row.get('Start_Timestamp'), row.get('End_Timestamp')
                 if start is not None and end is not None:
-                    kernels.append({'name': name, 'duration_us': (float(end) - float(start)) / 1000,
-                                    'metrics': {key: row[key] for key in counters if key in row}})
+                    dispatches[dispatch_key(path, row)] = {
+                        'name': name, 'duration_us': (float(end) - float(start)) / 1000, 'metrics': {}}
+    for path in sorted(directory.rglob('*_counter_collection.csv')):
+        with path.open() as stream:
+            for row in csv.DictReader(stream):
+                kernel = dispatches.get(dispatch_key(path, row))
+                counter = row.get('Counter_Name')
+                if kernel is not None and counter in counters:
+                    kernel['metrics'][counter] = {'value': float(row['Counter_Value']), 'unit': ''}
+    kernels = list(dispatches.values())
     skip = parameters.get('launch_skip') or 0
-    count = parameters.get('launch_count')
-    kernels = kernels[skip:skip + count if count else None]
+    count = parameters.get('launch_count') or 10
+    kernels = kernels[skip:skip + count]
     if not kernels:
         raise DiagnosticError('collection', 'rocprofv3 produced no matching kernel measurements')
+    if any(set(counters) - kernel['metrics'].keys() for kernel in kernels):
+        raise DiagnosticError('collection', 'rocprofv3 did not report every requested counter for candidate dispatches')
+    csv_text = io.StringIO()
+    writer = csv.writer(csv_text)
+    writer.writerow(['Kernel_Name', 'Duration_us', *counters])
+    for kernel in kernels:
+        writer.writerow([kernel['name'], kernel['duration_us'],
+                         *(kernel['metrics'][name]['value'] for name in counters)])
     top = parameters.get('top_kernels')
     if top:
         kernels = sorted(kernels, key=lambda item: item['duration_us'], reverse=True)[:top]
     return {'profiler': 'rocprofv3', 'level': parameters.get('level', 'sol'),
-            'kernels': kernels, 'exports': exports}
+            'kernels': kernels, 'exports': {'metrics.csv': _export(csv_text.getvalue())}}
 
 
 def _collect(
@@ -462,6 +490,10 @@ def _collect(
         return _collect_amd(request, root, deadline, log, target)
     if request.get('vendor') == 'ppu':
         return _collect_ppu(request, root, deadline, log, target)
+    if parameters.get('profiler') not in (None, 'ncu'):
+        raise DiagnosticError('capability', 'NVIDIA profiling requires NCU')
+    if parameters.get('fmt', 'auto') not in ('auto', 'sass', 'ptx'):
+        raise DiagnosticError('capability', 'NVIDIA disassembly supports auto, sass or ptx')
     ncu = _tool("ncu")
     report = root / "diagnostic.ncu-rep"
     _execute(_ncu_command(ncu, request, report, target), root, deadline, log)
@@ -565,7 +597,9 @@ def _driver(request_path: Path) -> int:
             path = root / ".caches" / folder
             path.mkdir(parents=True, exist_ok=True)
             os.environ[name] = str(path)
-        if parameters.get("fmt") == "ptx":
+        if parameters.get("fmt") == "ptx" or (
+                request.get('vendor') == 'ppu' and request['operation'] == 'disassemble'
+                and parameters.get('fmt', 'auto') == 'auto'):
             os.environ["CUTE_DSL_KEEP"] = "ptx,cubin"
             os.environ["CUTE_DSL_KEEP_PTX"] = "1"
         clocks = _load(root / "__atrex_abba.py", "_atrex_clock_support")

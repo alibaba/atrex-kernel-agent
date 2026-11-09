@@ -280,6 +280,7 @@ OSS_OUTPUT_ARCHIVE = "__atrex_outputs.tar.gz"
 SUBMITTED_JOB_RE = re.compile(r"\bsubmitted job_id=([A-Za-z0-9_.-]+); polling\.\.\.")
 ACTIVE_AGATE_JOBS: dict[str, tuple[str, str, str | None]] = {}
 ACTIVE_AGATE_JOBS_LOCK = Lock()
+ACTIVE_SSH_JOBS: dict[str, tuple[str, str]] = {}
 EVALUATION_INPUT_PATHS = frozenset(
     {
         "agent_problem.json",
@@ -2584,9 +2585,11 @@ def _ssh_shell_script(init_command: str, command: str) -> str:
 
 
 def _ssh_visibility(assignment: dict) -> str:
-    environment = dict(assignment['environment'], ATREX_SSH_GPU_VENDOR=assignment.get('vendor', ''))
+    environment = dict(assignment['environment'], ATREX_SSH_GPU_VENDOR=assignment.get('vendor', ''),
+                       ATREX_SSH_GPU_INDEX=str(assignment['index']))
     return ('unset CUDA_VISIBLE_DEVICES HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES '
-            'NVIDIA_VISIBLE_DEVICES GPU_DEVICE_ORDINAL\n' +
+            'NVIDIA_VISIBLE_DEVICES GPU_DEVICE_ORDINAL ATREX_BENCH_CLOCK_DEVICE '
+            'ATREX_BENCH_CLOCKS_LOCKED SOL_EXECBENCH_CLOCKS_LOCKED ATREX_BENCH_CLOCK_LOCK_SOURCE\n' +
             '\n'.join(f'export {key}={shlex.quote(value)}'
                       for key, value in environment.items()))
 
@@ -2645,6 +2648,7 @@ def _remote_temp_dir(stdout: str) -> str:
 def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir):
         return False
+    _cancel_ssh_job(ssh, target, remote_dir)
     try:
         result = subprocess.run(
             [
@@ -2658,6 +2662,32 @@ def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
+
+
+def _cancel_ssh_job(ssh: str, target: str, remote_dir: str) -> None:
+    # Find only this allocation's host-side namespace launchers. Do not trust a
+    # PID file in /atrex: candidate code can write that mounted directory.
+    script = '''import os, signal, sys
+from pathlib import Path
+binding = [b"--bind", os.fsencode(sys.argv[1]), b"/atrex"]
+for path in Path("/proc").glob("[0-9]*/cmdline"):
+    try:
+        args = path.read_bytes().split(b"\\0")
+        if b"--unshare-pid" in args and any(args[i:i+3] == binding for i in range(len(args)-2)):
+            os.kill(int(path.parent.name), signal.SIGKILL)
+    except (ProcessLookupError, FileNotFoundError, PermissionError):
+        pass
+'''
+    try:
+        subprocess.run([*_ssh_base(ssh, target), shlex.join(['python3', '-c', script, remote_dir])],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # The existing remote watchdog remains the execution ceiling.
+
+
+def _cancel_active_ssh_jobs() -> None:
+    for remote_dir, (ssh, target) in list(ACTIVE_SSH_JOBS.items()):
+        _cancel_ssh_job(ssh, target, remote_dir)
 
 
 def _run_ssh_job(
@@ -2730,6 +2760,7 @@ def _run_ssh_job(
         detail = (create.stderr or create.stdout).strip()[-1000:]
         raise SSHTransportError(f"cannot create remote workspace: {detail}")
     remote_dir = _remote_temp_dir(create.stdout)
+    ACTIVE_SSH_JOBS[remote_dir] = (ssh, target)
     try:
         transfer = subprocess.run(
             [
@@ -2817,6 +2848,7 @@ def _run_ssh_job(
         raise SSHTransportError(f"SSH transfer failed: {exc}") from exc
     finally:
         cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
+        ACTIVE_SSH_JOBS.pop(remote_dir, None)
         if not cleanup_succeeded:
             _record_pending_ssh_cleanup(target=target, remote_dir=remote_dir)
     if result is None:
@@ -3234,6 +3266,7 @@ def _cancel_active_agate_jobs() -> None:
 
 
 def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
+    _cancel_active_ssh_jobs()
     _cancel_active_agate_jobs()
     raise KeyboardInterrupt
 
@@ -4127,12 +4160,14 @@ def _run_typed_gateway(
                     file=sys.stderr,
                     flush=True,
                 )
-                with ThreadPoolExecutor(
-                    max_workers=1 if args.ssh else min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))
-                ) as executor:
+            if batched and not args.ssh:
+                with ThreadPoolExecutor(max_workers=min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))) as executor:
                     processes = list(executor.map(run_batch, batch_items))
             else:
-                processes = [run_batch(batch_items[0])]
+                # SSH owns one GPU. Keep its sequential submissions in the
+                # signal-handling thread so cancellation cannot launch a queued
+                # shape while an executor pool waits for shutdown.
+                processes = [run_batch(item) for item in batch_items]
     except GatewayHTTPError as exc:
         if kind != "run" and _typed_fallback_allowed(exc) and compatible_fallback:
             print(
@@ -4312,6 +4347,11 @@ def _main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"sandbox: {exc}") from exc
         if not args.health_command.strip():
             raise SystemExit("sandbox: --health-command must not be empty with --ssh")
+        from aka.light.evaluation.agate_native import values as native_values
+        unsupported = set(native_values(args, args.kind)) - {'shape_shards'}
+        if unsupported:
+            names = ', '.join('--' + name.replace('_', '-') for name in sorted(unsupported))
+            raise SystemExit(f'sandbox: SSH does not implement these Gateway options: {names}')
     elif args.ssh_runtime_bind:
         raise SystemExit("sandbox: --ssh-runtime-bind requires --ssh")
     elif args.ssh_gpu is not None:
@@ -5196,6 +5236,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         returncode = _main(argv)
     except BaseException as exc:
+        _cancel_active_ssh_jobs()
         _cancel_active_agate_jobs()
         _append_sandbox_telemetry(
             "sandbox_operation_completed",

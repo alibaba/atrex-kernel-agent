@@ -529,8 +529,11 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             return payload, None
 
     batches = batch_shape_ids(shapes, args.shape_batch_size)
-    with ThreadPoolExecutor(max_workers=1 if args.ssh else min(BATCH_WORKERS, len(batches))) as pool:
-        results = list(pool.map(run_batch, batches))
+    if args.ssh:
+        results = [run_batch(ids) for ids in batches]
+    else:
+        with ThreadPoolExecutor(max_workers=min(BATCH_WORKERS, len(batches))) as pool:
+            results = list(pool.map(run_batch, batches))
     failures = [process for _, process in results if process is not None]
     if failures:
         infrastructure = False

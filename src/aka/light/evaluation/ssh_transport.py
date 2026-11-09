@@ -15,7 +15,10 @@ import tempfile
 def endpoint_identity(args, environment=None):
     from aka.legacy.execution.runtime_tools import local_eval
     environment = os.environ if environment is None else environment
-    settings = [args.ssh, args.ssh_gpu, args.ssh_init, args.ssh_runtime_bind,
+    binds = args.ssh_runtime_bind
+    if binds is None:
+        binds = json.loads(environment.get('ATREX_SANDBOX_SSH_RUNTIME_BINDS', '[]'))
+    settings = [args.ssh, args.ssh_gpu, args.ssh_init, binds,
                 *(environment.get(name) for name in ('ATREX_SANDBOX_SSH_GPU_ISOLATION',
                   'ATREX_SANDBOX_SSH_DEVICE_MAP', 'ATREX_SANDBOX_SSH_BWRAP'))]
     digest = hashlib.sha256()
@@ -40,8 +43,10 @@ def run(gateway, args, workspace, request, kind):
     from aka.legacy.execution import resources
     from . import ssh_worker, ssh_native, source_diagnostics, abba_remote
 
-    if request.get('placement') or request.get('options', {}).get('shape_shards'):
+    if request.get('placement') or request.get('options', {}).get('shape_shards') not in (None, 1):
         raise ValueError('SSH owns one fixed GPU; Gateway placement and distributed sharding do not apply')
+    if kind in {'check', 'profile', 'disassemble'}:
+        request = dict(request, options=dict(request.get('options', {}), timeout_s=args.timeout))
 
     with tempfile.TemporaryDirectory(prefix='aka-ssh-typed-') as directory:
         root = Path(directory)
@@ -64,7 +69,7 @@ def run(gateway, args, workspace, request, kind):
                 entry = tarfile.TarInfo(name)
                 entry.size, entry.mode = len(data), 0o600
                 bundle.addfile(entry, io.BytesIO(data))
-        runtime = gateway._make_atrex_bench_runtime_bundle(workspace)
+        runtime = gateway._make_atrex_bench_runtime_bundle(workspace) if kind == 'run' else None
         if runtime:
             (uploads / 'runtime.tar.gz').write_bytes(base64.b64decode(runtime))
         runner = uploads / '__atrex_runner.sh'
@@ -114,10 +119,15 @@ def _check_health(gateway, args):
 def environment(gateway, args):
     if args.env_gpu and args.env_gpu != args.hardware:
         raise ValueError('SSH environment queries must name the assigned hardware')
-    process = run(gateway, args, Path(args.workspace).resolve(), {
+    request = {
         'hardware': args.hardware, 'frameworks': args.frameworks or args.env_capabilities,
         'counters': args.counters, 'limits': args.limits or args.env_capabilities,
-    }, 'env')
+        'capabilities': args.env_capabilities,
+    }
+    if args.dry_run:
+        print(json.dumps({'kind': 'env', 'transport': 'ssh', **request}))
+        return 0
+    process = run(gateway, args, Path(args.workspace).resolve(), request, 'env')
     job = json.loads(process.stdout)
     if job['status'] != 'succeeded':
         from .projection import emit_gateway_error

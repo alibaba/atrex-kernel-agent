@@ -89,6 +89,19 @@ missing result is not a candidate correctness verdict.
 NVIDIA clock control is applied when available. Unsupported clock control is
 recorded as not applied; AMD performance levels are not reported as fixed clocks.
 
+AMD Profile joins requested counters to the candidate's scoped dispatch trace and
+exports `metrics.csv`. Use `--counters rocprofv3` with Env to discover counters;
+deep profiling requires explicit `--counter` selections. NVIDIA-specific source
+correlation is unavailable on AMD. Env capability queries also list installed
+profilers. Counter discovery returns the assigned AMD GPU's counter names;
+large catalogs explicitly report truncation. Gateway placement and unimplemented
+Gateway-only options are rejected
+before execution; `shape_shards=1` is compatible with the fixed SSH allocation.
+
+Cancellation terminates the allocation's remote namespace, including its child
+processes. If SSH is unreachable during cancellation, the remote watchdog remains
+the execution ceiling; an unknown outcome is not reported as successful cancellation.
+
 Python dependencies must already be installed in the bound environment. Native
 CUDA manifests support provisioned pip/system dependencies and clean, pinned
 Git repositories bound at `/opt/aka-dependencies/<id>`. The declared Git ref and
@@ -102,16 +115,7 @@ contracts and MIG selection require a separate allocation implementation.
 
 ## Validation
 
-```bash
-PYTHONPATH=src python3 tools/check_ssh_backend.py
-PYTHONPATH=src python3 tools/check_ssh_backend.py \
-  --host gpu-worker --gpu 5 --hardware MI300X \
-  --bench /path/to/atrex-bench \
-  --runtime-bind /opt/venv --runtime-bind /opt/rocm \
-  --init 'export PATH=/opt/venv/bin:/opt/rocm/bin:$PATH; export LD_LIBRARY_PATH=/opt/rocm/lib' \
-  --output /tmp/aka-ssh-validation
-```
-
-The GPU smoke suite checks source-tree Evaluate/ABBA, diagnostics, device
-visibility, synchronized Dev outputs, an incorrect candidate and timeout handling.
-It runs only on an explicitly provided host and GPU.
+Validation evidence and hardware coverage are recorded in the pull request.
+Local smoke checks cover source-tree Evaluate/ABBA, diagnostics, device visibility,
+synchronized Dev outputs, an incorrect candidate, cancellation and timeout handling.
+Test scripts remain local under the repository's ignored `tests/` convention.

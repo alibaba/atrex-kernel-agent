@@ -1,6 +1,7 @@
 """Stateless typed GPU worker, shipped by the Supervisor into an SSH namespace."""
 from __future__ import annotations
 
+from contextlib import ExitStack
 import importlib.util
 import json
 import os
@@ -86,8 +87,19 @@ def evaluate(request, root):
         runner = root / 'run_eval.py'
     from __atrex_abba import _clock_lock
     import torch
-    supported = not getattr(torch.version, 'hip', None) and shutil.which('nvidia-smi') is not None
-    with _clock_lock(bool(request.get('lock_clocks')) and supported) as clocks:
+    supported = (not getattr(torch.version, 'hip', None) and os.environ.get('ATREX_SSH_GPU_VENDOR') != 'ppu'
+                 and shutil.which('nvidia-smi') is not None)
+    with ExitStack() as stack:
+        try:
+            clocks = stack.enter_context(_clock_lock(bool(request.get('lock_clocks')) and supported))
+        except RuntimeError as error:
+            # An ordinary SSH account may run kernels without clock-control
+            # privileges. Preserve that fact; evaluator failures and reset
+            # failures still propagate instead of being swallowed here.
+            if not any(reason in str(error).lower() for reason in (
+                    'insufficient permission', 'not supported', 'no supported graphics clocks')):
+                raise
+            clocks = {'applied': False, 'backend': 'nvidia-smi', 'reason': str(error)}
         config['clock_locked'] = clocks['applied']
         path = write(root, 'eval-config.json', json.dumps(config))
         local_eval.run(path, runner)
@@ -139,14 +151,36 @@ def environment(request):
                                 if importlib.util.find_spec(name)]
     if request.get('limits'):
         result['limits'] = {'num_gpus': 1, 'network': False, 'dependencies': 'preinstalled'}
+    if request.get('capabilities'):
+        candidates = {'ncu': 'ncu', 'rocprofv3': 'rocprofv3',
+                      'acu': '/usr/local/PPU_SDK/asight/bin/acu'}
+        result['profilers'] = [name for name, executable in candidates.items() if shutil.which(executable)]
     if request.get('counters'):
         tool = request['counters']
         commands = {'ncu': ['ncu', '--query-metrics'], 'rocprofv3': ['rocprofv3', '--list-avail'],
                     'acu': ['/usr/local/PPU_SDK/asight/bin/acu', '--query-metrics']}
         if tool not in commands:
             raise ValueError(f'Unknown profiler: {tool}')
-        result['counters'] = subprocess.run(commands[tool], capture_output=True, text=True,
-                                            timeout=30, check=True).stdout
+        output = subprocess.run(commands[tool], capture_output=True, text=True,
+                                timeout=30, check=True).stdout
+        if tool == 'rocprofv3':
+            # The SDK lists every physical agent despite ROCR visibility. Keep
+            # the assigned GPU's counter names, not repeated full descriptions.
+            selected = False
+            names = []
+            for line in output.splitlines():
+                key, separator, value = line.partition(':')
+                if separator and key.strip() == 'GPU':
+                    selected = value.strip() == os.environ['ATREX_SSH_GPU_INDEX']
+                elif selected and key.strip() == 'Counter_Name':
+                    names.append(value.strip())
+            if not names:
+                raise RuntimeError('rocprofv3 returned no counters for the assigned GPU')
+            output = '\n'.join(dict.fromkeys(names))
+        # Keep Env usable through the Agent's bounded response channel even on
+        # toolchains with very large metric catalogs. Never imply completeness.
+        result['counters'] = output[:65536]
+        result['counters_truncated'] = len(output) > 65536
     return result
 
 
