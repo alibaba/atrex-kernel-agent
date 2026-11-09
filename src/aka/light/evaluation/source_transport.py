@@ -148,8 +148,6 @@ def diagnostic_request(request, workspace, kind, *, timeout=600):
     if route in {"single", "typed"}:
         return attach(request, workspace, source=artifact.snapshot)
     files = artifact.files
-    if request.get("profiler", "ncu") != "ncu" or request.get("fmt") == "isa":
-        raise ValueError("Source-tree diagnostics currently support NVIDIA NCU and auto/sass/ptx")
     reference = request.get("reference", request.get("diagnostic_reference"))
     parameters = {key: request[key] for key in ("profiler", "level", "counters", "kernel_regex", "kernel_name",
                   "source", "launch_skip", "launch_count", "top_kernels", "arch", "sanitize", "fmt") if key in request}

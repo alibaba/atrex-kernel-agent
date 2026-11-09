@@ -2,14 +2,14 @@
 
 The installed `aka optimize` command starts the default **Light** workflow: managed
 source drafts, private HTTP tools, unified Episodes, and Supervisor-owned promotion.
-The primary path is native Atrex-Bench evaluation through Agate. For SOL-ExecBench,
-OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workflow.md).
+Native Atrex-Bench evaluation runs through Agate or the [OpenSSH backend](ssh-backend.md).
+For SOL-ExecBench or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workflow.md).
 
 ## Prerequisites
 
 - Python 3.10+, `bash`, `git`, and `torch` on the coordinator.
 - An authenticated coding CLI on `PATH`: `claude`, `qodercli`, `codex`, `pi`, or `dsh`.
-- A configured Agate endpoint and GPU worker with the workload's framework and GPU stack.
+- A configured Agate endpoint or SSH host with the workload's framework and GPU stack.
 - A native Atrex-Bench operator in its owning Bench checkout.
 - For coordinator isolation: Linux, Bubblewrap, and permission to create the required
   namespaces. macOS supports native Light; it does not support `light-sandbox` directly.
@@ -160,8 +160,8 @@ Use it with `--framework Cuda`. CUDA sources, headers, and `solution.json` form 
 candidate; Agate compiles and binds its launcher. The layout is fixed for the task.
 See [source imports and native CUDA](native-cuda.md).
 
-SOL/SSH requires `single_file` in Light, but Light ABBA has no SOL/SSH fallback.
-Use [Legacy](legacy-workflow.md) for campaigns needing that verification path.
+SSH supports source-tree and native CUDA Evaluate/ABBA. SOL requires `single_file`
+and the [Legacy](legacy-workflow.md) verification path.
 
 ## Budgets and recovery
 

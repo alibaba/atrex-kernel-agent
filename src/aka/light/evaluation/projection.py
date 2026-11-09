@@ -536,7 +536,7 @@ def profile_result(result: dict[str, Any], *, generalized: bool = False) -> dict
         projected["source_view"] = result["source_view"]
     if not generalized and isinstance(exports, dict):
         projected_exports = {}
-        for name in ("metrics.csv", "source.txt", "sass.txt", "ptx.txt"):
+        for name in ("metrics.csv", "source.txt", "sass.txt", "ptx.txt", "isa.txt"):
             item = exports.get(name)
             if not isinstance(item, dict):
                 continue

@@ -31,6 +31,7 @@ describe the versions and environments identified in those documents.
 | [GPU Wiki](../gpu-wiki/README.md) | Current structured stores and standalone knowledge interfaces |
 | [Dashboard](optimization-dashboard.md) | Optional viewer, current memory-history and multi-file export limitations |
 | [Community local gateway](local_gateway.md) | Local source-archive Eval/ABBA and Legacy request compatibility |
+| [Light OpenSSH backend](ssh-backend.md) | Native Evaluate/ABBA, GPU diagnostics, vendor selection and isolation modes |
 
 ## Legacy and compatibility
 

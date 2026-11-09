@@ -1,4 +1,4 @@
-"""Native Agate Eval ABBA: exact A/B/B/A evidence, no Dev driver fallback."""
+"""Native Eval ABBA over Agate or SSH: exact A/B/B/A evidence."""
 from __future__ import annotations
 
 import json
@@ -334,8 +334,8 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     from aka.light.execution.gateway_jobs import eval_retry_kind, payload_identity
 
     validate_comparison(args)
-    if args.ssh or (workspace / "workload.jsonl").exists():
-        raise ValueError("Native Eval ABBA requires an Agate Atrex-Bench input/Shape contract; SOL/SSH Dev fallback is disabled")
+    if (workspace / "workload.jsonl").exists():
+        raise ValueError("Native Eval ABBA requires an Atrex-Bench input/Shape contract")
     from aka.light.workspace.sources import read_path
     baseline = read_path(workspace / args.baseline_path)
     command = ["python3", "test_kernel.py"]
@@ -361,12 +361,13 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     if not shapes:
         raise ValueError("Native ABBA requires at least one Shape")
     if args.dry_run:
-        print(json.dumps({"kind": "same_allocation_abba", "transport": "agate_native_eval_abba",
+        print(json.dumps({"kind": "same_allocation_abba",
+                          "transport": "ssh_native_eval_abba" if args.ssh else "agate_native_eval_abba",
                           "shape_count": len(shapes), "comparison_repeats": args.comparison_repeats}))
         return 0
-    executable = gateway.find_agate()
+    executable = None if args.ssh else gateway.find_agate()
     url = args.url
-    if not executable and not url:
+    if not args.ssh and not executable and not url:
         raise ValueError("Native ABBA requires a resolvable Agate Gateway URL; no Dev fallback was submitted")
     schedule = verification_schedule(args.comparison_repeats)
     # Recorded acceptance retries create a fresh Gateway Record after an
@@ -401,6 +402,9 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
         batch = shape_batch_request(request, ids)
         identity = {"transport": "agate_native_eval_abba", "request": payload_identity(batch),
                     "schedule": schedule, "shape_ids": ids}
+        if args.ssh:
+            from .ssh_transport import endpoint_identity
+            identity.update(endpoint_identity(args))
         if store and (saved := store.load(identity)) is not None:
             retain_in_record(identity, saved)
             return saved["payload"], None
@@ -409,6 +413,9 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             retry_identity = (
                 {"abba_wall_clock_retry": attempt} if attempt else None
             )
+            if args.ssh:
+                from .ssh_transport import run
+                return run(gateway, args, workspace, batch, "run")
             if ARCHIVES in batch:
                 from .source_transport import run as run_tree
                 return run_tree(
@@ -522,7 +529,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             return payload, None
 
     batches = batch_shape_ids(shapes, args.shape_batch_size)
-    with ThreadPoolExecutor(max_workers=min(BATCH_WORKERS, len(batches))) as pool:
+    with ThreadPoolExecutor(max_workers=1 if args.ssh else min(BATCH_WORKERS, len(batches))) as pool:
         results = list(pool.map(run_batch, batches))
     failures = [process for _, process in results if process is not None]
     if failures:

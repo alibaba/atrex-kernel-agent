@@ -195,8 +195,9 @@ speedup ratios are diagnostic and have distinct meanings. Production source-poli
 is shared with Legacy; the validated distributed Agate exception is frozen from evaluator
 metadata, not candidate declarations.
 
-Light's native ABBA requires an Agate Atrex-Bench contract. SOL inputs can be loaded with
-explicit `single_file`, but SOL/SSH comparisons have no Light ABBA fallback.
+Light's native ABBA requires an Atrex-Bench contract, executed through Agate or
+[OpenSSH](ssh-backend.md). SOL inputs can be loaded with explicit `single_file`,
+but SOL comparisons have no Light ABBA fallback.
 The [Legacy guide](legacy-workflow.md) covers the supported alternative verification path.
 
 ## Recovery and observability

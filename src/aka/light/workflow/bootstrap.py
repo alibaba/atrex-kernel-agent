@@ -193,7 +193,7 @@ class Campaign:
     v1_ask_qoder: bool = False
     sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
     sandbox_ssh_init: str = ""  # remote environment activation command
-    sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
+    sandbox_ssh_gpu: int | None = None  # assigned physical GPU index
     sandbox_health_command: str = ""  # remote GPU readiness probe
     tokens_spent: int = field(default=0, init=False)
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (

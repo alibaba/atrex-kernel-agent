@@ -88,7 +88,7 @@ def parse_arguments(argv):
         default=None,
         metavar="INDEX",
         help=(
-            "Physical NVIDIA GPU index assigned to SSH execution (required with "
+            "Physical GPU index assigned to SSH execution (required with "
             "--sandbox-ssh; default: ATREX_SANDBOX_SSH_GPU)."
         ),
     )
@@ -379,7 +379,7 @@ def parse_arguments(argv):
         )
         if not re.fullmatch(r"[0-9]+", raw_ssh_gpu):
             ap.error(
-                "--sandbox-ssh-gpu must be a physical NVIDIA index; "
+                "--sandbox-ssh-gpu must be a physical GPU index; "
                 "MIG/UUID selectors are not yet supported"
             )
         args.sandbox_ssh_gpu = int(raw_ssh_gpu)

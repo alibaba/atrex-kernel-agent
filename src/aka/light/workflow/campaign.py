@@ -71,8 +71,8 @@ class ManagedCampaign(Campaign):
         from aka.light.runtime.paths import supervisor_campaign_root
         search_root = supervisor_campaign_root(self.workspace) / "search"
         if self.module_options.search is not None:
-            if not self.atrex_bench_root or self.sandbox_ssh:
-                raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA; SOL/SSH search is not supported")
+            if not self.atrex_bench_root:
+                raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA")
             from .search import PooledSearch
             from .search_driver import EpisodeSearchDriver
             driver = EpisodeSearchDriver(self, search_root)
@@ -112,7 +112,7 @@ class ManagedCampaign(Campaign):
                           platform=self.platform), self.source_provider,
             options=self.source_import_options,
             state_root=supervisor_campaign_root(self.workspace) / 'initial-source',
-            native_eval=bool(self.atrex_bench_root) and not self.sandbox_ssh)
+            native_eval=bool(self.atrex_bench_root))
         self._selected_initial_kernel = next(
             (entry.source.read_bytes() if entry.source is not None else entry.text.encode()
              for entry in content.files if entry.path == "kernel.py"), None)

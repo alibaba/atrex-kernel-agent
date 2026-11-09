@@ -24,7 +24,7 @@ Use the managed Evaluate/Profile tools and submit the usual episode report.
 With `file_system=cuda_manifest` and `framework=cuda`, native Atrex-Bench campaigns
 on Agate use `.cu` files and `solution.json`. Keep V0's PyTorch reference as the baseline only. Do not embed
 CUDA in kernel.py, generate Python bindings, run nvcc on the host, or change the
-reference/input/evaluator. SOL and SSH do not support this manifest route.
+reference/input/evaluator. Gateway and SSH support this manifest route; SOL does not.
 
 Write this local manifest (adapt the inputs and launcher to the operator):
 
