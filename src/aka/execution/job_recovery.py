@@ -67,10 +67,10 @@ class GatewayRecoveryMixin:
         self.capabilities.require(command)
         from dataclasses import replace
         from .environment_query import command_query, require_supported
-        from .gateway.requests import bound_limits
+        from .gateway.requests import NATIVE_ABBA, bound_limits
         backend = self._environment_backend() if hasattr(self, "request") else self._environment_backend(command.environment)
         support = backend.check(command_query(command), discover=False)
-        require_supported(support, require_known=command.operation == "same_allocation_abba")
+        require_supported(support, require_known=command.operation == NATIVE_ABBA)
         def decorate(result):
             return replace(result, environment_snapshot=support.environment,
                            environment_identity=support.environment.identity, environment_support=support)

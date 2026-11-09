@@ -196,6 +196,22 @@ class BackendEnvironment:
         return match_environment(query, snapshot)
 
 
+def _cuda_toolchain_reasons(observed):
+    """Report preparation observations, without certifying native CUDA execution."""
+    toolchain = observed.get("toolchain", {})
+    if not isinstance(toolchain, Mapping):
+        toolchain = {}
+    reasons = []
+    for name in ("cuda", "nvcc", "ptxas", "torch"):
+        value = toolchain.get(name)
+        version = value.get("version") if isinstance(value, Mapping) else value
+        unavailable = version == "unavailable" or isinstance(value, Mapping) and value.get("available") is False
+        known = isinstance(version, str) and bool(version.strip()) and version != "unknown"
+        status = "unavailable" if unavailable else "observed" if known else "unknown"
+        reasons.append("cuda-toolchain-" + status + ":" + name)
+    return reasons
+
+
 def match_environment(query, snapshot):
     """Match backend facts; a missing fact remains unknown, including resource availability."""
     declarations, observed = snapshot.declarations, snapshot.observed
@@ -226,6 +242,8 @@ def match_environment(query, snapshot):
     languages = declarations.get("supported_languages")
     for language in query.languages:
         name = language_alias(language)
+        if name == "cuda_cpp":
+            reasons.extend(_cuda_toolchain_reasons(observed))
         declaration = None
         if isinstance(languages, Mapping):
             declaration = next((value for key, value in languages.items() if language_alias(key) == name), None)
