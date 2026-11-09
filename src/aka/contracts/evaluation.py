@@ -153,6 +153,7 @@ DEFAULT_PERFORMANCE_TIMEOUT = 300
 DEFAULT_ABBA_RUN_TIMEOUT = 300
 DEFAULT_ABBA_REPEATS = 2
 ABBA_SCHEDULING_OVERHEAD = 30
+DEFAULT_EVALUATION_PREPARATION_OVERHEAD = 120
 
 
 def derived_evaluation_timeout(
@@ -161,8 +162,14 @@ def derived_evaluation_timeout(
     per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT,
     candidate_timeout: int = DEFAULT_CANDIDATE_TIMEOUT,
     performance_timeout: int = DEFAULT_PERFORMANCE_TIMEOUT,
+    preparation_overhead: int = DEFAULT_EVALUATION_PREPARATION_OVERHEAD,
 ) -> int:
-    """Return the compatibility allocation; slow compilation may need an override."""
+    """Include preparation allowance in new default allocations.
+
+    Preserve Light's former 120-second outer allowance without tying the Job
+    limit to client waiting. The backend owns queue deadlines; explicit and
+    retained allocations are not recomputed by this default factory.
+    """
     values = {
         "repeats": repeats,
         "per_run_timeout": per_run_timeout,
@@ -171,10 +178,12 @@ def derived_evaluation_timeout(
     }
     if any(type(value) is not int or value <= 0 for value in values.values()):
         raise ValueError("evaluation timing inputs must be positive integers")
+    if type(preparation_overhead) is not int or preparation_overhead < 0:
+        raise ValueError("evaluation preparation overhead must be a non-negative integer")
     return max(
         candidate_timeout + performance_timeout,
         2 * repeats * per_run_timeout + ABBA_SCHEDULING_OVERHEAD,
-    )
+    ) + preparation_overhead
 
 
 @dataclass(frozen=True)
