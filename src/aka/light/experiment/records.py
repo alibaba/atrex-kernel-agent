@@ -14,6 +14,7 @@ from aka.light.experiment.store import (
     JOB_ROOT_ENV,
     DuplicateTask,
     RecordNotFound,
+    digest,
     private_write,
     private_write_bytes,
     read_json,
@@ -39,6 +40,45 @@ def _completed_abba_timeout(sample: object, states: list[dict], *, truncated: bo
         and all(state.get("phase") == "terminal" for state in states)
         and not truncated
     )
+
+
+def _abba_acceptance_states(states: list[dict]) -> list[dict]:
+    """Use completed replacement batches while retaining old receipts on disk."""
+    if not any(state.get("phase") == "accepted" for state in states):
+        return states
+
+    def batch_identity(state):
+        identity = state.get("identity", {})
+        payload = identity.get("payload")
+        endpoint = identity.get("url_fingerprint")
+        if identity.get("kind") == "eval" and endpoint and isinstance(payload, dict) and payload.get("abba"):
+            return digest(payload), endpoint
+        return None
+
+    completed = {}
+    for state in states:
+        batch = batch_identity(state)
+        if batch is None or state.get("phase") != "terminal":
+            continue
+        process = state["process"]
+        job = job_from_process(subprocess.CompletedProcess(
+            [], process["returncode"], process["stdout"], process["stderr"]
+        ))
+        if job and job.get("status") == "succeeded" and cacheable_job(job, state["identity"]):
+            request_digest, endpoint = batch
+            completed.setdefault(request_digest, set()).add(endpoint)
+
+    current = []
+    for state in states:
+        batch = batch_identity(state) if state.get("phase") == "accepted" else None
+        if batch is not None:
+            request_digest, endpoint = batch
+            # An exact replacement from another Gateway can supply evidence.
+            # This does not assert cancellation or change job replay policy.
+            if completed.get(request_digest, set()) - {endpoint}:
+                continue
+        current.append(state)
+    return current
 
 
 def _read_record(reader, identifier, *, field, pattern):
@@ -257,6 +297,8 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                 responses.append(response)
                 sample = evaluation.result(response, operation)
                 states = [read_json(path) for path in directory.glob("**/jobs/*/state.json")]
+                if operation == "same_allocation_abba":
+                    states = _abba_acceptance_states(states)
                 pending = pending or any(state.get("phase") != "terminal" for state in states)
                 cacheable = cacheable and bool(states) and all(
                     state.get("phase") == "terminal" and cacheable_job(job_from_process(subprocess.CompletedProcess(
