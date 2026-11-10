@@ -134,6 +134,23 @@ def diagnostic(request, root, kind):
     raise RuntimeError('Diagnostic produced no result: ' + process.stderr[-2000:])
 
 
+def _amd_counter_names(output, index):
+    agents = {}
+    current = None
+    for line in output.splitlines():
+        key, separator, value = line.partition(':')
+        if separator and key.strip() == 'GPU':
+            current = value.strip()
+        elif current is not None and key.strip() == 'Counter_Name':
+            agents.setdefault(current, []).append(value.strip())
+    # Device isolation can renumber the sole visible agent to zero. With more
+    # than one agent, require the assigned physical index; never pick arbitrarily.
+    names = next(iter(agents.values())) if len(agents) == 1 else agents.get(index)
+    if not names:
+        raise RuntimeError('rocprofv3 returned no counters for the assigned GPU')
+    return '\n'.join(dict.fromkeys(names))
+
+
 def environment(request):
     import torch
     props = torch.cuda.get_device_properties(0)
@@ -166,17 +183,7 @@ def environment(request):
         if tool == 'rocprofv3':
             # The SDK lists every physical agent despite ROCR visibility. Keep
             # the assigned GPU's counter names, not repeated full descriptions.
-            selected = False
-            names = []
-            for line in output.splitlines():
-                key, separator, value = line.partition(':')
-                if separator and key.strip() == 'GPU':
-                    selected = value.strip() == os.environ['ATREX_SSH_GPU_INDEX']
-                elif selected and key.strip() == 'Counter_Name':
-                    names.append(value.strip())
-            if not names:
-                raise RuntimeError('rocprofv3 returned no counters for the assigned GPU')
-            output = '\n'.join(dict.fromkeys(names))
+            output = _amd_counter_names(output, os.environ['ATREX_SSH_GPU_INDEX'])
         # Keep Env usable through the Agent's bounded response channel even on
         # toolchains with very large metric catalogs. Never imply completeness.
         result['counters'] = output[:65536]

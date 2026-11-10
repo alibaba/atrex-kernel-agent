@@ -247,6 +247,7 @@ MAX_HTTP_REQUEST_TIMEOUT = 600
 RECOVERY_GET_TIMEOUT = 30
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
+SSH_GPU_LOCK_ACQUIRED_MARKER = "__ATREX_SSH_GPU_LOCK_ACQUIRED__"
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
 SSH_WATCHDOG_SOURCE = r"""
@@ -2240,6 +2241,10 @@ class SSHTransportError(RuntimeError):
     """A failure to connect to or transfer data through OpenSSH."""
 
 
+class SSHGPUBusy(EvidenceUnavailable):
+    """The allocation lock is occupied; this is not a broken GPU environment."""
+
+
 def _validate_ssh_target(target: str) -> str:
     value = target.strip()
     if not value or value.startswith("-"):
@@ -2489,8 +2494,11 @@ def _ssh_bwrap_command(
 ) -> str:
     """Build the only remote execution path: a restricted Bubblewrap namespace."""
     binds = [_ssh_runtime_bind(value) for value in runtime_binds]
+    launcher = os.environ.get('ATREX_SANDBOX_SSH_BWRAP')
+    if launcher is not None and not PurePosixPath(launcher).is_absolute():
+        raise ValueError('ATREX_SANDBOX_SSH_BWRAP must be an absolute remote executable path')
     args = [
-        os.environ.get('ATREX_SANDBOX_SSH_BWRAP', 'bwrap'),
+        launcher or 'bwrap',
         "--die-with-parent",
         "--new-session",
         "--unshare-net",
@@ -2563,8 +2571,22 @@ def _ssh_bwrap_command(
     # Pooled Episodes and separate shape requests share the assigned physical
     # GPU. Keep the lock outside the job namespace for the entire allocation.
     key = hashlib.sha256(gpu_uuid['uuid'].encode()).hexdigest()[:24]
+    # Emit a host-side acquisition marker so candidate exit 75 is not confused
+    # with flock expiry. Keep bwrap args in flock's argv so cancellation also
+    # finds the waiting process, and flock retains its FD through execution.
+    acquired = f'echo {SSH_GPU_LOCK_ACQUIRED_MARKER} >&2\nexec "$@"'
     return shlex.join(['flock', '--exclusive', '--wait', str(lock_timeout),
-                       f'/tmp/aka-ssh-gpu-{key}.lock', *args])
+                       '--conflict-exit-code', str(ENVIRONMENT_TEMPFAIL),
+                       f'/tmp/aka-ssh-gpu-{key}.lock',
+                       'bash', '-c', acquired, 'aka-ssh', *args])
+
+
+def _check_ssh_lock_result(result: subprocess.CompletedProcess[str]) -> None:
+    lines = result.stderr.splitlines(keepends=True)
+    acquired = any(line.rstrip('\r\n') == SSH_GPU_LOCK_ACQUIRED_MARKER for line in lines)
+    result.stderr = ''.join(line for line in lines if line.rstrip('\r\n') != SSH_GPU_LOCK_ACQUIRED_MARKER)
+    if result.returncode == ENVIRONMENT_TEMPFAIL and not acquired:
+        raise SSHGPUBusy('SSH GPU busy: allocation lock wait expired; retry when the GPU is free')
 
 
 def _ssh_base(executable: str, target: str) -> list[str]:
@@ -2623,12 +2645,12 @@ def _run_ssh_health(
             ],
             gpu_index=gpu_index,
             gpu_uuid=gpu_uuid,
-            lock_timeout=timeout,
+            lock_timeout=0,
         )
     except ValueError as exc:
         raise SSHTransportError(str(exc)) from exc
     try:
-        return subprocess.run(
+        result = subprocess.run(
             [*_ssh_base(ssh, target), remote_command],
             capture_output=True,
             text=True,
@@ -2636,6 +2658,8 @@ def _run_ssh_health(
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SSHTransportError(f"SSH health probe failed: {exc}") from exc
+    _check_ssh_lock_result(result)
+    return result
 
 
 def _remote_temp_dir(stdout: str) -> str:
@@ -2794,10 +2818,11 @@ def _run_ssh_job(
                 [*_ssh_base(ssh, target), remote_command],
                 capture_output=True,
                 text=True,
-                timeout=timeout + SSH_CONNECT_TIMEOUT + 15,
+                timeout=2 * timeout + SSH_CONNECT_TIMEOUT + 15,
             )
         except subprocess.TimeoutExpired as exc:
             raise SSHTransportError(f"SSH command wait timed out: {exc}") from exc
+        _check_ssh_lock_result(result)
 
         if sync_outputs:
             local_archive = temp / "ssh_outputs.tar.gz"
@@ -4864,7 +4889,10 @@ def _main(argv: list[str] | None = None) -> int:
                         stdout="",
                         stderr=str(exc),
                     )
-                if health.returncode != 0:
+                except SSHGPUBusy:
+                    health = None
+                    print('sandbox: post-command health probe skipped; SSH GPU is busy', file=sys.stderr)
+                if health is not None and health.returncode != 0:
                     detail = (health.stderr or health.stdout or "health probe failed")[-2000:]
                     _record_environment_failure(
                         target=args.ssh,
@@ -5252,7 +5280,8 @@ def main(argv: list[str] | None = None) -> int:
             timed_out = isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
             print(GATEWAY_ERROR_PREFIX + json.dumps(gateway_error_result({
                 "operation": category, "status": "failed", "outcome": "unavailable",
-                "error": {"error_class": "infra", "reason": "timeout" if timed_out else "evidence_unavailable",
+                "error": {"error_class": "infra", "reason": "ssh_gpu_busy" if isinstance(exc, SSHGPUBusy)
+                          else "timeout" if timed_out else "evidence_unavailable",
                           "message": "Gateway transport deadline reached; inspect saved Job state before retrying"
                           if timed_out else str(exc)},
             })))

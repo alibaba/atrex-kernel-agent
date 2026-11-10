@@ -107,6 +107,10 @@ def _check_health(gateway, args):
     try:
         health = gateway._run_ssh_health(args.ssh, args.ssh_init, args.health_command,
                                          args.ssh_runtime_bind, args.ssh_gpu)
+    except gateway.SSHGPUBusy:
+        # Another allocation may acquire the GPU before this post-job probe.
+        # Preserve the job's evidence without reporting an environment failure.
+        return
     except gateway.SSHTransportError as exc:
         gateway._record_environment_failure(target=args.ssh, stage='health', detail=str(exc))
         raise gateway.EvidenceUnavailable('SSH health probe unavailable after a failed request') from exc

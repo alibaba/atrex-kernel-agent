@@ -132,6 +132,11 @@ def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
     if value.get("outcome") == "unknown":
         from aka.light.runtime.request_errors import UNKNOWN_OUTCOME
         result["next_action"] = UNKNOWN_OUTCOME
+    elif isinstance(error, dict) and error.get("reason") == "ssh_gpu_busy":
+        result["next_action"] = (
+            "The assigned SSH GPU is busy. Retry after the current allocation releases it; "
+            "this is not a Kernel correctness verdict or an environment failure."
+        )
     elif isinstance(error, dict) and error.get("error_class") == "infra":
         result["next_action"] = (
             "Infrastructure failure, not a Kernel correctness verdict. Supervisor recovery owns retries. "

@@ -56,10 +56,18 @@ exposes the driver's render nodes and selects the assigned GPU with
 `ROCR_VISIBLE_DEVICES`. It does **not** prevent candidate code from accessing
 other devices. Select it only when that weaker device boundary is appropriate.
 No failure silently changes the isolation mode.
+This mode changes AMD render-node exposure only; NVIDIA keeps its assigned
+device-node isolation even when `runtime` is selected. An explicit device map
+always supplies its own device nodes and visibility settings.
 
 The selected GPU visibility is applied after environment activation and custom
 environment variables. An account-scoped physical-GPU lock serializes AKA
 allocations, including all ABBA runs. Locks do not coordinate unrelated programs.
+Lock acquisition and execution each receive the configured job timeout; the SSH
+client allows both budgets plus connection/cleanup slack. Lock-wait expiry returns
+retryable `ssh_gpu_busy` evidence, without marking the environment broken.
+Health/preflight probes acquire the lock without waiting and report busy when it
+is occupied. A post-job probe skips a busy GPU and preserves the job's evidence.
 
 PPU or other compatible CUDA runtimes can supply an explicit, supervisor-owned
 `ATREX_SANDBOX_SSH_DEVICE_MAP` JSON object keyed by physical index. Each entry
@@ -67,6 +75,61 @@ contains `vendor`, a stable `uuid`, the exact character-device `devices` list,
 and the runtime visibility `environment` mapping. Use the host's real driver
 nodes and selectors; the backend does not infer proprietary device names.
 These settings are captured with the selected profile for children and recovery.
+
+## Execution and failure paths
+
+```mermaid
+flowchart TD
+    Agent["Agent tool call"] --> Runtime["Supervisor Runtime: route request and capture identity"]
+    Runtime --> Typed["ssh_transport.run: typed payload and runtime bundle"]
+    Runtime --> Dev["Dev command and output manifest"]
+    Typed --> Upload["_run_ssh_job: resolve binds/devices, mktemp, scp"]
+    Dev --> Upload
+    Upload --> Lock{"Host GPU lock acquired?"}
+    Lock -->|"wait expires"| Busy["ssh_gpu_busy: retryable; environment unchanged"]
+    Lock -->|"yes"| Namespace["Bubblewrap: file, network and process namespaces"]
+    Namespace --> Watchdog["Execution watchdog: full job timeout"]
+    Watchdog --> Worker["ssh_worker: Evaluate / ABBA / diagnostics / Env, or Dev runner"]
+    Worker --> Receipt["job.json or Dev output archive"]
+    Receipt --> Download["scp download and bounded extraction"]
+    Download --> Evidence["Validate receipt; project result and checkpoint evidence"]
+    Evidence --> Agent
+    Watchdog -->|"timeout"| Stop["Terminate child process group"]
+    Upload -->|"SSH or transfer loss"| Missing["Infrastructure error; no candidate verdict"]
+    Download -->|"missing receipt"| Missing
+    Worker -->|"failed request"| Probe{"_run_ssh_health: nonblocking lock"}
+    Probe -->|"busy"| Preserve["Skip probe; preserve existing job evidence"]
+    Probe -->|"free"| Health["Isolated readiness probe"]
+    Health -->|"failure"| Recovery["Record environment failure"]
+    Health -->|"success"| Preserve
+    Runtime -->|"cancel / interrupt"| Cancel["_cancel_ssh_job: exact allocation argv match"]
+    Cancel -->|"reachable"| Kill["Kill queued launcher / namespace and children"]
+    Cancel -->|"unreachable"| Ceiling["Lock wait and watchdog remain bounded; outcome unknown"]
+    Evidence --> Cleanup["finally: cancel remaining namespace; remove remote workspace"]
+    Missing --> Cleanup
+    Busy --> Cleanup
+    Stop --> Cleanup
+    Kill --> Cleanup
+```
+
+`ssh_transport.run` packages the typed request and consumes the worker's
+`scratch/job.json`; Dev uses `_run_ssh_job` with its existing command/output
+contract. `_run_ssh_job` owns staging, transfer, the physical-GPU lock and cleanup.
+The host flock process retains the lock through namespace execution, including every
+ABBA block. `_ssh_bwrap_command` constructs the namespace; `_ssh_visibility`
+applies the assigned runtime selector after activation and custom environment.
+
+`ssh_worker` dispatches evaluation and diagnostics using the provisioned runtime.
+Completed shape batches retain their checkpoints; incomplete receipts and
+transport loss remain infrastructure outcomes. `_run_ssh_health` distinguishes
+contention from a failed readiness probe, so concurrent allocations cannot trigger
+environment recovery solely by holding the lock. `_cancel_ssh_job` matches the
+allocation's exact workspace bind arguments, including a launcher still waiting
+for the lock. Failed cleanup is recorded for later handling.
+
+The existing Gateway path is unchanged. SSH extends the command-only path with
+typed evidence and ABBA; reverting this change or selecting Gateway rolls it back.
+Runtime visibility is explicit and never a fallback after isolation failure.
 
 ## Operations and evidence
 
@@ -94,9 +157,13 @@ exports `metrics.csv`. Use `--counters rocprofv3` with Env to discover counters;
 deep profiling requires explicit `--counter` selections. NVIDIA-specific source
 correlation is unavailable on AMD. Env capability queries also list installed
 profilers. Counter discovery returns the assigned AMD GPU's counter names;
-large catalogs explicitly report truncation. Gateway placement and unimplemented
+when isolation leaves a single reported agent, its numbering may start at zero.
+Multiple-agent catalogs must match the assigned physical index.
+Large catalogs explicitly report truncation. Gateway placement and unimplemented
 Gateway-only options are rejected
 before execution; `shape_shards=1` is compatible with the fixed SSH allocation.
+The parser retains `acu` for provisioned SSH PPU runtimes; a Gateway deployment
+must advertise its own supported profiler capabilities before ACU can be used there.
 
 Cancellation terminates the allocation's remote namespace, including its child
 processes. If SSH is unreachable during cancellation, the remote watchdog remains
