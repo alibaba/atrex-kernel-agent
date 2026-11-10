@@ -3,16 +3,31 @@ from __future__ import annotations
 from typing import Any
 
 
+def _shape_id_sort_key(shape_id: str) -> tuple[int, int, str]:
+    """Sort integer-parseable IDs numerically and all other IDs lexically."""
+    try:
+        return (0, int(shape_id), shape_id)
+    except ValueError:
+        return (1, 0, shape_id)
+
+
+def _require_integer_shape_ids(shape_ids: list[str], *, label: str) -> None:
+    try:
+        for shape_id in shape_ids:
+            int(shape_id)
+    except ValueError as exc:
+        raise ValueError(
+            f"{label} must contain integer-parseable strings for Agate 0.14.33"
+        ) from exc
+
+
 def request_shape_ids(request: dict[str, Any]) -> list[str]:
     shapes = request["reference"]["shapes"]
-
-    def sort_key(shape_id: str) -> tuple[int, object]:
-        return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
 
     available = {str(shape_id) for shape_id in shapes}
     selected = (request.get("options") or {}).get("shape_ids")
     if selected is None:
-        return sorted(available, key=sort_key)
+        return sorted(available, key=_shape_id_sort_key)
     if (
         not isinstance(selected, list)
         or not selected
@@ -20,13 +35,7 @@ def request_shape_ids(request: dict[str, Any]) -> list[str]:
         or len(selected) != len(set(selected))
     ):
         raise ValueError("Eval options.shape_ids must be a non-empty list of distinct strings")
-    try:
-        for shape_id in selected:
-            int(shape_id)
-    except ValueError as exc:
-        raise ValueError(
-            "Agate 0.14.33 requires options.shape_ids to be integer-parseable strings"
-        ) from exc
+    _require_integer_shape_ids(selected, label="Eval options.shape_ids")
     unknown = [shape_id for shape_id in selected if shape_id not in available]
     if unknown:
         raise ValueError(
@@ -87,6 +96,7 @@ def shape_subset_request(
     unknown = [shape_id for shape_id in shape_ids if shape_id not in available]
     if unknown:
         raise ValueError("Unknown Shape ids: " + ", ".join(unknown))
+    _require_integer_shape_ids(shape_ids, label="Shape selection")
     options = dict(request.get("options") or {})
     if shape_ids == available:
         options.pop("shape_ids", None)

@@ -90,6 +90,10 @@ Pooled multi-trajectory search uses its own `epochs × trajectories × episodes_
 
 Current Light groups at most 20 selected Shape IDs into one Agate Eval job by default. The batch size is configurable through the Runtime's `--shape-batch-size` setting or `ATREX_EVAL_SHAPE_BATCH_SIZE`. Every job passes the original evaluator bundle plus repeated `--shape-ids`, explicitly requests clock locking, and sets `--shape-shards 1`. Up to 16 independent batch jobs may be submitted concurrently. Light keeps 600 seconds for candidate initialization/correctness, 300 seconds for steady-state performance, five warmups and 20 timing iterations. These are measurement-policy defaults rather than all being public Campaign flags.
 
+See the [Ray Data Shape-ID batching design](../../../docs/ray-data-shape-batching.md)
+for the interaction diagram, code mapping, measurable job-count reduction,
+failure behavior, trade-offs and rollback plan.
+
 ## SSH execution options
 
 Use SSH only when GPU work must run in a mandatory remote Bubblewrap namespace instead of Agate.

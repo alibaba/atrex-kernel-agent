@@ -381,10 +381,25 @@ def apply_request(request: dict[str, Any], args: argparse.Namespace, kind: str) 
         value = supplied.pop(name, None)
         if value is not None:
             options = request.setdefault("options", {})
-            if name in options and options[name] != value:
-                raise ValueError(
-                    f"Agate --{name.replace('_', '-')} conflicts with the Runtime Shape selection"
-                )
+            if name in options:
+                existing = options[name]
+                same_value = existing == value
+                if (
+                    name == "shape_ids"
+                    and isinstance(existing, list)
+                    and isinstance(value, list)
+                ):
+                    same_value = (
+                        len(existing) == len(value) and set(existing) == set(value)
+                    )
+                if not same_value:
+                    raise ValueError(
+                        f"Agate --{name.replace('_', '-')} conflicts with the Runtime Shape selection"
+                    )
+                # Preserve the Runtime's canonical order for stable batching,
+                # checkpoint identity and recovery when the same set is supplied
+                # in a different order.
+                continue
             options[name] = value
     # Agate's typed Profile/Check/Disassemble fields use their parser dest as
     # their wire name. Unknown future additive fields follow that public SDK

@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="820" viewBox="0 0 1280 820" role="img" aria-labelledby="title desc">
+  <title id="title">AKA Light Ray Data Shape-ID batching</title>
+  <desc id="desc">Full evaluator inputs are selected by Shape ID, partitioned into batches of at most twenty, submitted through up to sixteen workers as serial locked Agate jobs, and recovered from batch checkpoints. Invalid selections fail locally and multi-worker heterogeneous evidence motivates the serial shard policy.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#334155"/>
+    </marker>
+    <marker id="red-arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#b91c1c"/>
+    </marker>
+    <style>
+      .title { font: 700 28px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .section { font: 700 16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; letter-spacing: .04em; }
+      .head { font: 700 17px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #0f172a; }
+      .body { font: 14px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #334155; }
+      .code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; fill: #1e3a8a; }
+      .small { font: 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; fill: #475569; }
+      .box { fill: #ffffff; stroke: #94a3b8; stroke-width: 2; rx: 12; }
+      .policy { fill: #eff6ff; stroke: #3b82f6; stroke-width: 2; rx: 12; }
+      .success { fill: #ecfdf5; stroke: #10b981; stroke-width: 2; rx: 12; }
+      .failure { fill: #fef2f2; stroke: #ef4444; stroke-width: 2; rx: 12; }
+      .arrow { stroke: #334155; stroke-width: 2.5; fill: none; marker-end: url(#arrow); }
+      .red { stroke: #b91c1c; stroke-width: 2.5; fill: none; marker-end: url(#red-arrow); stroke-dasharray: 7 5; }
+    </style>
+  </defs>
+  <rect width="1280" height="820" fill="#f8fafc"/>
+  <text x="50" y="54" class="title">AKA Light Ray Data Shape-ID batching</text>
+  <text x="50" y="86" class="small">One recoverable logical batch maps to one serial, clock-locked Agate Eval job.</text>
+
+  <text x="50" y="130" class="section">NORMAL FLOW</text>
+
+  <rect x="50" y="155" width="225" height="165" class="box"/>
+  <text x="70" y="185" class="head">1. Build request</text>
+  <text x="70" y="214" class="body">Full evaluator bundle</text>
+  <text x="70" y="238" class="body">+ reviewed Shape IDs</text>
+  <text x="70" y="275" class="code">gateway.</text>
+  <text x="70" y="295" class="code">build_typed_request</text>
+
+  <rect x="315" y="155" width="235" height="165" class="box"/>
+  <text x="335" y="185" class="head">2. Validate + select</text>
+  <text x="335" y="214" class="body">Known, distinct, integer IDs</text>
+  <text x="335" y="238" class="body">Reference bundle unchanged</text>
+  <text x="335" y="275" class="code">shapes.</text>
+  <text x="335" y="295" class="code">shape_subset_request</text>
+
+  <rect x="590" y="155" width="245" height="165" class="policy"/>
+  <text x="610" y="185" class="head">3. Partition policy</text>
+  <text x="610" y="214" class="body">≤ 20 Shapes per batch</text>
+  <text x="610" y="238" class="body">≤ 16 submission workers</text>
+  <text x="610" y="270" class="code">policy.py</text>
+  <text x="610" y="290" class="code">SHAPE_BATCH_SIZE</text>
+  <text x="610" y="310" class="code">BATCH_WORKERS</text>
+
+  <rect x="875" y="135" width="350" height="205" class="policy"/>
+  <text x="895" y="168" class="head">4. One Agate Eval job per batch</text>
+  <text x="895" y="198" class="body">full bundle + repeated --shape-ids</text>
+  <text x="895" y="223" class="body">--shape-shards 1 + --lock-clocks</text>
+  <text x="895" y="248" class="body">serial Ray Data execution</text>
+  <text x="895" y="285" class="code">gateway._run_typed_gateway</text>
+  <text x="895" y="307" class="code">SHAPE_SHARDS / LOCK_CLOCKS</text>
+
+  <path d="M275 237 L315 237" class="arrow"/>
+  <path d="M550 237 L590 237" class="arrow"/>
+  <path d="M835 237 L875 237" class="arrow"/>
+
+  <rect x="300" y="385" width="300" height="145" class="success"/>
+  <text x="320" y="418" class="head">5a. Terminal cacheable batch</text>
+  <text x="320" y="447" class="body">Persist result + exact batch identity</text>
+  <text x="320" y="473" class="body">Resume reuses completed batch</text>
+  <text x="320" y="505" class="code">batch checkpoint / job record</text>
+
+  <rect x="680" y="385" width="300" height="145" class="box"/>
+  <text x="700" y="418" class="head">5b. Missing / non-terminal batch</text>
+  <text x="700" y="447" class="body">Retry only this logical batch</text>
+  <text x="700" y="473" class="body">Completed siblings remain reusable</text>
+  <text x="700" y="505" class="code">recovery unit: ≤ 20 Shapes</text>
+
+  <path d="M1050 340 C1050 365 600 350 510 385" class="arrow"/>
+  <path d="M1050 340 C1050 365 900 350 850 385" class="arrow"/>
+  <path d="M680 458 L600 458" class="arrow"/>
+
+  <text x="50" y="590" class="section">FAIL CLOSED BEFORE SUBMISSION</text>
+  <rect x="50" y="615" width="410" height="145" class="failure"/>
+  <text x="70" y="648" class="head">Invalid Runtime / Agent selection</text>
+  <text x="70" y="677" class="body">unknown, duplicate or non-integer Shape ID</text>
+  <text x="70" y="701" class="body">conflicting native option</text>
+  <text x="70" y="735" class="code">request_shape_ids / apply_request → ValueError</text>
+  <path d="M430 320 C430 520 255 520 255 615" class="red"/>
+
+  <text x="520" y="590" class="section">WHY SHAPE_SHARDS = 1</text>
+  <rect x="520" y="615" width="330" height="145" class="failure"/>
+  <text x="540" y="648" class="head">Multi-worker L20D evidence</text>
+  <text x="540" y="677" class="body">different environment.gpu_name</text>
+  <text x="540" y="701" class="body">or clock-state fields</text>
+  <text x="540" y="735" class="body">→ remote merge rejection</text>
+
+  <rect x="900" y="615" width="325" height="145" class="success"/>
+  <text x="920" y="648" class="head">Current safe policy</text>
+  <text x="920" y="677" class="body">one Ray worker inside each job</text>
+  <text x="920" y="701" class="body">up to 16 independent jobs outside</text>
+  <text x="920" y="735" class="code">SHAPE_SHARDS = 1</text>
+  <path d="M850 687 L900 687" class="arrow"/>
+</svg>

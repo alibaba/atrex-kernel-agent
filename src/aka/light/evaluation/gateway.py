@@ -1092,8 +1092,11 @@ def _private_evaluator_inputs(workspace: Path, *, environment=None) -> dict[str,
     return inputs
 
 
-def shape_id_sort_key(shape_id: str) -> tuple[int, object]:
-    return (0, int(shape_id)) if shape_id.isdigit() else (1, shape_id)
+def shape_id_sort_key(shape_id: str) -> tuple[int, int, str]:
+    try:
+        return (0, int(shape_id), shape_id)
+    except ValueError:
+        return (1, 0, shape_id)
 
 
 def _profile_shape_entry(shapes: object, shape_id: str, *, option: str = "--profile-shape-id") -> dict:
@@ -1436,7 +1439,7 @@ def build_typed_request(
         },
         "env_vars": _parse_env_items(env_items),
     }
-    if requested_shape_ids:
+    if requested_shape_ids and kind == "run":
         # Keep the complete evaluator-owned bundle and select by original ID.
         # Agate/Atrex-Bench can now validate and shard this subset inside one
         # Ray Data job, rather than Light manufacturing a different reference.
@@ -1455,8 +1458,10 @@ def build_typed_request(
     if kind == "run":
         request["mode"] = policy["mode"]
         request["options"]["shape_shards"] = SHAPE_SHARDS
-        if LOCK_CLOCKS:
-            request["lock_clocks"] = True
+        # Keep the policy value explicit in both the request and measurement
+        # identity. The current policy enables locking; a future policy change
+        # can disable it without reintroducing a constant-condition branch.
+        request["lock_clocks"] = LOCK_CLOCKS
         request["runner_overrides"] = runner_overrides()
         if dependency_specs:
             request["requirements"] = dependency_specs
@@ -1479,7 +1484,17 @@ def build_typed_request(
             request["launch_skip"] = launch_skip
         if launch_count is not None:
             request["launch_count"] = launch_count
-        selected_id, entry = _selected_profile_shape(shapes, profile_shape_id, request["env_vars"])
+        # A targeted-smoke command historically constrained Profile's default
+        # Shape. Keep that contract without sending Eval-only options.shape_ids
+        # in the Profile request.
+        profile_shapes = (
+            {shape_id: shapes[shape_id] for shape_id in requested_shape_ids}
+            if requested_shape_ids
+            else shapes
+        )
+        selected_id, entry = _selected_profile_shape(
+            profile_shapes, profile_shape_id, request["env_vars"]
+        )
         request["env_vars"].pop("PROFILE_SHAPE_ID", None)
         request["shape_id"] = selected_id
         request["reference"]["shapes"] = {selected_id: entry}
