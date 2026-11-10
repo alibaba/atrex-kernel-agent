@@ -158,7 +158,8 @@ class JobStore:
         with self._lock:
             self._db.close()
 
-    def create(self, kind: str, request: dict[str, Any], trace_id: str) -> tuple[dict[str, Any], bool]:
+    def create(self, kind: str, request: dict[str, Any], trace_id: str, *,
+               reserved_job_id: str | None = None) -> tuple[dict[str, Any], bool]:
         idempotency_key = request.get("idempotency_key")
         with self._lock:
             if idempotency_key:
@@ -167,10 +168,19 @@ class JobStore:
                     (kind, idempotency_key),
                 ).fetchone()
                 if row is not None:
+                    if reserved_job_id is not None and (
+                            row["job_id"] != reserved_job_id or _json_loads(row["request_json"]) != request):
+                        raise ValueError("idempotency key belongs to another reserved request")
                     return self._view(row), False
 
             now = time.time()
-            job_id = f"{_job_prefix(kind)}_{secrets.token_hex(6)}"
+            job_id = reserved_job_id or f"{_job_prefix(kind)}_{secrets.token_hex(6)}"
+            if reserved_job_id is not None:
+                row = self._db.execute("SELECT * FROM jobs WHERE job_id=?", (job_id,)).fetchone()
+                if row is not None:
+                    if row["kind"] != kind or _json_loads(row["request_json"]) != request:
+                        raise ValueError("Job reservation already belongs to another request")
+                    return self._view(row), False
             self._db.execute(
                 """
                 INSERT INTO jobs (
@@ -1607,7 +1617,8 @@ class LocalGateway:
                 f"localhost scheduler accepts target_hardware aliases: {accepted}"
             )
         request = dict(request, _local_kind=kind)
-        job, created = self.store.create(kind, request, trace_id)
+        reserved_job_id = self.uploads.reserved_job_id(request, kind)
+        job, created = self.store.create(kind, request, trace_id, reserved_job_id=reserved_job_id)
         if created:
             self.scheduler.notify()
         accepted = {

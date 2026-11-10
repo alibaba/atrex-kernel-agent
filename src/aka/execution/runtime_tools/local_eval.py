@@ -71,15 +71,37 @@ class UploadStore:
             total += size
         if total > MAX_BYTES:
             raise ValueError("source archives exceed the 24 MiB limit")
+        job_id = {"eval": "ev", "profile": "pf"}[payload["kind"]] + "_" + secrets.token_hex(6)
         uploads = []
         for item in files:
             token = "lu_" + secrets.token_hex(16)
-            metadata = dict(item, kind=payload["kind"], spec=payload.get("spec"))
+            metadata = dict(item, kind=payload["kind"], spec=payload.get("spec"), job_id=job_id)
             with self._path(token, ".json").open("x") as stream:
                 os.chmod(stream.name, 0o600)
                 json.dump(metadata, stream)
             uploads.append({"path": item["path"], "upload_ref": token})
-        return {"job_id": "upload_" + secrets.token_hex(12), "uploads": uploads}
+        return {"job_id": job_id, "uploads": uploads}
+
+    def reserved_job_id(self, request, kind):
+        files = request.get("oss_files", [])
+        if not files:
+            return None
+        identities = set()
+        for item in files:
+            try:
+                metadata = json.loads(self._path(item["upload_ref"], ".json").read_text())
+            except (FileNotFoundError, KeyError) as exc:
+                raise ValueError("source archive reservation is unavailable") from exc
+            if (metadata["path"], metadata["kind"], metadata["spec"]) != (item["path"], kind, request["spec"]):
+                raise ValueError("source archive does not belong to this request")
+            identity = metadata.get("job_id")
+            prefix = {"eval": "ev", "profile": "pf"}.get(kind)
+            if prefix is None or not isinstance(identity, str) or not re.fullmatch(prefix + r"_[0-9a-f]{12}", identity):
+                raise ValueError("source archive reservation has no confirmed Job identity")
+            identities.add(identity)
+        if len(identities) != 1:
+            raise ValueError("source archives belong to different Job reservations")
+        return identities.pop()
 
     def put(self, token, data):
         metadata = json.loads(self._path(token, ".json").read_text())
