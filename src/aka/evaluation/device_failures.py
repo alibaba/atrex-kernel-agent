@@ -17,6 +17,7 @@ _DEVICE_ERRORS = (
     "cuda error: system not yet initialized",
     "cudaerrorsystemnotready",
     "no cuda gpus are available",
+    "hw under unreliable state, a reset operation is needed!",
 )
 
 

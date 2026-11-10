@@ -417,6 +417,14 @@ class GatewayCommandEvaluator:
                     return assess_payload(identity, result, payload)
                 request = measurement.request_for(index % context["batch_count"]) if measurement is not None else json.loads(context["command"].submission)["request"]
                 job = _job_response(result.stdout)
+                if job is not None:
+                    from .device_failures import embedded_device_failure
+                    if embedded_device_failure(job):
+                        from aka.contracts.measurement import MeasurementDiagnostic
+                        assessment = assess_payload(identity, result)
+                        return replace(assessment, diagnostics=(*assessment.diagnostics,
+                            MeasurementDiagnostic("infrastructure", "device-unavailable",
+                                basis=("explicit-device-diagnostic",))))
                 if job and isinstance(job.get("result"), dict):
                     shapes = list(dict.fromkeys(point.shape_id for point in identity.points if point.shape_id is not None))
                     if context["kind"] == "same_allocation_abba":
@@ -489,6 +497,15 @@ class GatewayCommandEvaluator:
         jobs = []
         for result in results:
             job = _job_response(result.stdout)
+            if job is not None and context["kind"] == "run":
+                from .device_failures import embedded_device_failure
+                if embedded_device_failure(job):
+                    payload = {"all_pass": None, "evaluation_failure": {
+                        "category": "infrastructure", "code": "device-unavailable",
+                        "message": "GPU evaluation unavailable: worker reports an unavailable device; backend recovery is required"}}
+                    return self._command_evaluation(replace(result,
+                        transport_returncode=2, exit_code=None,
+                        stdout=TEST_RESULT_PREFIX + json.dumps(payload) + "\n"), context, results)
             settled = (job is not None and job.get("status") in {"succeeded", "failed"}
                 and isinstance(job.get("result"), dict)
                 and result.facts.disposition == "terminal" and result.transport_status in {"succeeded", "failed"})
@@ -573,9 +590,17 @@ class GatewayCommandEvaluator:
                 payload = {"all_pass": None, "error": error}
                 result = replace(result, transport_returncode=2, exit_code=None,
                     stdout=TEST_RESULT_PREFIX + json.dumps(payload, allow_nan=False) + "\n")
+        failure = None
+        unavailable = payload.get("evaluation_failure")
+        if isinstance(unavailable, dict):
+            from aka.contracts.evaluation import EvaluationFailure
+            failure = EvaluationFailure(str(unavailable["category"]), str(unavailable["code"]),
+                str(unavailable["message"]))
+            error = failure.message
         verification = VerificationResult("ERROR" if error else "PASS" if payload.get("all_pass") else "FAIL",
             payload.get("latency_us_geomean"), None, None,
             error=error,
+            failure=failure,
             candidate_performance_score=payload.get("performance_score"),
             candidate_latency_us_by_shape=shape_latency_facts(payload.get("latency_us_by_shape")))
         content = json.dumps(payload).encode()
