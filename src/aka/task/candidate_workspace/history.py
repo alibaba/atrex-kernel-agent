@@ -21,10 +21,11 @@ def validate_paths(paths):
 
 
 def resolve_revision(workspace, revision):
+    from .draft import is_draft
     # Git identities are object IDs (including historical unique abbreviations),
     # never user-provided Git expressions, refs or command options.
     current_revision(workspace)
-    if not (Path(workspace) / ".git").exists():
+    if not (Path(workspace) / ".git").exists() or is_draft(workspace):
         raise ValueError("revision facts require an initialized Workspace root")
     if not isinstance(revision, str) or re.fullmatch(r"[0-9a-fA-F]{4,64}", revision) is None:
         raise ValueError("unknown opaque workspace revision identity")
@@ -120,11 +121,12 @@ def _rename_paths(encoded):
 
 
 def working_facts(workspace: Path, *, paths=(), include_untracked=True):
+    from .draft import is_draft
     if type(include_untracked) is not bool:
         raise TypeError("include_untracked must be boolean")
     workspace = Path(workspace).absolute()
     current_revision(workspace)
-    if not (workspace / ".git").exists():
+    if not (workspace / ".git").exists() or is_draft(workspace):
         raise ValueError("working facts require an initialized Workspace root")
     paths = validate_paths(paths)
     _selected(workspace, tuple(WorkspaceFile(name, text="") for name in paths))

@@ -39,6 +39,9 @@ def current_revision(workspace: Path) -> str:
         raise ValueError("workspace Git metadata must not be a symlink")
     if not metadata.exists():
         return ""
+    from .draft import is_draft
+    if is_draft(workspace):
+        return ""
     # Validate metadata separately so corrupt repositories are not reported as unborn.
     _git(workspace, "rev-parse", "--git-dir")
     result = _git(workspace, "rev-parse", "--verify", "HEAD^{commit}", check=False)

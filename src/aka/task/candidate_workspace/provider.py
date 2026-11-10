@@ -9,6 +9,10 @@ def _legacy(handle):
 
 
 class GitCandidateWorkspace(GitSnapshots):
+    def prepare_draft(self, workspace):
+        from .draft import prepare_draft
+        return prepare_draft(workspace)
+
     def exclude_runtime_paths(self, workspace, exclusions):
         from .excludes import exclude_runtime_paths
         return exclude_runtime_paths(workspace, exclusions)

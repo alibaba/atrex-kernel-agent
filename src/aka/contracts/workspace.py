@@ -163,6 +163,9 @@ class CandidateCheckpointState:
 
 
 class CandidateWorkspace(Protocol):
+    def prepare_draft(self, workspace: Path) -> None:
+        """Declare a Git-free draft; reject existing repository metadata and hide its marker."""
+        ...
     def exclude_runtime_paths(self, workspace: Path,
                               exclusions: tuple[WorkspaceExclusion, ...]) -> None:
         """Append explicit owner runtime exclusions without changing tracked content/index."""

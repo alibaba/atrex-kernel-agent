@@ -26,8 +26,9 @@ def _revision_manifest(workspace, revision):
 
 
 def uses_context(workspace):
+    from .draft import is_draft
     target = Path(workspace) / MANIFEST
-    if not (Path(workspace) / ".git").exists():
+    if not (Path(workspace) / ".git").exists() or is_draft(workspace):
         return target.exists() or target.is_symlink()
     history = _git(workspace, "rev-list", "-1", "HEAD", "--", MANIFEST)
     path = context_store(workspace)

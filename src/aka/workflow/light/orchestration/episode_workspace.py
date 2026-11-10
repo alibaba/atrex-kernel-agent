@@ -82,6 +82,7 @@ class EpisodeWorkspace:
             raise ValueError("Cannot change inherit_state while resuming an existing Episode")
         with open_private_directory(self.root):
             pass
+        self.workspace_provider.prepare_draft(self.root)
         self.resources_registry.install(self.root)
         self.reserved_paths = self.resources_registry.installed_paths(self.root)
         if self.adaptive is not None:

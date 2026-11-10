@@ -40,6 +40,10 @@ def _git_mounts(workspace):
 
 def filesystem_access(workspace, *, include_git=False):
     workspace = Path(workspace).resolve(strict=True)
+    from .draft import is_draft
+    draft = is_draft(workspace)
+    if draft and include_git:
+        raise ValueError("Git-free drafts cannot grant Git access")
     protected = tuple(workspace / name for name in IMMUTABLE_BASELINE_PATHS
                       if (workspace / name).exists())
     from .source import POLICY, SELECTION, _policy
@@ -63,4 +67,5 @@ def filesystem_access(workspace, *, include_git=False):
         protected = tuple(dict.fromkeys(protected))
     if (workspace / SELECTION).exists():
         protected += (workspace / SELECTION,)
-    return FilesystemAccess(_git_mounts(workspace) if include_git else (), (), protected)
+    return FilesystemAccess(_git_mounts(workspace) if include_git else (),
+                            (workspace / ".git",) if draft else (), protected)
