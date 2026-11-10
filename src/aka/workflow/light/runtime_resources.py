@@ -58,4 +58,9 @@ def agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool 
             "Read their supplied Skills for request schemas and examples. "
             "Before choosing DSL imports, run `python3 tools/sandbox.py --kind env`. "
             "Its `task_worker_requirements` field lists the selected Task's per-Job dependency pins "
-            "and API compatibility notes; these may differ from the base image or local Python.")
+            "and API compatibility notes; these may differ from the base image or local Python. "
+            "For FlyDSL 0.3.4, read the selected shared reference "
+            "`reference/dsl/flydsl/0.3.4/guide.md` before implementing or repairing imports, "
+            "JIT/Context handling or memory operations. Match the Task's dependency version; "
+            "if the reference is absent or mismatched, record that fact and inspect the matching "
+            "version through the selected sandbox or pinned sources.")

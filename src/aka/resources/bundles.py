@@ -43,6 +43,11 @@ _BUNDLES = {
          ("measurement-session-instructions", "reference/CLAUDE.md", None, "runtime")),
     ),
     "research-records": (("runtime-records",), ()),
+    "flydsl-0.3.4": (
+        (),
+        (("dsl-flydsl-0-3-4", "reference/dsl/flydsl/0.3.4",
+          "reference/dsl/flydsl/0.3.4", "agent"),),
+    ),
     "kernel-wiki": (("kernel-wiki",), ()),
     "profiling-analysis": (("ppu-acu-joint-profile", "autonomous-gpu-kernel-timeline"), ()),
     "episode-report": (("runtime-report",), ()),

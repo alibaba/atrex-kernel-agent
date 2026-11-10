@@ -5,6 +5,12 @@ The full multi-cycle workflow and terminal handoff are defined in the injected e
 
 ## Framework Guidance
 
+- **FlyDSL version reference:** before selecting imports or implementing/repairing FlyDSL code,
+  inspect the selected runtime environment's `task_worker_requirements` for the actual per-Job pin.
+  For 0.3.4, read the selected shared `reference/dsl/flydsl/0.3.4/guide.md`, including the wheel
+  scope and the relevant API/Context chapter. This reference remains available with Wiki disabled.
+  For an absent reference or another version, record the mismatch and inspect matching pinned
+  sources or worker APIs through the sandbox.
 - **The V0 baseline is a pure-PyTorch reference wrapper** (correct + directly submittable), NOT yet in any optimized DSL. Migrating the body of `run()` from PyTorch to the `--framework` DSL is the *suggested* first lever of the optimization loop — do it in an early iteration, and update `solution.json` `spec.languages`/`dependencies` in the same iteration so the harness benches the real kernel.
 - The `--framework` value is a **recommended optimization direction**, not a hard constraint. Sessions MAY use a different DSL or mixed approaches if evidence shows a better performance path.
 - Preinstalled third-party helper libraries may be used, but the campaign environment is immutable: never

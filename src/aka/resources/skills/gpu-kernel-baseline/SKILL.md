@@ -35,6 +35,12 @@ The orchestrator installs discovered plugin instructions at `.atrex_plugins/inst
 
 ## Phase 2: Learn Framework APIs from enabled knowledge tools
 
+For FlyDSL, first inspect the selected runtime environment's `task_worker_requirements`.
+When the per-Job pin is 0.3.4, read `reference/dsl/flydsl/0.3.4/guide.md` before choosing imports,
+even with Wiki disabled. Its wheel scope and versioned APIs take precedence over conflicting
+examples from other versions. Record missing or mismatched references and use matching pinned
+sources or sandbox API probes; continue to use knowledge tools for operator-specific evidence.
+
 1. Read `.atrex_plugins/instructions.md` and inspect `python3 -m aka.resources.cli list` for enabled
    tool names and input schemas. Follow the session's phase-specific plugin instructions.
 2. Query available knowledge tools with the exact product, authoritative runtime architecture,
