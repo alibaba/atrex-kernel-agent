@@ -596,17 +596,18 @@ class RetainedWorkflowExport:
                 relative = path.relative_to(workspace).as_posix()
                 artifacts.append(_artifact('wiki_'+hashlib.sha256(relative.encode()).hexdigest(),
                     'wiki/'+path.parent.name+'/'+path.name,'wiki-query-event',path.read_bytes()))
-        sessions = list(read_sessions(workspace))
+        sessions = [(s, None) for s in read_sessions(workspace)]
         for directory in sorted(runtime.glob('episodes/e*')):
             number = int(directory.name[1:])
-            sessions.extend(replace(s, episode=number) for s in read_sessions(directory))
+            sessions.extend((s, number) for s in read_sessions(directory))
         for directory in sorted(runtime.glob('episodes/e*/agent_observations')):
-            sessions.extend(read_sessions(directory, direct=True))
+            number = int(directory.parent.name[1:])
+            sessions.extend((s, number) for s in read_sessions(directory, direct=True))
         sessions = tuple(SessionFact(
             s.session_id, s.runtime,
-            next((e.episode for e in episodes if e.session_id == s.session_id), None),
+            number if number is not None else next((e.episode for e in episodes if e.session_id == s.session_id), None),
             s.status, s.updated_at, s.usage, s.events, s.resume_supported,
-        ) for s in sessions)
+        ) for s, number in sessions)
         observed = [p.stat().st_mtime for p in (runtime/'state.json', runtime/'active_episode.json', workspace/'memory/live.json') if p.is_file()]
         observed.extend(datetime.fromisoformat(s.updated_at).timestamp() for s in sessions if s.updated_at)
         updated = datetime.fromtimestamp(max(observed), timezone.utc).isoformat() if observed else None

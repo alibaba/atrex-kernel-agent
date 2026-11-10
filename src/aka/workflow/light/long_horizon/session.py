@@ -165,8 +165,7 @@ class LongSessionRunner:
                 or not 0 <= output_limit_recovery_retries <= 10):
             raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")
         session_id = session_id or str(uuid.uuid4())
-        is_codex = self.agent_cli == "codex"
-        active_session_id = "" if is_codex else session_id
+        active_session_id = "" if self.agent_cli in {"codex", "dsh"} else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         owned = ExitStack()
@@ -286,6 +285,9 @@ class LongSessionRunner:
                     if self.agent_cli == "claude" else _pi_terminal_failure(stdout)
                     if self.agent_cli == "pi" else (None, None)
                 )
+                if self.agent_cli == "dsh":
+                    from aka.agent.dsh import terminal_failure
+                    failure_kind, provider_error_code = terminal_failure(stdout, active_session_id)
                 if failure_kind:
                     exit_status = exit_status or 1
                 total_tokens += self.usage_policy(turn)

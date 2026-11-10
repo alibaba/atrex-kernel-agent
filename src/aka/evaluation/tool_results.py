@@ -7,6 +7,7 @@ import math
 import statistics
 
 from aka.evaluation.correctness_summary import correctness_summary, finite_number
+from .response_policy import known_gateway_error
 
 PREFIXES = {
     "evaluate": "[test_kernel] RESULT_JSON=",
@@ -202,9 +203,24 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
     if operation == "dev":
         result["exit_code"] = response.get("exit_code")
     if errors:
-        for key in ("error", "next_action", "recovery", "outcome", "job_id", "trace_id", "http_status"):
-            if key in errors[0]:
-                result[key] = errors[0][key]
+        first_error = errors[0]
+        if known_gateway_error(first_error):
+            for key in (
+                "error",
+                "next_action",
+                "recovery",
+                "outcome",
+                "job_id",
+                "trace_id",
+                "http_status",
+            ):
+                if key in first_error:
+                    result[key] = first_error[key]
+        else:
+            # This Runtime version has no policy for the Agate response.  Keep
+            # its full redacted envelope in the canonical Agent result rather
+            # than reducing it to today's known error fields.
+            result.update(deepcopy(first_error))
         if len(errors) > 1:
             result["errors"] = errors
     if response.get("truncated"):

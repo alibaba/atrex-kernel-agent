@@ -113,9 +113,76 @@ facts still support versioning, reporting, and recovery.
 
 ## Source and measurement identity
 
-New tasks default to `source_tree`, with a fixed Python adapter and editable `impl/`.
+New tasks default to `source_tree`, with an editable `kernel.py` and optional `impl/`.
 Explicit alternatives are `single_file` and `cuda_manifest`. Layout implementations own
 validation and packaging; Workflow uses their common artifact interface.
+
+```mermaid
+flowchart LR
+    A[Operator source] --> B{Candidate layout}
+    B -->|source_tree| C[Editable kernel.py<br/>optional editable helpers]
+    B -->|single_file| D[Editable kernel.py]
+    B -->|cuda_manifest| E[Declared CUDA sources]
+    C --> F[Seal source artifact]
+    D --> F
+    E --> F
+    F --> G[Evaluate / Profile / Check]
+    G --> H[Record binds exact artifact digest]
+```
+
+### Shape visibility and resume compatibility
+
+Leaderboard keeps detailed shapes exposed. Production also exposes them by default;
+`--no-expose-evaluator-shapes` activates the generalized contract only for a staged
+native operator that actually has `agent_problem.json`. SOL and layouts without that
+contract remain exposed. Historical leaderboard and hidden-production snapshot keys
+are preserved; only the new production-plus-exposed combination receives a namespace
+suffix.
+
+```mermaid
+flowchart TD
+    A[CLI visibility flag] --> B{Production + no-expose<br/>+ agent_problem.json?}
+    B -->|No| C[Exposed]
+    B -->|Yes| D[Hidden]
+    C --> E[Derive compatibility snapshot key]
+    D --> E
+    E --> F{Workspace state exists?}
+    F -->|No| G[Persist selected visibility]
+    F -->|Yes| H{Recorded visibility matches?}
+    H -->|Yes| I[Resume pinned snapshot]
+    H -->|No| J[Fail closed and name matching CLI flag]
+```
+
+### Native Agate option and response boundary
+
+Light discovers non-authority options from the installed Agate parser so harmless
+additions do not require a Light release. The exact denylist is backed by a
+sensitive-name/help filter; credentials, endpoints, uploads, images/setup,
+filesystem and scheduling controls fail closed. Every Supervisor parser build logs
+the Agate version, exposed catalog and refused sensitive flags. The Supervisor
+operator and a Light maintainer review that audit record after an Agate upgrade;
+a refused option is not exposed until a first-class Light workflow is reviewed.
+Existing Light actions are advertised only for the commands where
+Light really forwards them, and incompatible Agate enums do not overwrite Light's
+defaults.
+
+```mermaid
+flowchart TD
+    A[Installed Agate parser] --> B[Discover command options]
+    B --> C{Exact denylist or<br/>sensitive authority pattern?}
+    C -->|Yes| D[Refuse and audit-log]
+    C -->|No| E{Existing Light action?}
+    E -->|Yes| F[Intersect supported commands<br/>validate default against enum]
+    E -->|No| G[Add native option]
+    F --> H[Advertise per-kind schema]
+    G --> H
+    H --> I[Validate requested kind]
+    I --> J[Forward through typed CLI / request]
+    J --> K{Known response type?}
+    K -->|Yes| L[Operation-specific compact projection]
+    K -->|No, exposed mode| M[Preserve unknown evidence]
+    K -->|No, hidden mode| N[Credential, path and shape redaction]
+```
 
 A Kernel ID binds the complete source snapshot for multi-file candidates, including headers
 and build settings. A measurement identity additionally binds evaluator/input bytes, target,

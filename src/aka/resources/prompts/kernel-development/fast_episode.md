@@ -8,7 +8,7 @@ early success: complete all {{FAST_TRIALS}} trials unless infrastructure failure
 authority makes the episode `blocked`.
 
 The supervisor owns the incumbent branch, canonical memory, acceptance, and squash promotion. You
-own only this episode branch, its final `kernel.py` and `solution.json`, journal, and terminal handoff.
+own only this episode branch, its complete candidate source, journal, and terminal handoff.
 
 ## Context
 
@@ -26,8 +26,9 @@ own only this episode branch, its final `kernel.py` and `solution.json`, journal
 
 {{RESUME_DIRECTIVE}}
 
-Never switch branches, push, merge, rebase, or alter refs. Commits may contain only
-`kernel.py` and its matching `solution.json` manifest. Plans, journals, and handoffs are ignored episode evidence and must never be added to
+Never switch branches, push, merge, rebase, or alter refs. Commits may contain only candidate source:
+`kernel.py`, optional `impl/**`, and an existing `solution.json` only for a legacy candidate format.
+Never create `solution.json` for a Source Tree. Plans, journals, and handoffs are ignored episode evidence and must never be added to
 Git. Never edit evaluator or ground-truth files, including `test_kernel.py`, `profile_driver.py`,
 `definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
 `agent_problem.json`, `metadata.json`, `roofline.json`, `CLAUDE.md`, or `README.md`. Do not write
@@ -75,7 +76,7 @@ python3 -m aka.resources.tools.iteration_trace phase-end <planning|implementatio
 
 ### 1. Plan — repeat for trials 1 through {{FAST_TRIALS}}
 
-Before planning a trial, restore `kernel.py` and its matching `solution.json` from `best_commit` when the previous trial was not kept.
+Before planning a trial, restore the complete candidate source from `best_commit` when the previous trial was not kept.
 Read that kernel, recent canonical memory, and the structured results of earlier trials in this
 episode. Pick one small, coherent implementation change that is not a verbatim repeat of a failed
 trial. Write the trial's unique draft with its hypothesis, exact code change, expected effect, and
@@ -98,8 +99,9 @@ profile data.
 
 ### 2. Implement — once per trial
 
-Edit `kernel.py` and update `solution.json` when its languages, dependencies, entry point, or role
-descriptions change. Keep the manifest accurate for the implementation, including framework conversions.
+Edit `kernel.py` and optionally create or edit implementation helpers under `impl/`. If `solution.json`
+already exists for the selected legacy candidate format, update it when its languages, dependencies,
+entry point, or role descriptions change; do not create it for a Source Tree.
 Keep the change focused. You may statically inspect source and repair obvious
 syntax or logic defects before evaluation, but do not launch exploratory GPU commands. Each trial is
 one attributable candidate; do not combine unrelated optimizations merely to fill the
@@ -107,12 +109,13 @@ one attributable candidate; do not combine unrelated optimizations merely to fil
 
 ### 3. Evaluator — exactly once per trial
 
-After the trial edit, commit `kernel.py` and any `solution.json` update, then atomically publish that trial's exact candidate
+After the trial edit, commit the complete candidate source, then atomically publish that trial's exact candidate
 commit for the supervisor's independent policy reviewer. Publishing starts policy review in parallel
 with the evaluator; do not wait for the reviewer:
 
 ```bash
 git add -- kernel.py
+if [ -d impl ] || git ls-files -- 'impl/**' | grep -q .; then git add -A -- impl; fi
 if [ -f solution.json ]; then git add -- solution.json; fi
 git commit -m "v{{VERSION}} trial N: fast kernel candidate"
 candidate_commit=$(git rev-parse HEAD)
@@ -153,16 +156,16 @@ are omitted and reported in `wiki_usage_errors`, while the experiment still reco
   --experiment-json '{"name":"fast trial N: plan -> implement -> evaluator","hypothesis":"...","change":"...","evidence":"official base-seed evaluator result or blocker","result":"...","evaluation":{"correctness":"pass|fail|unknown","performance":"improved|not_improved|unknown","latency_us":null,"kernel_hash":"<evaluator-kernel-hash-or-empty>"},"decision":"keep_as_best | reject_and_continue | blocked","wiki_usage_status":"<declared|no_material_use|not_queried>"}'
 ```
 
-{{FAST_KEEP_CONDITION}} Keep both `kernel.py` and its matching `solution.json` from that
-commit. Otherwise keep the prior best and restore both files before
+{{FAST_KEEP_CONDITION}} Keep the complete candidate source from that
+commit. Otherwise keep the prior best and restore its complete source before
 planning the next trial. Continue
 until {{FAST_TRIALS}} evaluator results and {{FAST_TRIALS}} journal experiments exist. Only
 infrastructure failure or missing authority may end early as `blocked`; a bad candidate is evidence
 for the next trial, not an early terminal `pivot`.
 
 After trial {{FAST_TRIALS}}, select {{FAST_FINAL_SELECTION}} over the canonical
-incumbent. If that best kernel is not the current `HEAD`, restore its exact previously evaluated kernel and matching manifest,
-commit `kernel.py` and any `solution.json` update as `v{{VERSION}}: select best fast candidate`, and atomically publish that
+incumbent. If that best kernel is not the current `HEAD`, restore its exact previously evaluated source tree,
+commit the complete candidate as `v{{VERSION}}: select best fast candidate`, and atomically publish that
 selection commit to the same policy-review request path. Do not run an additional evaluator: the supervisor
 matches the selected bytes to their recorded evaluator hash. If no trial produced a passing strict
 improvement, finish as `pivot`.
@@ -185,7 +188,7 @@ Reach exactly one state:
 
 1. `candidate_ready`: all {{FAST_TRIALS}} trials are recorded, the selected best evaluator
    result passes and matches the final kernel bytes, the selected candidate is committed, and the
-   worktree `kernel.py` and `solution.json` match that commit. Protected files must be unchanged; other uncommitted
+   complete candidate source matches that commit. Protected files must be unchanged; other uncommitted
    intermediate artifacts may remain in the worktree.
 2. `pivot`: all {{FAST_TRIALS}} trials are recorded and none produced a passing strict
    improvement; keep the incumbent.

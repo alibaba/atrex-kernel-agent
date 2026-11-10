@@ -21,7 +21,12 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
             plugin_dir = _selected_catalog.get() if scoped else os.environ.get("ATREX_PLUGIN_DIR")
         if plugins is None:
             plugins = _selected_plugins.get() if scoped else decode_json(os.environ.get("ATREX_PLUGIN_PATHS", "[]"))
-        super().__init__(plugin_dir, plugins=plugins if plugins is not None else ())
+        from .wiki.providers import selected_provider
+        self.wiki_provider = selected_provider()
+        plugins = tuple(plugins or ())
+        if self.wiki_provider is not None:
+            plugins = (*plugins, self.wiki_provider.catalog_root)
+        super().__init__(plugin_dir, plugins=plugins)
         if resources is None or agent_skills is None:
             selected, skills = selected_resources()
             resources = selected if resources is None else resources
@@ -33,6 +38,16 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
         return ("Use `python -m aka.resources.cli list` to discover enabled tools and Skills. "
                 "Invoke `python -m aka.resources.cli call <plugin.tool> --input <request.json>`.\n\n"
                 + super().instructions(phase, **values))
+
+    def wiki_prompt(self, slot: str) -> str | None:
+        """Read a selected provider's replacement for a Workflow Wiki fragment."""
+        from .plugin_runtime.registry import local_file
+        from aka.core.filesystem import read_regular_bytes
+        for plugin in self.plugins:
+            relative = plugin.manifest.get("instructions", {}).get("wiki_" + slot)
+            if relative:
+                return read_regular_bytes(local_file(plugin.root, relative), limit=128 * 1024).decode().strip()
+        return None
 
     def resource_file(self, name: str, relative: str) -> Path:
         """Return a member of exactly one selected declared resource, mounted or private."""

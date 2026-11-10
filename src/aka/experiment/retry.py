@@ -30,7 +30,12 @@ def _safe_to_retry(error):
 
 
 def _safe_facts(result):
+    def forbidden(value):
+        if isinstance(value, dict):
+            return value.get("code") == "replay-forbidden" or any(forbidden(item) for item in value.values())
+        return isinstance(value, (list, tuple)) and any(forbidden(item) for item in value)
     return (isinstance(result, dict) and result.get("transport_status") == "infrastructure"
+        and not forbidden(result.get("causes", ()))
         and isinstance(result.get("facts"), dict) and result["facts"].get("disposition") == "not_submitted"
         and not result["facts"].get("cancellation_requested")
         and result.get("output_scope") == "transport" and result.get("exit_code") is None

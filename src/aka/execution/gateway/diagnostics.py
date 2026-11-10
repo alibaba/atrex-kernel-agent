@@ -18,6 +18,18 @@ def report_typed_limitation(detail):
                          "limitation": reason})
 
 
+def replay_forbidden(job):
+    if not isinstance(job, dict):
+        return False
+    policy = job.get("replay_policy")
+    error = job.get("error") if isinstance(job.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    return (policy is not None and policy not in {"allow", "legacy"}
+            or job.get("execution_state") == "unknown"
+            or error.get("reason") == "dev_submission_ambiguous"
+            or any(row.get("retry_advice") == "never" for row in (job, error, details)))
+
+
 def causes_from_job(job):
     """Keep native error codes/messages and their causal structure, including deadlines."""
     def decode(value, depth=0):
@@ -42,7 +54,10 @@ def causes_from_job(job):
             tuple(decode(child, depth + 1) for child in children),
         )
     error = job.get("error") if isinstance(job, dict) else None
-    return (decode(error),) if error else ()
+    causes = (decode(error),) if error else ()
+    if replay_forbidden(job):
+        causes += (ExecutionCause("recovery", "replay-forbidden", "Backend requires original-job reconciliation."),)
+    return causes
 
 
 def remote_termination(job):

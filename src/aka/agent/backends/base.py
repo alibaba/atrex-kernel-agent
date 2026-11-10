@@ -186,6 +186,9 @@ class AgentBackendAdapter(ABC):
     def configure_environment(self, environment):
         return dict(environment)
 
+    def configuration_files(self, environment):
+        return self.files.config_files
+
     def name_session(self, command, name, session_id):
         return command
 
@@ -221,6 +224,22 @@ class AgentBackendAdapter(ABC):
 
     @abstractmethod
     def auth_hint(self) -> str: ...
+
+    def prepare_environment(self, environment, *, reasoning_effort):
+        return environment
+
+    def validated_exit_status(self, stdout: str, exit_status: int) -> int:
+        return exit_status
+
+    def release_environment(self, environment):
+        pass
+
+    def tool_environment(self, environment):
+        from contextlib import nullcontext
+        return nullcontext(environment)
+
+    def classify_terminal_failure(self, stdout: str, session_id: str):
+        return None, None
 
 
 def _phase_marker_receipts(event: Mapping[str, object]):

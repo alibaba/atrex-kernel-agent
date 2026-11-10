@@ -21,6 +21,15 @@ not replace a passing ordinary full Evaluate for the exact selected source.
 | Has this exact candidate or observation already been measured? | `record-read`, `kernel-read`, `kernel-records`, `kernel-pareto-frontier` | Saved facts/source; no new GPU allocation. See the history section below. |
 
 Read `python3 tools/sandbox.py --kind OPERATION --help` before using unfamiliar controls.
+The Runtime discovers safe native options from its installed Agate client at startup and
+shows them under their original Agate spellings (for example `--profiler acu`,
+`--cluster-label KEY=VALUE` or `--shape-shards N`). Updating Agate and restarting the
+Supervisor refreshes those options and enum values. Runtime-owned credentials, sources,
+uploads, waits, timeouts and evaluator selection are deliberately omitted.
+Known Agate result and error schemas receive the Runtime's operation-specific summary and
+recovery guidance. Unrecognized response markers, error classes and envelope fields are
+returned unchanged so a newer Agate client remains diagnosable; only credentials, private
+Supervisor paths and oversized-output truncation are applied universally.
 The injected task/evaluator contract and actual Runtime validation take precedence over
 generic examples. Do not invent endpoint, hardware, credential or evaluator overrides.
 

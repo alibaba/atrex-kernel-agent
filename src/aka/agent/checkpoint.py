@@ -22,7 +22,7 @@ def _digest(data):
 
 def capture_native_session(output, workspace, runtime, session_id, environment):
     """Called by Agent after its invocation has stopped, never by a consumer."""
-    if runtime not in {"claude", "codex"} or not session_id:
+    if runtime not in {"claude", "codex", "dsh"} or not session_id:
         return
     if not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
         raise ValueError("invalid native session identity")
@@ -33,7 +33,10 @@ def capture_native_session(output, workspace, runtime, session_id, environment):
     )
     target.parent.mkdir(parents=True, exist_ok=True)
     files = []
-    if runtime == "codex":
+    if runtime == "dsh":
+        from .dsh import native_session_files
+        session_root, files = native_session_files(environment, session_id)
+    elif runtime == "codex":
         from .codex_ledger import CodexSessionLedgerObserver, codex_home
 
         session_root = codex_home(environment).expanduser().resolve()
@@ -150,7 +153,7 @@ def validate_checkpoint(snapshot, *, check_destinations=False):
         session_root = Path(row["root"])
         session = (row["runtime"], row["session_id"])
         if (
-            row["runtime"] not in {"claude", "codex"}
+            row["runtime"] not in {"claude", "codex", "dsh"}
             or not isinstance(row["session_id"], str)
             or not re.fullmatch(r"[A-Za-z0-9_-]+", row["session_id"])
         ):

@@ -73,7 +73,7 @@ def prepare_home(workspace, session_id, backend, environment, *, state_root=None
         info = os.fstat(directory)
         if info.st_uid != os.geteuid() or info.st_mode & 0o077:
             raise ValueError("Agent session Home must be privately owned")
-    for relative in backend.files.config_files:
+    for relative in backend.configuration_files(environment):
         rel = Path(relative)
         if rel.is_absolute() or ".." in rel.parts:
             raise ValueError("Backend configuration paths must be relative")

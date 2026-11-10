@@ -24,12 +24,14 @@ class ProblemContent(Protocol):
 
 class ProblemProvider(Protocol):
     def load(self, directory: Path, *, optimization_mode: str | None = None,
-             snapshot_directory: Path | None = None) -> LoadedProblem:
+             snapshot_directory: Path | None = None,
+             expose_evaluator_shapes: bool = True) -> LoadedProblem:
         """Load explicit roles, or restore a validated run snapshot.
 
         With snapshot_directory, copy required content before returning. Reuse
         that snapshot on recovery even if the original source no longer exists.
-        A different problem/mode at an existing snapshot must fail closed.
+        A different problem/mode/shape-visibility policy at an existing snapshot
+        must fail closed.
         """
         ...
 

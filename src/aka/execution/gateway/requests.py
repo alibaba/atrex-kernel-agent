@@ -75,6 +75,9 @@ def operation_request(request, kind):
     if kind == "run":
         return value
     common = {"name", "spec", "candidate", "env_vars", "requirements", "deps_mode"}
+    from .native_options import catalog, COMMAND_BY_KIND
+    common |= {option.dest for option in catalog().values() if COMMAND_BY_KIND.get(kind) in option.commands}
+    common.add("placement")
     if kind == "profile":
         allowed = common | {"reference", "options", "level", "profiler", "counters", "kernel_regex",
                             "kernel_name", "top_kernels", "source", "launch_skip", "launch_count"}

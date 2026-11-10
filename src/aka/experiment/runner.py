@@ -290,6 +290,8 @@ class LegacyExperiment:
             if assessment is not None:
                 records.assessed(ref, attempt.attempt_id, assessment)
             retryable = result is not None and result.transport_status in {"infrastructure", "timed_out"}
+            if result is not None and any(cause.code == "replay-forbidden" for cause in result.causes):
+                retryable = False
             if assessment is not None and (assessment.validity == "invalid" or assessment.completeness == "complete"):
                 retryable = False
             if retryable and options["remeasurements"] and len(history[attempt.task_id]) <= options["remeasurements"]:

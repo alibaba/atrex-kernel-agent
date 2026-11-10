@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import argparse
 import os
+import stat
 import sys
 from pathlib import Path
 

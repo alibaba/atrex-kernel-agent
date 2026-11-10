@@ -26,57 +26,17 @@ _PREFIXES = {"run": "[test_kernel] RESULT_JSON=", "same_allocation_abba": "[sand
              "disassemble": "[sandbox] DISASSEMBLE_JSON="}
 
 
-class SharedMeasurements:
-    def __init__(self, *, factory, executor, evaluator, namespace_workspace, evaluation_input,
-                 workspace_provider, command_evaluator, environment_identity=None, query_request=None):
-        self.factory = factory
-        self.executor = executor
-        self.evaluator = evaluator
-        self.namespace_workspace = Path(namespace_workspace)
-        self.evaluation_input = evaluation_input
+class RecordedMeasurements:
+    """Read recorded owner DTOs without opening an execution session."""
+    def __init__(self, *, workspace_provider, evaluation_input=None):
         self.workspace_provider = workspace_provider
-        self.command_evaluator = command_evaluator
-        # The host supplies this only after a selected Executor confirms it.
-        # A recorded old environment never becomes current availability evidence.
-        self.environment_identity = environment_identity
-        self.query_request = query_request
+        self.evaluation_input = evaluation_input
 
-    @contextmanager
-    def _open(self):
-        from aka.workflow.budgets import bound_executor
-        with self.factory.open(workspace=self.namespace_workspace, purpose="development", executor=bound_executor(self.executor),
-                               evaluator=self.evaluator, evaluation_input=self.evaluation_input,
-                               command_evaluator=self.command_evaluator) as experiment:
-            yield experiment
+    def project(self, records, record):
+        return self._evidence(records, record)
 
-    def numerical(self, request, *, request_id):
-        """Run or resume the original public numerical experiment, then read its verdict."""
-        from aka.evaluation.numerical import decode_numerical_artifact
-        with self._open() as experiment:
-            try:
-                experiment.find(request_id)
-            except LookupError:
-                record = experiment.run_recorded(request, request_id=request_id)
-            else:
-                record = experiment.resume_recorded(request, request_id=request_id,
-                    recovery_timeout=request.numerical_probe.timeout, max_remeasurements=0)
-            if record.lifecycle != "terminal" or record.phase != "complete" or record.evaluation is None:
-                raise ValueError("original numerical experiment is pending")
-            artifacts = [item for item in record.artifacts if item.artifact_id == record.evaluation.artifact]
-            if len(artifacts) != 1:
-                raise ValueError("numerical experiment has no unique interpreted artifact")
-            value = decode_numerical_artifact(experiment.read_artifact(artifacts[0]))
-            return {**value['summary'], 'probes': value['probes'], 'experiment_ref': record.ref.as_dict()}
-
-    def _record(self, experiment, record_id):
-        if not isinstance(record_id, str) or RECORD_ID.fullmatch(record_id) is None:
-            raise ValueError("Record ID must be the full gateway-... ID returned by this Campaign")
-        # The namespace is selected by the host, never by an Agent argument.
-        records = tuple(experiment.iter_records())
-        found = [record for record in records if record.ref.experiment_id == record_id[len("gateway-"):]]
-        if len(found) != 1:
-            raise LookupError("Record is not available in this Campaign")
-        return found[0]
+    def candidate_source(self, records, record):
+        return self._source(records, record)
 
     @staticmethod
     def _identities(record):
@@ -204,6 +164,60 @@ class SharedMeasurements:
                 "typed_six_case_correctness": known and bool(identities) and all(
                     identity.method == "atrex-bench/eval" and identity.parameters.get("correctness_reuse_policy") == "typed-six-case/1"
                     for identity in identities), "created_at": record.created_at}
+
+
+class SharedMeasurements(RecordedMeasurements):
+    def __init__(self, *, factory, executor, evaluator, namespace_workspace, evaluation_input,
+                 workspace_provider, command_evaluator, environment_identity=None, query_request=None):
+        self.factory = factory
+        self.executor = executor
+        self.evaluator = evaluator
+        self.namespace_workspace = Path(namespace_workspace)
+        self.evaluation_input = evaluation_input
+        self.workspace_provider = workspace_provider
+        self.command_evaluator = command_evaluator
+        # The host supplies this only after a selected Executor confirms it.
+        # A recorded old environment never becomes current availability evidence.
+        self.environment_identity = environment_identity
+        self.query_request = query_request
+
+    @contextmanager
+    def _open(self):
+        from aka.workflow.budgets import bound_executor
+        with self.factory.open(workspace=self.namespace_workspace, purpose="development", executor=bound_executor(self.executor),
+                               evaluator=self.evaluator, evaluation_input=self.evaluation_input,
+                               command_evaluator=self.command_evaluator) as experiment:
+            yield experiment
+
+    def numerical(self, request, *, request_id):
+        """Run or resume the original public numerical experiment, then read its verdict."""
+        from aka.evaluation.numerical import decode_numerical_artifact
+        with self._open() as experiment:
+            try:
+                experiment.find(request_id)
+            except LookupError:
+                record = experiment.run_recorded(request, request_id=request_id)
+            else:
+                record = experiment.resume_recorded(request, request_id=request_id,
+                    recovery_timeout=request.numerical_probe.timeout, max_remeasurements=0)
+            if record.lifecycle != "terminal" or record.phase != "complete" or record.evaluation is None:
+                raise ValueError("original numerical experiment is pending")
+            artifacts = [item for item in record.artifacts if item.artifact_id == record.evaluation.artifact]
+            if len(artifacts) != 1:
+                raise ValueError("numerical experiment has no unique interpreted artifact")
+            value = decode_numerical_artifact(experiment.read_artifact(artifacts[0]))
+            return {**value['summary'], 'probes': value['probes'], 'experiment_ref': record.ref.as_dict()}
+
+    def _record(self, experiment, record_id):
+        if not isinstance(record_id, str) or RECORD_ID.fullmatch(record_id) is None:
+            raise ValueError("Record ID must be the full gateway-... ID returned by this Campaign")
+        # The namespace is selected by the host, never by an Agent argument.
+        records = tuple(experiment.iter_records())
+        found = [record for record in records if record.ref.experiment_id == record_id[len("gateway-"):]]
+        if len(found) != 1:
+            raise LookupError("Record is not available in this Campaign")
+        return found[0]
+
 
     def read(self, record_id):
         """Return Workflow facts from public owner DTOs, not a file record envelope."""

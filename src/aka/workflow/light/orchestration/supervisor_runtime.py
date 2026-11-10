@@ -266,6 +266,8 @@ class SupervisorRuntime:
         self.config = config
         if services is None or workspace_provider is None:
             raise TypeError("Workflow operations require explicitly selected shared modules")
+        from aka.execution.gateway.native_options import audit_summary
+        logging.getLogger(__name__).warning("Agate native option audit: %s", json.dumps(audit_summary(), sort_keys=True))
         self.agent, self.executor = services.agent, services.executor
         self.acceptance = CandidateGate()
         self.journal_factory = services.journal
@@ -310,7 +312,7 @@ class SupervisorRuntime:
         else:
             publish(resource_lock.parent, resource_lock.name, json.dumps(self.plugins.resource_snapshot()).encode())
         self.wiki = WikiService((self.audit_root or self.root) / "wiki", config.wiki_options,
-                                self.plugins.resource_snapshot())
+                                self.plugins.resource_snapshot(), provider=getattr(self.plugins, "wiki_provider", None))
 
     @property
     def journals_root(self) -> Path:
@@ -603,7 +605,13 @@ class SupervisorRuntime:
         self.measurements.environment_identity = identity
 
     def is_wiki_request(self, route, request):
-        return route == "/v1/wiki/query"
+        if route == "/v1/wiki/query":
+            return True
+        if route == "/v1/plugins/execute" and self.wiki.provider is not None and request.get("action") == "call":
+            plugin_id, _, operation = str(request.get("tool", "")).partition(".")
+            return any(p.id == plugin_id and p.tools.get(operation, {}).get("runtime_tool") == "wiki"
+                       for p in self.plugins.plugins)
+        return False
 
     def execute_trusted(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
                         parent=None, reference_snapshot: Path | None = None) -> dict:
@@ -691,8 +699,9 @@ class SupervisorRuntime:
                     return self.measurements.query(args, capability.workspace)
                 if converted.kind == "env":
                     from aka.contracts.execution_environment import EnvironmentQuery
+                    from aka.execution.gateway.native_options import apply_request
                     query = EnvironmentQuery(hardware=args.env_gpu or configuration.hardware,
-                        fresh=args.env_force)
+                        fresh=args.env_force, parameters=apply_request({}, args, "env"))
                     facts = self.executor.query_environment(query)
                     environment_facts = facts.as_dict()
                     requirements = getattr(evaluation_input, "worker_requirements", None)
@@ -838,6 +847,42 @@ class SupervisorRuntime:
             raise SessionRevokedError("Session revoked before tool invocation")
         from aka.core.plugin_runtime.schema import PluginError
         try:
+            if self.wiki.provider is not None:
+                plugin_id, _, operation = request["tool"].partition(".")
+                plugin = next((p for p in self.plugins.plugins if p.id == plugin_id), None)
+                tool = plugin.tools.get(operation) if plugin is not None else None
+                if tool is not None and tool.get("runtime_tool") == "wiki":
+                    self.plugins.check_lock(capability.workspace)
+                    if not self.config.wiki_enabled:
+                        raise RuntimeStateError("Wiki is disabled by the selected composition", code="wiki_disabled")
+                    from aka.core.plugin_runtime.schema import validate_schema
+                    from aka.workflow.light.host.projection import project_response, credential_values, redact_diagnostics
+                    validate_schema(tool["input_schema"], request["input"])
+                    with tempfile.TemporaryDirectory(dir=self.root, prefix="wiki-") as temporary:
+                        staged = Path(temporary)
+                        environment = {name: value for name, value in self.environment.items()
+                                       if not name.startswith(("AGATE_", "AKA_", "ATREX_"))}
+                        def project(value):
+                            public = project_response(subprocess.CompletedProcess([operation], 0,
+                                json.dumps(value, ensure_ascii=False), ""), wiki=True,
+                                private_values=credential_values(self.environment),
+                                private_paths=(str(staged), str(self.root), str(self.audit_root or "")))
+                            result = json.loads(public["stdout"])
+                            try:
+                                validate_schema(tool["output_schema"], result, "output")
+                            except PluginError as error:
+                                raise PluginError("invalid_output", str(error)) from error
+                            if len(json.dumps(result, ensure_ascii=False, allow_nan=False).encode()) + 1 > MAX_OUTPUT_BYTES:
+                                raise_output_error(request["tool"], "result_too_large")
+                            return result
+                        def redact(value):
+                            return redact_diagnostics(value, private_values=credential_values(self.environment),
+                                private_paths=(str(staged), str(self.root), str(self.audit_root or "")))
+                        result = self.wiki.invoke(self, capability, operation, request["input"], staged,
+                                                  environment, project=project, redact_error=redact)
+                    if not self._live(capability):
+                        raise SessionRevokedError("Session revoked during tool invocation")
+                    return {"exit_code": 0, "stdout": json.dumps(result, ensure_ascii=False) + "\n", "stderr": ""}
             result = self.plugins.call(request["tool"], request["input"], capability.workspace,
                 deadline=capability.deadline, cancel_event=_OperationCancellation(self, capability))
         except PluginError as error:

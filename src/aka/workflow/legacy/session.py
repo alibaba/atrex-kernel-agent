@@ -83,8 +83,7 @@ class LongSessionRunner:
         access: AgentAccess | None = None,
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
-        is_codex = self.agent_cli == "codex"
-        active_session_id = "" if is_codex else session_id
+        active_session_id = "" if self.agent_cli in {"codex", "dsh"} else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         access_options = {"access": access} if access is not None else {}

@@ -665,6 +665,7 @@ class Campaign:
             self.framework,
             agent_runtime=self.agent_cli,
             source_checks_enabled=self.source_checks_enabled,
+            expose_evaluator_shapes=self.expose_evaluator_shapes,
         )
 
     def _sandbox_directive(self) -> str:

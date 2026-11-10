@@ -8,6 +8,7 @@ _EXPORTS = {
     "BackendAdapterRegistry": (".adapter", "BackendAdapterRegistry"),
     "ClaudeAdapter": (".adapter", "ClaudeAdapter"),
     "CodexAdapter": (".adapter", "CodexAdapter"),
+    "DshAdapter": (".adapter", "DshAdapter"),
     "PiAdapter": (".adapter", "PiAdapter"),
     "QoderAdapter": (".adapter", "QoderAdapter"),
     "codex_settings_args": (".adapter", "codex_settings_args"),

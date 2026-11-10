@@ -23,7 +23,8 @@ class GatewayMeasurement:
         self.hardware = hardware
         self.private = private
         self.shape_ids = _request_shape_ids(request)
-        self.batches = [self.shape_ids] if profiling else _shape_batches(self.shape_ids, batch_size)
+        self.batches = ([self.shape_ids] if profiling or request.get("options", {}).get("shape_shards") is not None
+                        else _shape_batches(self.shape_ids, batch_size))
 
     def request_for(self, index):
         return (_shape_batch_request(self.request, self.batches[index])

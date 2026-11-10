@@ -62,10 +62,13 @@ def session_id_from_stream(
 ) -> str:
     """Return the persistent CLI session id observed in one stream.
 
-    Claude accepts the supervisor-provided id. Codex creates its own thread id
-    and reports it in the initial ``thread.started`` JSONL event, so recovery
-    must use that observed id rather than the supervisor's bookkeeping UUID.
+    Claude accepts the supervisor-provided id. Codex and DSH allocate native
+    identities and announce them in their opening JSONL events. Recovery uses
+    the observed identity rather than the supervisor's bookkeeping UUID.
     """
+    if agent_cli == "dsh":
+        from .dsh import session_id_from_stream as dsh_session_id
+        return dsh_session_id(stdout)
     if agent_cli != "codex":
         return requested_session_id
     return codex_thread_id_from_stream(stdout)
@@ -195,7 +198,7 @@ class NativeSession:
         self.runtime_id = runtime_id
         self.environment = environment
         self._home_binding = {key: environment.get(key) for key in (
-            "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR",
+            "HOME", "CODEX_HOME", "DSH_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR",
             "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
             "XDG_DATA_HOME", "XDG_STATE_HOME", "ATREX_AGENT_SANDBOX",
         )}
@@ -203,7 +206,17 @@ class NativeSession:
         self._setup_errors = codex_setup_errors
         self._ledger_usable = codex_ledger_usable
         self._stdout_usage = codex_stdout_session_usage
-        self._session_id = "" if is_codex else session_id
+        self._session_id = "" if runtime_id in {"codex", "dsh"} else session_id
+        if runtime_id == "dsh":
+            from .dsh import native_session_files
+            try:
+                native_session_files(environment, session_id)
+            except ValueError:
+                pass
+            else:
+                self._session_id = session_id
+            from .dsh_ledger import DshSessionLedgerObserver
+            self._dsh_observer = DshSessionLedgerObserver(environment, self._session_id)
         self._requested_session_id = session_id
         self._executor = executor
         self._closed = False
@@ -299,9 +312,14 @@ class NativeSession:
                 runtime=self._runtime,
                 environment=invocation_environment,
             )
-        stdout, stderr, exit_status, timed_out = self._executor(
-            command, self.workspace, None, invocation_environment
-        )
+        invocation_environment = self._runtime._adapter.prepare_environment(
+            invocation_environment, reasoning_effort=reasoning_effort)
+        try:
+            stdout, stderr, exit_status, timed_out = self._executor(
+                command, self.workspace, None, invocation_environment)
+        finally:
+            self._runtime._adapter.release_environment(invocation_environment)
+        exit_status = self._runtime._adapter.validated_exit_status(stdout, exit_status)
         self.environment = invocation_environment
         is_codex = self.runtime_id == "codex"
         observed_session_id = session_id_from_stream(
@@ -327,6 +345,22 @@ class NativeSession:
             ledger_usage_observed
             and not any(value.startswith("codex_") for value in observation_errors)
         )
+        if self.runtime_id == "dsh":
+            from .dsh_ledger import DshSessionLedgerObserver
+            try:
+                observer = getattr(self, "_dsh_observer", None)
+                if observer is None:
+                    observer = DshSessionLedgerObserver(invocation_environment)
+                    self._dsh_observer = observer
+                terminal_usage, errors = observer.observe(self._session_id, terminal_usage)
+                events = _replace_terminal_usage(events, terminal_usage)
+                observation_errors += errors
+            except (OSError, ValueError) as error:
+                observation_errors += ("dsh_ledger_unavailable:" + type(error).__name__,)
+                if terminal_usage.total_tokens is not None:
+                    terminal_usage = replace(terminal_usage, measurement="partial")
+                    events = _replace_terminal_usage(events, terminal_usage)
+            resume_usage_qualified = terminal_usage.measurement == "exact" and not observation_errors
         if is_codex and not ledger_usage_observed:
             fallback_usage = _codex_invocation_usage(
                 stream_session_usage or TokenUsage.unavailable(),

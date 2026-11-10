@@ -170,12 +170,15 @@ class FileExperimentRecords:
     The public reader only consumes committed files. Incomplete operations are
     deliberately not resumed by this implementation: they remain queryable.
     """
-    def __init__(self, root: Path, run_id: str):
+    def __init__(self, root: Path, run_id: str, *, create=True):
         if not run_id:
             raise ValueError("experiment run_id is required")
         self.run_id = run_id
         self.root = Path(root).resolve() / _digest(run_id)
-        self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        if create:
+            self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
+        elif self.root.is_symlink() or not self.root.is_dir():
+            raise LookupError("experiment namespace is unavailable")
         self._write_lock = RLock()
         self._artifact_storage = ArtifactStorage(self.root.parent)
 

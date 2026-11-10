@@ -48,8 +48,10 @@ class EnvironmentQuery:
     num_gpus: int = 1
     fresh: bool = False
     features: tuple[str, ...] = ()
+    parameters: Mapping = field(default_factory=dict)
 
     def __post_init__(self):
+        object.__setattr__(self, "parameters", _freeze(self.parameters))
         for name in ("languages", "requirements", "features"):
             values = tuple(getattr(self, name))
             if any(not isinstance(value, str) or not value.strip() for value in values):

@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import socket
+import stat
 from threading import Event, Thread
 
 from .protocol import ENDPOINT_ENV, TOKEN_ENV, receive, receive_json, send, send_json
@@ -47,6 +48,24 @@ def call_tool(name, payload, *, workspace, environment=None, cancel_event=None):
         raise ToolSessionError("cancelled")
     values = os.environ if environment is None else environment
     endpoint, token = values.get(ENDPOINT_ENV), values.get(TOKEN_ENV)
+    if (not endpoint or not token) and values.get("AKA_AGENT_CONNECTION_FILE"):
+        try:
+            descriptor = os.open(values["AKA_AGENT_CONNECTION_FILE"],
+                                 os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_NOFOLLOW", 0))
+            with os.fdopen(descriptor, "rb") as source:
+                info = os.fstat(source.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o077:
+                    raise ValueError("invalid connection file")
+                raw = source.read(16385)
+            if len(raw) > 16384:
+                raise ValueError("connection file too large")
+            connection = json.loads(raw)
+            if (not isinstance(connection, dict) or set(connection) != {"endpoint", "token"}
+                    or any(not isinstance(value, str) or not value for value in connection.values())):
+                raise ValueError("invalid connection")
+            endpoint, token = connection["endpoint"], connection["token"]
+        except (OSError, ValueError, UnicodeError):
+            raise ToolSessionError("session_unavailable") from None
     if not endpoint or not token:
         raise ToolSessionError("session_unavailable")
     received = None

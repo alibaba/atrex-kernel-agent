@@ -231,6 +231,7 @@ class CliAgentRuntime:
                 pre_observation_errors = (
                     f"codex_ledger_setup_failed:{type(exc).__name__}",
                 )
+        environment = self._adapter.prepare_environment(environment, reasoning_effort=request.reasoning_effort)
         try:
             stdout, stderr, exit_status, timed_out = self._process_runner(
                 command,
@@ -243,9 +244,14 @@ class CliAgentRuntime:
                 codex_temporary_home.close()
             raise
         finally:
+            self._adapter.release_environment(environment)
             if self._release_environment is not None:
                 self._release_environment(environment)
         observation_errors: tuple[str, ...] = pre_observation_errors
+        exit_status = self._adapter.validated_exit_status(stdout, exit_status)
+        if self.id == "dsh":
+            from .dsh import session_id_from_stream
+            session_id = session_id_from_stream(stdout)
         try:
             events, terminal_usage = self._adapter.normalize_stream(stdout)
         except Exception as exc:
@@ -279,6 +285,19 @@ class CliAgentRuntime:
                 observation_errors += (
                     f"codex_ledger_unavailable:{type(exc).__name__}",
                 )
+        if self.id == "dsh":
+            from .dsh_ledger import DshSessionLedgerObserver
+            try:
+                terminal_usage, errors = DshSessionLedgerObserver(environment).observe(session_id, terminal_usage)
+                from .native import _replace_terminal_usage
+                events = _replace_terminal_usage(events, terminal_usage)
+                observation_errors += errors
+            except (OSError, ValueError) as error:
+                observation_errors += ("dsh_ledger_unavailable:" + type(error).__name__,)
+                if terminal_usage.total_tokens is not None:
+                    terminal_usage = replace(terminal_usage, measurement="partial")
+                    from .native import _replace_terminal_usage
+                    events = _replace_terminal_usage(events, terminal_usage)
         if codex_temporary_home is not None:
             cleanup_error = codex_temporary_home.close()
             if cleanup_error:

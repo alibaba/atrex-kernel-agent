@@ -18,6 +18,7 @@ from .claude import ClaudeAdapter
 from .qoder import QoderAdapter
 from .pi import PiAdapter
 from .codex import CodexAdapter
+from .dsh import DshAdapter
 
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "AdapterFactory",
     "ClaudeAdapter",
     "CodexAdapter",
+    "DshAdapter",
     "QoderAdapter",
     "PiAdapter",
     "DEFAULT_BACKEND_REGISTRY",
@@ -77,3 +79,4 @@ DEFAULT_BACKEND_REGISTRY.register("claude", ClaudeAdapter)
 DEFAULT_BACKEND_REGISTRY.register("qodercli", QoderAdapter)
 DEFAULT_BACKEND_REGISTRY.register("codex", CodexAdapter)
 DEFAULT_BACKEND_REGISTRY.register("pi", PiAdapter)
+DEFAULT_BACKEND_REGISTRY.register("dsh", DshAdapter)

@@ -60,7 +60,7 @@ it never parses source declarations or chooses source filenames.
 | Selection | Independent implementation | Managed candidate |
 | --- | --- | --- |
 | `single_file` | `sources/single_file.py` | One Python source file |
-| `source_tree` | `sources/source_tree.py` | Pinned Python adapter plus editable source directories |
+| `source_tree` | `sources/source_tree.py` | Editable `kernel.py` plus optional implementation sources |
 | `cuda_manifest` | `sources/cuda_manifest.py` | CUDA sources, headers and `solution.json` |
 
 Implementations now live in `aka.task.source.formats`; the old import path is removed.
@@ -72,13 +72,13 @@ codec and Git transaction, and `artifacts.py` exposes format-independent operati
 Changing one format belongs in its implementation file.
 
 When `file_system` is omitted, new tasks use `source_tree`, including CUDA tasks.
-Without import configuration, the file system freezes the SourceProvider's initial
-`kernel.py` as `impl/model.py` and creates a fixed `kernel.py` adapter importing
-`Model`. The Agent can edit/add/delete files under `impl/`. No import manifest is
-needed. Source trees require native Atrex-Bench Eval; SOL/SSH tasks must explicitly
-select `single_file`. Select `cuda_manifest` explicitly to use Agate-generated CUDA
-bindings. Existing campaigns retain their format and must resume with that explicit
-selection if it differs from the new default.
+Without import configuration, the SourceProvider's initial `kernel.py` remains the
+editable evaluator entry point. It may contain the complete implementation, and the
+Agent may optionally create helper sources under `impl/`; no `impl/` directory or
+import manifest is required. Source trees require native Atrex-Bench Eval; SOL/SSH
+tasks must explicitly select `single_file`. Select `cuda_manifest` explicitly to use
+Agate-generated CUDA bindings. Existing campaigns retain their format and must resume
+with that explicit selection if it differs from the new default.
 The selected implementation is pinned in `.atrex_file_system.json` after the
 framework baseline. A resumed task must match it. A missing or invalid file fails
 within that implementation; execution never retries through another file system.
@@ -201,8 +201,8 @@ acceptance decisions. Validation harnesses remain outside the PR.
 
 The selected file-system marker is included in managed sessions' read-only
 assets. The native evaluator also passes the workspace directory to its child
-process through `PYTHONPATH`, so fixed adapters can import candidate packages
-such as `impl.model`. Existing `PYTHONPATH` entries remain available.
+process through `PYTHONPATH`, so editable `kernel.py` can import optional candidate
+packages such as `impl.model`. Existing `PYTHONPATH` entries remain available.
 
 Run 83968987 exposed both integration gaps after passing V1 standard correctness.
 MI308X stopped before its next managed session; PPU supplemental

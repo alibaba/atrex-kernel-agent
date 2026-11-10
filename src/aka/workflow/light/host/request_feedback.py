@@ -137,7 +137,10 @@ def gateway_schema(kind, parser):
                     "--profile-counter", "--top-kernels", "--include-raw-profile"},
         "check": {"--arch", "--sanitize", "--requirement", "--deps-mode"},
         "disassemble": {"--format", "--requirement", "--deps-mode"},
-        "dev": set(), "env": {"--env-gpu", "--env-capabilities", "--env-force"},
+        "dev": set(), "env": {
+            "--env-gpu", "--env-capabilities", "--env-force",
+            "--frameworks", "--counters", "--limits",
+        },
         "record-read": {"--record-id"}, "kernel-read": {"--kernel-id", "--output-path"},
         "kernel-records": {"--kernel-id"}, "kernel-pareto-frontier": set(),
     }
@@ -147,21 +150,38 @@ def gateway_schema(kind, parser):
     if kind in {"run", "profile", "dev", "check", "disassemble"}:
         allowed |= {"--input", "--sync", "--no-sync", "--env", "--inline-output", "--keep-pod", "--dry-run"}
     options = {}
+    from aka.light.evaluation.agate_native import COMMAND_BY_KIND
+    native_command = COMMAND_BY_KIND.get(kind)
     for action in parser._actions:
+        native_for_kind = native_command in getattr(action, "agate_commands", ())
         for flag in action.option_strings:
-            if flag not in allowed:
+            if flag not in allowed and not native_for_kind:
                 continue
-            item = {"type": "boolean" if action.nargs == 0 else
-                    "integer" if action.type is int else "number" if action.type is float else "string"}
+            value_type = getattr(action, "agate_value_type", action.type)
+            schema_type = getattr(action, "agate_schema_type", None)
+            item = {"type": schema_type or (
+                "boolean" if action.nargs == 0 else
+                "integer" if value_type is int else
+                "number" if value_type is float else "string"
+            )}
             if action.choices is not None:
                 item["enum"] = list(action.choices)
             if isinstance(action, argparse._AppendAction):
                 item["repeatable"] = True
+            if native_for_kind and flag.startswith("--"):
+                item["source"] = "agate"
+            if isinstance(action.help, str) and action.help:
+                item["description"] = action.help
             options[flag] = item
     options["--kind"] = {"const": kind}
     required = ["--kind", *({"record-read": ["--record-id"], "kernel-read": ["--kernel-id", "--output-path"],
                              "kernel-records": ["--kernel-id"]}.get(kind, []))]
     schema = {"cli_options": options, "required_options": required}
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+        schema["agate_version"] = version("atrex-gateway-client")
+    except PackageNotFoundError:
+        pass
     if kind in {"run", "profile", "dev"}:
         schema["command"] = "Optional argv after --; run defaults to python3 test_kernel.py."
     return schema

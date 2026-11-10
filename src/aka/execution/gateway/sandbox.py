@@ -2290,6 +2290,13 @@ def _typed_agate_command(
         top_kernels = request.get("top_kernels", args.top_kernels)
         if top_kernels is not None:
             command += ["--top-kernels", str(top_kernels)]
+        for field in ("kernel_name", "launch_skip", "launch_count"):
+            if request.get(field) is not None:
+                command += ["--" + field.replace("_", "-"), str(request[field])]
+        if request.get("source"):
+            command.append("--source")
+    from .native_options import request_arguments
+    command += request_arguments(request, kind)
     return command
 
 
@@ -2667,6 +2674,18 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
             agate += ["--env-var", item]
         if output_transport == "oss":
             agate += ["--oss-output", OSS_OUTPUT_ARCHIVE]
+        raw_native = os.environ.get("AKA_GATEWAY_NATIVE_OPTIONS")
+        if raw_native:
+            from .native_options import request_arguments
+            selected = json.loads(raw_native)
+            if selected.get("kind") != "dev" or args.ssh:
+                raise ValueError("native Dev options require the Agate Dev transport")
+            extras = request_arguments(selected["request"], "dev")
+            for flag in ("--intent", "--note"):
+                if flag in extras:
+                    index = agate.index(flag)
+                    del agate[index:index + 2]
+            agate += extras
         agate.append("bash __atrex_runner.sh")
 
         # The runner is uploaded separately after the command has been assembled.

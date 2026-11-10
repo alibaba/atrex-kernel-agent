@@ -41,6 +41,7 @@ class LegacyWorkflow:
             request.problem.directory,
             optimization_mode=request.settings.optimization_mode,
             snapshot_directory=request.problem.snapshot_directory,
+            expose_evaluator_shapes=request.settings.expose_evaluator_shapes,
         )
         if not isinstance(problem, LoadedProblem):
             raise TypeError("ProblemProvider.load must return LoadedProblem")

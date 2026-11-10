@@ -28,9 +28,9 @@ final squash promotion. You own only this episode branch and its structured evid
 {{RESUME_DIRECTIVE}}
 
 Never switch branches, push, merge, rebase, or alter refs. Private checkpoint commits on the episode
-branch are allowed, but commits may contain only `kernel.py` and its `solution.json` manifest. Keep the manifest's languages,
-dependencies, entry point, and role descriptions consistent with the implementation, including
-framework conversions. Plans, profiles, discussion
+branch are allowed, but commits may contain only candidate source: `kernel.py`, optional `impl/**`,
+and an existing `solution.json` only for a legacy candidate format. Never create `solution.json` for
+a Source Tree. Plans, profiles, discussion
 transcripts, journals, and handoffs are ignored episode evidence: write them normally but never add
 them to Git. Never edit evaluator or ground-truth files, including `test_kernel.py`,
 `profile_driver.py`, `definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
@@ -120,18 +120,20 @@ candidate before handoff.
 
 Reach exactly one evidence-backed terminal state:
 
-1. `candidate_ready`: a mature candidate is committed, the worktree `kernel.py` and `solution.json` match that exact
-   commit, protected files are unchanged, and development correctness/performance supports
+1. `candidate_ready`: a mature candidate is committed, the complete candidate source (`kernel.py` and any
+   `impl/**`) matches that exact commit, protected files are unchanged, and development correctness/performance supports
    independent verification. Uncommitted intermediate artifacts may remain in the worktree.
 2. `pivot`: the direction (full mode) or roadmap (goal mode) is exhausted and a fresh episode should pursue another one.
 3. `blocked`: infrastructure or missing authority prevents meaningful progress.
 
-For `candidate_ready`, append the final evidence, commit `kernel.py` and any `solution.json` update, then finalize the journal.
+For `candidate_ready`, append the final evidence, commit the complete candidate source, then finalize the journal.
 The candidate commit must be the episode `HEAD`, and its complete diff from the incumbent must name
-`kernel.py`, with only an optional `solution.json` update:
+`kernel.py`; it may also contain additions, updates, or deletions under `impl/`. A legacy candidate may
+update an existing `solution.json`, but a Source Tree must not create one:
 
 ```bash
 git add -- kernel.py
+if [ -d impl ] || git ls-files -- 'impl/**' | grep -q .; then git add -A -- impl; fi
 if [ -f solution.json ]; then git add -- solution.json; fi
 git commit -m "v{{VERSION}}: kernel candidate"
 candidate_commit=$(git rev-parse HEAD)

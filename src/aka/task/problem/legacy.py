@@ -29,13 +29,25 @@ class LegacyProblemProvider:
                 key: str(Path(value).expanduser().absolute()) for key, value in options.items()
             })
 
-    def load(self, directory: Path, *, optimization_mode=None, snapshot_directory: Path | None = None) -> LoadedProblem:
+    def load(
+        self,
+        directory: Path,
+        *,
+        optimization_mode=None,
+        snapshot_directory: Path | None = None,
+        expose_evaluator_shapes: bool = True,
+    ) -> LoadedProblem:
         """Preserve the original operator resolver's validation order and errors."""
         optimization_mode = optimization_mode or self.optimization_mode
+        snapshot_mode = optimization_mode + (
+            ":expose-evaluator-shapes"
+            if optimization_mode == "production" and expose_evaluator_shapes
+            else ""
+        )
         d = Path(directory).resolve()
         if snapshot_directory is not None and snapshot_directory.exists():
             from .snapshot import restore
-            return restore(snapshot_directory.resolve(), d, optimization_mode,
+            return restore(snapshot_directory.resolve(), d, snapshot_mode,
                            source_configuration=self.source_tree)
         if self.source_tree is not None and snapshot_directory is None:
             raise ValueError("Source-tree inputs require a retained Task snapshot")
@@ -47,7 +59,11 @@ class LegacyProblemProvider:
         atrex_bench_root = ""
         provided_problem = has_agent_problem(d)
         shapes_path = d / "shapes.json"
-        generalized = should_use_generalized_problem(d, optimization_mode)
+        generalized = should_use_generalized_problem(
+            d,
+            optimization_mode,
+            expose_evaluator_shapes=expose_evaluator_shapes,
+        )
         if generalized and provided_problem:
             if not shapes_path.is_file():
                 raise SystemExit(
@@ -132,9 +148,9 @@ class LegacyProblemProvider:
                         path.write_bytes(item.source.read_bytes() if item.source is not None else item.text.encode("utf-8"))
                         selected.append(WorkspaceFile(item.path, source=path, copy=item.copy))
                     problem = replace(problem, initial_source=InitialSource("kernel", root / "kernel.py", tuple(selected)))
-                    return capture(problem, snapshot_directory, d, optimization_mode,
+                    return capture(problem, snapshot_directory, d, snapshot_mode,
                                    source_configuration=self.source_tree)
-            return capture(problem, snapshot_directory, d, optimization_mode)
+            return capture(problem, snapshot_directory, d, snapshot_mode)
         return problem
 
     def content(self, problem: LoadedProblem, workspace: Path, *, generated_digest: str = "") -> ProblemContent:

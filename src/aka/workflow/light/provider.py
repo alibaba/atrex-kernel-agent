@@ -99,6 +99,7 @@ class LightWorkflow:
             request.problem.directory,
             optimization_mode=request.settings.optimization_mode,
             snapshot_directory=snapshot,
+            expose_evaluator_shapes=request.settings.expose_evaluator_shapes,
         )
         if not isinstance(problem, LoadedProblem):
             raise TypeError("ProblemProvider.load must return LoadedProblem")

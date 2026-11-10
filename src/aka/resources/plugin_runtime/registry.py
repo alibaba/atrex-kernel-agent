@@ -170,8 +170,11 @@ class PluginRegistry:
                     "output_schema",
                     "timeout_seconds",
                     "command",
+                    "runtime_tool",
                 }
-                or "command" not in tool
+                or ("command" not in tool and tool.get("runtime_tool") != "wiki")
+                or ("command" in tool and "runtime_tool" in tool)
+                or ("runtime_tool" in tool and tool["runtime_tool"] != "wiki")
             ):
                 raise PluginError("invalid_manifest", f"invalid tool: {name}")
             if (
@@ -183,7 +186,7 @@ class PluginRegistry:
                     "invalid_manifest", f"invalid description/timeout: {name}"
                 )
             loaded = dict(tool)
-            loaded["resolved_command"] = resolve_command(root, tool)
+            loaded["resolved_command"] = resolve_command(root, tool) if "command" in tool else ()
             for field in ("input_schema", "output_schema"):
                 if tool.get("runtime_tool") == "wiki-query":
                     expected = f"schemas/query.{field.removesuffix('_schema')}.json"
@@ -422,6 +425,8 @@ class PluginRegistry:
         if plugin is None or tool_name not in plugin.tools:
             raise PluginError("tool_not_found", f"tool is not enabled: {name}")
         tool = plugin.tools[tool_name]
+        if tool.get("runtime_tool") == "wiki":
+            raise PluginError("runtime_required", "Wiki provider calls require the managed Agent tool host")
         started = time.monotonic()
         call_id = "plugin-call-" + uuid.uuid4().hex
         status = "ok"

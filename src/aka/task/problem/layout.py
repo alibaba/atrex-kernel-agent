@@ -217,7 +217,7 @@ def has_agent_problem(op_dir: Path) -> bool:
     return (op_dir / AGENT_PROBLEM_FILENAME).is_file()
 
 
-def should_use_generalized_problem(op_dir: Path, optimization_mode: str) -> bool:
+def should_use_generalized_problem(op_dir: Path, optimization_mode: str, *, expose_evaluator_shapes=True) -> bool:
     """Return whether an operator must expose a generalized public contract.
 
     Private exact-case handling is a production policy, not an operator-layout side effect.
@@ -226,6 +226,7 @@ def should_use_generalized_problem(op_dir: Path, optimization_mode: str) -> bool
     """
     return (
         optimization_mode == "production"
+        and not expose_evaluator_shapes
         and not is_sol_op(op_dir)
         and (op_dir / "shapes.json").is_file()
         and find_atrex_bench_root(op_dir) is not None

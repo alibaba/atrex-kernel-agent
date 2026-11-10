@@ -37,13 +37,21 @@ def parse_tool_arguments(argv):
         parser.add_argument(flag, type=float)
     for flag in ("--shape-id", "--profile-counter", "--requirement", "--input", "--sync"):
         parser.add_argument(flag, action="append", default=[])
-    parser.add_argument("--env", "-e", action="append", default=[])
-    parser.add_argument("--profile-level", choices=("survey", "sol", "deep"), default="sol")
+    parser.add_argument("--env", "-e", "--env-var", action="append", default=[])
+    parser.add_argument("--profile-level", "--level", choices=("survey", "sol", "deep"), default="sol")
     parser.add_argument("--profiler", choices=("ncu", "nsys", "rocprofv3", "acu"))
-    parser.add_argument("--format", dest="disassembly_format", choices=("auto", "sass", "ptx", "isa"), default="auto")
+    parser.add_argument("--format", "--fmt", dest="disassembly_format", choices=("auto", "sass", "ptx", "isa"), default="auto")
+    parser.add_argument("--counter", dest="profile_counter", action="append")
+    parser.add_argument("--source", dest="profile_source", action="store_true")
+    parser.add_argument("--force", dest="env_force", action="store_true")
+    parser.add_argument("--frameworks", action="store_true")
+    parser.add_argument("--limits", action="store_true")
+    parser.add_argument("--counters")
     for flag in ("--no-sync", "--include-raw-profile", "--inline-output", "--profile-source", "--dry-run", "--env-capabilities", "--env-force"):
         parser.add_argument(flag, action="store_true")
     parser.add_argument("command", nargs=argparse.REMAINDER)
+    from aka.execution.gateway.native_options import extend_parser
+    extend_parser(parser)
     args = parser.parse_args(list(argv))
     if args.command[:1] == ["--"]:
         args.command = args.command[1:]
@@ -70,6 +78,13 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     from .gateway_request import prepare_request, _candidate_languages
     from .private_inputs import selected_content
     args = parse_tool_arguments(argv)
+    from aka.execution.gateway.native_options import values as native_values, apply_request
+    selected_kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
+    native = native_values(args, selected_kind)
+    if selected_kind != "env" and any((args.env_force, args.frameworks, args.counters, args.limits)):
+        raise ValueError("environment capability options require --kind env")
+    if selected_kind == "env" and any((args.env_capabilities, args.frameworks, args.counters, args.limits)) and not args.env_gpu:
+        raise ValueError("environment capability options require --env-gpu")
     if args.kind in {"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier", "env"}:
         return ToolRequest(args.kind, None, args)
     if args.no_sync and args.sync:
@@ -126,6 +141,8 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         hardware=configuration.hardware, artifacts=artifacts, operation=kind, filesystem_access=filesystem_access, output_options=output)
     environment = workload_environment(provisional)
     if sol and kind == "run" and not args.baseline_path:
+        if native:
+            raise UnsupportedExecution("native Agate controls require typed evaluation")
         return ToolRequest(kind, provisional, args)
     inputs = ()
     if args.input:
@@ -135,6 +152,11 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         if skipped:
             raise ValueError("required tool inputs are unavailable")
     if kind == "dev" or args.command and kind not in {"check", "disassemble"}:
+        if native:
+            if kind != "dev":
+                raise UnsupportedExecution("native Agate controls require a typed operation; an ad-hoc profile uses the portable Dev contract")
+            provisional = replace(provisional, environment={**provisional.environment,
+                "AKA_GATEWAY_NATIVE_OPTIONS": json.dumps({"kind": kind, "request": apply_request({}, args, kind)}, allow_nan=False)})
         options = ProfileOptions(args.profile_level, args.profiler, tuple(args.profile_counter), args.kernel_regex, args.top_kernels) if kind == "profile" else None
         return ToolRequest(kind, replace(provisional, input_files=inputs, profile_options=options), args)
     if inputs:
@@ -178,7 +200,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     portable_profile = (private_profile and candidate_archive is None and not nondefault_profile(profile_options)
         and not any(value is not None for value in (args.input_path, args.shapes_path, args.kernel_name,
                                                     args.launch_skip, args.launch_count))
-        and not args.profile_source)
+        and not args.profile_source and not native)
     if portable_profile:
         if args.profile_shape_id:
             if args.profile_shape_id not in request['reference']['shapes']:
@@ -190,6 +212,8 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     if native_manifest and kind in {'check', 'disassemble'}:
         raise ValueError('Compiled manifests support Evaluate and Profile; use Evaluate correctness_only for a build/correctness check')
     if (candidate_archive is not None or private_profile) and not native_manifest and kind in {"profile", "check", "disassemble"}:
+        if native:
+            raise UnsupportedExecution("native Agate controls cannot use the portable whole-tree diagnostic contract")
         from .diagnostic_preparation import command as diagnostic_command
         return ToolRequest(kind, diagnostic_command(provisional, request, source, kind, args, requirements), args)
     request["candidate"] = descriptor
@@ -255,6 +279,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
                 request.update({key: value for key, value in (("arch", args.arch), ("sanitize", args.sanitize)) if value is not None})
             else:
                 request["fmt"] = args.disassembly_format
+    request = apply_request(request, args, kind)
     submission = json.dumps({"schema_version": 1, "kind": kind, "request": request,
         "reference_files": {name: item.decode() for name, item in references.items() if Path(name).name == name}}, allow_nan=False).encode()
     return ToolRequest(operation, replace(provisional, operation=operation, submission=submission,

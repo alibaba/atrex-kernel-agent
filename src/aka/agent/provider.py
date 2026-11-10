@@ -407,6 +407,7 @@ class Agent:
             for name, expected in context.authority.items():
                 if values.get(name) != expected:
                     raise ValueError(f"Agent invocation cannot override owned {name}")
+            values = owned_control.enter_context(context.backend.tool_environment(values))
             launch = self._execution.launch(
                 command,
                 Path(cwd),

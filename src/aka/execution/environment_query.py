@@ -12,7 +12,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 
 from aka.contracts.execution import UnsupportedExecution
 from aka.contracts.execution_environment import (
-    EnvironmentQuery, EnvironmentSnapshot, EnvironmentSupport, requirements_identity,
+    EnvironmentQuery, EnvironmentSnapshot, EnvironmentSupport, requirements_identity, environment_document,
 )
 
 _CACHE = {}
@@ -127,7 +127,7 @@ class BackendEnvironment:
 
     def query(self, query):
         cached = self.cached(query)
-        if not query.fresh and "environment-not-queried" not in cached.diagnostics:
+        if not query.fresh and not query.parameters and "environment-not-queried" not in cached.diagnostics:
             return replace(cached, source="cache")
         if self.ssh:
             # The SSH sandbox has no stable query/worker identity contract. Do not
@@ -135,9 +135,14 @@ class BackendEnvironment:
             return replace(cached, diagnostics=("ssh-environment-discovery-not-supported",))
         from .gateway import sandbox
         errors, detail, capabilities = [], {}, {}
+        from .gateway.native_options import request_arguments
+        native = request_arguments(environment_document(query.parameters), "env")
+        executable = sandbox._find_agate() if not self.url or native else None
         encoded = quote(query.hardware, safe="")
         suffix = "?force=true" if query.fresh else ""
-        if self.url:
+        if self.url and executable is None:
+            if native:
+                raise UnsupportedExecution("native environment options require the installed Agate CLI")
             for path, destination in ((f"/v1/env/{encoded}" if query.hardware else "/v1/env", detail),
                                       (f"/v1/env/{encoded}/capabilities", capabilities)):
                 if destination is capabilities and not query.hardware:
@@ -154,21 +159,23 @@ class BackendEnvironment:
                                   else "environment-discovery-" + type(error).__name__)
         else:
             try:
-                executable = sandbox._find_agate()
                 if executable is None:
                     raise FileNotFoundError("agate")
                 base = [executable, "env"]
-                if self.profile:
+                if self.url:
+                    base += ["--url", self.url]
+                elif self.profile:
                     base += ["--profile", self.profile]
                 if query.hardware:
                     base += [query.hardware]
                 base += ["--http-timeout", "30", "--json"]
                 if query.fresh:
                     base += ["--force"]
+                base += native
                 for flags, destination in (([], detail), (["--frameworks", "--limits"], capabilities)):
                     if destination is capabilities and not query.hardware:
                         continue
-                    completed = subprocess.run([*base, *flags], capture_output=True, text=True,
+                    completed = subprocess.run([*base, *(flag for flag in flags if flag not in base)], capture_output=True, text=True,
                                                env=self.environment, timeout=60)
                     if completed.returncode:
                         errors.append("environment-cli-rejected")
@@ -185,10 +192,11 @@ class BackendEnvironment:
         snapshot = _snapshot(self.backend, self.endpoint, query, detail, capabilities, errors, self.operations)
         # An unknown observation stays unknown when cached; explicit fresh queries
         # refresh it without repeating discovery for every candidate submission.
-        with _LOCK:
-            if len(_CACHE) >= 64:
-                _CACHE.pop(next(iter(_CACHE)))
-            _CACHE[_cache_key(self.backend, self.endpoint, query.hardware)] = snapshot
+        if not query.parameters:
+            with _LOCK:
+                if len(_CACHE) >= 64:
+                    _CACHE.pop(next(iter(_CACHE)))
+                _CACHE[_cache_key(self.backend, self.endpoint, query.hardware)] = snapshot
         return snapshot
 
     def check(self, query, *, discover=True):

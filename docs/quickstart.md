@@ -8,7 +8,7 @@ OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workf
 ## Prerequisites
 
 - Python 3.10+, `bash`, `git`, and `torch` on the coordinator.
-- An authenticated coding CLI on `PATH`: `claude`, `qodercli`, `codex`, or `pi`.
+- An authenticated coding CLI on `PATH`: `claude`, `qodercli`, `codex`, `pi`, or `dsh`.
 - A configured Agate endpoint and GPU worker with the workload's framework and GPU stack.
 - A native Atrex-Bench operator in its owning Bench checkout.
 - For coordinator isolation: Linux, Bubblewrap, and permission to create the required
@@ -42,15 +42,20 @@ A native Atrex-Bench operator contains `reference.py`, `input.py`, and `shapes.j
 inside a checkout with `scripts/run_eval.py` and `src/atrex_bench`.
 The operator directory and AKA's `--repo-root` are separate inputs.
 
-In production mode, a supplied `agent_problem.json` provides the generalized public contract.
-Otherwise a trusted preprocessing session derives it from the evaluator-owned inputs.
-Optimization sessions receive the public contract; detailed shapes and generators stay private
-and are injected by the Supervisor during evaluation. Diagnostic feedback retains useful
-case identifiers and errors with private dimensions redacted.
+Production exposes the complete native Atrex-Bench contract by default. Optimization sessions can
+read `shapes.json` and evaluator metadata; Runtime feedback remains compact but retains exact
+dimensions. Production source review and promotion gates remain enabled. Pass
+`--no-expose-evaluator-shapes` to use a supplied or automatically derived `agent_problem.json`, keep
+detailed shapes private, inject them only during evaluation, and redact private dimensions from
+diagnostic feedback.
 
 The default `--optimization-mode leaderboard` exposes the benchmark contract and allows
 the permissive optimization policy. Select `production` explicitly for production review.
-Use a new workspace when changing modes or migrating a campaign that exposed private shapes.
+Existing leaderboard workspaces retain their historical exposed snapshot key and
+resume without migration. Existing hidden production workspaces must be resumed
+with `--no-expose-evaluator-shapes`; the persisted workspace policy fails closed
+and names that flag if a new default would otherwise change visibility. Use a new
+workspace only when intentionally changing mode or Shape-visibility policy.
 
 ## Launch Light
 
@@ -82,9 +87,12 @@ workspace, mode, and budgets into this same installed command.
 
 ### Agent backends and frameworks
 
-Use `--agent-cli codex`, `qodercli`, or `pi` to change the coding backend.
+Use `--agent-cli codex`, `qodercli`, `pi`, or `dsh` to change the coding backend.
+The [DSH guide](dsh-harness-adapter.md) walks through headless setup, provider
+settings, and Session progress.
 Provider settings use `ATREX_CLAUDE_SESSION_SETTINGS`, `ATREX_QODER_SESSION_SETTINGS`,
-`ATREX_CODEX_SESSION_SETTINGS`, or `ATREX_PI_SESSION_SETTINGS`, with
+`ATREX_CODEX_SESSION_SETTINGS`, `ATREX_PI_SESSION_SETTINGS`, or
+`ATREX_DSH_SESSION_SETTINGS`, with
 `ATREX_SESSION_SETTINGS` as the generic fallback. Keep credentials in the provider's
 supported login/configuration mechanism.
 
