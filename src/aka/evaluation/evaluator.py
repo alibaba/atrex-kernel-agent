@@ -560,6 +560,14 @@ class LegacyEvaluator:
                     message, candidate_repairable=False),
             )
         run = VerificationRun("candidate", 0, observation.returncode, result)
+        framework_transport_failed = request.mode == "framework" and observation.returncode != 0
+        if result.get("all_pass") is None and result.get("error"):
+            error = result["error"]
+            message = str(error.get("message") or error) if isinstance(error, dict) else str(error)
+            category = str(error.get("error_class") or "unknown") if isinstance(error, dict) else "unknown"
+            code = str(error.get("code") or "execution_failed") if isinstance(error, dict) else "execution_failed"
+            return VerificationResult("ERROR", None, None, None, runs=[run], error=message,
+                failure=EvaluationFailure(category, code, message, candidate_repairable=False))
         evaluation_failure = result.get("evaluation_failure")
         if isinstance(evaluation_failure, dict):
             category = str(evaluation_failure.get("category") or "infrastructure")

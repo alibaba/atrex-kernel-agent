@@ -2252,6 +2252,10 @@ class Campaign:
                     return None, CANDIDATE_SOURCE_PREFIX + " " + detail
                 return None, f"{VALIDATION_UNAVAILABLE_PREFIX} execution error: {detail}"
             return None, f"{VALIDATION_UNAVAILABLE_PREFIX} execution error: {test.stderr or test.stdout or exc}"
+        if result.get("all_pass") is None and result.get("error"):
+            error = result["error"]
+            detail = str(error.get("message") or error) if isinstance(error, dict) else str(error)
+            return None, f"{VALIDATION_UNAVAILABLE_PREFIX} execution error: {detail}"
         if result.get("all_pass") is not True:
             diagnostics = []
             compile_failure = False
