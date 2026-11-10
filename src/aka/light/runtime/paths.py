@@ -14,17 +14,14 @@ def supervisor_campaign_root(workspace: Path) -> Path:
 
 
 def legacy_resource_root() -> Path:
-    """Return the profile-selected public checkout used by legacy resource adapters.
-
-    Installed launches bind this value through the launch profile. The source-tree
-    fallback keeps direct developer imports usable without recreating the deleted
-    ``aka.legacy.application.paths`` compatibility module.
-    """
+    """Use an explicit resource checkout or the installed package's asset root."""
     configured = os.environ.get("AKA_LEGACY_REPO_ROOT")
-    root = (Path(configured).expanduser().resolve() if configured
-            else Path(__file__).resolve().parents[4])
-    if not (root / "src" / "aka").is_dir():
+    package = Path(__file__).resolve().parents[2]
+    checkout = Path(__file__).resolve().parents[4]
+    root = (Path(configured).expanduser().resolve() if configured else
+            checkout if (checkout / "src/aka").is_dir() else package)
+    if not (root / "src" / "aka").is_dir() and root != package:
         raise RuntimeError(
-            "AKA_LEGACY_REPO_ROOT must name the matching AKA checkout selected by the profile"
+            "AKA_LEGACY_REPO_ROOT must name a matching resource checkout or the installed AKA package"
         )
     return root

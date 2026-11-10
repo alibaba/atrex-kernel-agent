@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -70,10 +71,15 @@ def build_wiki_resources(output: Path) -> None:
 
 
 
-def build(distribution: str, output: Path) -> None:
+def build(distribution: str, output: Path, version: str | None = None) -> None:
     with tempfile.TemporaryDirectory(prefix=f'{distribution}-build-') as tmp:
         stage = Path(tmp)
         shutil.copy2(ROOT / 'packages' / distribution / 'pyproject.toml', stage / 'pyproject.toml')
+        if version:
+            metadata = stage / 'pyproject.toml'
+            content = re.sub(r'(?m)^version = "[^"]+"', f'version = "{version}"', metadata.read_text())
+            content = re.sub(r'(atrex-aka-[\w-]+(?:\[[^\]]+\])?==)[^"\s,;]+', lambda match: match[1] + version, content)
+            metadata.write_text(content)
         for legal in ('LICENSE', 'NOTICE'):
             shutil.copy2(ROOT / legal, stage / legal)
         for source in owned(distribution):
@@ -89,13 +95,14 @@ def main() -> int:
     parser.add_argument('--output', type=Path, required=True)
     parser.add_argument('--with-wiki-resources', action='store_true',
                         help='also export the selected public Wiki plugin and data as a separate artifact')
+    parser.add_argument('--version', default=None, help='version for a matching candidate release')
     parser.add_argument('distributions', nargs='*')
     args = parser.parse_args()
     distributions = args.distributions or list(OWNERS)
     for distribution in distributions:
         if distribution not in OWNERS:
             parser.error(f'unknown distribution: {distribution}')
-        build(distribution, args.output)
+        build(distribution, args.output, args.version)
     if args.with_wiki_resources:
         build_wiki_resources(args.output.resolve())
     return 0

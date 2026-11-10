@@ -12,8 +12,9 @@ from .cli_problem import problem_request
 from .cli_request import campaign_request
 
 
-def parse_arguments(argv):
+def argument_parser(*, prog=None):
     ap = argparse.ArgumentParser(
+        prog=prog,
         description="Long-horizon episode orchestrator for atrex-kernel-agent."
     )
     ap.add_argument("--conversion-budget-action", choices=("fail", "retain_verified"), default="fail")
@@ -313,6 +314,11 @@ def parse_arguments(argv):
         "directory. Default: current working directory.",
     )
     ap.add_argument("--workspace-suffix", default="", help=argparse.SUPPRESS)
+    return ap
+
+
+def parse_arguments(argv):
+    ap = argument_parser()
     raw_argv = list(argv) if argv is not None else sys.argv[1:]
     args = ap.parse_args(raw_argv)
     if args.workspace_suffix and args.workspace_suffix != _workspace_slug(

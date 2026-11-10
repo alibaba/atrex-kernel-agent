@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import sys
-from importlib.metadata import entry_points
+from importlib.metadata import entry_points, version
 from typing import Sequence
 
 from .core.effects import call_sync
@@ -10,6 +10,9 @@ from .core.effects import call_sync
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    if args == ["--version"]:
+        print("aka " + version("atrex-aka-framework"))
+        return 0
     available = entry_points()
     entries = (available.select(group="aka.commands") if hasattr(available, "select")
                else available.get("aka.commands", ()))
