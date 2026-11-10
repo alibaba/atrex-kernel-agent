@@ -1894,6 +1894,17 @@ class Campaign:
         """Run the configured outer V1 Agent; other CLIs only summarize an exit."""
         prompt = self._framework_baseline_prompt(n)
         if rejection:
+            # Per-shape native compiler traces can exceed Linux's single-argv
+            # limit. The Experiment retains complete receipts; the recovery
+            # prompt needs only a bounded excerpt with the final compiler cause.
+            encoded = rejection.encode("utf-8")
+            if len(encoded) > 16_384:
+                rejection = (
+                    encoded[:2_048].decode("utf-8", errors="ignore")
+                    + "\n... rejection excerpt truncated; inspect the original "
+                    "measurement record for complete diagnostics ...\n"
+                    + encoded[-12_288:].decode("utf-8", errors="ignore")
+                )
             prompt = (
                 "# Repair the preserved V1 candidate\n\n"
                 f"The supervisor rejected the current candidate: **{rejection}**\n"

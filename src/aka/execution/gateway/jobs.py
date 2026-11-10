@@ -202,9 +202,12 @@ class GatewayJobs:
             argv += ["--profile", self.profile]
         argv += ["--http-timeout", str(timeout), reference.identifier]
         result = self.runner(argv, env=self.environment, capture_output=True, text=True, timeout=timeout)
-        if result.returncode:
+        # agate get exits nonzero for failed jobs and unsuccessful dev commands;
+        # its stdout still contains the original structured JobView.
+        job = json.loads(result.stdout)
+        if not isinstance(job, dict) or not isinstance(job.get("job_id"), str):
             raise RuntimeError("original-job-query-failed")
-        return json.loads(result.stdout)
+        return job
 
     def query(self, reference, *, timeout, retry=InfrastructureRetryPolicy()):
         self._require(reference)
