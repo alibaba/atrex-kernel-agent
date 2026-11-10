@@ -361,6 +361,8 @@ class GatewayCommandEvaluator:
         """Only a settled unsupported route can authorize the prepared dev alternative."""
         if not prepared.fallback_steps or not results:
             return ()
+        if any(item.details.get("source_validation_failed") for result in results for item in result.diagnostics):
+            return ()
         if any(result.facts.disposition not in {"terminal", "not_submitted"} or result.facts.cancellation_requested or result.transport_status in {"cancelled", "timed_out", "interrupted"}
                or any(item.category in {"cancelled", "authentication"} for item in result.diagnostics)
                for result in results):

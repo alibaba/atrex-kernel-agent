@@ -7,7 +7,7 @@ import math
 import statistics
 
 from aka.evaluation.correctness_summary import correctness_summary, finite_number
-from .response_policy import known_gateway_error
+from .response_policy import known_gateway_error, execution_error
 
 PREFIXES = {
     "evaluate": "[test_kernel] RESULT_JSON=",
@@ -20,6 +20,19 @@ PREFIXES = {
 ERROR_PREFIXES = ("[sandbox] SOURCE_ERROR_JSON=", "[sandbox] GATEWAY_ERROR_JSON=")
 IDENTITIES = ("gateway_record_id", "kernel_id", "baseline_kernel_id")
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+
+
+def with_execution_error(response: dict, receipt) -> dict:
+    """Project an explicit failed receipt before a consumer looks for numeric output."""
+    stdout = response.get("stdout", "")
+    if any(line.startswith((*PREFIXES.values(), *ERROR_PREFIXES)) for line in stdout.splitlines()):
+        return response
+    error = execution_error(receipt)
+    if error is None:
+        return response
+    prefix = ERROR_PREFIXES[0] if error["error"]["code"] == "candidate_source_rejected" else ERROR_PREFIXES[1]
+    return {**response, "stdout": stdout + ("\n" if stdout and not stdout.endswith("\n") else "")
+        + prefix + json.dumps(error, ensure_ascii=False) + "\n"}
 
 
 def bound_diagnostic_response(response: dict) -> dict:
@@ -228,7 +241,11 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
     if response.get("diagnostic_truncation"):
         result["diagnostic_truncation"] = response["diagnostic_truncation"]
     if missing_result:
-        result.update(error={"code": "result_unavailable", "message": "No valid structured result was captured."},
+        diagnostic = response.get("stderr", "").strip() or "\n".join(notes).strip()
+        result.update(error={"code": "execution_failed" if response.get("exit_code") else "unrecognized_execution_output",
+                      "error_class": "unknown", "message": diagnostic or
+                      f"Execution returned no output: exit={response.get('exit_code')}",
+                      "candidate_repairable": False},
                       outcome="unknown", next_action="Inspect the saved Record and ask the operator to reconcile the outcome; do not resubmit blindly.")
     return {"operation": "evaluate" if operation == "same_allocation_abba" else operation,
             "status": status, "result": result, **identity}

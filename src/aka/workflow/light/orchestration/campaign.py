@@ -136,6 +136,7 @@ _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
 
 
 VALIDATION_UNAVAILABLE_PREFIX = "validation unavailable:"
+CANDIDATE_SOURCE_PREFIX = "candidate source rejected:"
 CANDIDATE_COMPILE_PREFIX = "candidate compilation failed:"
 
 
@@ -2236,11 +2237,21 @@ class Campaign:
             source_error = source_error_from_stdout(test.stdout)
             if source_error is not None:
                 error = source_error["error"]
-                return None, " ".join((error["message"], "; ".join(error["violations"]), error["next_action"]))
+                return None, CANDIDATE_SOURCE_PREFIX + " " + " ".join((error["message"], "; ".join(error["violations"]), error["next_action"]))
         try:
             result = _test_result_from_stdout(test.stdout)
         except (RuntimeError, json.JSONDecodeError) as exc:
-            return None, f"{VALIDATION_UNAVAILABLE_PREFIX} combined validation produced no usable result: {exc}"
+            from aka.evaluation.tool_results import canonical_result
+            feedback = canonical_result(response, {"operation": "evaluate"})["result"]
+            error = feedback.get("error")
+            if isinstance(error, dict):
+                detail = str(error.get("message") or error)
+                if isinstance(error.get("violations"), list):
+                    detail += "; " + "; ".join(str(item) for item in error["violations"])
+                if error.get("candidate_repairable") is True and error.get("job_submitted") is False:
+                    return None, CANDIDATE_SOURCE_PREFIX + " " + detail
+                return None, f"{VALIDATION_UNAVAILABLE_PREFIX} execution error: {detail}"
+            return None, f"{VALIDATION_UNAVAILABLE_PREFIX} execution error: {test.stderr or test.stdout or exc}"
         if result.get("all_pass") is not True:
             diagnostics = []
             compile_failure = False
@@ -2353,7 +2364,8 @@ class Campaign:
         memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
         blocked = _validation_blocked(problem)
         compile_failure = problem.startswith(CANDIDATE_COMPILE_PREFIX)
-        memory["correctness"] = {"status": "UNKNOWN" if blocked or compile_failure else "FAIL"}
+        source_rejected = problem.startswith(CANDIDATE_SOURCE_PREFIX)
+        memory["correctness"] = {"status": "UNKNOWN" if blocked or compile_failure or source_rejected else "FAIL"}
         memory["optimization"] = {
             "action_category": FRAMEWORK_BASELINE_CATEGORY,
             "action_description": f"rejected {self.framework} baseline attempt",
@@ -2364,7 +2376,7 @@ class Campaign:
             memory["pitfalls_and_fixes"] = pitfalls
         pitfalls.append(
             {
-                "error_type": "infrastructure" if blocked else "candidate_compile" if compile_failure else "production_policy"
+                "error_type": "infrastructure" if blocked else "candidate_source" if source_rejected else "candidate_compile" if compile_failure else "production_policy"
                 if "self-contained" in problem
                 else "correctness",
                 "error_message": problem,

@@ -126,15 +126,15 @@ class RecordedMeasurements:
         passed = selected.gate == "PASS" and valid if selected is not None and known and settled else None
         feedback = {}
         if record.kind == "command" and record.phase == "complete":
-            from aka.evaluation.tool_results import canonical_result
+            from aka.evaluation.tool_results import canonical_result, with_execution_error
             receipt = experiment.command_result(record.ref)
             operation_name = "evaluate" if operation == "run" else operation
-            public = canonical_result({"exit_code": receipt.returncode,
-                "stdout": receipt.stdout, "stderr": receipt.stderr}, {"operation": operation_name})["result"]
+            public = canonical_result(with_execution_error({"exit_code": receipt.returncode,
+                "stdout": receipt.stdout, "stderr": receipt.stderr}, receipt), {"operation": operation_name})["result"]
             feedback = {key: public[key] for key in ("failures", "actionable_diagnostics", "diagnostics",
-                "feedback_truncation", "diagnostic_truncation") if key in public}
+                "feedback_truncation", "diagnostic_truncation", "error", "next_action", "outcome") if key in public}
         result = {**feedback, "all_pass": passed, "correct": passed, "mode": mode,
-                  "error": selected.error if selected is not None else None,
+                  "error": feedback.get("error") or (selected.error if selected is not None else None),
                   "latency_us_by_shape": dict(selected.candidate_latency_us_by_shape) if selected is not None else {},
                   "latency_us_geomean": selected.candidate_latency_us if selected is not None else None,
                   "performance_score": selected.candidate_performance_score if selected is not None else None}
@@ -154,12 +154,14 @@ class RecordedMeasurements:
         exit_code = attempts[-1].result.returncode if attempts else None
         completed = settled and (known if operation in {"run", "same_allocation_abba"} else bool(attempts) and all(
             attempt.result.transport_status in {"succeeded", "failed"} for attempt in attempts))
+        failed = settled and bool(attempts) and attempts[-1].result.returncode != 0 and (
+            attempts[-1].result.facts.disposition in {"terminal", "not_submitted"})
         full_task = bool(identities) and all(identity.method in {"atrex-bench/eval", "legacy-sol/eval"}
             and identity.parameters.get("workload_scope") == "full-task" and identity.parameters.get("mode") == "full"
             for identity in identities)
         return {"gateway_record_id": "gateway-" + record.ref.experiment_id, "experiment_ref": record.ref.as_dict(),
                 "gateway_kind": operation, **binding, "source_sha256": binding.get("sha256"), "result": result,
-                "execution_status": "completed" if completed else "unknown", "exit_code": exit_code,
+                "execution_status": "completed" if completed else "failed" if failed else "unknown", "exit_code": exit_code,
                 "standard_full_evaluation": full_task and known,
                 "typed_six_case_correctness": known and bool(identities) and all(
                     identity.method == "atrex-bench/eval" and identity.parameters.get("correctness_reuse_policy") == "typed-six-case/1"
@@ -266,7 +268,9 @@ class SharedMeasurements(RecordedMeasurements):
             **({"kernel_id": evidence["kernel_id"]} if evidence.get("kernel_id") else {})}) + "\n"
         response = {"exit_code": returned.returncode if returned is not None else evidence["exit_code"] if evidence["exit_code"] is not None else 2,
                     "stdout": stdout, "stderr": stderr, "reused": reused}
-        from aka.evaluation.tool_results import canonical_result
+        from aka.evaluation.tool_results import canonical_result, with_execution_error
+        if returned is not None:
+            response = with_execution_error(response, returned)
         operation = "evaluate" if evidence["gateway_kind"] == "run" else evidence["gateway_kind"]
         agent = canonical_result(response, {"operation": operation, "options": {"evaluation_mode": payload.get("mode")}},
             record_id=evidence["gateway_record_id"])

@@ -1,7 +1,7 @@
 """Preserve original backend causes and distinguish terminal from cleanup evidence."""
 from aka.contracts.execution_recovery import ExecutionCause
 
-_TYPED_LIMITATIONS = ("kind_not_supported", "invalid_source", "source validation failed",
+_TYPED_LIMITATIONS = ("kind_not_supported", "invalid_source",
     "deps_install_failed", "gateway_dependency_install_failed", "http 404", "http 413", "http 501")
 
 
@@ -11,6 +11,8 @@ def report_typed_limitation(detail):
     This fact is only a support reason. Consumers must also prove the original
     attempt is settled before selecting any previously frozen fallback work.
     """
+    if "source validation failed" in str(detail).lower():
+        return
     reason = next((value for value in _TYPED_LIMITATIONS if value in str(detail).lower()), None)
     if reason is not None:
         from aka.execution.outcomes import emit_diagnostic

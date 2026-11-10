@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from aka.contracts.execution import JobResult
 from aka.evaluation.feedback import project_feedback, merge_feedback, bound_performance_feedback
 from aka.evaluation.tool_results import correctness_summary
-from aka.evaluation.response_policy import KNOWN_GATEWAY_ERROR_CLASSES, known_gateway_error
+from aka.evaluation.response_policy import KNOWN_GATEWAY_ERROR_CLASSES, known_gateway_error, SOURCE_VIOLATION
 
 MAX_AGENT_PROFILE_KERNELS = 32
 MAX_AGENT_EVALUATION_SHAPES = 4096
@@ -30,10 +30,7 @@ _SECRET_TEXT = re.compile(
     r"\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;\"'\]}]+)"
     r"|(\b(?:Authorization\s*:\s*)?Bearer\s+)[A-Za-z0-9._~+/-]+=*"
 )
-_SOURCE_VIOLATION = re.compile(
-    r"(?:Blocked import|Forbidden attribute access): [A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
-    r"|Forbidden string literal matching: [A-Za-z_]\w*"
-)
+_SOURCE_VIOLATION = SOURCE_VIOLATION
 
 def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
     """Only public candidate-source rules, never raw validation/evaluator text."""
@@ -54,7 +51,7 @@ def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
         code="candidate_source_rejected", error_class="code", reason="source_validation_failed",
         job_submitted=False, violations=violations,
         next_action=(
-            "Remove or replace the listed forbidden imports, attribute accesses or string literals "
+            "Remove or replace the listed forbidden names, imports, attribute accesses or string literals "
             "in the candidate, then retry the same operation with the repaired source. "
             "Do not bypass source validation through Dev."
         ),
@@ -87,7 +84,9 @@ def candidate_source_rejection(process: subprocess.CompletedProcess) -> dict[str
     if not any(diagnostic.details.get("source_validation_failed") and diagnostic.details.get("candidate_rejected")
                and not diagnostic.details.get("reference_rejected") for diagnostic in result.diagnostics):
         return None
-    return source_error_result({"error": {"code": "candidate_source_rejected", "job_submitted": False, "violations": []}})
+    from aka.evaluation.response_policy import execution_error
+    error = execution_error(result)
+    return source_error_result(error) if error is not None else None
 
 
 def source_error_from_stdout(stdout: str) -> dict[str, Any] | None:

@@ -476,6 +476,14 @@ class LegacyEvaluator:
 
     def _baseline_result(self, request, observation):
         from .measurement import shape_latency_facts
+        from .response_policy import execution_error
+        execution_failure = execution_error(observation)
+        if execution_failure and execution_failure["error"].get("candidate_repairable") is True:
+            error = execution_failure["error"]
+            message = " ".join((error["message"], "; ".join(error["violations"]),
+                                execution_failure["next_action"]))
+            return VerificationResult("FAIL", None, None, None, error=message,
+                failure=EvaluationFailure("request", error["code"], message, candidate_repairable=True))
         if observation.returncode != 0 and observation.primary_diagnostic is not None:
             primary, *secondary = observation.diagnostics
             details = {**primary.details, "failure_class": primary.category,
@@ -492,6 +500,8 @@ class LegacyEvaluator:
                     or details.get("io_contract_rejected")
                 )
             )
+            if details.get("source_validation_failed"):
+                repairable = False
             secondary_classes = [
                 str(item.get("failure_class") or "protocol")
                 for item in details.get("secondary_diagnostics", [])
@@ -518,7 +528,8 @@ class LegacyEvaluator:
                     + secondary_context
                     if repairable
                     else f"gateway validation pending: failure_class={category}; "
-                    "no correctness result was produced"
+                    + (execution_failure["error"]["message"] if execution_failure else
+                       observation.stderr or observation.stdout or str(dict(primary.details)))
                     + secondary_context
                 )
                 failure_code = (
@@ -532,20 +543,21 @@ class LegacyEvaluator:
             )
             return VerificationResult("FAIL" if repairable else "ERROR", None, None, None,
                                       error=message, failure=failure)
-        framework_transport_failed = (
-            request.mode == "framework" and observation.returncode != 0
-        )
         try:
             result = result_from_stdout(observation.stdout)
-        except (RuntimeError, json.JSONDecodeError):
-            if not framework_transport_failed:
-                raise
+        except (RuntimeError, json.JSONDecodeError) as exc:
+            from .tool_results import canonical_result
+            feedback = canonical_result({"exit_code": observation.returncode,
+                "stdout": observation.stdout, "stderr": observation.stderr}, {"operation": "evaluate"})["result"]
+            error = execution_failure["error"] if execution_failure else feedback.get("error", {})
+            message = str(error.get("message") or observation.stderr or observation.stdout or exc)
             return VerificationResult(
-                "FAIL",
+                "ERROR",
                 None,
                 None,
                 None,
-                error=f"combined validation command failed (exit={observation.returncode})",
+                error=message, failure=EvaluationFailure("unknown", str(error.get("code") or "execution_failed"),
+                    message, candidate_repairable=False),
             )
         run = VerificationRun("candidate", 0, observation.returncode, result)
         evaluation_failure = result.get("evaluation_failure")
