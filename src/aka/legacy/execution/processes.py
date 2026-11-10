@@ -208,15 +208,42 @@ def _current_process(pid: int) -> ProcessRecord | None:
     return _process_table().get(pid)
 
 
+def _darwin_session_processes() -> dict[int, ProcessRecord]:
+    """Read a PID census without spawning ps on each suspension poll."""
+    try:
+        list_pids = ctypes.CDLL("/usr/lib/libproc.dylib").proc_listallpids
+        list_pids.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        list_pids.restype = ctypes.c_int
+        count = list_pids(None, 0)
+        if count <= 0:
+            return {}
+        # Leave room for processes created between sizing and reading.
+        capacity = count + 64
+        for _ in range(2):
+            pids = (ctypes.c_int * capacity)()
+            count = list_pids(pids, ctypes.sizeof(pids))
+            if count <= 0:
+                return {}
+            if count < capacity:
+                records = (_darwin_process(pid) for pid in pids[:count] if pid > 0)
+                return {record.pid: record for record in records if record is not None}
+            capacity *= 2
+    except (AttributeError, OSError):
+        pass
+    return {}
+
+
 def session_process_snapshot() -> dict[int, ProcessRecord]:
     """Read PID-reuse-safe identities for an owned Agent tree (Linux/macOS)."""
-    records = _process_table()
     if sys.platform == "darwin":
+        records = _darwin_session_processes()
+        if records:
+            return records
         # A PID can exit between ps and libproc. The ps fallback's second-level
         # identity must not look like a different live owner in the pause scope.
-        records = {pid: record for pid, record in records.items()
-                   if record.start_token.startswith("darwin:")}
-    return records
+        return {pid: record for pid, record in _process_table().items()
+                if record.start_token.startswith("darwin:")}
+    return _process_table()
 
 
 def _registry_path(state_dir: Path, handoff_id: str) -> Path:
