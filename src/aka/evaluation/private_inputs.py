@@ -80,14 +80,27 @@ def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capa
         files[PROFILE_CASE_PATH] = ExecutionFile(PROFILE_CASE_PATH,
             (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8"), 0o400)
         private_paths.add(PROFILE_CASE_PATH)
+    if kind == "profile":
+        from aka.execution.command_syntax import is_profile_command
+        if is_profile_command(list(command.command)):
+            from .resources import profile_driver_script
+            if any(item.path == "profile_driver.py" for item in command.input_files):
+                raise ValueError("Profile cannot override the selected runtime driver")
+            files["profile_driver.py"] = ExecutionFile("profile_driver.py",
+                profile_driver_script().read_bytes())
+            for name in ("input.py", "agent_problem.json", "definition.json", "workload.jsonl"):
+                if name in content:
+                    files[name] = content[name]
+            if not private and "shapes.json" in content:
+                files["shapes.json"] = content["shapes.json"]
     runtime_files = ()
     if evaluator and evaluation_input.runtime_root is not None:
         runtime = evaluation_input.runtime_root
         package = runtime / "src" / "atrex_bench"
         if not (runtime / "scripts/run_eval.py").is_file() or not (package / "utils.py").is_file():
             raise RuntimeError("invalid selected Task Atrex-Bench runtime")
-        # Preserve the evaluator-only runtime closure; Profile imports its public
-        # driver and does not upload the evaluator runtime.
+        # The standalone Profile driver uses Torch or the selected SOL dependency;
+        # only Evaluate imports this separate Atrex-Bench runtime closure.
         selections = ["scripts/run_eval.py", "src/atrex_bench/__init__.py", "src/atrex_bench/utils.py"]
         selections += ["src/atrex_bench/" + name for name in ("sdk.py", "shape_contracts.py", "eval", "cli")
                        if (package / name).exists()]
@@ -98,7 +111,8 @@ def portable_inputs(command, evaluation_input, content, *, evaluator, kind, capa
     if capabilities is None or not capabilities.prepared_inputs:
         raise UnsupportedExecution("selected executor cannot transport the closed Task evaluation inputs")
     from .portable_selection import public_inputs
-    public = {item.path: item for item in public_inputs(command, evaluator=evaluator, prepared_files=prepared_files)}
+    public = {item.path: item for item in public_inputs(command, evaluator=evaluator,
+        prepared_files=(*prepared_files, *files.values()))}
     public.update(files)
     files = public
     if kind == "profile" and private:

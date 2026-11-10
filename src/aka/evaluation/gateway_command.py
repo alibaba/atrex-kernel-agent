@@ -268,7 +268,7 @@ class GatewayCommandEvaluator:
                 raise ValueError("distributed profile requires the typed route")
             from .measurement import portable_profile_identity
             frozen_files = ()
-            identities = (portable_profile_identity(command, reference),) if kind == "profile" else ()
+            identities = ()
             if kind in {"run", "profile"} and candidate:
                 from aka.contracts.workspace import RevisionContent
                 from .source_archives import source_artifact, source_parameters
@@ -276,9 +276,7 @@ class GatewayCommandEvaluator:
                 source_facts = source_parameters(source)
                 context["candidate_artifact"], _ = source_artifact(source)
                 context["source_parameters"] = source_facts
-                if identities:
-                    identities = tuple(replace(identity, parameters={**identity.parameters, **source_facts}) for identity in identities)
-                else:
+                if kind != "profile":
                     from aka.contracts.measurement import MeasurementIdentity, MeasurementPoint
                     from .measurement import _digest
                     sol = self.evaluation_input is not None and self.evaluation_input.adapter == "legacy-sol-v1"
@@ -311,7 +309,14 @@ class GatewayCommandEvaluator:
                         _digest({"task": {name: item.content.hex() for name, item in content.items()}, "parameters": parameters}),
                         parameters, tuple(command.requirements), "explicit-requirements" if command.requirements else "unknown")
                     identities = (identity,)
-            return PreparedEvaluation((portable_inputs(replace(command, operation="dev", profile_options=None), self.evaluation_input, content, evaluator=evaluator, kind=kind, capabilities=capabilities, prepared_files=frozen_files),), 1, context,
+            step = portable_inputs(replace(command, operation="dev", profile_options=None),
+                self.evaluation_input, content, evaluator=evaluator, kind=kind,
+                capabilities=capabilities, prepared_files=frozen_files)
+            if kind == "profile":
+                identity = portable_profile_identity(step, reference)
+                identities = (replace(identity, parameters={**identity.parameters,
+                    **context.get("source_parameters", {})}),)
+            return PreparedEvaluation((step,), 1, context,
                                       measurement_identities=identities)
         if kind == "profile" and profile_level == "deep" and not (options.kernel_regex if options is not None else None):
             raise ValueError("--profile-level deep requires --kernel-regex")
@@ -388,6 +393,14 @@ class GatewayCommandEvaluator:
         from .measurement import assess_payload
         from .transport_results import _optimizer_result_from_eval
         identity = prepared.measurement_identities[index]
+        if identity.method == "legacy-profile/1":
+            assessment = assess_payload(identity, result)
+            if result.returncode:
+                from aka.contracts.measurement import MeasurementDiagnostic
+                assessment = replace(assessment, diagnostics=(*assessment.diagnostics,
+                    MeasurementDiagnostic("execution", "profile-command-failed",
+                        basis=("public-command-exit",))))
+            return assessment
         payload = None
         if identity.method != "atrex-bench/profile":
             try:
@@ -428,6 +441,11 @@ class GatewayCommandEvaluator:
         context = prepared.context
         command = context["command"]
         measurement = context["measurement"]
+        if context["kind"] == "profile" and measurement is None:
+            from .gateway_measurement import prepare_profile_output
+            result = results[0]
+            return CommandEvaluation(replace(result, stdout=prepare_profile_output(
+                result.stdout, private=context["private"], failed=result.returncode != 0)))
         if context["kind"] in {"check", "disassemble"}:
             result = results[0]
             job = _job_response(result.stdout)

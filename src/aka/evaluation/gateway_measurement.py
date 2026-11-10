@@ -52,6 +52,18 @@ class GatewayMeasurement:
         return result
 
 
+def prepare_profile_output(stdout, *, private, failed):
+    """Preserve public startup failures without publishing hidden candidate stdout."""
+    if not private:
+        return stdout
+    import re
+    # Portable Profile has no numerical RESULT_JSON contract. Its files and
+    # stderr remain execution outputs; arbitrary stdout can contain private inputs.
+    pattern = r"[^\s:]+: can't open file '[^'\n]+': \[Errno 2\] No such file or directory"
+    return "\n".join(line for line in stdout.splitlines()
+        if failed and len(line) <= 4096 and re.fullmatch(pattern, line))
+
+
 def prepare_dev_output(workspace, stdout, *, evaluator, private, baseline=None):
     if evaluator:
         stdout = _hydrate_abba_result_lines(workspace, stdout, baseline=baseline)

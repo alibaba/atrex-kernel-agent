@@ -208,13 +208,20 @@ def gateway_identity(request, reference_files, kind="run", *, full_request=None,
 def portable_profile_identity(command, reference):
     """Identify the unchanged wrapper method without inventing typed controls."""
     from .command_inputs import PROFILE_ENVIRONMENT_KEYS
-    content = _content_inputs(command.workspace, reference)
+    closure = command.prepared_inputs
+    content = ({item.path: _bytes(item.content) for item in (*closure.files, *closure.runtime_files)}
+               if closure is not None else _content_inputs(command.workspace, reference))
     explicit = [{"path": item.path, "mode": item.mode, "sha256": _bytes(item.content)}
                 for item in command.input_files]
     input_digest = _digest({"content": content, "explicit_inputs": explicit})
     candidate_path = command.workspace / "kernel.py"
     revision = "sha256:" + (_bytes(candidate_path.read_bytes()) if candidate_path.is_file() else input_digest)
     shape = command.environment.get("PROFILE_SHAPE_ID")
+    if closure is not None:
+        from .private_inputs import PROFILE_CASE_PATH
+        case = next((item for item in closure.files if item.path == PROFILE_CASE_PATH), None)
+        if case is not None:
+            shape = json.loads(case.content)["shape_id"]
     points = (MeasurementPoint("candidate", revision, 0, shape),)
     controls = {key: _bytes(value.encode()) for key, value in command.environment.items()
                 if key in PROFILE_ENVIRONMENT_KEYS}
