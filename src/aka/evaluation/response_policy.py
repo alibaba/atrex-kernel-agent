@@ -14,7 +14,7 @@ SOURCE_VIOLATION = re.compile(
 
 def execution_error(result: JobResult) -> dict[str, Any] | None:
     """Interpret captured execution failure facts without inferring dispatch from text."""
-    if result.returncode == 0 and result.transport_status in {"succeeded", "failed", "unknown"}:
+    if result.returncode == 0 and not result.diagnostics and result.transport_status in {"succeeded", "failed", "unknown"}:
         return None
     candidate_rejected = (
         result.facts.disposition == "not_submitted" and not result.job_references
@@ -42,7 +42,7 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
             "next_action": "Replace the reported forbidden names, imports or attribute accesses in the candidate. "
                 "Use the documented APIs for the pinned runtime version, then validate the repaired source. "
                 "Do not bypass source validation through Dev."}
-    primary = result.primary_diagnostic
+    primary = result.primary_diagnostic or (result.diagnostics[0] if result.diagnostics else None)
     message = result.stderr.strip() or result.stdout.strip()
     if not message:
         message = "; ".join(f"{item.category}/{item.code}: {dict(item.details)}"

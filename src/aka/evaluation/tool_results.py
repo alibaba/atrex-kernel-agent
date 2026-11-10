@@ -25,8 +25,15 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 def with_execution_error(response: dict, receipt) -> dict:
     """Project an explicit failed receipt before a consumer looks for numeric output."""
     stdout = response.get("stdout", "")
-    if any(line.startswith((*PREFIXES.values(), *ERROR_PREFIXES)) for line in stdout.splitlines()):
-        return response
+    for line in stdout.splitlines():
+        prefix = next((p for p in (*PREFIXES.values(), *ERROR_PREFIXES) if line.startswith(p)), None)
+        if prefix:
+            try:
+                value = json.loads(line[len(prefix):])
+            except ValueError:
+                continue
+            if isinstance(value, dict):
+                return response
     error = execution_error(receipt)
     if error is None:
         return response
