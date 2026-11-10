@@ -148,6 +148,25 @@ _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
 )
 
 
+def _framework_baseline_failure_problem(result: SessionResult) -> str:
+    """Prefer the Provider failure over the missing-handoff consequence."""
+    if result.timed_out:
+        detail = result.stderr_tail.strip() or result.stdout_tail.strip()
+        suffix = f": {detail[-4000:]}" if detail else ""
+        return f"Agent session timed out before publishing the Episode 0 handoff{suffix}"
+    if result.exit_status != 0:
+        detail = result.stderr_tail.strip() or result.stdout_tail.strip()
+        suffix = f": {detail[-4000:]}" if detail else ""
+        return (
+            "Agent session failed before publishing the Episode 0 handoff "
+            f"(exit={result.exit_status}){suffix}"
+        )
+    return (
+        result.completion_diagnosis
+        or "Framework Baseline Episode 0 ended without an accepted candidate_ready report"
+    )
+
+
 def framework_baseline_workspace_contract(workspace: Path) -> bytes:
     """Render the real SourceProvider boundary used by the pre-Episode V1 stage."""
     from aka.light.workspace.sources import instructions, policy_at
@@ -1918,10 +1937,7 @@ class Campaign:
         finally:
             self._warn_restored_baseline_paths(baseline_commit)
         if res.handoff is None or res.handoff.status != "candidate_ready":
-            problem = (
-                res.completion_diagnosis
-                or "Framework Baseline Episode 0 ended without an accepted candidate_ready report"
-            )
+            problem = _framework_baseline_failure_problem(res)
             self._record_framework_baseline_failure(problem)
             self._sync_framework_baseline_live(
                 phase="failed",

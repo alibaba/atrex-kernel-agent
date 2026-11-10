@@ -40,7 +40,7 @@ from aka.light.workflow.journal_service import (
 )
 from aka.light.workflow.journal import JournalFactory
 from aka.light.workflow.models import EpisodeHandoff, SupervisorState
-from aka.light.workflow.bootstrap import Campaign
+from aka.light.workflow.bootstrap import Campaign, _framework_baseline_failure_problem
 from aka.light.workflow.claim_review import validate_review
 from aka.light.workflow.constants import FRAMEWORK_BASELINE_FILE
 from aka.light.workflow.episode import LongHorizonCampaign
@@ -87,6 +87,34 @@ def _claim_finding(judgment: str, *, critical: bool) -> dict[str, object]:
         "reason": "The supplied evidence has the stated level of support.",
         "evidence": ["gateway-records/gateway-example/record.json"],
     }
+
+
+def test_framework_baseline_process_failure_precedes_missing_handoff_diagnosis():
+    result = SimpleNamespace(
+        exit_status=125,
+        timed_out=False,
+        stderr_tail="Agent projected /proc setup failed (FileNotFoundError)",
+        stdout_tail="",
+        completion_diagnosis="handoff file is missing",
+    )
+
+    problem = _framework_baseline_failure_problem(result)
+
+    assert "exit=125" in problem
+    assert "projected /proc setup failed" in problem
+    assert "handoff file is missing" not in problem
+
+
+def test_framework_baseline_clean_exit_keeps_handoff_diagnosis():
+    result = SimpleNamespace(
+        exit_status=0,
+        timed_out=False,
+        stderr_tail="",
+        stdout_tail="",
+        completion_diagnosis="handoff file is missing",
+    )
+
+    assert _framework_baseline_failure_problem(result) == "handoff file is missing"
 
 
 def test_claim_review_verdict_ignores_noncritical_limitations():
