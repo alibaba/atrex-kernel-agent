@@ -14,7 +14,11 @@ from pathlib import Path
 
 from aka.legacy.evaluation.abba import verification_schedule
 from aka.light.evaluation.result_conversion import compile_failures
-from aka.legacy.evaluation.shapes import batch_shape_ids, shape_batch_request
+from aka.legacy.evaluation.shapes import (
+    batch_shape_ids,
+    request_shape_ids,
+    shape_subset_request,
+)
 from aka.light.evaluation.evaluation_feedback import evaluation_feedback
 from aka.light.evaluation.policy import BATCH_WORKERS, validate_abba_repeats
 from aka.light.evaluation.public_result import correctness_summary
@@ -357,7 +361,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     if not request["abba"]["baseline"] or not request["candidate"]:
         raise ValueError("Native ABBA requires two non-empty candidate sources")
     request["runner_overrides"]["perf_timeout_s"] = comparison_run_timeout(args)
-    shapes = sorted(request["reference"]["shapes"], key=gateway.shape_id_sort_key)
+    shapes = request_shape_ids(request)
     if not shapes:
         raise ValueError("Native ABBA requires at least one Shape")
     if args.dry_run:
@@ -398,7 +402,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             record_store.retain_terminal_job(identity, retained)
 
     def run_batch(ids):
-        batch = shape_batch_request(request, ids)
+        batch = shape_subset_request(request, ids)
         identity = {"transport": "agate_native_eval_abba", "request": payload_identity(batch),
                     "schedule": schedule, "shape_ids": ids}
         if store and (saved := store.load(identity)) is not None:
@@ -521,6 +525,9 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
                 retain_in_record(identity, saved)
             return payload, None
 
+    # Each bounded ABBA batch remains one same-allocation A/B/B/A Eval. Agate
+    # receives the original reference bundle plus --shape-ids and the Runtime's
+    # fixed shape_shards=1 policy from the typed request.
     batches = batch_shape_ids(shapes, args.shape_batch_size)
     with ThreadPoolExecutor(max_workers=min(BATCH_WORKERS, len(batches))) as pool:
         results = list(pool.map(run_batch, batches))

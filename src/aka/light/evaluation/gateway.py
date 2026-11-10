@@ -123,6 +123,7 @@ from aka.light.runtime.request_errors import GatewayConfigurationError  # noqa: 
 from aka.light.experiment.store import BATCH_ROOT_ENV, JOB_ROOT_ENV, EvidenceUnavailable  # noqa: E402
 from aka.light.evaluation.policy import (  # noqa: E402
     CORRECTNESS_CASES, BENCH_ITERS, WARMUP_ITERS, SHAPE_BATCH_SIZE, BATCH_WORKERS,
+    SHAPE_SHARDS, LOCK_CLOCKS,
     runner_overrides, measurement_defaults,
 )
 from aka.light.evaluation.projection import (  # noqa: E402
@@ -159,7 +160,7 @@ from aka.light.execution.gateway_jobs import (  # noqa: E402
 from aka.legacy.evaluation.shapes import (
     request_shape_ids as _request_shape_ids,
     batch_shape_ids as batch_shape_ids,
-    shape_batch_request as _shape_batch_request,
+    shape_subset_request as _shape_subset_request,
 )
 
 from aka.light.evaluation.result_conversion import (
@@ -1388,7 +1389,6 @@ def build_typed_request(
         # gateway must honor the adapter's targeted-smoke contract instead of
         # silently expanding a one-shape request back to the complete workload.
         requested_shape_ids = list(dict.fromkeys(requested_shape_ids))
-        shapes = {shape_id: shapes[shape_id] for shape_id in requested_shape_ids}
     try:
         policy = evaluation_policy(command, evaluation_mode) if kind == "run" else None
         multi_seed = policy["num_correctness_cases"] - 1 if policy else 0
@@ -1417,15 +1417,6 @@ def build_typed_request(
         ):
             value = read_json_object(_evaluator_input_path(workspace, filename, required=False))
             if value is not None:
-                if requested_shape_ids and isinstance(value.get("shapes"), dict):
-                    value = dict(value)
-                    value["shapes"] = {
-                        shape_id: value["shapes"][shape_id]
-                        for shape_id in requested_shape_ids
-                        if shape_id in value["shapes"]
-                    }
-                    if filename == "metadata.json" and "num_shapes" in value:
-                        value["num_shapes"] = len(requested_shape_ids)
                 reference[field] = value
 
     num_gpus = _distributed_evaluation_world_size(reference.get("metadata"))
@@ -1445,6 +1436,11 @@ def build_typed_request(
         },
         "env_vars": _parse_env_items(env_items),
     }
+    if requested_shape_ids:
+        # Keep the complete evaluator-owned bundle and select by original ID.
+        # Agate/Atrex-Bench can now validate and shard this subset inside one
+        # Ray Data job, rather than Light manufacturing a different reference.
+        request["options"]["shape_ids"] = requested_shape_ids
     correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(
         reference.get("metadata") if isinstance(reference.get("metadata"), dict) else None,
         reference.get("operator"),
@@ -1458,7 +1454,9 @@ def build_typed_request(
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
         request["mode"] = policy["mode"]
-        request["lock_clocks"] = True
+        request["options"]["shape_shards"] = SHAPE_SHARDS
+        if LOCK_CLOCKS:
+            request["lock_clocks"] = True
         request["runner_overrides"] = runner_overrides()
         if dependency_specs:
             request["requirements"] = dependency_specs
@@ -1968,7 +1966,11 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
                 "ATREX_EVAL_SHAPE_BATCH_SIZE", str(DEFAULT_EVAL_SHAPE_BATCH_SIZE)
             )
         ),
-        help="Maximum Atrex-Bench shapes per concurrent eval job (default: 4).",
+        help=(
+            "Maximum evaluator Shape IDs submitted in one Agate Eval job. "
+            f"Each job uses --shape-shards {SHAPE_SHARDS} with the Ray Data Shape-ID "
+            f"contract (default: {DEFAULT_EVAL_SHAPE_BATCH_SIZE})."
+        ),
     )
     parser.add_argument(
         "--sync",
@@ -3543,6 +3545,11 @@ def build_typed_agate_command(
     ]
     if kind == "run":
         command += ["--mode", str(request.get("mode") or "full")]
+        shape_shards = options.get("shape_shards")
+        if shape_shards is not None:
+            command += ["--shape-shards", str(shape_shards)]
+        for shape_id in options.get("shape_ids") or []:
+            command += ["--shape-ids", str(shape_id)]
         if request.get("lock_clocks"):
             command.append("--lock-clocks")
         if request.get("deps_mode"):
@@ -3593,7 +3600,15 @@ def build_typed_agate_command(
         if args.top_kernels is not None:
             command += ["--top-kernels", str(args.top_kernels)]
     from aka.light.evaluation.agate_native import cli_arguments
-    command += cli_arguments(args, kind)
+    command += cli_arguments(
+        args,
+        kind,
+        exclude=(
+            frozenset({"shape_shards", "shape_ids"})
+            if kind == "run"
+            else frozenset()
+        ),
+    )
     return command
 
 
@@ -3954,14 +3969,12 @@ def _run_typed_gateway(
         return None
 
     expected_shape_ids = _request_shape_ids(request)
-    native_shape_shards = request.get("options", {}).get("shape_shards")
-    shape_batches = (
-        batch_shape_ids(
-            expected_shape_ids,
-            getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
-        )
-        if kind == "run" and native_shape_shards is None
-        else [expected_shape_ids]
+    # Light checkpoints bounded logical batches. Each batch uses Agate's
+    # Shape-ID contract but fixes shape_shards=1 until heterogeneous worker
+    # environment fields can be merged reliably by the remote evaluator.
+    shape_batches = batch_shape_ids(
+        expected_shape_ids,
+        getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
     )
     batched = len(shape_batches) > 1
 
@@ -4027,9 +4040,7 @@ def _run_typed_gateway(
                 item: tuple[int, list[str]],
             ) -> subprocess.CompletedProcess[str]:
                 batch_index, shape_ids = item
-                batch_request = (
-                    _shape_batch_request(request, shape_ids) if batched else request
-                )
+                batch_request = _shape_subset_request(request, shape_ids)
                 batch_identity = (
                     {
                         "transport": "agate_native_eval",
@@ -4068,9 +4079,9 @@ def _run_typed_gateway(
                         raise FileNotFoundError("agate")
                     reference_dir = None
                     if kind in {"run", "profile"}:
-                        # Even a single targeted batch needs its filtered reference
-                        # directory. Otherwise the agate CLI would reload the original
-                        # full shapes.json and defeat Evaluate/Profile selection.
+                        # The CLI receives the complete evaluator contract. Eval subset
+                        # selection travels separately as --shape-ids; Profile still
+                        # carries its single selected Shape in the typed request.
                         reference_dir = batch_root / f"batch-{batch_index:04d}"
                         _shape_batch_reference(batch_request["reference"], reference_dir)
                     agate = build_typed_agate_command(
@@ -4116,8 +4127,9 @@ def _run_typed_gateway(
             batch_items = list(enumerate(shape_batches))
             if batched:
                 print(
-                    f"[sandbox] running {len(shape_batches)} shape batches "
-                    f"with {min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))} workers",
+                    f"[sandbox] running {len(shape_batches)} Agate Eval batches "
+                    f"with {min(DEFAULT_EVAL_BATCH_WORKERS, len(shape_batches))} "
+                    f"submission workers; each job uses shape_shards={SHAPE_SHARDS}",
                     file=sys.stderr,
                     flush=True,
                 )

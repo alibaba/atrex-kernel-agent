@@ -195,7 +195,7 @@ Each Episode edits a managed draft, evaluates an exact source, submits an eviden
 
 ## Resume, failures and cleanup
 
-Resume with the same checkout behavior, workspace, composition, framework, candidate layout, optimization mode and visibility policy. Light can reconcile accepted Agate job IDs, completed Evaluate/ABBA batches, an interrupted Framework Baseline and an interrupted Episode from durable state.
+Resume with the same checkout behavior, workspace, composition, framework, candidate layout, optimization mode and visibility policy. Light can reconcile accepted Agate job IDs and completed Evaluate/ABBA batches, while Agate/Atrex-Bench owns Ray Data execution within each batch job. It can also resume an interrupted Framework Baseline and an interrupted Episode from durable state.
 
 - Do not clear a workspace merely because a process exited. Inspect Workflow, Session and Agate state first.
 - A timeout, queue failure, missing evidence or protocol error is not proof that the candidate is incorrect.

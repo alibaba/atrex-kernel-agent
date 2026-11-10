@@ -88,7 +88,7 @@ Pooled multi-trajectory search uses its own `epochs × trajectories × episodes_
 | `--verify-run-timeout SECONDS` | `300` | Execution budget for each individual A or B measurement. The enclosing allocation is derived from this and `--verify-repeats` unless explicitly overridden. |
 | `--min-improvement-pct PCT` | `0` | Candidate GeoMean latency improvement must be strictly greater than this percentage to promote. Correctness and complete evidence remain mandatory. |
 
-Current Light measurement defaults are one Shape per batch, up to 16 batches in parallel, 600 seconds for candidate initialization/correctness, 300 seconds for steady-state performance, five warmups and 20 timing iterations. These are measurement-policy defaults rather than all being public Campaign flags.
+Current Light groups at most 20 selected Shape IDs into one Agate Eval job by default. The batch size is configurable through the Runtime's `--shape-batch-size` setting or `ATREX_EVAL_SHAPE_BATCH_SIZE`. Every job passes the original evaluator bundle plus repeated `--shape-ids`, explicitly requests clock locking, and sets `--shape-shards 1`. Up to 16 independent batch jobs may be submitted concurrently. Light keeps 600 seconds for candidate initialization/correctness, 300 seconds for steady-state performance, five warmups and 20 timing iterations. These are measurement-policy defaults rather than all being public Campaign flags.
 
 ## SSH execution options
 
@@ -181,12 +181,16 @@ The optimization CLI is shared with Legacy. On current `main`, the following acc
 | `--gateway-candidate-recovery` | Legacy Framework Baseline candidate-repair policy; Light uses its own typed feedback and recovery path. |
 | `--resume-framework-candidate` | Legacy retained-candidate adoption switch; Light restores V1 from its own durable state. |
 | `--conversion-budget-action` | Legacy behavior at a conversion budget boundary. Light fails explicitly when mandatory conversion remains incomplete at its budget boundary. |
-| `--verify-shape-batch-size` | Legacy ABBA batch control. Current Light uses one Shape per batch with bounded parallelism and does not consume this CLI field. |
+| `--verify-shape-batch-size` | Legacy-only spelling. Light acceptance uses its configured `shape_batch_size` (default 20) to bound Shape IDs per ABBA job; every job sets `shape_shards=1`. |
 
 If a later `main` wires one of these settings into `ManagedCampaign`, update this reference from the implementation rather than inferring support from parser acceptance alone.
 
 ## Agate-native Runtime options
 
-Inside a Light Episode, Runtime tools discover safe, non-authority Agate options from the installed `atrex-gateway-client` and expose them through the tool schema. Updating the client and restarting the Supervisor refreshes that catalog. Credentials, endpoints, uploads, source selection, timeouts, evaluator version and other authority-bearing options remain Supervisor-owned and are deliberately blocked from this dynamic pass-through.
+Inside a Light Episode, Runtime tools discover safe, non-authority Agate options from the installed `atrex-gateway-client` and expose them through the tool schema. Updating the client and restarting the Supervisor refreshes that catalog. Credentials, endpoints, uploads, source paths, timeouts, evaluator version and other authority-bearing options remain Supervisor-owned and are deliberately blocked from this dynamic pass-through. Shape IDs are evaluator-owned opaque selectors, so the reviewed `--shape-ids` subset control is allowed. Ray Data shard count and clock locking remain Runtime-owned policy: `--shape-shards` and `--lock-clocks` are not exposed to the Agent.
+
+With `atrex-gateway-client>=0.14.33`, repeated `--shape-ids ID` values select integer-parseable IDs from the unchanged evaluator-owned reference bundle. Light uses them to place at most 20 Shapes in a recoverable Agate job by default and fixes `--shape-shards 1` in its measurement policy. This preserves the new Shape-ID contract while avoiding heterogeneous-worker merge failures.
+
+Agate automatically keeps unsupported combinations serial, including source archives/OSS attachments, extra requirements and multi-GPU requests. An explicit `--shape-shards N` greater than one turns those combinations into validation errors, so prefer automatic mode unless the operator has verified the exact runtime contract.
 
 Use the installed Runtime tool help/schema for the exact operation-specific fields. Do not assume an option supported by Agate `eval` is also valid for Profile, Check, Disassemble or Dev.

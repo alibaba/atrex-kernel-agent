@@ -89,14 +89,17 @@ configured allocation's complete schedule. Without that option, each run uses th
 the 300-second Performance timeout and its equal share of the configured allocation. Acceptance can
 reuse only an exact matching request, including baseline bytes, path, repeats and run timeout.
 The injected acceptance block supplies the exact command for the current
-configuration, including Shape batch size, and a `kernel-read` command for the committed
+configuration and a `kernel-read` command for the committed
 incumbent. Use that block instead of this generic example when seeking acceptance reuse.
 Runtime owns the measurement repetitions and derives the allocation timeout; do not emulate
 them with repeated Agent requests or environment overrides. Other request/input changes can
 prevent reuse. A matching comparison is optional and does not replace the report's full Evaluate.
 
 Full Evaluate and ABBA default to 20 timing iterations and 5 warmup iterations, matching
-Legacy's sampling counts. They use one Shape per batch and at most 16 concurrent batches.
+Legacy's sampling counts. Light groups at most 20 selected Shape IDs into one recoverable Agate
+job by default and may submit up to 16 such jobs concurrently. Every job carries the complete
+reference bundle, explicitly requests clock locking, passes its subset with repeated
+`--shape-ids ID`, and sets `--shape-shards 1`.
 Promotion minimizes GeoMean latency versus the
 incumbent; `performance_score` is diagnostic. The returned `improvement_pct` is
 `(speedup - 1) * 100`, matching Runtime (100 us to 80 us means 1.25x and 25%).

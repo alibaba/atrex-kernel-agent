@@ -68,7 +68,7 @@ Do not combine per-Shape winners into a synthetic Kernel. Use a single measured 
 1. Use runtime status to identify the exact scope, stage, Episode, Session, Agent phase, pending tool, and staleness.
 2. If waiting on Agate, inspect logical calls and physical jobs. Report queue, execution and total time separately when persisted.
 3. Classify failures as `infrastructure`, `candidate`, `policy`, `protocol`, or `unknown`. Do not count infrastructure failure as correctness failure.
-4. Inspect batch fields before claiming a retry reran everything; Evaluate and ABBA may reuse completed Shape batches.
+4. Inspect `eval_execution`, `shape_selection`, completed batch records and saved job evidence before claiming a retry reran everything. Light can reuse a completed 20-Shape job; Agate owns Ray Data execution inside that job.
 5. If the Agent is thinking or repeatedly restarting, inspect Session token/incidents and the corresponding conversation trace without exposing secrets.
 6. If Campaign state is inactive or stalled, inspect the owning Supervisor process and logs; do not restart until the failure boundary is understood.
 
