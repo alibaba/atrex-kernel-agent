@@ -71,15 +71,20 @@ def build_wiki_resources(output: Path) -> None:
 
 
 
-def build(distribution: str, output: Path, version: str | None = None) -> None:
+def build(distribution: str, output: Path, version: str | None = None, *, framework_cli: bool = True) -> None:
     with tempfile.TemporaryDirectory(prefix=f'{distribution}-build-') as tmp:
         stage = Path(tmp)
         shutil.copy2(ROOT / 'packages' / distribution / 'pyproject.toml', stage / 'pyproject.toml')
+        metadata = stage / 'pyproject.toml'
+        content = metadata.read_text()
         if version:
-            metadata = stage / 'pyproject.toml'
-            content = re.sub(r'(?m)^version = "[^"]+"', f'version = "{version}"', metadata.read_text())
+            content = re.sub(r'(?m)^version = "[^"]+"', f'version = "{version}"', content)
             content = re.sub(r'(atrex-aka-[\w-]+(?:\[[^\]]+\])?==)[^"\s,;]+', lambda match: match[1] + version, content)
-            metadata.write_text(content)
+        if distribution == 'atrex-aka-framework' and not framework_cli:
+            # A coordinated application can own the console script. Preserve
+            # the Framework's standalone CLI in default public builds.
+            content = re.sub(r'(?ms)^\[project\.scripts\]\n.*?(?=^\[|\Z)', '', content)
+        metadata.write_text(content)
         for legal in ('LICENSE', 'NOTICE'):
             shutil.copy2(ROOT / legal, stage / legal)
         for source in owned(distribution):
@@ -96,13 +101,15 @@ def main() -> int:
     parser.add_argument('--with-wiki-resources', action='store_true',
                         help='also export the selected public Wiki plugin and data as a separate artifact')
     parser.add_argument('--version', default=None, help='version for a matching candidate release')
+    parser.add_argument('--framework-cli', action=argparse.BooleanOptionalAction, default=True,
+                        help='export the Framework console script; disable when a coordinated application owns it')
     parser.add_argument('distributions', nargs='*')
     args = parser.parse_args()
     distributions = args.distributions or list(OWNERS)
     for distribution in distributions:
         if distribution not in OWNERS:
             parser.error(f'unknown distribution: {distribution}')
-        build(distribution, args.output, args.version)
+        build(distribution, args.output, args.version, framework_cli=args.framework_cli)
     if args.with_wiki_resources:
         build_wiki_resources(args.output.resolve())
     return 0
