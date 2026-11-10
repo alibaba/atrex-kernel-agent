@@ -150,7 +150,7 @@ def gateway_schema(kind, parser):
     if kind in {"run", "profile", "dev", "check", "disassemble"}:
         allowed |= {"--input", "--sync", "--no-sync", "--env", "--inline-output", "--keep-pod", "--dry-run"}
     options = {}
-    from aka.light.evaluation.agate_native import COMMAND_BY_KIND
+    from aka.execution.gateway.native_options import COMMAND_BY_KIND
     native_command = COMMAND_BY_KIND.get(kind)
     for action in parser._actions:
         native_for_kind = native_command in getattr(action, "agate_commands", ())
