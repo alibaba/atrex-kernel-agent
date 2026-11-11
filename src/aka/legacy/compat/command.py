@@ -18,10 +18,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     boundary = argv.index("--") if "--" in argv else len(argv)
     parser = argparse.ArgumentParser(
-        prog="aka optimize",
+        prog="python -m aka optimize",
         usage="%(prog)s --repo-root PATH [EXECUTION OPTIONS] -- [OPTIMIZATION ARGS]",
         description="Translate the retained optimization CLI for installed AKA modules and explicit tool resources.",
-        epilog="Example: aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
+        epilog="Example: python -m aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
     )
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument(

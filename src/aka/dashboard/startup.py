@@ -36,7 +36,7 @@ class DashboardStartup:
         return f"http://{self.host}:{server.server_port}/"
 
     def run(self, invocation: Invocation) -> int:
-        parser = argparse.ArgumentParser(prog="aka dashboard", description=__doc__)
+        parser = argparse.ArgumentParser(prog="python -m aka.dashboard", description=__doc__)
         source = parser.add_mutually_exclusive_group(required=True)
         source.add_argument("--workspace", type=Path,
                             help="Workspace to observe using the configured source plugin")

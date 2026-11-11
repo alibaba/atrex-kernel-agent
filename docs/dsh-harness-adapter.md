@@ -32,7 +32,7 @@ This example uses the default headless profile with the official DeepSeek route:
 ```sh
 export ATREX_DSH_SESSION_SETTINGS='{"provider":"deepseek-official","model":"deepseek-flash"}'
 
-aka optimize --repo-root /path/to/aka -- \
+python -m aka optimize --repo-root /path/to/aka -- \
   --op-dir /path/to/operator \
   --platform '<gpu-target>' --framework Triton \
   --agent-cli dsh --workspace /path/to/runs
@@ -55,7 +55,7 @@ export ATREX_DSH_SESSION_SETTINGS='{
 }'
 ```
 
-Then run the same `aka optimize` command. Authentication stays with DSH's normal
+Then run the same `python -m aka optimize` command. Authentication stays with DSH's normal
 provider configuration.
 
 ## Choose a profile and model

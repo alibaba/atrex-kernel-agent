@@ -104,7 +104,7 @@ Replace the default source with a composition patch:
 ```
 
 The replacement module provides `observation_source` and declares its own dependencies
-and identity files. Installed launches accept `aka run --patch`; source calls to
+and identity files. Installed launches accept `python -m aka run --patch`; source calls to
 `run_profile` explicitly pass `aka.dashboard.tokens.OBSERVATION_SOURCE` in `tokens`.
 A missing required source fails Core assembly rather than creating an implicit reader.
 
@@ -309,7 +309,7 @@ Find the installed profile:
 
 ```sh
 python -c 'from pathlib import Path; import aka.dashboard; print(Path(aka.dashboard.__file__).parent / "profiles/dashboard.json")'
-aka run --profile /absolute/path/to/dashboard/profiles/dashboard.json -- \
+python -m aka run --profile /absolute/path/to/dashboard/profiles/dashboard.json -- \
   --workspace /path/to/runs --port 0
 ```
 

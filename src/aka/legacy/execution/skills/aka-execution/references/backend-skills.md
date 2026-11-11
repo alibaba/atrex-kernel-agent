@@ -42,7 +42,7 @@ To supply Gateway guidance, prepare an execution patch in the host environment:
 }
 ```
 
-Pass that file with `aka optimize --execution-patch /path/to/patch.json` or the
+Pass that file with `python -m aka optimize --execution-patch /path/to/patch.json` or the
 matching application's execution configuration. Use a resource path supplied
 by the deployment. The selected Skill's files and source path are locked for
 workspace recovery; restore those resources or use a new workspace if they

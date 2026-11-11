@@ -1,6 +1,6 @@
 # Light modules and launch profiles
 
-New `aka optimize` and `aka workflow` launches default to `light`: native Agent execution,
+New `python -m aka optimize` and `python -m aka workflow` launches default to `light`: native Agent execution,
 session capture, managed drafts, private HTTP tools and unified Light Episodes. This is a
 launch-selection change, not a change to the Legacy providers. Use `--profile workflow`
 to retain the Legacy Agent, Task and Workflow, or `--profile light-sandbox` for Bubblewrap.
@@ -9,7 +9,7 @@ Wiki is default-on; Direction/Experiment recording and generated memory remain d
 Install the matching `atrex-aka-light` package together with its framework/legacy dependencies.
 If Light is unavailable, default startup fails with installation guidance; it never silently
 falls back to Legacy. Explicit `--profile workflow` still works without the Light package.
-`aka run` remains profile-explicit, and standalone Execution selection is unchanged.
+`python -m aka run` remains profile-explicit, and standalone Execution selection is unchanged.
 Recorded continuations restore their frozen selection before considering any new-launch
 default; an existing Legacy continuation is not converted to Light. For a manual restart
 of a Legacy workspace without continuation metadata, pass `--profile workflow` explicitly.
@@ -102,7 +102,7 @@ Build and install the three packages from a matching checkout:
 python3 -m pip install build
 python3 tools/build_distributions.py --output /tmp/aka-wheels atrex-aka-framework atrex-aka-legacy atrex-aka-light
 python3 -m pip install --force-reinstall --no-index --find-links /tmp/aka-wheels atrex-aka-light
-aka optimize --repo-root /path/to/aka --profile light -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Cuda
+python -m aka optimize --repo-root /path/to/aka --profile light -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Cuda
 ```
 
 Use `--profile light-sandbox` on a Linux coordinator with Bubblewrap. macOS supports the native profiles; selecting Bubblewrap there fails explicitly. There is no silent native fallback.
@@ -282,7 +282,7 @@ Provider configuration uses the existing Core composition patch format. For exam
 
 Patches replace a module's whole configuration; omitted fields receive that provider's defaults, not the previously selected profile's values. The `tool_runtime` and light Workflow options apply only to light compositions.
 
-Keep `"startup": true` in Workflow patches passed to `aka optimize`: the launch profile
+Keep `"startup": true` in Workflow patches passed to `python -m aka optimize`: the launch profile
 sets this field, while the standalone provider defaults it to false. Omitting it removes
 the required `startup` service and prevents the CLI from launching the campaign.
 
@@ -720,7 +720,7 @@ use this composition patch:
 }
 ```
 
-Pass it with `aka optimize --repo-root /path/to/aka --profile light --patch /path/to/patch.json -- ...` (also supported by
+Pass it with `python -m aka optimize --repo-root /path/to/aka --profile light --patch /path/to/patch.json -- ...` (also supported by
 `light-sandbox`). Set it to `false` to disable them again. The selected value is persisted in the private Episode
 Journal; change it only at an Episode boundary or in a new workspace, not while resuming an existing
 Episode. Older Journals without the field retain enabled behavior; when resuming an older

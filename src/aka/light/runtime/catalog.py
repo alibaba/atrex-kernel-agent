@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextvars import ContextVar
 
 from aka.light.runtime.plugins import PluginError
 from aka.light.runtime.plugins import PluginRegistry as Registry
@@ -11,6 +12,7 @@ from aka.light.runtime.plugins.files import read_text
 from aka.light.workflow.constants import REPO_ROOT
 
 PLUGIN_DIR = Path(__file__).resolve().parent / "catalogs"
+EXTRA_PLUGIN_ROOTS = ContextVar("aka_light_extra_plugin_roots", default=())
 
 
 class PluginRegistry(Registry):
@@ -23,6 +25,17 @@ class PluginRegistry(Registry):
             plugin_dir = plugin_root.parent
         super().__init__(plugin_dir, plugin_root=plugin_root,
                          resource_root=legacy_resource_root(), enabled=enabled)
+        seen = {plugin.id for plugin in self.plugins}
+        for path in EXTRA_PLUGIN_ROOTS.get():
+            path = Path(path).resolve()
+            extra = Registry(path.parent, plugin_root=path, resource_root=legacy_resource_root())
+            for plugin in extra.plugins:
+                if plugin.id in seen:
+                    raise PluginError("invalid_config", f"duplicate plugin id: {plugin.id}")
+                seen.add(plugin.id)
+                self.plugins.append(plugin)
+        self.mounts()
+        tuple(self._environment_declarations())
 
     def wiki_prompt(self, slot: str) -> str | None:
         """Provider-supplied replacement for a built-in Wiki prompt fragment, if declared."""

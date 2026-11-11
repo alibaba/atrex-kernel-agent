@@ -13,7 +13,7 @@ from aka.legacy.compat.profiles import DEFAULT_LAUNCH_PROFILE, launch_profile_pa
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="aka workflow")
+    parser = argparse.ArgumentParser(prog="python -m aka workflow")
     parser.add_argument("--repo-root", required=True, type=Path,
                         help="explicit public tool resource root for the selected profile")
     parser.add_argument("--profile", default=None,

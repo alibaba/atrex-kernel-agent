@@ -11,7 +11,7 @@ promotion, budgets, and recovery.
 
 ## Entry point and composition
 
-`aka optimize --repo-root /path/to/aka -- ...` converts optimization arguments into a typed
+`python -m aka optimize --repo-root /path/to/aka -- ...` converts optimization arguments into a typed
 Workflow request, then launches through Bootstrap and Core. A launch manifest selects a
 composition and startup target. Core validates configuration, assembles dependencies, and
 disposes owned providers when the invocation ends.

@@ -36,7 +36,7 @@ silently executed twice.
 Point the default optimizer at the local endpoint:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
+python -m aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/operator \
   --platform H20 --framework Triton \
   --sandbox-hardware local \

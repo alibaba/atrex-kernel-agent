@@ -1,14 +1,14 @@
 # Run AKA through profile-selected startup
 
-AKA uses the installed `aka optimize` command. It converts the retained optimization arguments once,
+AKA uses the installed `python -m aka optimize` command. It converts the retained optimization arguments once,
 then uses a launch profile to select Workflow through Bootstrap and Core. Evaluation, Execution,
 Resources and recovery run from their installed owning modules.
 
-For fresh `aka optimize` and `aka workflow` launches, the default profile is now `light`.
+For fresh `python -m aka optimize` and `python -m aka workflow` launches, the default profile is now `light`.
 It requires the matching `atrex-aka-light` distribution and selects native (not Bubblewrap)
 Agent execution with capture and managed Light services. Use `--profile light-sandbox`
 for isolation, or `--profile workflow` for the previous Legacy behavior. Missing Light is
-an actionable startup error, not an implicit Legacy fallback. `aka run` remains explicit.
+an actionable startup error, not an implicit Legacy fallback. `python -m aka run` remains explicit.
 Continuations use their saved selection regardless of this new-launch default; do not
 switch a live Legacy workspace to Light by omitting the profile on a manual restart.
 
@@ -18,8 +18,8 @@ Use Python 3.10 or later, install the matching distributions as described below,
 checkout resources available:
 
 ```sh
-aka optimize --repo-root "$PWD" -- --help
-aka optimize --repo-root "$PWD" -- \
+python -m aka optimize --repo-root "$PWD" -- --help
+python -m aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton \
   --agent-cli codex --workspace /path/to/runs
 ```
@@ -57,10 +57,10 @@ submodules before exporting a checkout without Git metadata.
 The command can run from any working directory:
 
 ```sh
-aka --help
-aka optimize --help
-aka optimize --repo-root /path/to/aka -- --help
-aka optimize --repo-root /path/to/aka -- \
+python -m aka --help
+python -m aka optimize --help
+python -m aka optimize --repo-root /path/to/aka -- --help
+python -m aka optimize --repo-root /path/to/aka -- \
   --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton \
   --agent-cli codex --workspace /path/to/runs
 ```
@@ -80,7 +80,7 @@ Core owns the neutral command dispatcher. Bootstrap contributes `run`, and Optim
 contributes `optimize`, via the `aka.commands` package entry-point group. Help lists
 installed contributions without importing them; unknown or duplicate command names fail
 before loading a command. There is no implicit default command. The Legacy distribution also contributes
-`workflow` and `execution`; `aka --help` lists the installed command set. Source-only use of `python -m aka` requires installed command metadata; there is no
+`workflow` and `execution`; `python -m aka --help` lists the installed command set. Source-only use of `python -m aka` requires installed command metadata; there is no
 source-tree fallback script.
 
 ## Select a startup implementation
@@ -125,7 +125,7 @@ Create its Core composition at `profiles/compositions/workflow.json`:
 Then run it with Bootstrap installed and the plugin importable:
 
 ```sh
-aka run --profile /path/to/profiles/launch.json -- example-argument
+python -m aka run --profile /path/to/profiles/launch.json -- example-argument
 ```
 
 The instance receives the arguments after `--` as `Invocation.argv`. Removing, disabling
@@ -163,7 +163,7 @@ exit_code = run_profile(Path("/path/to/profiles/launch.json"), Invocation(("arg1
 ```
 
 For the optimization CLI adapter, install the matching packages and provide the resource
-checkout. Generic `aka run` does not add business checkouts to `sys.path`:
+checkout. Generic `python -m aka run` does not add business checkouts to `sys.path`:
 
 ```python
 from pathlib import Path
@@ -223,11 +223,11 @@ original invocation ends.
 With the recorded pair supplied in the environment, invoke generic reconstruction as:
 
 ```sh
-aka run --resume -- startup-argument
+python -m aka run --resume -- startup-argument
 ```
 
 `--resume` and `--profile` are mutually exclusive. Resume accepts no `--patch` or `--var`
-overrides. `run_profile()` and `aka run --profile ...` reject inherited selection keys
+overrides. `run_profile()` and `python -m aka run --profile ...` reject inherited selection keys
 instead of silently ignoring the explicit profile; use resume, or clear both keys to
 start from a profile. The historical optimizer entrypoint still detects recorded
 selections automatically and retains its checkout and selected-launcher checks.
@@ -274,7 +274,7 @@ Retain those inputs and do not rewrite locks to bypass identity checks.
 
 | Distribution | Ownership | Python |
 | --- | --- | --- |
-| `atrex-aka-framework` | `aka`, neutral dispatcher, `aka.core`, `aka.contracts`, `aka.bootstrap`, generic `aka run` command | 3.10+ |
+| `atrex-aka-framework` | `python -m aka`, neutral dispatcher, `aka.core`, `aka.contracts`, `aka.bootstrap`, generic `python -m aka run` command | 3.10+ |
 | `atrex-aka-legacy` | Shared business providers, explicit Legacy Workflow, `optimize` / `workflow` / `execution` commands | 3.10+ |
 | `atrex-aka-light` | Managed Agent/Workspace/Runtime, evaluation and acceptance, default Light profiles | 3.10+ |
 | `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |

@@ -1,4 +1,4 @@
-"""Source-checkout launcher using the same Bootstrap profile as aka run."""
+"""Source-checkout launcher using the same Bootstrap profile as python -m aka run."""
 import sys
 from pathlib import Path
 

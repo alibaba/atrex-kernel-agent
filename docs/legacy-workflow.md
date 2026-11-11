@@ -93,11 +93,11 @@ memory points to the stable source SHA. A setup Agent is retained only for deriv
 Open Claude Code, Codex, or Qoder in the repository and provide a concrete task prompt. For example:
 
 ```text
-Use the installed `aka optimize --profile workflow` command with this checkout as `--repo-root` to start one Legacy optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
+Use the installed `python -m aka optimize --profile workflow` command with this checkout as `--repo-root` to start one Legacy optimization task for atrex-bench/xx. Put the workspace under ~/aka-opt, set the platform to H20, use the local sandbox, use claude as the Agent CLI, set max-iters to 300, specify cuda as the framework, and run in production mode.
 ```
 
 The coding agent should resolve the requested values into optimization arguments after the mandatory
-`aka optimize --repo-root /path/to/checkout --profile workflow --` boundary, verify the local prerequisites, and launch
+`python -m aka optimize --repo-root /path/to/checkout --profile workflow --` boundary, verify the local prerequisites, and launch
 that command. This prompt-driven path is a convenience
 layer over the same orchestrator, not a separate optimization workflow.
 
@@ -106,7 +106,7 @@ layer over the same orchestrator, not a separate optimization workflow.
 Run a single-operator campaign directly against a SOL-ExecBench op directory containing `definition.json`, `reference.py`, and `workload.jsonl`:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
+python -m aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework CuteDSL \
     --agent-cli qodercli \
@@ -121,7 +121,7 @@ to run `bwrap` and access only the intended GPU devices; do not attach cloud cre
 service secrets to it. Runtime trees outside `/usr` must be exposed explicitly as read-only binds:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
+python -m aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform H20 --sandbox-hardware H20 --framework Triton \
     --sandbox-ssh user@gpu-host \
@@ -281,7 +281,7 @@ Omit `--agent-cli` to use Claude. Provider-specific settings can be supplied thr
 To use Codex, pass `--agent-cli codex`:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
+python -m aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli codex --max-iters 20 --token-budget 8000000
@@ -311,7 +311,7 @@ To use Pi, select it as the backend and optionally configure its provider and mo
 
 ```bash
 export ATREX_PI_SESSION_SETTINGS='{"provider":"anthropic","model":"claude-opus"}'  # optional
-aka optimize --repo-root "$PWD" --profile workflow -- \
+python -m aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU --framework Triton \
     --agent-cli pi --max-iters 20 --token-budget 8000000
@@ -327,7 +327,7 @@ leaving provider credentials in Pi's normal auth/config files. `ATREX_PI_SESSION
 Omit `--framework` to run every framework supported by the detected GPU concurrently:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
+python -m aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --workspace /path/to/runs --max-iters 20
@@ -348,7 +348,7 @@ libraries and evidence-backed framework changes are allowed. Use production mode
 framework-pure implementation:
 
 ```bash
-aka optimize --repo-root "$PWD" --profile workflow -- \
+python -m aka optimize --repo-root "$PWD" --profile workflow -- \
     --op-dir /path/to/sol-execbench/op \
     --platform TARGET_GPU --sandbox-hardware REMOTE_GPU \
     --optimization-mode production --framework Triton \
@@ -434,7 +434,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
 --arch ARCH                      Override runtime architecture detection
 ```
 
-Run `aka optimize --repo-root "$PWD" --profile workflow -- --help` for the Legacy interface. Some Qoder models
+Run `python -m aka optimize --repo-root "$PWD" --profile workflow -- --help` for the Legacy interface. Some Qoder models
 report zero token usage in stream JSON; in that case `--token-budget` cannot be enforced, so
 `--max-iters` remains the hard campaign bound.
 

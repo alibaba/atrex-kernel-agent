@@ -198,8 +198,8 @@ Each capture directory is created with mode `0700`. Only the current session and
 The CLI import/argument smoke check requires no GPU or model credentials:
 
 ```bash
-aka optimize --help
-aka optimize --repo-root "$PWD" -- --help
+python -m aka optimize --help
+python -m aka optimize --repo-root "$PWD" -- --help
 ```
 
 Regression tests are maintained outside this repository. Local validation uses recorded-format fixtures and real Python subprocesses instead of paid Agent CLIs. It covers native children, duplicate/cumulative counters, resume deltas, phase ordering, scoped shared-home discovery, capture limits, complete functional stdout/stderr, pipe draining after write/parser failures, ledger-failure diagnostics and resume qualification, normal exit, timeout, Long Horizon invocation archives, and the kill switch (including destination precedence, stale-observation clearing, environment propagation, and stream/ledger fallback). Boundary regressions also cover a larger ledger versus incomplete Capture, partial-fallback cursor invalidation, output arriving more than five seconds after the root exits, timeout/interruption after leader exit, and oversized native lines spanning multiple polls. The CLI smoke check alone does not verify these behaviors.

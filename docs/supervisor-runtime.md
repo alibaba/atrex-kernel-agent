@@ -1,7 +1,7 @@
 # Supervisor GPU/Wiki Runtime
 
 Light's private Tool Runtime serves agent GPU, Wiki, record, and Journal requests.
-It is created by the selected Workflow behind `aka optimize`; no separate server command
+It is created by the selected Workflow behind `python -m aka optimize`; no separate server command
 is needed. The agent receives thin `tools/sandbox.py` and `tools/plugin.py` clients,
 while credentials, private evaluator inputs, source snapshots, and records stay in the Supervisor.
 
