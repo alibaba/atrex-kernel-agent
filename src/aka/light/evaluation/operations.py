@@ -22,21 +22,25 @@ from aka.light.evaluation.projection import (
 
 
 def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
-    if args.command or args.ssh:
-        raise ValueError("Check/Disassemble require the typed Gateway; no command or SSH transport")
+    if args.command:
+        raise ValueError("Check/Disassemble do not accept a command override")
     request = gateway.build_typed_request(
         workspace, args.hardware, args.timeout, args.env, [], args.kind,
         arch=args.arch, sanitize=args.sanitize, disassembly_format=args.disassembly_format,
         requirements=args.requirement or (), deps_mode=args.deps_mode,
+        ssh=bool(args.ssh),
     )
     from aka.light.evaluation.agate_native import apply_request
     request = apply_request(request, args, args.kind)
     if args.dry_run:
-        print(json.dumps({"kind": args.kind, "candidate_bytes": len(request["candidate"].encode())}))
+        print(json.dumps({"kind": args.kind, "candidate_bytes": len(json.dumps(request["candidate"]).encode())}))
         return 0
-    executable = gateway.find_agate()
+    executable = None if args.ssh else gateway.find_agate()
     from aka.light.evaluation.source_transport import DIAGNOSTIC, run as run_tree
-    if DIAGNOSTIC in request:
+    if args.ssh:
+        from .ssh_transport import run
+        process = run(gateway, args, workspace, request, args.kind)
+    elif DIAGNOSTIC in request:
         process = run_tree(gateway, args, request, args.kind, queue_wait_grace)
     elif args.url and executable is None:
         process = gateway.run_direct_job(

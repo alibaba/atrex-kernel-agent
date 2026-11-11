@@ -421,8 +421,8 @@ This schedules 10 Epochs × 2 Trajectories × 2 Episodes = **40 logical Episodes
 Within each Trajectory Episodes are serial; different Trajectories may run concurrently.
 The concurrency limit bounds whole Episodes, not each Episode's GPU Shape batches.
 An omitted or empty `search` retains the existing serial Workflow and defaults.
-Pooled search currently requires the native Atrex-Bench Eval/ABBA route; SOL/SSH
-configurations fail before Bootstrap rather than running unverifiable search Episodes.
+Pooled search requires native Atrex-Bench Eval/ABBA through Agate or SSH. SSH
+allocations on the same GPU are serialized. SOL configurations fail before Bootstrap.
 
 ```mermaid
 flowchart LR
@@ -486,7 +486,7 @@ The `candidate` module defaults to `source_tree`. Without import configuration,
 the initial implementation remains an editable `kernel.py`. It may be the complete
 implementation or import optional helper files created under `impl/`; that directory
 is not required. Select `file_system=single_file` explicitly only for the legacy
-single-file layout or SOL/SSH. To import a package, configure the candidate module to
+single-file layout or SOL. To import a package, configure the candidate module to
 snapshot a plain local directory (no Git required):
 
 ```json
@@ -581,9 +581,9 @@ format and Kernel binding. Changed files, removed files and fixed-file tampering
 cannot reuse an unrelated measurement.
 
 This option currently requires native Atrex-Bench and `package_root: "."`,
-matching Runtime's native Eval archive limitation. Tree diagnostics currently
-require NVIDIA NCU (auto/sass/ptx disassembly). SOL/SSH
-tree tasks and runtime-support uploads are rejected, not silently degraded.
+matching Runtime's native Eval archive limitation. Tree diagnostics use the selected
+worker's tools: NVIDIA NCU, AMD rocprofv3/LLVM, or a provisioned PPU toolchain.
+SSH supports native tree tasks. SOL tree tasks and runtime-support uploads are rejected.
 It composes with Epoch/Trajectory search; one Light Episode remains one Runtime
 Attempt. Use a new Campaign workspace when changing a source contract.
 
@@ -1006,7 +1006,7 @@ and carry a valid reference score when present. The Legacy gates are unchanged.
 
 Light's shared defaults are defined in `aka.light.evaluation.policy`. Performance sampling matches Legacy: 20 timing iterations and 5 warmup iterations. Execution controls retain a 600-second candidate initialization/correctness limit and use a 300-second steady-state Performance limit. With the default two measurements per side, one A or B run receives the 300-second Performance limit and the enclosing allocation is 1230 seconds, including 30 seconds of scheduling overhead. If a request increases ABBA repeats without explicitly increasing the allocation, the implicit per-run limit is reduced to the equal share that fits; an explicit per-run limit is never silently reduced. The Ray Data measurement contract explicitly requests clock locking; ABBA still interleaves A/B measurements inside one allocation. Correctness preserves the legacy candidate gate: full Evaluate and candidate correctness use 6 cases (base plus 5 additional). Full Bootstrap/V1 measurements use the same sampling defaults; explicitly targeted bring-up smoke remains one case. Evaluate and ABBA group at most 20 selected Shape IDs into one Agate job by default. Each job retains the unchanged reference bundle, passes its selection through `options.shape_ids`, and explicitly sets `shape_shards=1`. Up to 16 independent jobs may be submitted concurrently, and completed jobs remain available for batch-level recovery. Explicit operator/request overrides remain part of task identity. Changing these defaults changes measurement identity, so records made with the previous contract remain readable but are not reused for new default requests.
 
-ABBA submits native `Eval` requests with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Agent exploration defaults to 6 correctness cases; the exact Supervisor retention request uses 1 case after the separate six-case candidate gate. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume; the former Dev-driver fallback is removed. SOL/SSH comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
+ABBA submits native `Eval` requests through Agate or SSH with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Agent exploration defaults to 6 correctness cases; the exact Supervisor retention request uses 1 case after the separate six-case candidate gate. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume. Comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
 
 The resolved measurement defaults and native transport participate in the task identity. Old Dev ABBA/old-policy Evaluate records remain readable but cannot satisfy the new measurement contract. Acceptance retry keys also identify the GeoMean policy. Journal options, adaptive-state inheritance, Workflow organization and supplemental numerical-validation configuration are unchanged.
 
