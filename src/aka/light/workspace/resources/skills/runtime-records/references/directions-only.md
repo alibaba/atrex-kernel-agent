@@ -6,23 +6,23 @@ The Direction module is enabled and the Experiment module is disabled. Runtime m
 
 ## Propose, select, and progress work
 
-A Direction may be a direct Kernel change or an optimization-relevant capability probe,
-microbenchmark, correctness investigation, or performance attribution whose result changes Kernel
-design or selection. It must identify that consequential Kernel decision. Runtime/evaluator
-maintenance, infrastructure operation, and unrelated documentation are outside the Direction queue.
-For a probe-led Direction, `change_scope` describes the Kernel path it may unlock or reject.
+A Direction is a durable optimization program around a bottleneck, workload regime, or architecture
+objective and should contain several implementation variants or probes. A single implementation,
+parameter choice, capability probe, or mechanism test remains a bounded step inside an existing
+Direction rather than becoming a new Direction. Runtime/evaluator maintenance,
+infrastructure operation, and unrelated documentation are outside the Direction queue.
 
 Write mutation requests below `scratch/`. A proposal requires:
 
 ```json
 {
   "action": "propose",
-  "name": "Split KV across CTAs",
+  "name": "Decode parallelism and KV-traffic architecture",
   "change_scope": "major_redesign",
-  "hypothesis": "KSPLIT can hide long-KV memory latency enough to pay for reduction",
-  "applicability": "Long-context regimes with enough KV work for multiple CTAs",
-  "expected_benefit": "Reduce long-context latency without regressing short-context dispatch",
-  "plan": ["Compile a KSPLIT=2 probe", "Evaluate the complete workload"]
+  "objective": "Remove repeated KV work and expose enough parallelism across decode regimes",
+  "applicability": "Short-query, long-KV and GQA-dominated workloads",
+  "expected_benefit": "Reduce decode-side full-workload latency",
+  "plan": ["Measure GQA packing", "Explore split-KV and combine families"]
 }
 ```
 
@@ -32,7 +32,7 @@ not expose Experiments. Relationship values are
 `refinement`, `correction`, `combination`, `alternative`, `reimplementation`, or
 `contradiction`. All cited IDs must already be visible. Refinement, correction, alternative,
 reimplementation, and contradiction require exactly one effective parent; combination requires at
-least two. Reuse an existing Direction ID when the hypothesis is unchanged. Genealogy is descriptive:
+least two. Reuse an existing Direction ID while its objective and applicability are unchanged. Genealogy is descriptive:
 the child does not inherit parent status, plan, evidence, Kernel source or priority. Check out or
 branch from the relevant imported Git ref separately when needed. Runtime checks parent visibility, arity and cycles, not
 the scientific correctness of the relationship label.
@@ -58,7 +58,7 @@ updates by Direction ID, and leave new ideas proposed until work actually starts
 
 Use `after_direction_id` instead, or omit both positions to move it to the end. Submit durable queue
 changes through `prioritize-direction`. The `plan` belongs to the Agent: Runtime neither records
-completed plan steps nor chooses the next step. Revise the Direction only when its claim, scope, or
+completed plan steps nor chooses the next step. Revise the Direction only when its objective, scope, or
 remaining plan changes materially.
 
 ## Close or preserve a Direction
@@ -72,16 +72,14 @@ are terminal and continued work requires a derived Direction.
   "action": "defer",
   "direction_id": "direction_11111111111111111111111111111111",
   "analysis": "The capability probe is blocked by the current compiler",
-  "hypothesis_status": "unresolved",
   "reopen_condition": "The target compiler exposes the required instruction"
 }
 ```
 
 `complete`, `abandon`, `block`, and `defer` use the same core fields. Do not provide Experiment
-support fields; in this mode their evidence field is `gateway_record_ids`. A `supported` or `refuted`
-closure requires at least one completed Kernel-bound Gateway Record. An unresolved `abandon` may omit
-evidence and is terminal. `hypothesis_status` is `unresolved`, `supported`, or `refuted`. Unresolved
-`defer` and `block` require `reopen_condition`. Use `defer` for a strategic pause and `block`
+support fields; in this mode their optional evidence field is `gateway_record_ids`. There is no
+`hypothesis_status`; lifecycle state records whether the optimization program is active, paused,
+completed, or abandoned. `defer` and `block` require `reopen_condition`. Use `defer` for a strategic pause and `block`
 only for a concrete technical or external dependency that prevents progress. Continue multiple bounded
 probe/candidate/measurement cycles while useful work remains; do not hand off the first promotable
 checkpoint.
@@ -116,11 +114,11 @@ The exact reported HEAD must have a completed, passing standard full Evaluate wi
 `mode=full` and `input_scope=contract`. Subset Evaluate, Profile, Dev, Check, Disassemble, and ABBA
 alone cannot qualify it. Submit through `--kind episode-report`.
 
-Use `direction_terminal` only after completing or abandoning all local active Directions. Pooled search
-may use `cross_trajectory_share` only with `status=candidate_ready` for a reusable checkpoint backed by a passing standard full
-Evaluate of the exact committed source while leaving Directions active. A
-blocked report requires `status=blocked` and a nonempty `blocker`. Close every local active Direction
-with `block` first.
+`direction_terminal` is the ordinary handoff value and may preserve local `in_progress` Directions.
+Pooled search may use `cross_trajectory_share` only with `status=candidate_ready` for a reusable
+checkpoint backed by a passing standard full Evaluate of the exact committed source. A blocked report
+requires `status=blocked` and a nonempty `blocker`; close every local active Direction with `block`
+first.
 For a terminal pivot use
 `{"status":"pivot","handoff_reason":"direction_terminal","summary":"..."}`.
 

@@ -151,22 +151,22 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
         properties["action"] = {"const": action}
         if action in {"propose", DIRECTION_REVISION_ACTION}:
             properties["name"]["description"] = (
-                "Short name for the optimization-relevant hypothesis or investigation."
+                "Short name for the optimization bottleneck or architecture path."
             )
             properties["change_scope"] = {
                 "enum": sorted(DIRECTION_CHANGE_SCOPES),
                 "description": (
-                    "Scope of the Kernel path affected or unlocked by the hypothesis; for a "
+                    "Scope of the Kernel path affected or unlocked by the objective; for a "
                     "probe-led Direction this is not the number of files touched by the probe."
                 ),
             }
-            properties["hypothesis"]["description"] = (
-                "Falsifiable claim whose resolution can change Kernel design, implementation "
-                "selection, candidate repair, or the next optimization decision."
+            properties["objective"]["description"] = (
+                "Optimization bottleneck or architecture goal this Direction is responsible for "
+                "resolving across its planned variants."
             )
             properties["applicability"]["description"] = (
                 "Workload, Shape regime, semantic case, or hardware/compiler condition where "
-                "the hypothesis should hold."
+                "the Direction applies."
             )
             properties["expected_benefit"]["description"] = (
                 "Expected Kernel improvement or consequential implementation decision that this "
@@ -176,7 +176,7 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                 properties[key] = {"type": "array", "maxItems": 64,
                                    "items": {"type": "string", "minLength": 1, "maxLength": 4000}}
             properties["plan"]["description"] = (
-                "Bounded probes, edits, and measurements that discriminate the hypothesis."
+                "Architecture families, implementation variants, and measurements to explore."
             )
             properties["stop_conditions"]["description"] = (
                 "Optional array of non-empty conditions that make further work on this "
@@ -196,8 +196,8 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                     "type": "string",
                     "pattern": "^direction_[0-9a-f]{32}$",
                     "description": (
-                        "Editable local Direction identity whose claim and plan will receive "
-                        "the next reviewed revision."
+                        "Editable local Direction identity. Proposed-state revisions remain "
+                        "unreviewed drafts; active revisions receive independent Review."
                     ),
                 }
                 if not experiments_enabled:
@@ -209,24 +209,21 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
         else:
             properties["direction_id"] = {"type": "string", "pattern": "^direction_[0-9a-f]{32}$"}
             if action in CLOSURES:
-                properties["hypothesis_status"] = {"enum": ["unresolved", "supported", "refuted"]}
                 properties["reopen_condition"] = _text()
                 if experiments_enabled:
                     properties["supporting_experiment_ids"] = _ids(
-                        "experiment_", minimum=1, maximum=32
+                        "experiment_", minimum=0, maximum=32
                     )
                     properties["supporting_experiment_ids"]["description"] = (
-                        "Experiment evidence for this closure. Required for a supported or "
-                        "refuted terminal conclusion; omit for an unresolved closure."
+                        "Optional measured Experiments that support this lifecycle decision."
                     )
                 else:
                     properties["gateway_record_ids"] = _ids(
                         "gateway-", minimum=0, maximum=64
                     )
                     properties["gateway_record_ids"]["description"] = (
-                        "Gateway Record evidence for this Direction-only closure, including "
-                        "abandon. A supported or refuted conclusion requires at least one "
-                        "completed Kernel-bound Record; unresolved abandon may omit evidence."
+                        "Optional Gateway Record evidence that informed this Direction-only "
+                        "lifecycle decision."
                     )
         return _object(properties, fields)
     return None
@@ -416,20 +413,18 @@ def augment_error(response, *, route, request, research_records=False, direction
             )
             direction_instruction = (
                 (
-                    "Close all local active Directions with complete/abandon for "
-                    "direction_terminal, or with block for a blocked report. For "
-                    "candidate_ready with direction_terminal, the selected Experiment must "
-                    "belong to a Direction completed or abandoned in this Episode. For "
-                    "cross_trajectory_share, it must belong to an in-progress Direction. Only "
-                    "candidate_ready may use cross_trajectory_share while leaving Directions "
-                    "active. "
+                    "direction_terminal may preserve local in-progress Directions. For "
+                    "candidate_ready, its selected Experiment may belong to an in-progress, "
+                    "completed, or abandoned visible Direction. Close every local active "
+                    "Direction with block only for a blocked report. cross_trajectory_share "
+                    "still requires an in-progress Direction and is available only to "
+                    "candidate_ready in pooled search. "
                 )
                 if directions_enabled and experiments_enabled
                 else (
-                    "Close all local active Directions with complete/abandon for "
-                    "direction_terminal, or with block for a blocked report. Only "
-                    "candidate_ready may use cross_trajectory_share while leaving Directions "
-                    "active. "
+                    "direction_terminal may preserve local in-progress Directions. Close every "
+                    "local active Direction with block only for a blocked report. "
+                    "cross_trajectory_share is available only to candidate_ready in pooled search. "
                     if directions_enabled
                     else "No Direction mutation is required because Direction recording is disabled. "
                 )

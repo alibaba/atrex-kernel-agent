@@ -724,9 +724,10 @@ class LongHorizonCampaign:
         journal_path: Path,
         handoff: EpisodeHandoff,
     ) -> str:
-        candidate = (
+        agent_candidate = (
             handoff.candidate_commit if handoff.status == "candidate_ready" else ""
         )
+        supervisor_candidate = agent_candidate
         private_journal = None
 
         def load_private_runtime_journal() -> dict[str, Any]:
@@ -743,7 +744,7 @@ class LongHorizonCampaign:
             base_commit=worktree.base_commit,
             branch=worktree.branch,
             state=handoff.status,
-            candidate_commit=candidate,
+            candidate_commit=agent_candidate,
             runtime_journal_loader=load_private_runtime_journal,
         )
         if diagnosis:
@@ -760,6 +761,16 @@ class LongHorizonCampaign:
             from aka.light.workflow.journal_service import sealed_candidate_source
 
             try:
+                supervisor_candidate = private_journal.get("candidate_commit")
+                if (
+                    not isinstance(supervisor_candidate, str)
+                    or not supervisor_candidate
+                ):
+                    return (
+                        "The accepted Episode handoff has no Supervisor candidate archive. "
+                        "Do not edit Runtime-owned state; replay the identical accepted "
+                        "episode-report once, then report the blocker if it persists."
+                    )
                 source = sealed_candidate_source(private_journal, worktree.path)
                 if source is None:
                     return (
@@ -767,7 +778,11 @@ class LongHorizonCampaign:
                         "Do not edit Runtime-owned state; replay the identical accepted "
                         "episode-report once, then report the blocker if it persists."
                     )
-                violation, _ = self.base_campaign.candidate_workspace.restore_sealed_candidate(worktree, candidate, source)
+                violation, _ = (
+                    self.base_campaign.candidate_workspace.restore_sealed_candidate(
+                        worktree, supervisor_candidate, source
+                    )
+                )
             except (OSError, ValueError, RuntimeError) as error:
                 return (
                     "Supervisor could not restore the candidate source sealed by the accepted "
@@ -775,14 +790,22 @@ class LongHorizonCampaign:
                     "identical accepted episode-report once, then report the blocker if it persists."
                 )
         else:
-            violation, _ = self.base_campaign.candidate_workspace.validate_candidate(worktree, candidate)
+            violation, _ = self.base_campaign.candidate_workspace.validate_candidate(
+                worktree, supervisor_candidate
+            )
         if violation:
             return violation
         try:
             journal = load_journal(journal_path)
             finalized_at = _iso_timestamp(str(journal["finalized_at"]))
             committed_at = float(
-                git_text(worktree.path, "show", "-s", "--format=%ct", candidate)
+                git_text(
+                    worktree.path,
+                    "show",
+                    "-s",
+                    "--format=%ct",
+                    supervisor_candidate,
+                )
             )
         except (KeyError, ValueError, OSError, json.JSONDecodeError) as exc:
             return (
@@ -799,7 +822,7 @@ class LongHorizonCampaign:
         if self.base_campaign.optimization_mode == "production":
             try:
                 from aka.light.workspace.sources import from_git
-                sealed = from_git(worktree.path, candidate)
+                sealed = from_git(worktree.path, supervisor_candidate)
                 # Revalidate the immutable full-Evaluate receipt against the
                 # sealed source, but do not execute acceptance gates twice.
                 self.base_campaign.selected_episode_evaluation(worktree.episode, sealed)

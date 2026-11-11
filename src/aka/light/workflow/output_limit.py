@@ -13,11 +13,10 @@ from aka.light.workspace.sources import source_name
 EPISODE_COMPLETION_INSTRUCTION = (
     "Continue the current optimization path in this same Episode from saved files and receipts. "
     "Do not submit episode-report merely because a candidate is promotable or this response "
-    "was truncated. Submit it only after the selected optimization path and its active Direction(s), "
-    "when Direction recording is enabled, are completed or exhausted, "
-    "a pooled search must publish a status=candidate_ready reusable checkpoint backed by a passing "
-    "standard full Evaluate of the exact committed source, or a concrete blocker prevents further "
-    "work; include the "
+    "was truncated. Submit it when a useful candidate checkpoint has a passing standard full "
+    "Evaluate, an evidence-backed pivot is ready, a pooled search must publish a "
+    "status=candidate_ready reusable checkpoint, or a concrete blocker prevents further work. "
+    "An ordinary direction_terminal handoff may preserve in-progress Directions; include the "
     "matching handoff_reason. Correct rejected report fields and resubmit only when that handoff "
     "condition is actually satisfied."
 )

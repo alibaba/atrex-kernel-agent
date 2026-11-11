@@ -62,7 +62,7 @@ def validate_relationship(
     if kind not in RELATIONSHIPS:
         raise ValueError(
             f"relationship must be one of {', '.join(RELATIONSHIPS)}; "
-            "reuse the existing Direction for an unchanged hypothesis and record "
+            "reuse the existing Direction for an unchanged objective and applicability, and record "
             "implementation changes as Experiments"
         )
     for parent in parents:

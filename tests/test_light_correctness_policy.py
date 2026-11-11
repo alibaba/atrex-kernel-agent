@@ -609,7 +609,13 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("Hardware: `{{ARCH}}`", episode)
         self.assertIn("Gateway Records are measurement authority", episode)
         self.assertIn("highest plausible full-workload latency impact", episode)
-        self.assertIn("bounded probe, not to discard a higher-upside path", episode)
+        self.assertIn("A Direction is a durable optimization program", episode)
+        self.assertIn(
+            "A single implementation, parameter sweep, capability probe, or mechanism "
+            "test is an Experiment, not a new Direction",
+            episode,
+        )
+        self.assertIn("discarding higher-upside work", episode)
         self.assertIn("commit the complete candidate", episode)
         self.assertIn("smallest measurement that resolves the current question", episode)
         self.assertIn("Repeat `probe → candidate → measurement → revert/keep` cycles", episode)
@@ -652,6 +658,46 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         for fragment in (directions, research):
             self.assertIn("only an `in_progress` Direction may", fragment)
         self.assertIn("closure evidence uses `gateway_record_ids`", directions)
+        self.assertIn(
+            "A supported Experiment updates the evidence for its Direction; "
+            "it does not imply that the Direction is complete",
+            research,
+        )
+        self.assertIn(
+            "Keep the Direction active while any high-value implementation variant, "
+            "parameter family, workload regime, or combination remains unexplored",
+            research,
+        )
+        self.assertIn(
+            "The default next action is to update the current Direction's remaining plan "
+            "and continue",
+            research,
+        )
+        self.assertIn(
+            "Create a derived Direction only when the optimization objective or "
+            "applicability changes materially",
+            research,
+        )
+        self.assertIn(
+            "After each Experiment, compare the remaining branches within the current "
+            "Direction before deciding whether the overall optimization program is exhausted",
+            research,
+        )
+
+        claim_review = (prompt_dir / "research_claim_review.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("important enough to organize durable work", claim_review)
+        self.assertIn("plan covers a meaningful strategy space", claim_review)
+        self.assertIn(
+            "Reject a proposed Direction when it describes a single candidate, parameter "
+            "choice, isolated probe, or one-step mechanism",
+            claim_review,
+        )
+        self.assertIn(
+            "Do not treat one supported Experiment or one supported mechanism as completion",
+            claim_review,
+        )
 
         baseline = (prompt_dir / "framework_baseline.md").read_text(
             encoding="utf-8"
@@ -708,8 +754,15 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("Multiple local Directions may be `in_progress`", runtime_records)
         self.assertNotIn("at most three distinct Directions", runtime_records)
         self.assertIn("not necessarily an immediate source edit", runtime_records)
-        self.assertIn("consequential decision it unlocks", runtime_records)
-        self.assertIn("Do not use it for Runtime/evaluator maintenance", runtime_records)
+        self.assertIn("should normally span multiple candidates", runtime_records)
+        self.assertIn(
+            "A single implementation, parameter sweep, capability probe, or mechanism "
+            "test belongs under an existing Direction",
+            runtime_records,
+        )
+        self.assertIn(
+            "Do not use Directions for Runtime/evaluator maintenance", runtime_records
+        )
         self.assertIn("genealogy only", (
             Path(__file__).resolve().parents[1]
             / "src/aka/light/workspace/resources/skills/runtime-records/references/journal.md"

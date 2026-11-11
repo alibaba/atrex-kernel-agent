@@ -229,7 +229,7 @@ def test_unresolved_direction_closure_may_omit_supporting_experiments(tmp_path):
             "action": "propose",
             "name": "Capability probe",
             "change_scope": "major_redesign",
-            "hypothesis": "The target instruction family may be available.",
+            "objective": "Determine whether the target instruction family unlocks a faster architecture.",
             "applicability": "The configured target architecture.",
             "expected_benefit": "Unlock a higher-throughput implementation path.",
             "plan": ["Compile one bounded capability probe."],
@@ -251,7 +251,6 @@ def test_unresolved_direction_closure_may_omit_supporting_experiments(tmp_path):
             "action": "block",
             "direction_id": direction_id,
             "analysis": "The external compiler service is unavailable.",
-            "hypothesis_status": "unresolved",
             "reopen_condition": "Resume after the compiler service recovers.",
         },
     )
@@ -329,31 +328,54 @@ def test_direction_only_review_receives_direct_gateway_records(tmp_path):
             "action": "propose",
             "name": "Vectorized load",
             "change_scope": "incremental",
-            "hypothesis": "A wider load can reduce instruction overhead.",
+            "objective": "Reduce instruction overhead with aligned wider loads.",
             "applicability": "Aligned vector-add shapes.",
             "expected_benefit": "Reduce latency on aligned shapes.",
             "plan": ["Compare scalar and vectorized candidates."],
             "gateway_record_ids": [record_id],
         },
     })
-    revised = service.execute({
+    revised_draft = service.execute({
         "operation": "direction_update",
         "request": {
             "action": "revise",
             "direction_id": result["direction_id"],
             "name": "Aligned vectorized load",
             "change_scope": "incremental",
-            "hypothesis": "An aligned wider load can reduce instruction overhead.",
+            "objective": "Reduce instruction overhead with aligned wider loads.",
+            "applicability": "Aligned vector-add shapes.",
+            "expected_benefit": "Reduce latency on aligned shapes.",
+            "plan": ["Compare scalar and aligned vectorized candidates."],
+        },
+    })
+    started = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "start",
+            "direction_id": result["direction_id"],
+            "analysis": "Run the bounded aligned-load comparison.",
+        },
+    })
+    revised_active = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "revise",
+            "direction_id": result["direction_id"],
+            "name": "Aligned vectorized load",
+            "change_scope": "incremental",
+            "objective": "Reduce instruction overhead with aligned wider loads.",
             "applicability": "Aligned vector-add shapes.",
             "expected_benefit": "Reduce latency on aligned shapes.",
             "plan": ["Compare scalar and aligned vectorized candidates."],
         },
     })
 
-    assert result["review"]["claim_review_quality"] == "supported"
-    assert revised["review"]["claim_review_quality"] == "supported"
+    assert "review" not in result
+    assert "review" not in revised_draft
+    assert started["review"]["claim_review_quality"] == "supported"
+    assert revised_active["review"]["claim_review_quality"] == "supported"
     direction = json.loads(
-        (workspace / revised["archive_path"]).read_text()
+        (workspace / revised_active["archive_path"]).read_text()
     )
     assert direction["gateway_record_ids"] == [record_id]
     schema = journal_schema(
@@ -416,7 +438,7 @@ def test_derived_direction_review_resolves_experiment_gateway_records(tmp_path):
             "action": "propose",
             "name": "Scalar baseline",
             "change_scope": "incremental",
-            "hypothesis": "The scalar implementation is launch bound.",
+            "objective": "Remove launch-bound overhead from the scalar implementation.",
             "applicability": "Small vector-add shapes.",
             "expected_benefit": "Identify the next scheduling change.",
             "plan": ["Measure the scalar implementation."],
@@ -445,7 +467,7 @@ def test_derived_direction_review_resolves_experiment_gateway_records(tmp_path):
             "action": "propose",
             "name": "Vectorized alternative",
             "change_scope": "incremental",
-            "hypothesis": "Vectorized loads reduce the measured overhead.",
+            "objective": "Reduce the measured overhead with vectorized loads.",
             "applicability": "Aligned vector-add shapes.",
             "expected_benefit": "Improve the measured launch-bound regime.",
             "plan": ["Measure one vectorized candidate."],
@@ -455,14 +477,35 @@ def test_derived_direction_review_resolves_experiment_gateway_records(tmp_path):
         },
     })
 
-    revised = service.execute({
+    revised_draft = service.execute({
         "operation": "direction_update",
         "request": {
             "action": "revise",
             "direction_id": derived["direction_id"],
             "name": "Vectorized alternative",
             "change_scope": "incremental",
-            "hypothesis": "Aligned vectorized loads reduce the measured overhead.",
+            "objective": "Reduce the measured overhead with aligned vectorized loads.",
+            "applicability": "Aligned vector-add shapes.",
+            "expected_benefit": "Improve the measured launch-bound regime.",
+            "plan": ["Measure one aligned vectorized candidate."],
+        },
+    })
+    started = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "start",
+            "direction_id": derived["direction_id"],
+            "analysis": "Run the bounded vectorized-load comparison.",
+        },
+    })
+    revised_active = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "revise",
+            "direction_id": derived["direction_id"],
+            "name": "Vectorized alternative",
+            "change_scope": "incremental",
+            "objective": "Reduce the measured overhead with aligned vectorized loads.",
             "applicability": "Aligned vector-add shapes.",
             "expected_benefit": "Improve the measured launch-bound regime.",
             "plan": ["Measure one aligned vectorized candidate."],
@@ -470,11 +513,13 @@ def test_derived_direction_review_resolves_experiment_gateway_records(tmp_path):
     })
 
     assert reviewed_derived == [
-        (derived["direction_id"], "propose"),
+        (derived["direction_id"], "start"),
         (derived["direction_id"], "revise"),
     ]
-    assert derived["review"]["claim_review_quality"] == "supported"
-    assert revised["review"]["claim_review_quality"] == "supported"
+    assert "review" not in derived
+    assert "review" not in revised_draft
+    assert started["review"]["claim_review_quality"] == "supported"
+    assert revised_active["review"]["claim_review_quality"] == "supported"
 
 
 def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
@@ -502,7 +547,7 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
             "action": "propose",
             "name": "Split KV",
             "change_scope": "major_redesign",
-            "hypothesis": "Split KV should improve long contexts.",
+            "objective": "Expose sufficient KV parallelism for long-context regimes.",
             "applicability": "Long-context attention shapes on the target GPU.",
             "expected_benefit": "Reduce full-workload geometric-mean latency.",
             "plan": ["Compile a probe", "Evaluate the complete workload"],
@@ -834,7 +879,7 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
             "action": "propose",
             "name": "Split K",
             "change_scope": "major_redesign",
-            "hypothesis": "Splitting K may improve long-context shapes.",
+            "objective": "Improve long-context shapes through K-parallel architecture families.",
             "applicability": "Long-context shapes.",
             "expected_benefit": "Reduce long-context latency.",
             "plan": ["Compile the bounded probe", "Evaluate the workload"],
@@ -857,7 +902,7 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
             "direction_id": direction_id,
             "name": "Split K crossover",
             "change_scope": "major_redesign",
-            "hypothesis": "Splitting K helps only beyond a measurable K crossover.",
+            "objective": "Determine and optimize the K-parallel crossover across workload regimes.",
             "applicability": "Shapes beyond the measured K crossover.",
             "expected_benefit": "Reduce long-context latency without short-shape regression.",
             "plan": [
@@ -880,7 +925,9 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
         (workspace / "directions" / "in_progress" / f"{direction_id}.json").read_text()
     )
     assert projected["revision"] == 2
-    assert projected["hypothesis"].endswith("K crossover.")
+    assert projected["objective"].endswith("workload regimes.")
+    assert "hypothesis" not in projected
+    assert "hypothesis_status" not in projected
     assert projected["status"] == "in_progress"
     assert "completed_plan_steps" not in projected
     assert "next_step" not in projected
@@ -892,7 +939,6 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
             "action": "defer",
             "direction_id": direction_id,
             "analysis": "Pause until the profiler is restored.",
-            "hypothesis_status": "unresolved",
             "reopen_condition": "Profiler is available.",
         },
     })
@@ -904,7 +950,7 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
                 "direction_id": direction_id,
                 "name": "Split K crossover",
                 "change_scope": "major_redesign",
-                "hypothesis": "A revised but closed claim.",
+                "objective": "A revised but closed optimization objective.",
                 "applicability": "Long-context shapes.",
                 "expected_benefit": "Reduce latency.",
                 "plan": ["Measure"],
@@ -972,7 +1018,7 @@ def test_claim_revisions_resume_the_prior_review_session(tmp_path):
             "action": "propose",
             "name": "Split K",
             "change_scope": "major_redesign",
-            "hypothesis": "Split K may improve long-context shapes.",
+            "objective": "Improve long-context shapes through split-K architecture families.",
             "applicability": "Long-context shapes.",
             "expected_benefit": "Reduce latency.",
             "plan": ["Compile a bounded probe"],
@@ -986,7 +1032,7 @@ def test_claim_revisions_resume_the_prior_review_session(tmp_path):
             "direction_id": direction_id,
             "name": "Split K crossover",
             "change_scope": "major_redesign",
-            "hypothesis": "Split K helps only above a crossover.",
+            "objective": "Determine the useful split-K crossover and implementation family.",
             "applicability": "Shapes above the crossover.",
             "expected_benefit": "Reduce long-context latency.",
             "plan": ["Measure the crossover"],
@@ -998,6 +1044,19 @@ def test_claim_revisions_resume_the_prior_review_session(tmp_path):
             "action": "start",
             "direction_id": direction_id,
             "analysis": "Proceed with the bounded probe.",
+        },
+    })
+    service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "revise",
+            "direction_id": direction_id,
+            "name": "Split K crossover",
+            "change_scope": "major_redesign",
+            "objective": "Determine the measured split-K crossover and implementation family.",
+            "applicability": "Shapes above the crossover.",
+            "expected_benefit": "Reduce long-context latency.",
+            "plan": ["Measure the crossover under the same allocation policy"],
         },
     })
     experiment = service.execute({
@@ -1018,7 +1077,7 @@ def test_claim_revisions_resume_the_prior_review_session(tmp_path):
         },
     })
 
-    assert review_calls[0] == ("propose", None, "review-session-1")
+    assert review_calls[0] == ("start", None, "review-session-1")
     assert review_calls[1] == ("revise", "review-session-1", "review-session-1")
     assert review_calls[2][0:2] == ("experiment", None)
     assert review_calls[3] == (
@@ -1053,7 +1112,7 @@ def test_missing_claim_revision_ids_return_repairable_guidance(tmp_path):
                 "direction_id": "direction_" + "1" * 32,
                 "name": "Unknown Direction",
                 "change_scope": "local",
-                "hypothesis": "This ID does not exist.",
+                "objective": "Resolve a nonexistent optimization objective.",
                 "applicability": "No visible scope.",
                 "expected_benefit": "No established benefit.",
                 "plan": ["Inspect the current projection"],
@@ -1140,7 +1199,7 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
             "action": "propose",
             "name": "Split KV",
             "change_scope": "major_redesign",
-            "hypothesis": "Split KV should improve long contexts.",
+            "objective": "Expose sufficient KV parallelism for long-context workloads.",
             "applicability": "Long-context attention shapes.",
             "expected_benefit": "Reduce end-to-end latency.",
             "plan": ["Compile a bounded probe"],
@@ -1148,16 +1207,15 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
     })
     direction_id = proposed["direction_id"]
     assert proposed["archive_path"] == f"directions/proposed/{direction_id}.json"
-    assert proposed["review"]["archive_status"] == "archived"
-    assert proposed["review"]["evidence_eligible"] is True
-    assert proposed["review"]["claim_review_quality"] == "supported"
+    assert "review" not in proposed
+    projected_draft = json.loads(
+        (workspace / proposed["archive_path"]).read_text()
+    )
+    assert projected_draft["claim_review_quality"] == "not_reviewed"
     assert "review_path" not in proposed
-    assert "evidence_manifest" not in proposed["review"]
-    assert "_review_session_audit" not in proposed["review"]
-    assert "session_audit" not in proposed["review"]
     assert not list((workspace / "directions").rglob("*.review.json"))
 
-    service.execute({
+    started = service.execute({
         "operation": "direction_update",
         "request": {
             "action": "start",
@@ -1165,6 +1223,12 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
             "analysis": "This is the highest-value unresolved path.",
         },
     })
+    assert started["review"]["archive_status"] == "archived"
+    assert started["review"]["evidence_eligible"] is True
+    assert started["review"]["claim_review_quality"] == "supported"
+    assert "evidence_manifest" not in started["review"]
+    assert "_review_session_audit" not in started["review"]
+    assert "session_audit" not in started["review"]
     recorded = service.execute({
         "operation": "experiment_record",
         "request": {
@@ -1182,6 +1246,11 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
     assert "reviewer_model" not in recorded["review"]
     assert "_review_session_audit" not in recorded["review"]
     assert "session_audit" not in recorded["review"]
+    assert recorded["review"]["direction_status"] == "in_progress"
+    assert recorded["review"]["runtime_action"] == (
+        "Keep the Direction active unless its objective, planned variants, and stop "
+        "conditions are genuinely exhausted."
+    )
     assert not (workspace / "experiments" / experiment_id / "review.json").exists()
     assert len(reviewed_targets) == 2
     audit_outcomes = [
@@ -1240,6 +1309,7 @@ def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
         "next_check": "Measure the next candidate against the same baseline.",
         "confidence": "high",
     }
+
 
     def run_session(workspace, _prompt, timeout=None, **kwargs):
         assert timeout is None
@@ -1303,6 +1373,46 @@ def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
     assert resume_requests[-1] == ("provider-session-2", True)
     assert resumed_audit["attempts"][0]["resumed"] is True
     assert resumed_audit["attempts"][0]["session_id"] == "provider-session-2"
+
+
+def test_experiment_only_review_does_not_invent_direction_status(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    journals = tmp_path / "scope" / "journals"
+    evidence = journals / "episodes" / "e00000001"
+    evidence.mkdir(parents=True)
+    initialize_journal(
+        evidence / "journal.json",
+        episode=1,
+        base_commit="a" * 40,
+        branch="work",
+        tool_modules=("experiments",),
+    )
+
+    service = SupervisorJournalService(
+        workspace=workspace,
+        campaign_root=journals,
+        evidence_root=evidence,
+        research_root=tmp_path / "research",
+        claim_reviewer=lambda _root: _claim_review(
+            "supported",
+            [_claim_finding("supported", critical=True)],
+        ),
+    )
+    recorded = service.execute({
+        "operation": "experiment_record",
+        "request": {
+            "name": "Bounded observation",
+            "intent": "Record one measured fact.",
+            "interpretation": "The observation is valid within the measured scope.",
+        },
+    })
+
+    assert recorded["review"]["claim_review_quality"] == "supported"
+    assert "direction_status" not in recorded["review"]
+    assert recorded["review"]["runtime_action"] == (
+        "Use the archived record as reviewed research evidence."
+    )
 
 
 def test_research_claim_reviewer_launch_failures_are_privately_auditable(tmp_path):
@@ -1478,17 +1588,26 @@ def test_unsupported_research_claims_are_not_archived(tmp_path):
         research_root=tmp_path / "research",
         claim_reviewer=reviewer,
     )
+    proposed = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "propose",
+            "name": "Unsupported split",
+            "change_scope": "major_redesign",
+            "objective": "Reduce latency through an uncited architecture path.",
+            "applicability": "All workload shapes.",
+            "expected_benefit": "Large speedup.",
+            "plan": ["Implement the entire redesign"],
+        },
+    })
+    assert "review" not in proposed
     with pytest.raises(AgentRequestError) as direction_rejected:
         service.execute({
             "operation": "direction_update",
             "request": {
-                "action": "propose",
-                "name": "Unsupported split",
-                "change_scope": "major_redesign",
-                "hypothesis": "An uncited mechanism will reduce latency.",
-                "applicability": "All workload shapes.",
-                "expected_benefit": "Large speedup.",
-                "plan": ["Implement the entire redesign"],
+                "action": "start",
+                "direction_id": proposed["direction_id"],
+                "analysis": "Commit resources to the proposed redesign.",
             },
         })
     response = direction_rejected.value.response
@@ -1496,8 +1615,9 @@ def test_unsupported_research_claims_are_not_archived(tmp_path):
     assert response["error"]["review"]["claim_review_quality"] == "unsupported"
     assert "evidence_manifest" not in response["error"]["review"]
     assert "will not be archived" in response["error"]["review"]["runtime_action"]
-    assert load_journal(evidence / "journal.json")["direction_events"] == []
-    assert not (workspace / "directions").exists()
+    direction_events = load_journal(evidence / "journal.json")["direction_events"]
+    assert [event["action"] for event in direction_events] == ["propose"]
+    assert (workspace / proposed["archive_path"]).is_file()
 
     experiment_evidence = journals / "episodes" / "e00000002"
     experiment_evidence.mkdir(parents=True)
@@ -1540,8 +1660,15 @@ def test_unsupported_research_claims_are_not_archived(tmp_path):
     experiment_audit = list(
         (experiment_evidence / "claim-audit").glob("*/outcome.json")
     )
-    assert len(direction_audit) == len(experiment_audit) == 1
-    for path in (*direction_audit, *experiment_audit):
+    assert len(direction_audit) == 2
+    assert len(experiment_audit) == 1
+    unsupported_audits = [
+        path
+        for path in (*direction_audit, *experiment_audit)
+        if json.loads(path.read_text())["status"] == "unsupported"
+    ]
+    assert len(unsupported_audits) == 2
+    for path in unsupported_audits:
         outcome = json.loads(path.read_text())
         assert outcome["status"] == "unsupported"
         assert outcome["error"]["error"]["review"]["claim_review_quality"] == "unsupported"
@@ -1613,7 +1740,7 @@ def test_partial_experiment_is_projected_but_cannot_support_terminal_verdict(tmp
             "action": "propose",
             "name": "Split KV",
             "change_scope": "major_redesign",
-            "hypothesis": "Split KV may reduce long-context latency.",
+            "objective": "Reduce long-context latency with KV-parallel architecture families.",
             "applicability": "Long-context shapes.",
             "expected_benefit": "Reduce latency.",
             "plan": ["Measure one bounded candidate."],
@@ -1654,20 +1781,16 @@ def test_partial_experiment_is_projected_but_cannot_support_terminal_verdict(tmp
     assert "review_safe_interpretation" not in projected
     assert "review_scientific_next_check" not in projected
 
-    with pytest.raises(AgentRequestError) as rejected:
-        service.execute({
-            "operation": "direction_update",
-            "request": {
-                "action": "complete",
-                "direction_id": direction_id,
-                "analysis": "Treat the observation as proof.",
-                "hypothesis_status": "supported",
-                "supporting_experiment_ids": [experiment_id],
-            },
-        })
-    assert rejected.value.response["error"]["code"] == (
-        "direction_support_review_incomplete"
-    )
+    closed = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "complete",
+            "direction_id": direction_id,
+            "analysis": "The bounded Direction is complete; retain the narrower observation.",
+            "supporting_experiment_ids": [experiment_id],
+        },
+    })
+    assert closed["status"] == "recorded"
 
 
 def test_missing_experiment_reference_is_repairable_and_records_nothing(tmp_path):
@@ -1761,7 +1884,7 @@ def test_direction_projection_moves_between_status_directories(tmp_path):
             "action": "propose",
             "name": "Split KV",
             "change_scope": "major_redesign",
-            "hypothesis": "Split KV should reduce long-context latency.",
+            "objective": "Reduce long-context latency with KV-parallel architecture families.",
             "applicability": "Long-context attention shapes.",
             "expected_benefit": "Reduce latency by exposing CTA parallelism.",
             "plan": ["Compile a bounded probe"],
@@ -1796,7 +1919,6 @@ def test_direction_projection_moves_between_status_directories(tmp_path):
             "action": "block",
             "direction_id": direction_id,
             "analysis": "The required compiler feature is unavailable.",
-            "hypothesis_status": "unresolved",
             "reopen_condition": "The target compiler exposes the required feature.",
         },
     })
@@ -1807,7 +1929,7 @@ def test_direction_projection_moves_between_status_directories(tmp_path):
     ) in progress
 
 
-def test_episode_handoff_requires_terminal_direction_or_enabled_peer_share(tmp_path):
+def test_episode_handoff_allows_active_direction_or_enabled_peer_share(tmp_path):
     def service_for(name: str, *, sharing: bool = False):
         workspace = tmp_path / name / "workspace"
         workspace.mkdir(parents=True)
@@ -1837,7 +1959,7 @@ def test_episode_handoff_requires_terminal_direction_or_enabled_peer_share(tmp_p
                 "action": "propose",
                 "name": "Split KV",
                 "change_scope": "major_redesign",
-                "hypothesis": "Split KV should improve long-context latency.",
+                "objective": "Improve long-context latency with KV-parallel architecture families.",
                 "applicability": "Long-context attention shapes.",
                 "expected_benefit": "Reduce latency by increasing KV parallelism.",
                 "plan": ["Compile a probe", "Measure a candidate family"],
@@ -1854,18 +1976,6 @@ def test_episode_handoff_requires_terminal_direction_or_enabled_peer_share(tmp_p
         return service, direction_id, evidence / "journal.json"
 
     standalone, direction_id, journal = service_for("standalone")
-    with pytest.raises(AgentRequestError) as premature:
-        standalone.execute({
-            "operation": "episode_report",
-            "request": {
-                "status": "pivot",
-                "handoff_reason": "direction_terminal",
-                "summary": "A checkpoint exists but the Direction still has useful work.",
-            },
-        })
-    assert premature.value.response["error"]["code"] == "handoff_not_ready"
-    assert premature.value.response["error"]["active_direction_ids"] == [direction_id]
-
     with pytest.raises(AgentRequestError) as unavailable:
         standalone.execute({
             "operation": "episode_report",
@@ -1878,26 +1988,39 @@ def test_episode_handoff_requires_terminal_direction_or_enabled_peer_share(tmp_p
     assert unavailable.value.response["error"]["code"] == (
         "cross_trajectory_sharing_unavailable"
     )
-
-    standalone.execute({
-        "operation": "direction_update",
-        "request": {
-            "action": "abandon",
-            "direction_id": direction_id,
-            "analysis": "The planned probes and candidate family are exhausted.",
-            "hypothesis_status": "unresolved",
-        },
-    })
     accepted = standalone.execute({
         "operation": "episode_report",
         "request": {
             "status": "pivot",
             "handoff_reason": "direction_terminal",
-            "summary": "The selected Direction is exhausted.",
+            "summary": "The current Episode ends while the Direction retains useful work.",
         },
     })
     assert accepted["status"] == "accepted"
     assert load_journal(journal)["outcome"]["handoff_reason"] == "direction_terminal"
+    next_evidence = journal.parents[1] / "e00000002"
+    next_evidence.mkdir()
+    initialize_journal(
+        next_evidence / "journal.json",
+        episode=2,
+        base_commit="b" * 40,
+        branch="work-2",
+        tool_modules=("directions",),
+    )
+    resumed = SupervisorJournalService(
+        workspace=standalone.workspace,
+        campaign_root=standalone.campaign_root,
+        evidence_root=next_evidence,
+        research_root=tmp_path / "standalone" / "research-2",
+        origin={"epoch": 2, "trajectory": 1, "episode": 2},
+    )
+    resumed.publish_research_files()
+    assert (
+        standalone.workspace
+        / "directions"
+        / "in_progress"
+        / f"{direction_id}.json"
+    ).is_file()
 
     pooled, pooled_direction, pooled_journal = service_for("pooled", sharing=True)
     with pytest.raises(AgentRequestError) as missing_checkpoint:
@@ -1935,7 +2058,6 @@ def test_episode_handoff_requires_terminal_direction_or_enabled_peer_share(tmp_p
             "action": "block",
             "direction_id": blocked_direction,
             "analysis": "The required compiler capability is unavailable.",
-            "hypothesis_status": "unresolved",
             "reopen_condition": "The target compiler exposes the capability.",
         },
     })
@@ -1960,7 +2082,6 @@ def test_episode_handoff_requires_terminal_direction_or_enabled_peer_share(tmp_p
             "action": "abandon",
             "direction_id": terminal_direction,
             "analysis": "The planned Direction has no worthwhile next step.",
-            "hypothesis_status": "unresolved",
         },
     })
     terminal_blocker = terminal.execute({
@@ -1976,7 +2097,7 @@ def test_episode_handoff_requires_terminal_direction_or_enabled_peer_share(tmp_p
     assert load_journal(terminal_journal)["outcome"]["handoff_reason"] == "blocked"
 
 
-def test_candidate_handoff_accepts_selected_direction_closed_before_another(monkeypatch, tmp_path):
+def test_candidate_handoff_accepts_selected_in_progress_direction(monkeypatch, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     journals = tmp_path / "scope" / "journals"
@@ -1989,42 +2110,63 @@ def test_candidate_handoff_accepts_selected_direction_closed_before_another(monk
         base_commit="a" * 40,
         branch="work",
     )
-    first = "direction_" + "1" * 32
-    second = "direction_" + "2" * 32
-    experiment_id = "experiment_" + "3" * 32
-    current = load_journal(journal)
-    current["direction_events"] = [
-        {"direction_id": first, "action": "complete"},
-        {"direction_id": second, "action": "complete"},
-    ]
-    current["experiments"] = [{
-        "experiment_id": experiment_id,
-        "direction_id": first,
-        "gateway_record_ids": [],
-        "name": "candidate evidence",
-        "intent": "Nominate the measured candidate.",
-        "interpretation": "The exact candidate passed.",
-    }]
-    directions = {
-        first: {"direction_id": first, "name": "first", "status": "completed"},
-        second: {"direction_id": second, "name": "second", "status": "completed"},
-    }
-    monkeypatch.setattr(
-        "aka.light.workflow.journal_service.validate_report_evidence",
-        lambda *args, **kwargs: (current, directions, None),
-    )
     service = SupervisorJournalService(
         workspace=workspace,
         campaign_root=journals,
         evidence_root=evidence,
         supervisor_git=True,
     )
+    direction_ids = []
+    for name in ("first", "second"):
+        direction_id = service.execute({
+            "operation": "direction_update",
+            "request": {
+                "action": "propose",
+                "name": name,
+                "change_scope": "incremental",
+                "objective": f"Explore the remaining high-value {name} optimization variants.",
+                "applicability": "The measured workload.",
+                "expected_benefit": "Reduce latency.",
+                "plan": ["Measure the next bounded variant."],
+            },
+        })["direction_id"]
+        service.execute({
+            "operation": "direction_update",
+            "request": {
+                "action": "start",
+                "direction_id": direction_id,
+                "analysis": "Keep this measured path active across Episodes.",
+            },
+        })
+        direction_ids.append(direction_id)
+    experiment_id = service.execute({
+        "operation": "experiment_record",
+        "request": {
+            "direction_id": direction_ids[0],
+            "name": "candidate evidence",
+            "intent": "Nominate the measured candidate.",
+            "interpretation": "The exact candidate passed.",
+        },
+    })["experiment_id"]
+    current = load_journal(journal)
+    directions = {
+        direction_id: {
+            "direction_id": direction_id,
+            "name": name,
+            "status": "in_progress",
+        }
+        for direction_id, name in zip(direction_ids, ("first", "second"), strict=True)
+    }
+    monkeypatch.setattr(
+        "aka.light.workflow.journal_service.validate_report_evidence",
+        lambda *args, **kwargs: (current, directions, None),
+    )
 
     result = service._submit_report(
         {
             "status": "candidate_ready",
             "handoff_reason": "direction_terminal",
-            "summary": "Both local Directions are terminal.",
+            "summary": "The candidate is ready while both Directions retain useful variants.",
             "selected_experiment_id": experiment_id,
         },
         agent_kernel_id="b" * 40,
@@ -2050,7 +2192,7 @@ def test_episode_report_schema_and_prompt_require_explicit_handoff_reason():
     assert "Repeat `probe → candidate → measurement → revert/keep` cycles" in prompt
     assert "pooled search must publish a reusable measured checkpoint to peers" in prompt
     assert "plausible full-workload latency impact and applicability" in prompt
-    assert "not to discard a higher-upside path" in prompt
+    assert "discarding higher-upside work" in prompt
     assert "Use local Git to manage the Kernel development history" in prompt
 
 
@@ -2103,9 +2245,9 @@ def test_episode_report_recovery_guidance_matches_status_schema(status, expected
     )
     guidance = projected["error"]["next_action"]
     assert expected in guidance
-    assert "Only candidate_ready may use cross_trajectory_share" in guidance
-    assert "selected Experiment must belong to a Direction completed or abandoned" in guidance
-    assert "For cross_trajectory_share, it must belong to an in-progress Direction" in guidance
+    assert "direction_terminal may preserve local in-progress Directions" in guidance
+    assert "selected Experiment may belong to an in-progress" in guidance
+    assert "cross_trajectory_share still requires an in-progress Direction" in guidance
 
 
 def test_direction_proposal_schema_requires_applicability_and_expected_benefit():
@@ -2114,9 +2256,11 @@ def test_direction_proposal_schema_requires_applicability_and_expected_benefit()
     )
     assert "applicability" in schema["required"]
     assert "expected_benefit" in schema["required"]
+    assert "objective" in schema["required"]
+    assert "hypothesis" not in schema["properties"]
     assert schema["properties"]["applicability"]["type"] == "string"
     assert schema["properties"]["expected_benefit"]["type"] == "string"
-    assert "change Kernel design" in schema["properties"]["hypothesis"]["description"]
+    assert "architecture goal" in schema["properties"]["objective"]["description"]
     assert "implementation decision" in schema["properties"]["expected_benefit"]["description"]
     assert "probe-led Direction" in schema["properties"]["change_scope"]["description"]
 
@@ -2144,10 +2288,11 @@ def test_direction_schema_explains_field_types_and_mode_specific_closure_evidenc
         experiments_enabled=False,
     )
     assert "gateway_record_ids" in direction_only["properties"]
-    assert "including abandon" in (
+    assert "Optional Gateway Record evidence" in (
         direction_only["properties"]["gateway_record_ids"]["description"]
     )
     assert "supporting_experiment_ids" not in direction_only["properties"]
+    assert "hypothesis_status" not in direction_only["properties"]
 
     with_experiments = journal_schema(
         "direction_update",
@@ -2157,6 +2302,7 @@ def test_direction_schema_explains_field_types_and_mode_specific_closure_evidenc
         experiments_enabled=True,
     )
     assert "supporting_experiment_ids" in with_experiments["properties"]
+    assert with_experiments["properties"]["supporting_experiment_ids"]["minItems"] == 0
     assert "gateway_record_ids" not in with_experiments["properties"]
 
 
@@ -2230,7 +2376,7 @@ def test_direction_closure_before_start_returns_exact_recovery(tmp_path):
             "action": "propose",
             "name": "Capability probe",
             "change_scope": "incremental",
-            "hypothesis": "The probe can resolve the implementation choice.",
+            "objective": "Resolve the consequential implementation choice with bounded probes.",
             "applicability": "The current workload.",
             "expected_benefit": "Avoid an unproductive implementation path.",
             "plan": ["Run one bounded probe."],
@@ -2245,7 +2391,6 @@ def test_direction_closure_before_start_returns_exact_recovery(tmp_path):
                 "action": "abandon",
                 "direction_id": direction_id,
                 "analysis": "The probe is no longer useful.",
-                "hypothesis_status": "unresolved",
             },
         )
     message = str(raised.value)
@@ -2268,7 +2413,6 @@ def test_direction_closure_before_start_returns_exact_recovery(tmp_path):
             "action": "abandon",
             "direction_id": direction_id,
             "analysis": "The probe is no longer useful.",
-            "hypothesis_status": "unresolved",
         },
     )
     assert result["status"] == "recorded"
@@ -2296,7 +2440,7 @@ def test_episode_may_sequentially_start_more_than_three_directions(tmp_path):
                 "action": "propose",
                 "name": f"Direction {index}",
                 "change_scope": "incremental",
-                "hypothesis": f"Probe {index} can select a better Kernel path.",
+                "objective": f"Select and optimize the better Kernel path for regime {index}.",
                 "applicability": "The current workload.",
                 "expected_benefit": "Resolve one consequential implementation choice.",
                 "plan": ["Run the discriminating probe."],
@@ -2319,7 +2463,6 @@ def test_episode_may_sequentially_start_more_than_three_directions(tmp_path):
                 "action": "abandon",
                 "direction_id": direction_id,
                 "analysis": "The bounded probe leaves no worthwhile next step.",
-                "hypothesis_status": "unresolved",
             },
         )
 
@@ -2346,7 +2489,7 @@ def test_paused_direction_can_restart_but_terminal_direction_cannot(tmp_path):
             "action": "propose",
             "name": "Capability probe",
             "change_scope": "major_redesign",
-            "hypothesis": "The capability may unlock a faster Kernel.",
+            "objective": "Determine whether the capability unlocks a faster Kernel architecture.",
             "applicability": "The target GPU.",
             "expected_benefit": "Enable the structural redesign.",
             "plan": ["Compile the bounded probe."],
@@ -2359,7 +2502,6 @@ def test_paused_direction_can_restart_but_terminal_direction_cannot(tmp_path):
         "action": "defer",
         "direction_id": direction_id,
         "analysis": "The required compiler is temporarily unavailable.",
-        "hypothesis_status": "unresolved",
         "reopen_condition": "The compiler becomes available.",
     })
     assert update_direction(journal, campaign, {
@@ -2369,7 +2511,6 @@ def test_paused_direction_can_restart_but_terminal_direction_cannot(tmp_path):
         "action": "abandon",
         "direction_id": direction_id,
         "analysis": "The path is no longer relevant.",
-        "hypothesis_status": "unresolved",
     })
     with pytest.raises(ValueError, match="cannot start from status abandoned"):
         update_direction(journal, campaign, {
@@ -2400,7 +2541,7 @@ def test_second_local_direction_start_returns_precise_recovery(tmp_path):
                     "action": "propose",
                     "name": f"Direction {index}",
                     "change_scope": "local",
-                    "hypothesis": f"Probe {index} can select a better Kernel path.",
+                    "objective": f"Select and optimize the better Kernel path for regime {index}.",
                     "applicability": "The current workload.",
                     "expected_benefit": "Resolve one consequential implementation choice.",
                     "plan": ["Run the discriminating probe."],
@@ -2466,9 +2607,11 @@ def test_completion_reuses_persisted_candidate_acceptance_without_numerical_reru
     import aka.light.workspace.sources as workspace_sources
     from aka.light.workflow import journal_service
 
-    candidate = "b" * 40
+    agent_candidate = "b" * 40
+    supervisor_candidate = "c" * 40
     private = {
-        "candidate_commit": candidate,
+        "candidate_commit": supervisor_candidate,
+        "candidate_kernel_id": agent_candidate,
         "acceptance_checks": {
             "five_case_correctness": {
                 "checks": {
@@ -2481,28 +2624,45 @@ def test_completion_reuses_persisted_candidate_acceptance_without_numerical_reru
     }
     selected = []
     numerical = []
+    projection_candidates = []
+    restored = []
+    git_reads = []
+    commit_time_reads = []
 
     def validate_projection(*_args, **kwargs):
+        projection_candidates.append(kwargs["candidate_commit"])
         kwargs["runtime_journal_loader"]()
         return ""
+
+    def restore_sealed_candidate(_worktree, commit, source):
+        restored.append((commit, source))
+        return "", []
+
+    def from_git(_workspace, commit):
+        git_reads.append(commit)
+        return b"sealed"
+
+    def read_commit_time(_workspace, *_args):
+        commit_time_reads.append(_args[-1])
+        return "0"
 
     monkeypatch.setattr(episode_module, "validate_terminal", validate_projection)
     monkeypatch.setattr(
         journal_service, "sealed_candidate_source", lambda _journal, _workspace: b"sealed"
     )
-    monkeypatch.setattr(workspace_sources, "from_git", lambda _workspace, _commit: b"sealed")
+    monkeypatch.setattr(workspace_sources, "from_git", from_git)
     monkeypatch.setattr(
         episode_module,
         "load_journal",
         lambda _path: {"finalized_at": "2026-11-06T00:00:01+00:00"},
     )
-    monkeypatch.setattr(episode_module, "git_text", lambda *_args: "0")
+    monkeypatch.setattr(episode_module, "git_text", read_commit_time)
 
     campaign = LongHorizonCampaign.__new__(LongHorizonCampaign)
     campaign.base_campaign = SimpleNamespace(
         read_runtime_episode_journal=lambda _episode: private,
         candidate_workspace=SimpleNamespace(
-            restore_sealed_candidate=lambda *_args: ("", [])
+            restore_sealed_candidate=restore_sealed_candidate
         ),
         optimization_mode="production",
         selected_episode_evaluation=lambda episode, source: (
@@ -2516,10 +2676,14 @@ def test_completion_reuses_persisted_candidate_acceptance_without_numerical_reru
     diagnosis = campaign._completion_check(
         CandidateHandle(1, "a" * 40, "work", tmp_path),
         tmp_path / "journal.json",
-        EpisodeHandoff("candidate_ready", candidate),
+        EpisodeHandoff("candidate_ready", agent_candidate),
     )
 
     assert diagnosis == ""
+    assert projection_candidates == [agent_candidate]
+    assert restored == [(supervisor_candidate, b"sealed")]
+    assert git_reads == [supervisor_candidate]
+    assert commit_time_reads == [supervisor_candidate]
     assert selected == [(1, b"sealed")]
     assert numerical == []
 
@@ -3745,7 +3909,8 @@ def _finalized_journal(path: Path, *, episode: int, suffix: str, record_id: str)
             "action": "propose",
             "name": f"direction-{suffix}",
             "change_scope": "major_redesign",
-            "hypothesis": "A falsifiable shared hypothesis",
+            # Historical sealed Journals can still contain the retired field.
+            "hypothesis": "A shared optimization objective",
             "plan": ["implement", "measure"],
             "stop_conditions": [],
             "recorded_at": "2026-10-30T00:00:00+00:00",
@@ -3758,7 +3923,6 @@ def _finalized_journal(path: Path, *, episode: int, suffix: str, record_id: str)
             "analysis": "Started",
             "recorded_at": "2026-10-30T00:01:00+00:00",
             "supporting_experiment_ids": [],
-            "hypothesis_status": None,
         },
         {
             "direction_event_id": "directionevent_" + ("e" if suffix != "e" else "f") * 32,
@@ -3767,7 +3931,6 @@ def _finalized_journal(path: Path, *, episode: int, suffix: str, record_id: str)
             "analysis": "Deferred after measurement",
             "recorded_at": "2026-10-30T00:02:00+00:00",
             "supporting_experiment_ids": [experiment_id],
-            "hypothesis_status": "unresolved",
         },
     ]
     value["experiments"] = [
@@ -3990,7 +4153,6 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
                     "analysis": "shared analysis",
                     "supporting_experiment_ids": [],
                     "associated_experiment_ids": [shared_experiment],
-                    "hypothesis_status": "unresolved",
                 }
             },
             "experiments": [
@@ -3999,7 +4161,7 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
                     "recorded_by": "T2",
                     "sequence": 1,
                     "name": "shared experiment",
-                    "hypothesis": "shared hypothesis",
+                    "objective": "shared optimization objective",
                     "change": "shared change",
                     "gateway_record_ids": [],
                     "analysis": "shared result",
@@ -4096,7 +4258,7 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
                 "action": "propose",
                 "name": "local continuation",
                 "change_scope": "major_redesign",
-                "hypothesis": "refine the shared direction",
+                "objective": "refine the shared optimization objective",
                 "applicability": "The shared Direction's target regimes.",
                 "expected_benefit": "Retain the peer gain while refining its bottleneck.",
                 "plan": ["implement locally"],
@@ -4161,13 +4323,17 @@ def test_search_epoch_seals_other_trajectory_research_and_measurements(tmp_path)
         runtime_root = supervisor_campaign_root(driver.children[number].workspace)
         shared = json.loads(shared_research_path(runtime_root / "journals").read_text())
         assert set(shared["directions"]) == {identities[other][0]}
-        assert shared["directions"][identities[other][0]]["proposed_by"] == f"T{other}"
+        shared_direction = shared["directions"][identities[other][0]]
+        assert shared_direction["proposed_by"] == f"T{other}"
+        assert shared_direction["objective"] == "A shared optimization objective"
+        assert "hypothesis" not in shared_direction
+        assert "hypothesis_status" not in shared_direction
         assert shared["research_queue"] == sorted(
             [identities[1][0], identities[2][0]]
         )
         assert {row["experiment_id"] for row in shared["experiments"]} == {identities[other][1]}
         assert shared["experiments"][0]["recorded_by"] == f"T{other}"
-        assert "origin" not in shared["directions"][identities[other][0]]
+        assert "origin" not in shared_direction
         store = MeasurementStore(runtime_root / "measurements")
         assert set(store.record_ids()) == set(records.values())
         assert store.read_kernel(kernels[other]).startswith(b"def kernel_")
@@ -4245,6 +4411,7 @@ def test_shared_direction_queue_preserves_unvoted_inherited_order():
 def test_only_explicitly_low_quality_reviewed_claims_are_withheld_from_sharing():
     assert _shareable_claim({"claim_review_quality": "supported"}) is True
     assert _shareable_claim({}) is True  # legacy/pre-review compatibility
+    assert _shareable_claim({"claim_review_quality": "not_reviewed"}) is False
     assert _shareable_claim({"claim_review_quality": "partially_supported"}) is False
     assert _shareable_claim({"claim_review_quality": "unreviewed"}) is False
 
@@ -4272,7 +4439,7 @@ def test_multiple_active_directions_require_explicit_experiment_binding(tmp_path
                 "action": "propose",
                 "name": name,
                 "change_scope": "incremental" if name == "incremental" else "major_redesign",
-                "hypothesis": f"{name} path may improve latency.",
+                "objective": f"Optimize the {name} path across applicable regimes.",
                 "applicability": "The target workload.",
                 "expected_benefit": "Resolve a consequential optimization choice.",
                 "plan": ["Run one bounded probe."],
@@ -4348,7 +4515,7 @@ def test_candidate_preflight_reuses_supported_historical_experiment(tmp_path):
             "revision": 1,
             "name": "Historical path",
             "change_scope": "incremental",
-            "hypothesis": "The measured implementation is viable.",
+            "objective": "Establish and improve the viable implementation family.",
             "applicability": "The target workload.",
             "expected_benefit": "Provide a reusable exact candidate.",
             "plan": ["Evaluate the exact candidate."],
@@ -4362,7 +4529,6 @@ def test_candidate_preflight_reuses_supported_historical_experiment(tmp_path):
             "analysis": "Measure it.",
             "recorded_at": "2026-01-01T00:00:01Z",
             "supporting_experiment_ids": [],
-            "hypothesis_status": None,
             "reopen_condition": None,
         },
         {
@@ -4371,7 +4537,6 @@ def test_candidate_preflight_reuses_supported_historical_experiment(tmp_path):
             "analysis": "The exact candidate passed.",
             "recorded_at": "2026-01-01T00:00:02Z",
             "supporting_experiment_ids": [experiment_id],
-            "hypothesis_status": "supported",
             "reopen_condition": None,
             "claim_review_quality": "supported",
         },
@@ -6135,7 +6300,7 @@ def test_peer_in_progress_direction_does_not_block_local_lease(tmp_path):
                     "direction_id": peer,
                     "name": "peer major redesign",
                     "change_scope": "major_redesign",
-                    "hypothesis": "peer hypothesis",
+                    "objective": "peer optimization objective",
                     "plan": ["continue"],
                     "stop_conditions": [],
                     "status": "in_progress",
@@ -6160,7 +6325,7 @@ def test_peer_in_progress_direction_does_not_block_local_lease(tmp_path):
         "operation": "direction_update",
         "request": {
             "action": "propose", "name": "local probe", "change_scope": "local",
-            "hypothesis": "local hypothesis",
+            "objective": "local optimization objective",
             "applicability": "The local trajectory's target workload.",
             "expected_benefit": "Resolve the local performance uncertainty.",
             "plan": ["measure"],
@@ -6189,14 +6354,13 @@ def test_epoch_projection_replays_local_active_direction_beside_peer_active_dire
                     "direction_id": peer,
                     "name": "peer redesign",
                     "change_scope": "major_redesign",
-                    "hypothesis": "peer hypothesis",
+                    "objective": "peer optimization objective",
                     "plan": ["continue peer work"],
                     "stop_conditions": [],
                     "status": "in_progress",
                     "owner": "T2",
                     "supporting_experiment_ids": [],
                     "associated_experiment_ids": [],
-                    "hypothesis_status": "unresolved",
                 }
             },
             "experiments": [],
@@ -6220,7 +6384,7 @@ def test_epoch_projection_replays_local_active_direction_beside_peer_active_dire
             "action": "propose",
             "name": "local redesign",
             "change_scope": "major_redesign",
-            "hypothesis": "local hypothesis",
+            "objective": "local optimization objective",
             "plan": ["continue local work"],
             "stop_conditions": [],
             "recorded_at": "2026-11-01T00:00:00+00:00",
@@ -6233,7 +6397,6 @@ def test_epoch_projection_replays_local_active_direction_beside_peer_active_dire
             "analysis": "Keep the redesign active across Episodes.",
             "recorded_at": "2026-11-01T00:01:00+00:00",
             "supporting_experiment_ids": [],
-            "hypothesis_status": None,
         },
     ]
     private_write(previous_path, previous)

@@ -15,8 +15,10 @@ First classify the submission from `target.json`, then apply the matching standa
 
 ## Direction standard
 
-- A Direction `propose` or `revise` asks whether a bounded investigation is worth doing. Mark it `supported` when the optimization target is relevant, the hypothesis is coherent and falsifiable, the applicability is reasonably scoped, and the plan can discriminate success from failure at bounded cost. The predicted mechanism and benefit are hypotheses, not facts that must already be proven. Unverified estimates, approximate magnitudes, and secondary mechanism details are non-decision-critical unless the proposal has no useful rationale without them.
-- A terminal Direction asks whether the evidence justifies the stated `hypothesis_status` and the decision to close, defer, block, abandon, or derive follow-up work. Mark it `supported` when the cited measurements justify that decision within a defensible scope. Uncertain root-cause details, incomplete explanations, or imprecise benefit magnitudes do not downgrade the verdict when they do not change the terminal decision; narrow them in `scope_safe_interpretation` instead.
+- A Direction `start`, or a `revise` after work has started, asks whether the optimization objective is important enough to organize durable work, its applicability is clear, and its plan covers a meaningful strategy space that can contain multiple candidates and Experiments. A Direction is not one falsifiable hypothesis. The expected benefit is a prioritization estimate, not a fact that must already be proven.
+- Reject a proposed Direction when it describes a single candidate, parameter choice, isolated probe, or one-step mechanism that belongs as an Experiment under an existing optimization program. Explain that classification error in `primary_issue` and use `next_check` to identify the existing Direction or the broader optimization objective under which the Experiment belongs.
+- A Direction closure asks whether the optimization program is genuinely completed, exhausted, strategically deferred, concretely blocked, or reasonably abandoned. For `complete`, verify that the meaningful branches in its objective, applicability, plan, and stop conditions were addressed or shown to have insufficient remaining value. Do not treat one supported Experiment or one supported mechanism as completion of the Direction, and do not require a global supported/refuted verdict.
+- Uncertain mechanism details or imprecise benefit magnitudes do not downgrade the review when they do not change admission or the lifecycle decision; narrow them in `scope_safe_interpretation` instead.
 - Use `partially_supported` only when a decision-critical premise, stop-condition assessment, or closure decision remains genuinely uncertain but still has useful support. Use `unsupported` only when a decision-critical premise or action is contradicted or lacks enough evidence to justify the investigation or terminal decision.
 
 ## Experiment standard
@@ -25,7 +27,7 @@ First classify the submission from `target.json`, then apply the matching standa
 - Mechanistic interpretation is useful but not required for `supported`. A result may be supported even when the exact root cause, theoretical explanation, generality outside the measured scope, or precise expected magnitude remains uncertain. Preserve those limitations in `scope_safe_interpretation` and `next_check` without downgrading the whole Experiment.
 - Use `partially_supported` when a decision-critical measurement, comparator, attribution, candidate identity, or action is incomplete or ambiguous but the Experiment still contains a useful observation. Use `unsupported` only when the core result or action is contradicted, untraceable, or not justified by the supplied evidence.
 
-A lifecycle-only Direction `start` is not a scientific claim and should not normally be sent for review.
+Unstarted `propose` and `revise` drafts are not sent for review. A `start` is the admission review before resources are committed; judge the effective Direction proposal supplied beside the lifecycle event.
 
 Use exactly one verdict:
 

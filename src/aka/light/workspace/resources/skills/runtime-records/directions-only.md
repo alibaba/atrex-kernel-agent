@@ -10,7 +10,11 @@ Direction recording is enabled; Experiment commands are disabled. Start with roo
 Read or query relevant `records/<gateway_record_id>.json` files directly, selecting only needed
 fields or bounded text; do not print complete Records or long streams into the Session.
 
-A Direction is a consequential Kernel path or uncertainty, not Runtime/evaluator maintenance. Check for duplicates and rank by expected benefit and applicability. Multiple local Directions may be `in_progress`; the most recently started or prioritized one is the focus. Choose executable work from the Local work queue; restart paused work explicitly. The Shared direction pool is discovery-only: absorb compatible peer ideas into one local derivative and cite every source ID in `derived_from_direction_ids`. Continue bounded probe/edit/measurement/revert-or-keep cycles while useful work remains.
+A Direction is a durable optimization program around a consequential bottleneck, workload regime,
+or architecture objective, not Runtime/evaluator maintenance. It should span multiple candidates or
+probes; a single implementation, parameter choice, capability probe, or mechanism test remains a
+bounded step under an existing Direction. Check for duplicates and rank by expected benefit and
+applicability. Multiple local Directions may be `in_progress`; the most recently started or prioritized one is the focus. Choose executable work from the Local work queue; restart paused work explicitly. The Shared direction pool is discovery-only: absorb compatible peer ideas into one local derivative and cite every source ID in `derived_from_direction_ids`. Continue bounded probe/edit/measurement/revert-or-keep cycles while useful work remains.
 
 Use `update-direction` and `prioritize-direction` for mutations. Routine execution of plan steps does not require a Runtime mutation; use `action=revise` only when the claim or remaining plan changes materially. Omit `supporting_experiment_ids`; Experiment-derived genealogy is unavailable. Claim-bearing Direction requests may cite their own measurement evidence with `gateway_record_ids`, allowing the independent Review to inspect the corresponding Records. For `candidate_ready`, separately cite `gateway_record_ids` containing a passing standard full Evaluate of the exact clean HEAD. Follow [the exact Direction and report schemas](references/journal.md) and [saved result/source semantics](references/records.md). Never invent IDs or measured results.
 

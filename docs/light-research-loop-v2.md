@@ -216,9 +216,9 @@ derived_from_direction_ids: []
 derived_from_experiment_ids: []
 ```
 
-日常执行 plan 中的步骤不单独生成 Runtime 记录；只有证据实质改变了 Direction 的声明或剩余 plan 时才提交完整 revision。对于假设仍未解决的 `deferred` 或 `blocked` Direction，必须记录 `reopen_condition`；`abandoned` 是不可重启的终态。
+日常执行 plan 中的步骤不单独生成 Runtime 记录；只有证据实质改变了 Direction 的 objective、applicability 或剩余 plan 时才提交完整 revision。对于暂时无法继续的 `deferred` 或 `blocked` Direction，必须记录 `reopen_condition`；`abandoned` 是不可重启的终态。
 
-Direction 关闭时记录 hypothesis status 和引用证据；完整的 Experiment 与 Measurement 关联由 Runtime 自动推导。
+Direction 关闭时只记录生命周期结论与可选的支撑 Experiment，不再将整条优化主线归纳为 `supported/refuted`。具体可证伪问题及其解释属于 Experiment；完整的 Experiment 与 Measurement 关联由 Runtime 自动推导。
 
 ### 所有权
 
@@ -257,7 +257,7 @@ Runtime 验证每个 `gateway_record_id`；对应的标准化公开结果平铺�
 `intent` 和 `interpretation` 是 Agent 的可修正判断，与测量事实和支撑材料分目录展示。
 `gateway_record_ids` 与 `references` 是互相独立的可选数组，均可省略或为空；只有非空
 `references` 才创建归档。没有测量 Record 的 Experiment 只能作为研究笔记，不能单独支撑
-`supported/refuted` 结论或候选晋升。
+Direction 生命周期结论或候选晋升。
 
 Direction 和 Experiment 同时启用时，省略 `direction_id` 的 Experiment 默认关联当前 focus Direction；没有 focus 时仅在恰好一个本地 active Direction 的情况下自动推导。请求可以显式指定其他本地可写 Direction。只启用 Experiment 时不要求 `direction_id`，由 `intent` 表达本次局部假设。关闭 Experiment 时，Measurement Record 仍完整保留执行事实。
 
@@ -489,8 +489,8 @@ Runtime 继续负责长时间等待、重试、去重和基础设施故障分类
 
 一个 Episode 内可以持续完成多轮 `probe → candidate → measurement → revert/keep`。获得一个可晋升候选只是 checkpoint，不是终止条件。`episode-report` 必须声明 `handoff_reason`，且只允许：
 
-- `direction_terminal`：本 Episode 选中的研究工作真正完成或穷尽；启用 Direction 时必须先把所有本地 active Direction `complete` 或 `abandon`，候选 Experiment 必须属于本 Episode 完成或放弃的 Direction；
-- `cross_trajectory_share`：仅限多轨迹搜索，需要把有意义的 checkpoint 发布给同伴；候选 Experiment 必须属于仍为 `in_progress` 的 Direction，这是唯一可保留 active Direction 的 handoff；
+- `direction_terminal`：本 Episode 的有界工作已收口；可以保留需要跨 Episode 继续的 `in_progress` Direction；
+- `cross_trajectory_share`：仅限多轨迹搜索，需要把有意义的 checkpoint 发布给同伴；候选 Experiment 应属于仍为 `in_progress` 的 Direction；
 - `blocked`：具体 blocker 使当前工作无法继续；启用 Direction 时必须先用 `block` 关闭。
 
 Runtime 会校验 reason、report status、当前 Direction 生命周期及运行模式，避免 Agent 用普通 checkpoint 提前结束 Episode。

@@ -84,6 +84,12 @@ def _remove_retired_plan_progress(state: Mapping[str, object]) -> None:
         if isinstance(direction, dict):
             direction.pop("completed_plan_steps", None)
             direction.pop("next_step", None)
+            if "objective" not in direction and isinstance(
+                direction.get("hypothesis"), str
+            ):
+                direction["objective"] = direction["hypothesis"]
+            direction.pop("hypothesis", None)
+            direction.pop("hypothesis_status", None)
 
 
 def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
@@ -99,6 +105,10 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
         item = deepcopy(dict(direction))
         item.pop("completed_plan_steps", None)
         item.pop("next_step", None)
+        if "objective" not in item and isinstance(item.get("hypothesis"), str):
+            item["objective"] = item["hypothesis"]
+        item.pop("hypothesis", None)
+        item.pop("hypothesis_status", None)
         direction_id = item.get("direction_id")
         if not isinstance(direction_id, str) or not direction_id:
             raise ValueError("observed Direction has no ID")
@@ -694,7 +704,7 @@ class ResearchStore:
                         f"in_progress({owner})"
                         if status == "in_progress" and owner else status
                     ),
-                    "hypothesis": item.get("hypothesis"),
+                    "objective": item.get("objective"),
                     "applicability": item.get("applicability"),
                     "expected_benefit": item.get("expected_benefit"),
                     "analysis": item.get("analysis"),
@@ -750,7 +760,7 @@ class ResearchStore:
             {
                 key: item.get(key)
                 for key in (
-                    "direction_id", "name", "proposed_by", "access", "status", "hypothesis",
+                    "direction_id", "name", "proposed_by", "access", "status", "objective",
                     "applicability", "expected_benefit", "analysis", "reopen_condition",
                 )
                 if item.get(key) is not None

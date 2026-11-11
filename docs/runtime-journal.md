@@ -55,21 +55,20 @@ promoted.
 
 ## Direction and Experiment recording
 
-When their respective modules are enabled, Directions describe hypotheses, plans, lifecycle, and
-ancestry; Experiments describe intent and interpretations that may cite Gateway records or
-supporting files.
+When their respective modules are enabled, Directions describe durable optimization objectives,
+applicability, strategy plans, lifecycle, and ancestry; Experiments describe concrete test intent
+and interpretations that may cite Gateway records or supporting files.
 `gateway_record_ids` and `references` are independent optional arrays; either may be omitted or
 empty. Runtime validates cited records and privately archives non-empty references, rewriting them
 to `experiments/<experiment_id>/references/...` paths.
 A candidate report selects an Experiment with `selected_experiment_id` when the Experiment module
-is enabled, or cites `gateway_record_ids` directly when it is disabled. When the Direction module
-is enabled, a normal terminal handoff requires the current Direction to be completed or abandoned;
-a blocked handoff requires it to be closed with `block`. Only `cross_trajectory_share` may publish
-while it remains in progress.
+is enabled, or cites `gateway_record_ids` directly when it is disabled. An ordinary terminal handoff
+may preserve a local `in_progress` Direction for a later Episode; a blocked handoff requires every
+local active Direction to be closed with `block`.
 
 | Command | Purpose |
 | --- | --- |
-| `update-direction` | Propose, start, complete, abandon, block, or defer a hypothesis |
+| `update-direction` | Propose, start, revise, complete, abandon, block, or defer an optimization program |
 | `record-experiment` | Attach analysis and actual measurement IDs |
 | `episode-report` | Submit the terminal outcome |
 

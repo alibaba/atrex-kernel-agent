@@ -23,8 +23,8 @@ the Session. A receipt with stream output includes `stdout_location` and/or `std
 | --- | --- | --- |
 | `gateway-…` | One saved measurement operation | Measured evidence, result reader, direct report citation when the Experiment module is disabled |
 | full Git commit ID | Exact committed Kernel source; exposed as `kernel_commit_id` | Source reader, measurement index, peer Git history |
-| `direction_…` | Research hypothesis and lifecycle | `PROGRESS.md`, `directions/<status>/*.json`, Direction updates |
-| `experiment_…` | Interpretation tied to real measurement IDs | `experiments/<experiment_id>/experiment.json`, closure and report |
+| `direction_…` | Optimization objective and lifecycle | `PROGRESS.md`, `directions/<status>/*.json`, Direction updates |
+| `experiment_…` | Concrete test and interpretation tied to measurement IDs | `experiments/<experiment_id>/experiment.json`, closure and report |
 
 Agate Job IDs cannot replace these IDs.
 
@@ -82,9 +82,9 @@ infrastructure errors, not input mistakes.
 - Duplicate measurement: read `error.gateway_record_id`; do not submit another GPU task.
 - Report rejected: verify exact source and measured evidence. When the Experiment module is enabled,
   check the selected Experiment; otherwise check `gateway_record_ids`. When the Direction module is
-  enabled, complete/abandon all local active Directions for `direction_terminal`, or block them for
-  a blocked handoff; pooled `cross_trajectory_share` is the only exception. Correct the report and
-  resubmit. No successful finalization occurred; the Agent owns engineering
+  enabled, `direction_terminal` may preserve local `in_progress` Directions; block every local active
+  Direction only for a blocked handoff. Correct the report and resubmit. No successful finalization
+  occurred; the Agent owns engineering
   commits and the Supervisor independently validates and seals the exact reported HEAD.
 - Report publication failed: after storage recovery, resubmit the identical report; the durable
   report is reused. Do not rerun GPU work or modify the reported HEAD/create a replacement commit.

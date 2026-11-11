@@ -47,7 +47,7 @@ def _shareable_claim(item):
     """Keep explicit low-quality reviews trajectory-local; preserve legacy claims."""
     quality = item.get("claim_review_quality", item.get("review_quality"))
     return quality not in {
-        "partially_supported", "unreviewed"
+        "partially_supported", "unreviewed", "not_reviewed"
     }
 
 
