@@ -33,8 +33,10 @@ gateway-owned source; English documentation is checked against its reviewed
 upstream and translation digests. `<gpu_arch>` preproduction exercised native CUDA Evaluate,
 multi-file CUTLASS, targeted numerical inputs, Profile, two-shape native ABBA and a
 deliberately incorrect candidate. One ABBA allocation encountered repository networking
-failure; the existing infrastructure retry recovered it and both shapes passed. Check/Disassemble and SOL/SSH do not accept native manifests; unsupported
-native requests stop without a Dev fallback.
+failure; the existing infrastructure retry recovered it and both shapes passed.
+Agate Check/Disassemble and SOL do not accept native manifests. The
+[SSH backend](ssh-backend.md) supports native manifests with provisioned dependencies
+and worker-supported diagnostics. Unsupported requests stop without a Dev fallback.
 
 
 Final-package preproduction validation (2026-10-27): `ev_9403730bedb7`
@@ -75,9 +77,9 @@ When `file_system` is omitted, new tasks use `source_tree`, including CUDA tasks
 Without import configuration, the SourceProvider's initial `kernel.py` remains the
 editable evaluator entry point. It may contain the complete implementation, and the
 Agent may optionally create helper sources under `impl/`; no `impl/` directory or
-import manifest is required. Source trees require native Atrex-Bench Eval; SOL/SSH
+import manifest is required. Source trees require native Atrex-Bench Eval; SOL
 tasks must explicitly select `single_file`. Select `cuda_manifest` explicitly to use
-Agate-generated CUDA bindings. Existing campaigns retain their format and must resume
+worker-generated CUDA bindings. Existing campaigns retain their format and must resume
 with that explicit selection if it differs from the new default.
 The selected implementation is pinned in `.atrex_file_system.json` after the
 framework baseline. A resumed task must match it. A missing or invalid file fails

@@ -12,6 +12,15 @@ MAX_FILE = 16 * 1024 * 1024
 MAX_TOTAL = 64 * 1024 * 1024
 MAX_SNAPSHOT = 6 * MAX_TOTAL
 CACHES = {".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"}
+# Agent runtime state roots are created as *siblings* of the optimizer workspace
+# (home.py: workspace.parent/.atrex-agent-homes; session_capture.py:
+# cwd.parent/.atrex-session-traces). When a snapshot root sits above them they are
+# walked as nested paths whose first segment is not in WORKSPACE_ONLY, so their
+# provider files (e.g. .claude/projects/*/memory/MEMORY.md) used to leak into the
+# candidate source tree and fail editable_roots validation, aborting the whole run.
+# They are pruned at any depth so runtime state can never be mistaken for kernel
+# source; this is a collection filter only and leaves validate_files untouched.
+AGENT_RUNTIME_ROOTS = {".atrex-agent-homes", ".atrex-session-traces"}
 PROTECTED = {"atrex_bench", "torch", "cutlass", "cuda", "triton", "site", "sitecustomize",
              "usercustomize", "importlib", "packaging", "json", "subprocess", "os", "sys"}
 # Controller/public inputs and runtime state are not Candidate source files.
@@ -38,7 +47,9 @@ def relative(value: str, *, dot=False) -> str:
     return value
 
 def ignored(name):
-    return any(p in CACHES for p in Path(name).parts) or Path(name).suffix in {".pyc", ".pyo"}
+    parts = Path(name).parts
+    return (any(p in CACHES or p in AGENT_RUNTIME_ROOTS for p in parts)
+            or Path(name).suffix in {".pyc", ".pyo"})
 
 def source_name(name):
     first = name.split("/")[0]
