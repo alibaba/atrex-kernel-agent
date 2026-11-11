@@ -2,7 +2,9 @@
 
 Logical task identity contains exact sources, not expiring OSS URLs. Persist the
 uploaded wire request before POST so an uncertain submission reuses that same
-reservation and idempotency key on recovery.
+reservation and idempotency key on recovery.  The upload cache uses the same
+canonical request identity as the Gateway job checkpoint: temporary display
+labels must not invalidate an upload, while source changes must.
 """
 from __future__ import annotations
 import hashlib
@@ -21,6 +23,14 @@ from aka.light.workspace.sources import archive_bytes
 ARCHIVES = "__atrex_eval_archives"
 DIAGNOSTIC = "__atrex_source_diagnostic"
 MAX_INLINE_DEV_BYTES = 4 * 1024 * 1024
+
+
+def _logical_request_fingerprint(kind, request):
+    """Bind an upload to the canonical task request, including exact sources."""
+    from aka.light.execution.gateway_jobs import payload_identity
+    from aka.light.experiment.store import digest
+
+    return digest([kind, payload_identity(request)])
 
 
 class SourceUploadError(RuntimeError):
@@ -82,7 +92,7 @@ def uploaded_request(request, wire_key, *, json_call, upload, kind="eval"):
     key = hashlib.sha256(wire_key.encode()).hexdigest()
     root = os.environ.get(JOB_ROOT_ENV)
     path = Path(root) / "uploads" / (key + ".json") if root else None
-    logical = hashlib.sha256(json.dumps([kind, request], sort_keys=True).encode()).hexdigest()
+    logical = _logical_request_fingerprint(kind, request)
     if path is not None:
         try:
             saved = read_json(path)
