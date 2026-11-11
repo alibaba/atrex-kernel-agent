@@ -54,6 +54,13 @@ def batch_shape_ids(shape_ids: list[str], batch_size: int) -> list[list[str]]:
 def shape_batch_request(
     request: dict[str, Any], shape_ids: list[str]
 ) -> dict[str, Any]:
+    """Rewrite the reference bundle to one physical Shape batch.
+
+    This is the compatibility contract for transports such as SSH whose worker
+    consumes the materialized ``shapes.json`` rather than Agate's
+    ``options.shape_ids`` selector.  Remove any selector inherited from the
+    logical request so the filtered bundle remains internally consistent.
+    """
     batched = dict(request)
     reference = dict(request["reference"])
     reference["shapes"] = {
@@ -74,6 +81,9 @@ def shape_batch_request(
             payload["num_shapes"] = len(shape_ids)
         reference[field] = payload
     batched["reference"] = reference
+    options = dict(request.get("options") or {})
+    options.pop("shape_ids", None)
+    batched["options"] = options
     return batched
 
 

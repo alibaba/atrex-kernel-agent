@@ -36,15 +36,24 @@ or throughput claim.
 | Diagram element | Implementation |
 |---|---|
 | Build the full-bundle Eval request and attach a reviewed Shape selection | `aka.light.evaluation.gateway.build_typed_request` |
-| Validate selected IDs and preserve the full reference bundle | `aka.legacy.evaluation.shapes.request_shape_ids` and `shape_subset_request` |
+| Validate selected IDs and preserve the full reference bundle for Agate | `aka.legacy.evaluation.shapes.request_shape_ids` and `shape_subset_request` |
 | Bound each logical batch to 20 Shapes, force one shard and lock clocks | `aka.light.evaluation.policy`: `SHAPE_BATCH_SIZE`, `SHAPE_SHARDS`, `LOCK_CLOCKS` |
 | Submit up to 16 independent jobs and merge only complete batch evidence | `aka.light.evaluation.gateway._run_typed_gateway` and `BATCH_WORKERS` |
 | Persist terminal batches and reuse them on resume | `aka.light.experiment.abba_checkpoints` and the Gateway job record store |
 
-The batch identity includes the exact selected Shape IDs, complete source and
-reference identity, measurement contract, shard policy and clock policy. A
-terminal cacheable batch is reused. A missing, non-terminal or non-cacheable
-batch is the recovery unit; completed sibling batches are not resubmitted.
+The diagram describes the Agate path. The typed SSH worker consumes its
+materialized `shapes.json` and does not interpret Agate's `options.shape_ids`.
+For SSH, Light therefore rewrites the reference, metadata and roofline to the
+physical batch and removes the selector before dispatch. This preserves the
+pre-existing SSH contract and prevents every logical batch from re-running the
+full workload.
+
+The Agate batch identity includes the exact selected Shape IDs, complete source
+and reference identity, measurement contract, shard policy and clock policy.
+The SSH identity instead includes the filtered physical reference and endpoint
+identity. A terminal cacheable batch is reused. A missing, non-terminal or
+non-cacheable batch is the recovery unit; completed sibling batches are not
+resubmitted.
 
 ## Failure behavior
 
@@ -55,6 +64,9 @@ batch is the recovery unit; completed sibling batches are not resubmitted.
 - Agate infrastructure failure affects at most one logical batch. Its completed
   siblings remain reusable, but the failed batch may contain up to 20 Shapes and
   therefore has a larger retry blast radius than the previous one-Shape job.
+- SSH Evaluate and ABBA filter each logical batch before transport. They remain
+  sequential on the assigned GPU, but evaluate each selected Shape exactly once
+  rather than once per batch.
 - Allowing multiple Ray workers produced merge rejection on the production L20D
   pool when workers reported different `environment.gpu_name` or clock-state
   fields. `shape_shards=1` avoids that merge until the remote evidence contract

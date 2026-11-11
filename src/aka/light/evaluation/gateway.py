@@ -162,6 +162,7 @@ from aka.light.execution.gateway_jobs import (  # noqa: E402
 from aka.legacy.evaluation.shapes import (
     request_shape_ids as _request_shape_ids,
     batch_shape_ids as batch_shape_ids,
+    shape_batch_request as _shape_batch_request,
     shape_subset_request as _shape_subset_request,
 )
 
@@ -4043,9 +4044,10 @@ def _run_typed_gateway(
         return None
 
     expected_shape_ids = _request_shape_ids(request)
-    # Light checkpoints bounded logical batches. Each batch uses Agate's
-    # Shape-ID contract but fixes shape_shards=1 until heterogeneous worker
-    # environment fields can be merged reliably by the remote evaluator.
+    # Light checkpoints bounded logical batches. Agate batches use its Shape-ID
+    # contract and fix shape_shards=1 until heterogeneous worker environment
+    # fields can be merged reliably. SSH instead materializes a filtered
+    # reference bundle because its worker does not consume options.shape_ids.
     shape_batches = batch_shape_ids(
         expected_shape_ids,
         getattr(args, "shape_batch_size", DEFAULT_EVAL_SHAPE_BATCH_SIZE),
@@ -4114,7 +4116,11 @@ def _run_typed_gateway(
                 item: tuple[int, list[str]],
             ) -> subprocess.CompletedProcess[str]:
                 batch_index, shape_ids = item
-                batch_request = _shape_subset_request(request, shape_ids)
+                batch_request = (
+                    _shape_batch_request(request, shape_ids)
+                    if args.ssh
+                    else _shape_subset_request(request, shape_ids)
+                )
                 batch_identity = (
                     {
                         "transport": "agate_native_eval",

@@ -17,6 +17,7 @@ from aka.light.evaluation.result_conversion import compile_failures
 from aka.legacy.evaluation.shapes import (
     batch_shape_ids,
     request_shape_ids,
+    shape_batch_request,
     shape_subset_request,
 )
 from aka.light.evaluation.evaluation_feedback import evaluation_feedback
@@ -403,7 +404,14 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             record_store.retain_terminal_job(identity, retained)
 
     def run_batch(ids):
-        batch = shape_subset_request(request, ids)
+        # Agate selects IDs from the complete evaluator bundle. The typed SSH
+        # worker consumes a materialized shapes.json and therefore needs the
+        # physical bundle filtered to this batch instead.
+        batch = (
+            shape_batch_request(request, ids)
+            if args.ssh
+            else shape_subset_request(request, ids)
+        )
         identity = {"transport": "agate_native_eval_abba", "request": payload_identity(batch),
                     "schedule": schedule, "shape_ids": ids}
         if args.ssh:
