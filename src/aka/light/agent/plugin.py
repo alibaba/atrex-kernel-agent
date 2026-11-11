@@ -25,12 +25,26 @@ def _options(config):
 def validate_config(config):
     from pathlib import Path
     from aka.light.agent.sandbox import sandbox_executable
+    from aka.light.agent.preflight import check_projected_proc
+    import subprocess
+
     for value in config["read_only_paths"]:
         path = Path(value).expanduser()
         if not path.is_absolute() or not path.exists():
             raise ValueError("Agent read_only_paths must name existing absolute paths")
     # Explicit isolation fails before a Campaign is launched, including on macOS.
-    sandbox_executable(_options(config).environment())
+    options = _options(config)
+    sandbox_executable(options.environment())
+    if options.sandbox == "bwrap" and options.proc_mode == "projected":
+        try:
+            check_projected_proc()
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            raise ValueError(
+                "light-sandbox with proc_mode=projected requires Linux, a working "
+                "C compiler and development headers in the execution container; "
+                "install the platform packages and run "
+                "`python -m aka.light.agent.preflight` before launch"
+            ) from exc
 
 
 def apply(ctx, config):

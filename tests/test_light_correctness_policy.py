@@ -3972,5 +3972,56 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("shape contract is invalid", problem)
 
 
+class ProjectedProcStartupPreflightTests(unittest.TestCase):
+    @staticmethod
+    def _config(*, proc_mode="projected"):
+        return {
+            "sandbox": "bwrap",
+            "capture": True,
+            "timeout_seconds": 28800,
+            "bwrap_executable": "bwrap",
+            "proc_mode": proc_mode,
+            "read_only_paths": [],
+        }
+
+    def test_projected_light_sandbox_compiles_shim_before_campaign_launch(self):
+        from aka.light.agent.plugin import validate_config
+
+        with (
+            patch("aka.light.agent.sandbox.sandbox_executable"),
+            patch("aka.light.agent.preflight.check_projected_proc") as preflight,
+        ):
+            validate_config(self._config())
+
+        preflight.assert_called_once_with()
+
+    def test_projected_light_sandbox_reports_missing_compiler_as_startup_error(self):
+        from aka.light.agent.plugin import validate_config
+
+        with (
+            patch("aka.light.agent.sandbox.sandbox_executable"),
+            patch(
+                "aka.light.agent.preflight.check_projected_proc",
+                side_effect=FileNotFoundError("cc"),
+            ),
+            self.assertRaisesRegex(
+                ValueError,
+                r"working C compiler and development headers.*preflight",
+            ),
+        ):
+            validate_config(self._config())
+
+    def test_private_proc_does_not_require_compiler_preflight(self):
+        from aka.light.agent.plugin import validate_config
+
+        with (
+            patch("aka.light.agent.sandbox.sandbox_executable"),
+            patch("aka.light.agent.preflight.check_projected_proc") as preflight,
+        ):
+            validate_config(self._config(proc_mode="private"))
+
+        preflight.assert_not_called()
+
+
 if __name__ == "__main__":
     unittest.main()

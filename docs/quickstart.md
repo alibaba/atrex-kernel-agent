@@ -12,7 +12,11 @@ OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workf
 - A configured Agate endpoint and GPU worker with the workload's framework and GPU stack.
 - A native Atrex-Bench operator in its owning Bench checkout.
 - For coordinator isolation: Linux, Bubblewrap, and permission to create the required
-  namespaces. macOS supports native Light; it does not support `light-sandbox` directly.
+  namespaces. `light-sandbox` with `proc_mode: projected` also requires a working C compiler
+  and libc development headers in the exact execution container (`gcc glibc-devel` on the
+  supported DNF image). Run `python3 -m aka.light.agent.preflight` there before launch; startup
+  now fails closed if this compile check does not pass. macOS supports native Light; it does not
+  support `light-sandbox` directly.
 
 NVIDIA profiling requires the appropriate NCU tools on the worker; AMD and PPU profiling
 use their respective worker toolchains. Initialize only the reference-project submodules
