@@ -16,7 +16,9 @@ import tarfile
 import uuid
 from pathlib import Path
 
-from aka.light.experiment.store import JOB_ROOT_ENV, EvidenceUnavailable, digest, private_write, read_json
+from aka.light.experiment.store import (
+    JOB_ROOT_ENV, EvidenceUnavailable, digest, read_evidence_json, write_evidence_json,
+)
 from aka.light.evaluation.evaluation_failures import embedded_device_failure
 
 DEFAULT_MAX_INFRA_RETRIES = 2
@@ -332,7 +334,7 @@ def execute_job(
     state = {}
     if directory:
         try:
-            state = read_json(directory / "state.json")
+            state = read_evidence_json(directory / "state.json")
         except FileNotFoundError:
             pass
         if state and state.get("identity") != identity:
@@ -354,9 +356,9 @@ def execute_job(
         if process is not None:
             value["process"] = {"returncode": process.returncode, "stdout": process.stdout, "stderr": process.stderr}
         if directory:
-            private_write(directory / "state.json", value)
+            write_evidence_json(directory / "state.json", value)
             if process is not None:
-                private_write(directory / f"submission-{submission:04d}-{phase}.json", value)
+                write_evidence_json(directory / f"submission-{submission:04d}-{phase}.json", value)
         return value
 
     def saved_job_id() -> str | None:

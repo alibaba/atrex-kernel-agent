@@ -17,7 +17,7 @@ from aka.light.experiment.store import (
     digest,
     private_write,
     private_write_bytes,
-    read_json,
+    read_evidence_json,
 )
 from aka.light.workspace.files import MAX_FILE_BYTES, publish, relative_path
 from aka.light.agent.session_tail import read_regular_bytes
@@ -192,7 +192,7 @@ def _typed_correctness_evidence(store, record_id: str) -> bool:
     """Do not elevate a Dev script's result marker into a typed correctness gate."""
     found = False
     for path in (store.root / "records" / record_id).glob("repetition-*/jobs/*/state.json"):
-        state = read_json(path)
+        state = read_evidence_json(path)
         identity = state.get("identity", {})
         if not isinstance(identity, dict):
             return False
@@ -296,7 +296,7 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     private_paths=(str(staged), str(store.root), *effects.private_paths))
                 responses.append(response)
                 sample = evaluation.result(response, operation)
-                states = [read_json(path) for path in directory.glob("**/jobs/*/state.json")]
+                states = [read_evidence_json(path) for path in directory.glob("**/jobs/*/state.json")]
                 if operation == "same_allocation_abba":
                     states = _abba_acceptance_states(states)
                 pending = pending or any(state.get("phase") != "terminal" for state in states)

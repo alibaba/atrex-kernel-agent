@@ -28,6 +28,9 @@ JOB_ROOT_ENV = "ATREX_AKA_MEASUREMENT_JOB_ROOT"
 ABBA_BATCH_ROOT_ENV = "ATREX_AKA_ABBA_BATCH_ROOT"
 BATCH_ROOT_ENV = "ATREX_AKA_SHAPE_BATCH_ROOT"
 MAX_RECORD_BYTES = 32 * 1024 * 1024
+MAX_EVIDENCE_BYTES = 256 * 1024 * 1024
+EVIDENCE_CHUNK_BYTES = 8 * 1024 * 1024  # Fixed part size for chunked evidence v1.
+_CHUNKED_EVIDENCE = "chunked_evidence_v1"
 MAX_RECORD_HEADER_BYTES = 16 * 1024
 RECORD_HEADER_FIELDS = frozenset({"gateway_record_id", "operation", "created_at", "kernels"})
 
@@ -123,6 +126,56 @@ def private_write_bytes(path: Path, data: bytes) -> None:
                 os.unlink(temporary, dir_fd=parent)
             except FileNotFoundError:
                 pass
+
+
+def _evidence_chunk(path: Path, checksum: str, index: int) -> Path:
+    return path.with_name(f".evidence-{checksum}-{index:04d}.part")
+
+
+def write_evidence_json(path: Path, value: dict) -> None:
+    """Publish private execution evidence, keeping large bodies in bounded chunks."""
+    data = (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    if len(data) <= MAX_RECORD_BYTES:
+        private_write_bytes(path, data)
+        return
+    if len(data) > MAX_EVIDENCE_BYTES:
+        raise EvidenceUnavailable("Execution evidence exceeds its total size limit")
+    checksum = hashlib.sha256(data).hexdigest()
+    for index, offset in enumerate(range(0, len(data), EVIDENCE_CHUNK_BYTES)):
+        chunk = data[offset:offset + EVIDENCE_CHUNK_BYTES]
+        private_write_bytes(_evidence_chunk(path, checksum, index), chunk)
+    # Publish last. Readers see the previous record or a fully written new one.
+    private_write(path, {_CHUNKED_EVIDENCE: {"bytes": len(data), "sha256": checksum}})
+
+
+def read_evidence_json(path: Path) -> dict:
+    """Read inline or chunked evidence, including older oversized Job receipts."""
+    value = read_json(path, limit=MAX_EVIDENCE_BYTES)
+    if _CHUNKED_EVIDENCE not in value:
+        return value
+    manifest = value[_CHUNKED_EVIDENCE]
+    if set(value) != {_CHUNKED_EVIDENCE} or not isinstance(manifest, dict):
+        raise ValueError("Invalid execution evidence manifest")
+    size, checksum = manifest.get("bytes"), manifest.get("sha256")
+    if (type(size) is not int or not 0 < size <= MAX_EVIDENCE_BYTES
+            or not isinstance(checksum, str) or not re.fullmatch(r"[0-9a-f]{64}", checksum)):
+        raise ValueError("Invalid execution evidence chunk metadata")
+    data = bytearray()
+    for index, offset in enumerate(range(0, size, EVIDENCE_CHUNK_BYTES)):
+        expected = min(size - offset, EVIDENCE_CHUNK_BYTES)
+        try:
+            chunk = read_regular_bytes(_evidence_chunk(path, checksum, index), limit=expected + 1)
+        except FileNotFoundError as error:
+            raise EvidenceUnavailable("Execution evidence manifest references a missing chunk") from error
+        if len(chunk) != expected:
+            raise EvidenceUnavailable("Execution evidence chunk has an unexpected size")
+        data.extend(chunk)
+    if hashlib.sha256(data).hexdigest() != checksum:
+        raise EvidenceUnavailable("Execution evidence checksum mismatch")
+    value = json.loads(data)
+    if not isinstance(value, dict):
+        raise ValueError("Measurement evidence must be an object")
+    return value
 
 
 class EvidenceUnavailable(RuntimeError):
@@ -299,7 +352,7 @@ class MeasurementStore:
                     # Old projections could hide the device error. Inspect sealed
                     # terminal jobs only for failed Eval/ABBA records, not all history.
                     for path in (self.root / "records" / record_id).glob("**/jobs/*/state.json"):
-                        state = read_json(path)
+                        state = read_evidence_json(path)
                         process = state.get("process", {})
                         try:
                             job = json.loads(process.get("stdout", ""))

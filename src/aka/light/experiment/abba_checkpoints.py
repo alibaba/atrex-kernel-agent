@@ -19,11 +19,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aka.legacy.task.persistence import durable_write_json, ensure_private_directory
-from aka.light.experiment.store import private_write, read_json
+from aka.legacy.task.persistence import ensure_private_directory
+from aka.light.experiment.store import read_evidence_json, write_evidence_json
 from aka.light.evaluation.evaluation_failures import embedded_device_failure
-
-MAX_CHECKPOINT_BYTES = 32 * 1024 * 1024
 
 
 def _digest(value: object) -> str:
@@ -68,7 +66,7 @@ def _load_checkpoint(root: Path, identity: dict[str, Any], label: str) -> dict[s
     if not path.exists():
         return None
     try:
-        envelope = read_json(path, limit=MAX_CHECKPOINT_BYTES)
+        envelope = read_evidence_json(path)
         value = envelope["record"]
         if envelope["content_digest"] != _digest(value) or value["identity"] != identity:
             raise ValueError("checkpoint digest or request identity mismatch")
@@ -115,8 +113,6 @@ def _save_checkpoint(
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }
     envelope = {"record": record, "content_digest": _digest(record)}
-    if len(json.dumps(envelope).encode()) > MAX_CHECKPOINT_BYTES:
-        raise RuntimeError(f"{label} batch checkpoint exceeds its byte limit")
     if root.is_symlink():
         raise RuntimeError(f"{label} batch checkpoint directory is unsafe")
     ensure_private_directory(root)
@@ -127,7 +123,7 @@ def _save_checkpoint(
         existing = load(identity)
         if existing is not None:
             return existing
-        durable_write_json(root / f"{_digest(identity)}.json", envelope)
+        write_evidence_json(root / f"{_digest(identity)}.json", envelope)
         return record
     finally:
         fcntl.flock(descriptor, fcntl.LOCK_UN)
@@ -176,9 +172,9 @@ def _retain_terminal_job(
     }
     path = evidence_root / "jobs" / _digest(job_identity) / "state.json"
     try:
-        existing = read_json(path)
+        existing = read_evidence_json(path)
     except FileNotFoundError:
-        private_write(path, state)
+        write_evidence_json(path, state)
     else:
         if existing != state:
             raise RuntimeError("Retained Shape batch evidence is inconsistent")
