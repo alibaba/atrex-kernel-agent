@@ -4,7 +4,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Sequence
 
@@ -17,25 +16,12 @@ from aka.legacy.workflow.process_environment import invocation_environment
 
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    # A distribution may provide one installed optimizer application. The
-    # retained resource-checkout CLI remains explicitly addressable.
-    if not any(value == "--repo-root" or value.startswith("--repo-root=") for value in argv):
-        applications = tuple(entry_points(group="aka.optimizers"))
-        if len(applications) > 1:
-            print("Multiple installed optimizer applications; use an isolated environment.", file=sys.stderr)
-            return 2
-        if applications:
-            from aka.core.effects import call_sync
-            result = call_sync(applications[0].load(), argv)
-            if type(result) is not int:
-                raise TypeError("optimizer application must return an integer exit code")
-            return result
     boundary = argv.index("--") if "--" in argv else len(argv)
     parser = argparse.ArgumentParser(
-        prog="aka optimize",
+        prog="python -m aka optimize",
         usage="%(prog)s --repo-root PATH [EXECUTION OPTIONS] -- [OPTIMIZATION ARGS]",
         description="Translate the retained optimization CLI for installed AKA modules and explicit tool resources.",
-        epilog="Example: aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
+        epilog="Example: python -m aka optimize --repo-root /path/to/public-resources -- --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton. Problem directories use native Atrex-Bench or SOL layouts.",
     )
     parser.add_argument("--repo-root", type=Path, required=True)
     parser.add_argument(

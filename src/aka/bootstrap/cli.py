@@ -15,7 +15,7 @@ from .host import check_profile, resume, run_profile
 def main(argv: Sequence[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     boundary = argv.index("--") if "--" in argv else len(argv)
-    parser = argparse.ArgumentParser(prog="aka run")
+    parser = argparse.ArgumentParser(prog="python -m aka run")
     mode = parser.add_mutually_exclusive_group(required=True)
     mode.add_argument("--profile", type=Path, help="start from the selected launch profile")
     mode.add_argument("--resume", action="store_true", help="reconstruct the recorded launch selection")

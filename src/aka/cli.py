@@ -8,10 +8,10 @@ from typing import Sequence
 from .core.effects import call_sync
 
 
-def main(argv: Sequence[str] | None = None, *, prog: str = "aka", distribution: str = "atrex-aka-framework") -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args == ["--version"]:
-        print(prog + " " + version(distribution))
+        print("python -m aka " + version("atrex-aka-framework"))
         return 0
     available = entry_points()
     entries = (available.select(group="aka.commands") if hasattr(available, "select")
@@ -23,12 +23,12 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "aka", distribution: 
             return 2
         commands[entry.name] = entry
     if not args or args == ["--help"] or args == ["-h"]:
-        print(f"usage: {prog} COMMAND [ARGS ...]")
+        print("usage: python -m aka COMMAND [ARGS ...]")
         print("Commands: " + (", ".join(sorted(commands)) or "none installed"))
         return 0
     command = commands.get(args[0])
     if command is None:
-        print(f'Unknown AKA command: "{args[0]}". Run {prog} --help.', file=sys.stderr)
+        print(f'Unknown AKA command: "{args[0]}". Run python -m aka --help.', file=sys.stderr)
         return 2
     result = call_sync(command.load(), args[1:])
     if type(result) is not int:

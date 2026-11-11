@@ -17,7 +17,7 @@ enabled. To add Direction/Experiment annotations:
 {"api_version":1,"patches":[{"id":"light_journal","config":{"research_records":true}}]}
 ```
 
-Pass the patch before `--` in `aka optimize --repo-root ... --patch ... -- ...`.
+Pass the patch before `--` in `python -m aka optimize --repo-root ... --patch ... -- ...`.
 The setting is frozen per Episode. Older Journals without the setting retain enabled behavior;
 resume them with their original configuration. Legacy local append/finalize APIs belong to
 the Legacy workflow and must not be mixed with Light reports.

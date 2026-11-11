@@ -2,7 +2,7 @@
 
 Core assembles plugins for Bootstrap, which invokes the profile-selected Startup. The
 default Light profile serves the optimizer; `workflow` explicitly selects Legacy.
-`aka run` can select independent implementations. This guide describes the framework shipped in this source tree. See
+`python -m aka run` can select independent implementations. This guide describes the framework shipped in this source tree. See
 [application invocation](application-plugin-migration.md) for setup and the supported
 checkout dependency.
 
@@ -16,9 +16,9 @@ checkout dependency.
   `Startup.run(invocation) -> int`, shared by installed Workflow targets.
 - `aka.bootstrap`: launch-profile resolution, startup target selection, invocation,
   continuation identity and disposal of the assembled composition. It has no fixed
-  Application or Workflow dependency and contributes `aka run`.
+  Application or Workflow dependency and contributes `python -m aka run`.
 - `aka.legacy.compat`: optimization argument conversion and launch selection; contributes
-  `aka optimize`. Installed Workflow plugins provide the startup implementation.
+  `python -m aka optimize`. Installed Workflow plugins provide the startup implementation.
 - `aka.light`: managed Agent, Workspace, Tool Runtime, measurement, acceptance, and Workflow providers.
 
 Core imports neither the optimization application nor Execution. The local tool/Skill registries under
@@ -108,7 +108,7 @@ these to owned children and persist the selection before delayed restart. The le
 adapter currently uses a durable `launch-selection.json` referenced by schema 4 restart
 metadata. The [launch selection variable reference](application-plugin-migration.md#launch-selection-environment-variables)
 defines the snapshot path, digest, paired transport, temporary/durable lifetime and
-explicit `aka run --resume` entrypoint. See the [current recovery constraints](application-plugin-migration.md#current-child-and-recovery-behavior): selection-free main schema 3
+explicit `python -m aka run --resume` entrypoint. See the [current recovery constraints](application-plugin-migration.md#current-child-and-recovery-behavior): selection-free main schema 3
 records may use the historical built-in Legacy profile (not the new-launch Light default) and be upgraded by the
 validated recovery owner; new launch records remain strict.
 

@@ -1,6 +1,6 @@
 # Quick Start
 
-The installed `aka optimize` command starts the default **Light** workflow: managed
+The installed `python -m aka optimize` command starts the default **Light** workflow: managed
 source drafts, private HTTP tools, unified Episodes, and Supervisor-owned promotion.
 The primary path is native Atrex-Bench evaluation through Agate. For SOL-ExecBench,
 OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workflow.md).
@@ -29,7 +29,7 @@ python3 tools/build_distributions.py --output /tmp/aka-wheels \
   atrex-aka-framework atrex-aka-legacy atrex-aka-light
 python3 -m pip install --force-reinstall --no-index \
   --find-links /tmp/aka-wheels atrex-aka-light
-aka optimize --help
+python -m aka optimize --help
 ```
 
 Keep all three distributions and the resource checkout at the same revision. Their current
@@ -63,7 +63,7 @@ workspace only when intentionally changing mode or Shape-visibility policy.
 From the AKA checkout:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
+python -m aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/atrex-bench/operator \
   --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
   --optimization-mode production \
@@ -141,7 +141,7 @@ annotations. All three are disabled by default. Standard evaluator correctness,
 measurement records, report validation, and ABBA remain required with them disabled.
 
 A patch replaces the provider's **whole configuration**; omitted values take provider
-defaults. A Workflow patch used by `aka optimize` must retain `"startup": true` to
+defaults. A Workflow patch used by `python -m aka optimize` must retain `"startup": true` to
 provide the launch entry point. An Agent patch for `light-sandbox` should retain
 `"sandbox": "bwrap"` and `"capture": true` when those behaviors are desired.
 See [all module options](optional-light-modules.md#other-module-options).
@@ -199,5 +199,5 @@ Raw private stores and Session traces are not public submission artifacts. The o
 does not package complete multi-file source trees. Use the workflow's source-aware export
 for those candidates.
 
-Run `aka optimize --repo-root "$PWD" -- --help` for CLI syntax; the parser retains Legacy
+Run `python -m aka optimize --repo-root "$PWD" -- --help` for CLI syntax; the parser retains Legacy
 options, so use the [Light guide](optional-light-modules.md) for their workflow applicability.

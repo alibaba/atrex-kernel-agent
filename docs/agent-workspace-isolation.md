@@ -8,7 +8,7 @@ when the host cannot provide it; it does not fall back to native execution.
 ## Launch and configuration
 
 ```bash
-aka optimize --repo-root "$PWD" --profile light-sandbox -- \
+python -m aka optimize --repo-root "$PWD" --profile light-sandbox -- \
   --op-dir /path/to/atrex-bench/operator \
   --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
   --workspace /path/to/new-runs
