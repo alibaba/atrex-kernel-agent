@@ -152,15 +152,17 @@ def cacheable_job(job: object, identity: dict | None = None) -> bool:
 
 def complete_evaluation(result: dict, request: dict) -> bool:
     """Missing stage/Shape data is not a completed Candidate rejection."""
+    from aka.legacy.evaluation.shapes import request_shape_ids
+    selected_shapes = request_shape_ids(request)
     if request.get("abba"):
         from aka.light.evaluation.native_abba import parse_native_abba
         try:
             parse_native_abba({"status": "succeeded", "result": result},
-                              request["abba"]["repeats"] * 2, list(request["reference"]["shapes"]))
+                              request["abba"]["repeats"] * 2, selected_shapes)
             return True
         except (ValueError, TypeError, KeyError, AttributeError):
             return False
-    shapes = request["reference"].get("shapes", {})
+    shapes = selected_shapes
     passed = result.get("passed")
     if not shapes or not isinstance(passed, dict):
         return False

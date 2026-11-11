@@ -185,7 +185,7 @@ Prefer a background service or declared workload for long runs; do not keep an i
 
 ## Resume
 
-Resume with the same checkout behavior, workspace, composition, framework, source layout, mode, and visibility settings. Light reconciles accepted Agate job IDs, completed batches, an interrupted Framework Baseline, and an interrupted Episode from durable state.
+Resume with the same checkout behavior, workspace, composition, framework, source layout, mode, and visibility settings. Light reconciles accepted Agate job IDs and completed measurement batches; Agate/Atrex-Bench owns Ray Data execution inside each batch job. Light also resumes an interrupted Framework Baseline and an interrupted Episode from durable state.
 
 Do not clear a workspace merely because a process exited. First inspect runtime, Agate, and acceptance status. If the user requests a clean rerun that preserves Bootstrap/V0, identify the exact supported reset boundary for that checkout; do not manually delete arbitrary state directories.
 

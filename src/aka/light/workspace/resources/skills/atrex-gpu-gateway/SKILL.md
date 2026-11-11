@@ -84,8 +84,9 @@ Read [reference directory format](reference/reference-dir.md) when preparing an 
 All these references and examples ship with the Skill.
 
 Shape parallelism is enabled by default for atrex eval; existing quotas and admission determine the worker budget.
-Explicit `--shape-shards 1` forces serial execution. Older or unverified bench versions retain serial fallback.
-See [advanced evaluation](reference/evaluation.md#shape-parallelism) for parallelism options, shard recovery and fallback boundaries.
+Light's Runtime owns the shard policy and does not expose shard-count control to the Agent. Older or unverified
+bench versions retain serial fallback. See [advanced evaluation](reference/evaluation.md#shape-parallelism) for
+Shape selection, shard recovery and fallback boundaries.
 
 ### input.py size limit
 

@@ -300,8 +300,11 @@ class EvalBatchStore:
         ):
             raise ValueError("Eval batch has an invalid request identity")
         shapes = reference.get("shapes")
-        if not isinstance(shapes, dict) or list(shapes) != shape_ids:
+        if not isinstance(shapes, dict):
             raise ValueError("Eval batch request has inconsistent Shape coverage")
+        from aka.legacy.evaluation.shapes import request_shape_ids
+        if request_shape_ids(request) != shape_ids:
+            raise ValueError("Eval batch selection disagrees with options.shape_ids")
         try:
             job = json.loads(record["stdout"])
         except json.JSONDecodeError as exc:

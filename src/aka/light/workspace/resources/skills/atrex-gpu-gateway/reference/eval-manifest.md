@@ -78,7 +78,7 @@ The same information is persisted in `ExecutionSpec.metadata.solution` and retai
 Legacy strings/archives are projected into minimal source descriptions; undeclared file inventories and digests in legacy archives remain unknown.
 `declaration_sha256` fingerprints only the manifest declaration. It is not an artifact cache key: reuse also depends on actual hardware,
 toolchain, installed dependencies, environment settings and evaluator version. The first version promises neither cache hits nor shared artifacts.
-Manifests currently execute serially: automatic shape parallelism falls back to serial execution, and explicit `--shape-shards` greater than 1 is rejected.
+Manifests currently execute serially: automatic shape parallelism falls back to serial execution, and Light's Runtime does not expose shard-count control to the Agent.
 Both ABBA candidate and baseline may use manifests, with separate sources, dependencies and build artifacts.
 The evaluator must support `eval_mode=abba`; use `--atrex-bench-version` to select a compatible version if the image's evaluator is older.
 
@@ -222,7 +222,7 @@ import os
 from atrex_gateway_client import AkSkAuth, Client, build_eval_request
 
 client = Client(os.environ["AGATE_URL"], auth=AkSkAuth(os.environ["AGATE_AK"], os.environ["AGATE_SK"]))
-request = build_eval_request("triton.json", "reference", "H20", shape_shards=1)
+request = build_eval_request("triton.json", "reference", "H20")
 print(client.validate_eval(request))
 accepted = client.submit_job("eval", request)
 print(client.wait(accepted["job_id"]))

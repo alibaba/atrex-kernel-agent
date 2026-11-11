@@ -20,9 +20,11 @@ WARMUP_ITERS = 5
 # seconds. Operators may still override the enclosing allocation.
 CANDIDATE_TIMEOUT = DEFAULT_CANDIDATE_TIMEOUT
 PERFORMANCE_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
-SHAPE_BATCH_SIZE = 1
+SHAPE_BATCH_SIZE = 20
+SHAPE_SHARDS = 1
 BATCH_WORKERS = 16
-MEASUREMENT_CONTRACT = "runtime-native-eval-v1"
+LOCK_CLOCKS = True
+MEASUREMENT_CONTRACT = "runtime-native-eval-ray-data-v2"
 ACCEPTANCE_METRIC = "geomean-latency-reduction-v1"
 
 
@@ -38,5 +40,6 @@ def runner_overrides() -> dict:
 
 def measurement_defaults() -> dict:
     return {"contract": MEASUREMENT_CONTRACT, "bench_iters": BENCH_ITERS,
-            "correctness_cases": CORRECTNESS_CASES, "lock_clocks": True,
+            "correctness_cases": CORRECTNESS_CASES, "lock_clocks": LOCK_CLOCKS,
+            "shape_batch_size": SHAPE_BATCH_SIZE, "shape_shards": SHAPE_SHARDS,
             "runner_overrides": runner_overrides()}

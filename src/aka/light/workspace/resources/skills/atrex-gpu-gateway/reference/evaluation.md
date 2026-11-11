@@ -8,18 +8,22 @@ For SOL formats and problem contracts, see [solution-json.md](solution-json.md) 
 ```bash
 # Automatic mode derives the worker budget from current quotas and admission.
 agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm
-# Limit concurrent single-GPU workers; 1 forces serial execution.
-agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm --shape-shards 2
+# Evaluate an original-bundle subset without rewriting shapes.json.
+agate eval --gpu '<gpu_arch>' --candidate my_kernel.py --reference-dir data/rms_norm \
+  --shape-ids 0 --shape-ids 2
 ```
 
 This applies only to atrex eval and is enabled by default without new Diamond configuration.
 The image's bench must pass capability verification. An explicit `--atrex-bench-version` is probed after isolated job installation:
 capable versions run in parallel; old, unknown or unverified versions fall back to serial execution.
-For a known serial-only version, set `--shape-shards 1` to avoid retaining a multi-GPU budget after fallback.
+Light's Runtime owns the shard count; the Agent may select Shape IDs but cannot override the shard policy.
 Upgrade the server before using new fields. Use a compatible client for older servers; do not change idempotency keys to rerun in-flight jobs.
 
 Admitted worker count and shape-shard count are separate. Each shard contains at most 4 shapes; remaining shards queue in Ray.
 Original shape IDs, input seeds and evaluation configuration are preserved, and all shards merge into one job result.
+`--shape-ids` is repeatable and validated against those original IDs. Light keeps the full
+reference/metadata/roofline bundle and forwards the selection through `options.shape_ids`
+so CLI, direct HTTP and source-tree requests agree.
 An explicit budget over the limit is rejected. Worker terminal evidence is limited to 900;
 automatic mode reduces the budget while retaining every shape, whereas explicit excess is rejected.
 The ledger's peak GPU count shows the total admitted GPU budget; a CPU driver does not mean the job uses zero GPUs.
@@ -89,9 +93,11 @@ ABBA `baseline_input` resolves relative to the same directory and is inlined; ex
 Other runner parameters are validated by worker-side atrex-bench; misspellings produce `unsupported runner config key`.
 The gateway controls `output`/`checkpoint_dir` and ignores values for them in the config file.
 
-The server's current default atrex eval/profile wheel is `0.1.0.post20260917160311`; request/cluster pins take precedence.
+The server documentation bundled with Agate 0.14.33 identifies `0.1.0.post20261108035252`
+as the default bench with partial-failure and distributed-subset support; request/cluster pins
+still take precedence and are capability-probed rather than trusted by version alone.
 Use `--atrex-bench-version VERSION` for an explicit version. Without a request pin, an image wheel is reused only if it exactly matches the cluster/default pin.
-Inspect `request_digest.atrex_bench_runtime` in `agate get JOB_ID --spec --json` for version source, image version and job-level installation.
+Inspect `request_digest.atrex_bench_runtime` in `agate get --spec JOB_ID` for version source, image version and job-level installation.
 Do not describe the default as resolving the newest index version on every job.
 
 ## Placement and measurement confidence

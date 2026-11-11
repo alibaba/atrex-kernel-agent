@@ -45,6 +45,7 @@ BLOCKED = frozenset({
     "--backend", "--harness", "--atrex-bench-version", "--set", "--operator",
     "--deps-mode", "--replay-policy",
     "--num-correctness-cases", "--bench-iters", "--mode", "--lock-clocks",
+    "--shape-shards",
     # These select a different evaluator/source contract rather than tuning the
     # current operator request. They need first-class Runtime workflows.
     "--collective", "--numel", "--dtype", "--warmup-iters", "--subset",
@@ -330,12 +331,14 @@ def values(args: argparse.Namespace, kind: str) -> dict[str, Any]:
     return result
 
 
-def cli_arguments(args: argparse.Namespace, kind: str) -> list[str]:
+def cli_arguments(
+    args: argparse.Namespace, kind: str, *, exclude: frozenset[str] = frozenset()
+) -> list[str]:
     """Render explicitly supplied native values using Agate's own spellings."""
     supplied = values(args, kind)
     result: list[str] = []
     for option in catalog().values():
-        if option.dest not in supplied:
+        if option.dest not in supplied or option.dest in exclude:
             continue
         value = supplied[option.dest]
         if option.action == "append":
@@ -377,9 +380,30 @@ def apply_request(request: dict[str, Any], args: argparse.Namespace, kind: str) 
         diagnostic = request.get("__atrex_source_diagnostic")
         if isinstance(diagnostic, dict):
             diagnostic["placement"] = placement
-    shape_shards = supplied.pop("shape_shards", None)
-    if shape_shards is not None:
-        request.setdefault("options", {})["shape_shards"] = shape_shards
+    for name in ("shape_shards", "shape_ids"):
+        value = supplied.pop(name, None)
+        if value is not None:
+            options = request.setdefault("options", {})
+            if name in options:
+                existing = options[name]
+                same_value = existing == value
+                if (
+                    name == "shape_ids"
+                    and isinstance(existing, list)
+                    and isinstance(value, list)
+                ):
+                    same_value = (
+                        len(existing) == len(value) and set(existing) == set(value)
+                    )
+                if not same_value:
+                    raise ValueError(
+                        f"Agate --{name.replace('_', '-')} conflicts with the Runtime Shape selection"
+                    )
+                # Preserve the Runtime's canonical order for stable batching,
+                # checkpoint identity and recovery when the same set is supplied
+                # in a different order.
+                continue
+            options[name] = value
     # Agate's typed Profile/Check/Disassemble fields use their parser dest as
     # their wire name. Unknown future additive fields follow that public SDK
     # convention and remain subject to Gateway schema validation.
