@@ -263,10 +263,13 @@ class FileExperimentRecords:
                     raise ExperimentRecordError("record_unavailable", ref) from error
                 if not isinstance(record.created_at, str):
                     raise ExperimentRecordError("record_corrupt", ref)
-            except ExperimentRecordError as error:
+            except (ExperimentRecordError, OSError) as error:
+                failure = error if isinstance(error, ExperimentRecordError) else ExperimentRecordError("record_unavailable", ref)
                 if on_error is None:
-                    raise
-                on_error(error)
+                    if failure is error:
+                        raise
+                    raise failure from error
+                on_error(failure)
                 continue
             records.append(record)
         yield from sorted(records, key=lambda record: (record.created_at, record.ref.experiment_id))
