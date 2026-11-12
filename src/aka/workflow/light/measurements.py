@@ -94,6 +94,25 @@ class RecordedMeasurements:
             and measurement.comparability == "comparable" for measurement in measurements) and len({
                 measurement.environment_identity for measurement in measurements}) == 1
         valid = known and all(measurement.validity == "valid" for measurement in measurements)
+        qualification = []
+        if not known:
+            if not identities:
+                qualification.append("measurement-identity-missing")
+            if len(measurements) != len(identities):
+                qualification.append("measurement-evidence-unsettled")
+            for measurement in measurements:
+                if not measurement.environment_identity:
+                    qualification.append("environment-identity-missing")
+                if measurement.identity.dependency_policy == "unknown":
+                    qualification.append("dependency-policy-unknown")
+                if measurement.completeness != "complete":
+                    qualification.append("measurement-incomplete")
+                if measurement.validity == "unknown":
+                    qualification.append("measurement-validity-unknown")
+            if len({item.environment_identity for item in measurements}) > 1:
+                qualification.append("environment-identity-mismatch")
+            if not qualification:
+                qualification.append("measurement-not-comparable")
         modes = {identity.parameters.get("mode") for identity in identities}
         mode = next(iter(modes)) if len(modes) == 1 else None
         operation = (record.steps[0].operation if record.steps else str(record.request.get("operation", "dev")))
@@ -138,6 +157,11 @@ class RecordedMeasurements:
                   "latency_us_by_shape": dict(selected.candidate_latency_us_by_shape) if selected is not None else {},
                   "latency_us_geomean": selected.candidate_latency_us if selected is not None else None,
                   "performance_score": selected.candidate_performance_score if selected is not None else None}
+        if qualification:
+            result["qualification"] = {"status": "unknown", "reasons": list(dict.fromkeys(qualification))}
+            result["diagnostics"] = [*result.get("diagnostics", ()),
+                *({"category": "qualification", "code": code}
+                  for code in dict.fromkeys(qualification))]
         if selected is not None and selected.failure is not None:
             result["failure"] = asdict(selected.failure)
         if operation == "same_allocation_abba" and selected is not None:
@@ -281,6 +305,11 @@ class SharedMeasurements(RecordedMeasurements):
             agent.pop(key, None)
         if operation in {"evaluate", "same_allocation_abba"}:
             agent["result"]["correct"] = evidence["result"]["correct"]
+            if "qualification" in evidence["result"]:
+                agent["result"]["qualification"] = evidence["result"]["qualification"]
+                agent["result"]["diagnostics"] = [*agent["result"].get("diagnostics", ()),
+                    *(item for item in evidence["result"].get("diagnostics", ())
+                      if item.get("category") == "qualification")]
             if evidence["result"]["correct"] is None:
                 agent["result"]["correctness"] = None
         return {**response, "agent_result": agent}

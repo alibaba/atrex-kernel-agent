@@ -313,6 +313,12 @@ class SupervisorRuntime:
             publish(resource_lock.parent, resource_lock.name, json.dumps(self.plugins.resource_snapshot()).encode())
         self.wiki = WikiService((self.audit_root or self.root) / "wiki", config.wiki_options,
                                 self.plugins.resource_snapshot(), provider=getattr(self.plugins, "wiki_provider", None))
+        # Wiki workers execute trusted host resources, independently of the
+        # selected GPU transport. Keep the caller's filesystem scope enforced
+        # by the local Execution plugin rather than dropping it for Gateway.
+        from aka.execution.assembly import compose_execution
+        self._wiki_execution = compose_execution(profile="local")
+        self.wiki_executor = self._wiki_execution.executor
 
     @property
     def journals_root(self) -> Path:
@@ -335,7 +341,10 @@ class SupervisorRuntime:
         for capability in capabilities:
             if capability.session_control:
                 capability.session_control.kill()
-        self.temporary.cleanup()
+        try:
+            self.temporary.cleanup()
+        finally:
+            self._wiki_execution.dispose()
 
     def revoke(self, token: str):
         with self.lock:
@@ -496,7 +505,7 @@ class SupervisorRuntime:
             capability.lock.release()
 
     def run_executor(self, command, cwd, environment, capability, *, deadline=None):
-        from aka.contracts.execution import CommandSpec
+        from aka.contracts.execution import CommandSpec, UnsupportedExecution
         effective = min(deadline or float("inf"), capability.deadline or
                         (time.monotonic() + self.request_timeout_seconds))
         remaining = effective - time.monotonic()
@@ -506,10 +515,15 @@ class SupervisorRuntime:
             raise RequestDispatchTimeout("Caller execution budget has expired")
         self._acquire(self.slots, capability, effective)
         try:
-            result = self.executor.run(CommandSpec(Path(cwd), tuple(command),
+            result = self.wiki_executor.run(CommandSpec(Path(cwd), tuple(command),
                 timeout=max(1, math.ceil(remaining)), environment=environment, operation="dev",
                 cancel_event=_OperationCancellation(self, capability),
                 filesystem_access=self._request_access(capability, Path(cwd))))
+        except UnsupportedExecution as error:
+            raise RuntimeStateError("The local Wiki executor cannot enforce this request's execution scope.",
+                code="wiki_execution_unavailable", next_action=(
+                    "Continue without Wiki and report the execution configuration to the operator. "
+                    "No GPU job was submitted by this Wiki request.")) from error
         finally:
             self.slots.release()
         process = subprocess.CompletedProcess(command,
