@@ -12,9 +12,9 @@ Read this file when installing or updating the 0.2.0 module distributions from a
 
 Light consists of three Python distributions that must come from the same source revision:
 
-- `atrex-aka-framework`: the `aka` CLI and plugin framework
-- `atrex-aka-legacy`: shared Task, Agent, and compatibility components required by Light
-- `atrex-aka-light`: the Light Workflow, Runtime, observability, and reliable-execution implementation
+- `atrex-aka-framework`: the CLI, contracts, Core and shared Task, Agent, Execution, Evaluation, Experiment and Resources modules
+- `atrex-aka-legacy`: the compatibility Workflow required by Light
+- `atrex-aka-light`: the managed Light Workflow and its Runtime
 
 The three wheels and the resource checkout passed through `--repo-root` must come from the same revision. The packages commonly all report version `0.2.0`, so rebuild and force-reinstall them after a source update; do not rely on the displayed package version alone.
 
@@ -52,7 +52,17 @@ bash /path/to/atrex-kernel-agent/skills/atrex-aka-light/scripts/install_light.sh
 
 The installer validates the checkout and interpreter, builds matching framework, legacy, and Light wheels, force-reinstalls them from the local wheel directory, and verifies both `python -m aka --help` and `python -m aka optimize --help`.
 
-The current installer resolves only local wheels with `--force-reinstall --no-index`. Supply a complete wheel directory using `--wheel-dir`, including external runtime dependencies such as `packaging`; preinstalling dependencies alone does not satisfy a forced reinstall. The script's temporary directory contains only the three AKA wheels, so its default dependency bootstrap needs a separate fix. For example, download the external dependency wheels into the retained directory before running the installer.
+The installer passes the three newly built AKA wheel paths explicitly to pip, so
+same-name packages on an index cannot replace them. Online mode resolves external
+dependencies using the configured package index. Build output is isolated from old
+wheels in the retained directory.
+
+For offline installation, supply `--offline --wheel-dir /path/to/wheelhouse`.
+The wheelhouse must include the complete build and runtime dependency closure,
+including `build`, its dependencies, `setuptools`, `wheel` and `packaging>=23`.
+Build isolation also consumes this wheelhouse. A clean dependency resolution check
+runs before runtime installation; missing wheels stop installation with the original
+pip/build diagnostics. Preinstalled dependencies alone do not satisfy a forced reinstall.
 
 If the environment cannot install the Python `build` frontend from a package index, install it beforehand and pass `--no-install-build-dependency`.
 
@@ -65,12 +75,15 @@ cd /path/to/atrex-kernel-agent
 python3 -m pip install build packaging
 python3 tools/build_distributions.py --output /tmp/aka-wheels \
   atrex-aka-framework atrex-aka-legacy atrex-aka-light
-python3 -m pip install --force-reinstall --no-index \
-  --find-links /tmp/aka-wheels atrex-aka-light
+python3 -m pip install --force-reinstall \
+  /tmp/aka-wheels/atrex_aka_framework-0.2.0-py3-none-any.whl \
+  /tmp/aka-wheels/atrex_aka_legacy-0.2.0-py3-none-any.whl \
+  /tmp/aka-wheels/atrex_aka_light-0.2.0-py3-none-any.whl
 python3 -m aka optimize --help
 ```
 
-`--no-index --find-links` prevents installation from mixing locally built packages with same-name, same-version packages from a remote index.
+Use the actual filenames produced by this checkout when versions change. Add
+`--no-index --find-links /path/to/complete-wheelhouse` for offline installation.
 
 ## Verify the installation
 
