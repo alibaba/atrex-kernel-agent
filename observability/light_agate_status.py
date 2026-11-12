@@ -7,7 +7,6 @@ from collections import Counter
 import json
 from pathlib import Path
 import sys
-from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -20,6 +19,7 @@ from observability.common import (
     elapsed_seconds,
     emit,
     evaluation_result,
+    existing_store,
     iter_records,
     job_identifier,
     job_state_rows,
@@ -116,6 +116,8 @@ def _physical_job(scope, state: dict, *, source: str, record_id: str | None,
     terminal = checkpoint_phase == "terminal" or status in {
         "succeeded", "failed", "cancelled", "canceled", "completed"
     }
+    if isinstance(job, dict) and job.get('source') == 'recorded_execution_facts':
+        terminal = job.get('execution_facts', {}).get('disposition') in {'terminal', 'not_submitted'}
     return {
         "scope": scope.label,
         "trajectory": scope.trajectory,
@@ -175,15 +177,23 @@ def snapshot(workspace: Path) -> dict:
     audit_duplicates = 0
     audit_running = 0
     for scope in discover_scopes(workspace):
-        for marker in sorted((scope.measurement_root / "tasks").glob("*.json")):
-            value = read_json(marker, default={})
-            if isinstance(value, dict):
-                task_markers.append({"scope": scope.label, "task_digest": marker.stem, **value})
+        store = existing_store(scope)
+        legacy_root = scope.campaign_root / 'measurements'
+        if store is None or store.legacy is not None or any((legacy_root / 'records').glob('gateway-*')):
+            for marker in sorted((legacy_root / "tasks").glob("*.json")):
+                value = read_json(marker, default={})
+                if isinstance(value, dict):
+                    task_markers.append({"scope": scope.label, "source": "legacy_task_marker", "task_digest": marker.stem, **value})
         for row in iter_records(scope, include_incomplete=True):
             record = row.get("record", {})
+            shared = row.get("execution_record")
+            if shared and shared.get('lifecycle') != 'terminal':
+                task_markers.append({'scope': scope.label, 'source': 'shared_experiment',
+                    'gateway_record_id': row['gateway_record_id'], 'status': 'validation_pending',
+                    'lifecycle': shared['lifecycle'], 'phase': shared['phase'], 'updated_at': shared['updated_at']})
             request = row.get("request", {})
             response = record.get("response") if isinstance(record, dict) else None
-            jobs = job_state_rows(row["directory"])
+            jobs = job_state_rows(row["directory"], record=shared)
             errors = []
             retries = 0
             for state in jobs:
@@ -201,7 +211,7 @@ def snapshot(workspace: Path) -> dict:
                 ))
             primary_error = errors[-1] if errors else _error(None, response)
             cacheable = record.get("cacheable") if isinstance(record, dict) else None
-            if not row["complete"]:
+            if not row["complete"] or shared and shared.get('lifecycle') != 'terminal':
                 outcome = "running_or_interrupted"
             elif primary_error is not None:
                 outcome = "failed"
@@ -307,7 +317,7 @@ def snapshot(workspace: Path) -> dict:
             "waiting_queue_depth": None,
             "availability": (
                 "live locks, slot limits and queue state are process-local and are not durably persisted; "
-                "running task markers report unresolved Records, not lock ownership"
+                "shared Experiment lifecycle and legacy task markers report unresolved Records, not lock ownership"
             ),
         },
         "calls": calls,

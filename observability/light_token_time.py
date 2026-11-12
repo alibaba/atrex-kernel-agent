@@ -49,14 +49,6 @@ def _summed_session_usage(rows: list[dict]) -> dict:
 
 def _session_rows(scope) -> list[dict]:
     public = load_snapshot(scope)
-    if public.sessions:
-        return [{"scope": scope.label, "trajectory": scope.trajectory, "episode": session.episode,
-                 "stage": "episode" if session.episode is not None else startup_stage(scope.workspace),
-                 "run": session.session_id, "session_id": session.session_id, "backend": session.runtime,
-                 "state": session.status, "started_at": None, "finished_at": session.updated_at,
-                 "wall_seconds": None, "usage": _usage(session.usage),
-                 "accounting_basis": "public_agent_session", "warnings": [], "capture_errors": []}
-                for session in public.sessions]
     rows = []
     root = scope.workspace / ".atrex_long_horizon" / "episodes"
     for path in sorted(root.glob("e*/sessions/run-*/token-usage.json")):
@@ -118,7 +110,33 @@ def _session_rows(scope) -> list[dict]:
                 "capture_errors": value.get("capture_errors") if isinstance(value.get("capture_errors"), list) else [],
             }
         )
-    return rows
+    if not public.sessions:
+        return rows
+    # A public session is authoritative for usage. Join trace timing only by
+    # native session ID and backend; never add the same usage a second time.
+    selected = {}
+    for session in public.sessions:
+        key = (session.runtime, session.session_id)
+        previous = selected.get(key)
+        if previous is None or (session.updated_at or '') > (previous.updated_at or ''):
+            selected[key] = session
+    result = []
+    for key, session in selected.items():
+        traces = [row for row in rows if (row['backend'], row['session_id']) == key]
+        starts = [row['started_at'] for row in traces if isinstance(row.get('started_at'), str)]
+        finishes = [row['finished_at'] for row in traces if isinstance(row.get('finished_at'), str)]
+        started = getattr(session, 'started_at', None) or (min(starts) if starts else None)
+        # updated_at is an observation timestamp, not proof of session completion.
+        finished = getattr(session, 'finished_at', None) or (max(finishes) if finishes else None)
+        result.append({"scope": scope.label, "trajectory": scope.trajectory, "episode": session.episode,
+            "stage": "episode" if session.episode is not None else startup_stage(scope.workspace),
+            "run": session.session_id, "session_id": session.session_id, "backend": session.runtime,
+            "state": session.status, "started_at": started, "finished_at": finished,
+            "wall_seconds": elapsed_seconds(started, finished), "usage": _usage(session.usage),
+            "accounting_basis": "public_agent_session", "timing_basis": "session_trace" if traces else "unavailable",
+            "warnings": [], "capture_errors": []})
+    result.extend(row for row in rows if row.get('session_id') and (row['backend'], row['session_id']) not in selected)
+    return result
 
 
 def snapshot(workspace: Path) -> dict:

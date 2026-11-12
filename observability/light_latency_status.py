@@ -28,7 +28,6 @@ from aka.evaluation.tool_results import result_from_response  # noqa: E402
 from observability.measurement_reader import (  # noqa: E402
     MeasurementStore,
     RECORD_ID,
-    source_identity,
 )
 from aka.workflow.light.support.paths import supervisor_campaign_root  # noqa: E402
 from aka.workflow.light.search import read_state  # noqa: E402
@@ -122,7 +121,6 @@ def _accepted_evidence(owner: Path, candidate: dict) -> dict:
         record_id = legacy if isinstance(legacy, str) and RECORD_ID.fullmatch(legacy) else None
     if record_id is None:
         return {**unavailable, "verification_evidence": "gateway_record_id_not_available"}
-    store_root = supervisor_campaign_root(owner) / "measurements"
     if not MeasurementStore.available(owner):
         return {**unavailable, "gateway_record_id": record_id,
                 "verification_evidence": "measurement_store_not_available"}

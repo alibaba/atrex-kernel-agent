@@ -35,17 +35,23 @@ revision。验证状态写入 `verification_evidence`。
 
 ### Measurement Store 位置
 
-工具从顶层 workspace 开始，自动发现该 Campaign 的全部持久化测量范围。每个范围的权威记录位于对应 Supervisor 根目录的：
+当前模块版本从顶层 workspace 发现共享 Experiment 命名空间：workspace 的父目录下
+`.aka-experiments/<namespace-digest>/<experiment-id>/record.json`。通过已有命名空间
+只读打开记录，不创建新 Store；源码来自记录绑定的内容制品。
+
+上游 v1 历史记录兼容读取对应 Supervisor 根目录下的：
 
 - `measurements/records/gateway-*/record.json`：Agate 调用请求、返回结果和 Record 身份；
 - `measurements/kernels/<kernel-id>/kernel.py`：与该测量绑定的候选源码快照；
-- `measurements/identity.key`：证明该 Measurement Store 已经初始化，避免观测命令意外创建新 Store。
+- `measurements/identity.key`：v1 测量身份的历史输入；它不是当前共享 Store 的存在证明。
 
 如果 Campaign 下存在 `search/trajectories/t*`，这些 workspace 对应的 Measurement Store 也会被自动发现并汇总。操作者仍然只需要提供顶层 Campaign workspace。
 
 ### Record 完整性
 
-每个 `record.json` 都通过主线 `MeasurementStore.read` 读取，而不是直接信任 JSON 内容。读取过程会验证：
+每个 `record.json` 都通过只读 `MeasurementStore.read` 适配器读取。共享记录由
+`FileExperimentRecords` 验证摘要、命名空间／记录身份及绑定内容，按 lifecycle 和
+attempt 执行事实判断是否终结；v1 读取过程验证：
 
 - Gateway Record ID 与目录一致；
 - 请求摘要与保存的请求一致；
@@ -88,7 +94,7 @@ revision。验证状态写入 `verification_evidence`。
 这里必须区分两种身份：
 
 - 接受状态里的 `commit` 或 Workflow Export 的 `revision` 是 Git commit，输出统一命名为 `accepted_best.git_commit`；
-- 当前主线 Measurement Store 的 `kernel_id` 不是 Git commit。它由候选源码的 SHA-256 通过 UUIDv5 派生，格式为 `kernel-<32 个十六进制字符>`，输出为 `best_passing_full_eval.kernel_id`；
+- 共享 Experiment 的 `kernel_id` 由候选源码包的 SHA-256 得到，格式为 `kernel-<64 个十六进制字符>`；v1 历史记录通过 UUIDv5 派生为 32 位格式。二者都不是 Git commit，输出均为 `best_passing_full_eval.kernel_id`；
 - Measurement Record 同时保存原始内容摘要 `kernel_artifact_digest`，格式为 `sha256:<64 个十六进制字符>`。
 
 因此不能用 `kernel_id` 执行 Git 操作，也不能把它重命名为 Git commit。需要取回源码时，应使用 Measurement Store 的 Kernel 读取接口和该 `kernel_id`。

@@ -10,6 +10,7 @@ from aka.task.candidate_workspace.provider import GitCandidateWorkspace
 from aka.task.source.formats import from_inputs
 from aka.workflow.light.measurements import RecordedMeasurements
 from aka.workflow.light.support.paths import supervisor_campaign_root
+from aka.evaluation.tool_results import PREFIXES
 from .legacy_records import LegacyMeasurementReader, source_identity as legacy_identity
 
 KERNEL_ID = re.compile(r"kernel-(?:[0-9a-f]{32}|[0-9a-f]{64})")
@@ -37,8 +38,11 @@ class MeasurementStore:
     @staticmethod
     def shared_available(workspace):
         workspace = Path(workspace).resolve()
-        key = hashlib.sha256(json.dumps(str(workspace), sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()).hexdigest()
-        return (workspace.parent / ".aka-experiments" / key).is_dir()
+        try:
+            FileExperimentRecords(workspace.parent / ".aka-experiments", str(workspace), create=False)
+        except LookupError:
+            return False
+        return True
 
     @staticmethod
     def available(workspace):
@@ -80,9 +84,7 @@ class MeasurementStore:
         request = {"operation": operation, "options": {"command": list(command), "evaluation_mode": result.get("mode"),
             "evaluation_policy": {"mode": result.get("mode")}}}
         request["standard_full_evaluation"] = evidence["standard_full_evaluation"]
-        prefix = {"evaluate": "[test_kernel] RESULT_JSON=", "same_allocation_abba": "[sandbox] ABBA_JSON=",
-                  "profile": "[sandbox] PROFILE_JSON=", "check": "[sandbox] CHECK_JSON=",
-                  "disassemble": "[sandbox] DISASSEMBLE_JSON="}.get(operation, "")
+        prefix = PREFIXES.get(operation, "")
         identity = {key: evidence[key] for key in ("kernel_id", "kernel_artifact_digest", "sha256") if key in evidence}
         response = {"exit_code": evidence["exit_code"], "stdout": prefix + json.dumps(result, ensure_ascii=False) + "\n", "stderr": ""}
         from .legacy_records import digest
@@ -91,6 +93,12 @@ class MeasurementStore:
             "created_at": record.created_at, "cacheable": evidence["execution_status"] == "completed" and result.get("all_pass") is True,
             "kernels": {"candidate": identity}, "response": response,
             "execution_status": evidence["execution_status"], "experiment_ref": record.ref.as_dict()}
+
+    def execution_record(self, record_id):
+        """Return validated lifecycle/attempt facts for a shared record only."""
+        if self.legacy is not None or not isinstance(record_id, str) or len(record_id) != 72:
+            return None
+        return self._records.get(ExperimentRef(str(self.workspace), record_id.removeprefix("gateway-"))).as_dict()
 
     def read_kernel(self, kernel_id):
         if self.legacy is not None or isinstance(kernel_id, str) and len(kernel_id) == 39:

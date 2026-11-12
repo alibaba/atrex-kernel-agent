@@ -84,7 +84,6 @@ def locate_git_commit(workspace: Path, campaign_root: Path, commit: str) -> Loca
 
 def existing_stores(workspace: Path, campaign_root: Path):
     for owner in measurement_workspaces(workspace, campaign_root):
-        root = supervisor_campaign_root(owner) / "measurements"
         if MeasurementStore.available(owner):
             yield owner, MeasurementStore(owner)
 
@@ -101,8 +100,6 @@ def locate_kernel_id(workspace: Path, campaign_root: Path, kernel_id: str) -> Lo
             continue
         digest = "sha256:" + hashlib.sha256(source).hexdigest()
         artifact_digest = artifact_digest or digest
-        if artifact_digest != digest:
-            raise ValueError("Kernel ID resolves to inconsistent artifact digests")
         matches.append((source, str(owner)))
     return _unique_source(
         matches,

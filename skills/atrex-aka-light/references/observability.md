@@ -104,7 +104,11 @@ python3 "$AKA_REPO/observability/export_light_evidence.py" "$CAMPAIGN" \
   --output /path/to/new-evidence-directory
 ```
 
-The output contains the exact source package, physical Agate Job IDs and raw responses, the response Light exposed to the Agent, and a provenance manifest. The output path must not already exist.
+The output contains the exact source package, physical Agate Job IDs, the response
+Light exposed to the Agent, and a provenance manifest. Raw Agate responses are
+included when retained. Shared records may provide only `recorded_execution_facts`;
+`agate_response` then remains null and `evidence_source` identifies the available
+evidence. The output path must not already exist.
 
 Export only source by accepted Git revision or measured identity:
 

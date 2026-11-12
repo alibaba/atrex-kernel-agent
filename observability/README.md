@@ -57,7 +57,9 @@ python3 observability/export_light_evidence.py /path/to/campaign \
 The new directory contains:
 
 - `kernel/`: the exact measured source package;
-- `agate-jobs.json`: raw physical Agate responses and Job IDs;
+- `agate-jobs.json`: physical Job IDs and available execution evidence. Each row
+  identifies `evidence_source`; `agate_response` is null when only shared
+  `recorded_execution_facts` were retained;
 - `agent-response.json`: the response exposed to the Agent by Light;
 - `manifest.json`: identities and provenance for the export.
 
