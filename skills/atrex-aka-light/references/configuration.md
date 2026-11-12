@@ -29,7 +29,7 @@ from remembered flags.
 ## Public request fields
 
 Native flags map directly to
-[`WorkflowSettings` and `CampaignRuntimeSettings`](../../../src/aka/contracts/workflow.py).
+`WorkflowSettings` and `CampaignRuntimeSettings` in `$AKA_REPO/src/aka/contracts/workflow.py`.
 Their dataclass defaults and the CLI help are authoritative. Alternatively pass
 `--settings` and `--runtime` JSON objects; specifying the same field in JSON
 and as a flag is rejected.
@@ -70,7 +70,7 @@ their settings.
 Light selects native ABBA, one Shape per batch, one measurement repetition
 and bounded parallel batch workers (up to 16). The Runtime DTO's
 `shape_batch_size` is not a substitute for the selected Evaluation policy.
-[Module options](../../../docs/optional-light-modules.md#light-measurement-policy)
+Module options in `$AKA_REPO/docs/optional-light-modules.md`, section `light-measurement-policy`,
 describe the defaults and their ownership.
 
 `ATREX_SANDBOX_QUEUE_WAIT_GRACE` defaults to unset/`None`: no local client
@@ -97,7 +97,7 @@ and SSH are mutually exclusive. The Gateway provider rejects SSH settings.
 | `ATREX_ENVIRONMENT_POLL_INTERVAL` | Recovery probe interval. |
 
 The named Light profiles inherit these SSH configuration names from the Workflow
-environment allowlist. See [SSH backend](../../../docs/ssh-backend.md) for GPU
+environment allowlist. See `$AKA_REPO/docs/ssh-backend.md` for GPU
 isolation, explicit device maps and dependencies.
 
 SSH supports typed requests, source archives, explicit input files and
@@ -113,7 +113,7 @@ provider defaults. Retain `startup: true` for a Workflow launched by
 `execution`, `resources`, `problem`, `source`, `candidate` and
 `experiment`; the old `tool_runtime`, `light_journal` and `wiki` entries
 are retired. The matching
-[module guide](../../../docs/optional-light-modules.md) owns schemas and examples.
+module guide at `$AKA_REPO/docs/optional-light-modules.md` owns schemas and examples.
 
 | Module | Relevant controls |
 | --- | --- |
@@ -134,7 +134,7 @@ Live drafts, tools, Skills, scratch, Conversation history and research state are
 not merged between trajectories.
 
 Routed Wiki is configured through `workflow.wiki`/`wiki_options`;
-[WikiConfig](../../../src/aka/resources/wiki/config.py) owns model, effort,
+`WikiConfig` in `$AKA_REPO/src/aka/resources/wiki/config.py` owns model, effort,
 settings_file, base_url, timeout, bridge_timeout, queue_timeout and concurrency.
 Wiki timeouts do not change GPU or Agent budgets.
 

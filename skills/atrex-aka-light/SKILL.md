@@ -46,7 +46,9 @@ three-file template.
 This skill and the `observability/` scripts are checkout resources. To install
 this skill in an Agent's skill directory, copy the complete `skills/atrex-aka-light/`
 directory, including references, scripts and examples. Commands here use the
-original checkout paths. Read [installation](references/installation.md) for runtime dependencies.
+original checkout paths. Set `AKA_REPO` to the matching checkout; references to
+`docs/...` and `src/...` are relative to that checkout, even when this skill was
+copied elsewhere. Read [installation](references/installation.md) for runtime dependencies.
 
 Create an isolated Python environment, then install all three matching distributions from one AKA checkout:
 

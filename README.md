@@ -22,7 +22,11 @@ lets users configure and replace agents, workspaces, evaluation, execution, and 
 AKA supports Claude, Qoder, Codex, Pi, and [DSH](docs/dsh-harness-adapter.md),
 with CUDA, Triton, CuTeDSL, FlyDSL, and TileLang
 tooling for supported NVIDIA, AMD, and T-Head PPU environments. Native Atrex-Bench evaluation
-runs through Agate; GPU Wiki provides optimization knowledge.
+runs through Agate or a provisioned [OpenSSH GPU backend](docs/ssh-backend.md);
+GPU Wiki provides optimization knowledge. The [Light skill](skills/atrex-aka-light/SKILL.md)
+provides installation and launch guidance. [Observation tools](observability/README.md)
+report retained execution, performance and session evidence. Both are checkout resources;
+keep a checkout matching the installed module distributions.
 
 ## How AKA works
 
