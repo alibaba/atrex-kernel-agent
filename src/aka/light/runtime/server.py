@@ -342,7 +342,7 @@ def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
     from aka.light.execution.gateway_jobs import TERMINAL_VALIDATION_ENV
     return {key: value for key, value in environment.items() if
             not key.startswith(("AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_", "ATREX_GPU_WIKI_"))
-            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, JOB_ROOT_ENV, BATCH_ROOT_ENV,
+            and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, "ATREX_AKA_RUNTIME_CONNECTION_FILE", JOB_ROOT_ENV, BATCH_ROOT_ENV,
                             ABBA_BATCH_ROOT_ENV,
                             "ATREX_AKA_MEASUREMENT_REPETITIONS",
                             "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT",

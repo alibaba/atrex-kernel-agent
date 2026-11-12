@@ -75,8 +75,10 @@ the remote GPU executor.
 ## Campaign lifecycle
 
 1. **Freeze inputs.** Load the operator, initial source, evaluator contract, runtime pins,
-   and selected candidate format. Production preprocessing provides a generalized public
-   contract while detailed inputs remain private.
+   and selected candidate format. Shapes are exposed by default. Production uses a
+   generalized public contract only when `--no-expose-evaluator-shapes` successfully stages
+   `agent_problem.json`; the persisted visibility records that actual projection. If the requested
+   hidden projection is unsupported, startup fails rather than falling back to exposed inputs.
 2. **Establish baselines.** Measure V0 and, when configured, establish V1 in the target
    framework. Imported source trees retain their pinned initial package. Before pooled
    trajectories fan out, Supervisor seals one canonical Agent Git bundle: every trajectory
@@ -138,15 +140,17 @@ speedup ratios are diagnostic and have distinct meanings. Production source-poli
 is shared with Legacy; the validated distributed Agate exception is frozen from evaluator
 metadata, not candidate declarations.
 
-Light's native ABBA requires an Agate Atrex-Bench contract. SOL inputs can be loaded with
-explicit `single_file`, but SOL/SSH comparisons have no Light ABBA fallback.
+Light's native ABBA requires an Atrex-Bench contract. Explicit SSH transports that same
+native Evaluate/ABBA contract through the isolated SSH executor. SOL inputs can be loaded
+with explicit `single_file`, but SOL without a native Atrex-Bench contract has no Light ABBA fallback.
 The [Legacy guide](legacy-workflow.md) covers the supported alternative verification path.
 
 ## Recovery and observability
 
 The Supervisor persists accepted job IDs, request identities, complete ABBA batches, report
-transactions, source seals, and promotion audits. Direct HTTP replay uses durable idempotency
-keys. An uncertain CLI submission without an ID needs reconciliation, not blind resubmission.
+transactions, source seals, and promotion audits. Agate SDK submissions use durable idempotency
+keys. An uncertain non-idempotent submission without an ID returns a structured submission
+timeout and is not blindly resubmitted.
 
 Session throttling and output-limit recovery retain the Episode draft and observation history.
 Agent active time excludes authenticated blocking Runtime requests. GPU, Wiki, and queue

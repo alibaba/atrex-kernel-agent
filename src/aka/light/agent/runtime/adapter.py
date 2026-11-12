@@ -8,7 +8,7 @@ from dataclasses import replace
 from aka.legacy.agent.adapter import (
     AgentBackendAdapter, AdapterFactory, BackendAdapterRegistry,
     ClaudeLikeAdapter as _ClaudeLikeAdapter, ClaudeAdapter as _ClaudeAdapter,
-    QoderAdapter as _QoderAdapter, PiAdapter as _PiAdapter, CodexAdapter,
+    QoderAdapter as _QoderAdapter, PiAdapter as _PiAdapter, CodexAdapter, DshAdapter,
     token_usage_from_mapping, token_usage_from_model_usage,
     toml_config_value, pi_settings_args, codex_settings_args,
     _counter, _json_events, _phase_marker_receipts,
@@ -190,3 +190,4 @@ DEFAULT_BACKEND_REGISTRY.register("claude", ClaudeAdapter)
 DEFAULT_BACKEND_REGISTRY.register("qodercli", QoderAdapter)
 DEFAULT_BACKEND_REGISTRY.register("codex", CodexAdapter)
 DEFAULT_BACKEND_REGISTRY.register("pi", PiAdapter)
+DEFAULT_BACKEND_REGISTRY.register("dsh", DshAdapter)

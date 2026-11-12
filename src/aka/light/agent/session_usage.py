@@ -104,6 +104,12 @@ class UsageAccumulator:
 
     def __init__(self, backend: str, *, max_entries: int = 100_000):
         self.backend = backend
+        if backend == "dsh":
+            from aka.legacy.agent.dsh import UsageLedger
+            self.dsh = UsageLedger()
+            self.dsh_main_id = ""
+            self.dsh_seeded = {}
+            self.dsh_sessions = {}
         self.max_entries = max_entries
         self.old_ids: set[str] = set()
         self.responses: dict[str, dict] = {}
@@ -183,6 +189,41 @@ class UsageAccumulator:
         self.missing.add(path + ":resume_history_incomplete")
         self.prior_codex.pop(path, None)
 
+    def _feed_dsh_native(self, path, event, index, *, previous=False):
+        from aka.legacy.agent.dsh import native_usage
+        if event.get("type") == "session":
+            self.dsh_seeded[path] = event.get("isSeeded") is True
+            if isinstance(event.get("id"), str) and event["id"]:
+                self.dsh_sessions[path] = event["id"]
+        elif event.get("type") == "session/end-seed":
+            self.dsh_seeded[path] = False
+        elif (not self.dsh_seeded.get(path, False)
+              and event.get("type") in {"assistant/message", "assistant/attempt"}):
+            session = self.dsh_sessions.get(path, path.split('/')[-2])
+            sequence = event.get("seq")
+            if type(sequence) is not int or sequence < 0:
+                self.missing.add(path + ":dsh_missing_sequence")
+                sequence = index
+            # A new JSONL generation preserves logical Session/sequence IDs.
+            # Keep those IDs stable across migrations and invocation history.
+            identity = f"dsh-native:{session}:{sequence}"
+            if previous:
+                self.old_ids.add(identity)
+                self.responses.pop(identity, None)
+                return
+            if identity in self.old_ids:
+                return
+            usage = native_usage(event)
+            if usage.total_tokens is None:
+                self.missing.add(identity + ":usage_unavailable")
+            prior = self.responses.get(identity)
+            if prior is not None and prior["usage"] != usage:
+                self.missing.add(identity + ":usage_changed")
+            self.responses[identity] = {
+                "message_id": identity, "path": path,
+                "agent": session, "usage": usage, "native": True,
+            }
+
     def feed(self, path: str, text: str, *, previous: bool = False) -> None:
         is_native = path != "provider/stdout.stream-json"
         for line in text.splitlines():
@@ -203,6 +244,8 @@ class UsageAccumulator:
             message = event.get("message")
             body = event.get("payload")
             if previous:
+                if self.backend == "dsh" and is_native:
+                    self._feed_dsh_native(path, event, index, previous=True)
                 if isinstance(message, dict) and message.get("id"):
                     self.old_ids.add(message["id"])
                     self.responses.pop(message["id"], None)
@@ -215,6 +258,20 @@ class UsageAccumulator:
                 self.native_seen = True
             if self.backend == "pi":
                 self._feed_pi(path, event, index, is_native)
+                continue
+            if self.backend == "dsh":
+                if is_native:
+                    self._feed_dsh_native(path, event, index)
+                else:
+                    if event.get("type") == "session" and isinstance(event.get("sessionId"), str):
+                        self.dsh_main_id = event["sessionId"]
+                    key, usage = self.dsh.feed(event)
+                    if usage is not None:
+                        identity = f"dsh:{key[0]}:{key[1]}"
+                        self.responses[identity] = {
+                            "message_id": identity, "path": path, "agent": "main",
+                            "usage": usage, "native": False,
+                        }
                 continue
             if not is_native and event.get("type") in {"result", "turn.completed"}:
                 self.credit_event = line
@@ -304,6 +361,12 @@ class UsageAccumulator:
 
     def report(self, *, finished: bool = False) -> dict:
         responses = list(self.responses.values())
+        if self.backend == "dsh":
+            # Root native attempts are already folded into headless step usage.
+            # A scoped child's own settlements are disjoint; seeded history is
+            # excluded while reading and resumed prefixes are never re-fed.
+            responses = [row for row in responses if not row["native"]
+                         or (self.dsh_main_id and row["agent"] != self.dsh_main_id)]
         if self.backend == "pi":
             responses, pi_total, pi_exact, pi_warnings = self._pi_evidence(finished)
         observed = sum_token_usages([r["usage"] for r in responses])
@@ -312,7 +375,15 @@ class UsageAccumulator:
         )
         warnings = []
         exact = finished and not self.missing and self.native_seen and bool(self.responses)
-        if self.backend == "pi":
+        if self.backend == "dsh":
+            self.terminal = self.dsh.total()
+            children = [row["usage"] for row in responses if row["native"]]
+            total = sum_token_usages([self.terminal, *children]) if children else self.terminal
+            exact = finished and not self.missing and self.native_seen and total.measurement == "exact"
+            basis = "dsh_root_steps_and_native_child_attempts"
+            if not exact:
+                warnings.append("dsh_step_usage_incomplete")
+        elif self.backend == "pi":
             total, exact, warnings = pi_total, pi_exact, pi_warnings
             basis = "pi_settled_stream" if exact else "pi_source_counter_bounds"
         elif self.backend == "claude":
@@ -387,7 +458,9 @@ class UsageAccumulator:
             "warnings": warnings,
             "missing_usage": sorted(self.missing),
             "subagent_coverage": (
-                "pi_stream; native-only evidence conservatively merged without shared response IDs"
+                "headless root steps plus selected native child attempts; seeded history excluded"
+                if self.backend == "dsh"
+                else "pi_stream; native-only evidence conservatively merged without shared response IDs"
                 if self.backend == "pi"
                 else "native child counters are diagnostic only; not added to result.usage"
                 if self.backend == "claude"

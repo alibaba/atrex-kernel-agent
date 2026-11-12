@@ -111,6 +111,9 @@ def build_session_environment(runtime_id: str) -> dict[str, str]:
     if runtime_id == "pi":
         environment["PI_SKIP_VERSION_CHECK"] = "1"
         environment["PI_TELEMETRY"] = "0"
+    if runtime_id == "dsh":
+        environment["DSH_HOME"] = str(Path(environment.get("DSH_HOME")
+            or Path(environment.get("HOME") or str(Path.home())) / ".dsh").expanduser().resolve())
     if runtime_id == "claude" and environment.get("ANTHROPIC_AUTH_TOKEN"):
         environment.pop("ANTHROPIC_API_KEY", None)
     return environment
@@ -169,6 +172,7 @@ class CliAgentRuntime:
         # The active backend is supervisor-owned. Plan helpers use it to avoid recursively
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id
+        environment = self._adapter.prepare_environment(environment, reasoning_effort=request.reasoning_effort)
         codex_observer = None
         codex_temporary_home = None
         pre_observation_errors: tuple[str, ...] = ()
@@ -210,7 +214,13 @@ class CliAgentRuntime:
             if codex_temporary_home is not None:
                 codex_temporary_home.close()
             raise
+        finally:
+            self._adapter.release_environment(environment)
         observation_errors: tuple[str, ...] = pre_observation_errors
+        exit_status = self._adapter.validated_exit_status(stdout, exit_status)
+        if self.id == "dsh":
+            from .dsh import session_id_from_stream
+            session_id = session_id_from_stream(stdout)
         try:
             events, terminal_usage = self._adapter.normalize_stream(stdout)
         except Exception as exc:

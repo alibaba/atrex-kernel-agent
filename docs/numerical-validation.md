@@ -21,7 +21,7 @@ flowchart TD
 - The planner writes a declarative plan: at most three cases, actual nested tensor ABI paths, supported generators and public input constraints. It cannot provide Python, an evaluator, private Shape IDs or thresholds. Supported distributions include constant, uniform, log-uniform, sparse, alternating, ramp, packed bytes and near-constant. Unspecified input leaves retain the original generator's values.
 - `aka.light.acceptance.remote_numerical` executes up to three representative matching Shapes, two seeds and all declared ranks per case, using the canonical evaluator. Receipts bind case, selected Shapes, seeds, ranks and observed coverage. A complete failing workload can disprove correctness; a PASS requires all selected coverage. No eligible Shapes yields an explicit unsupported advisory, not a passing test.
 - Supplemental probes use the task's trusted metadata/evaluator correctness policy; Light does not inject fallback `atol`, `rtol`, mismatch-fraction or relative-L2 thresholds. Structural, dtype, finite-value, mutation and exact non-floating checks remain evaluator-owned.
-- Native `input.py`/`reference.py`/`shapes.json` is required for these constructors. SOL contracts without that ABI receive a recorded unsupported advisory. Their full-workload correctness remains required; Light native ABBA does not support SOL/SSH.
+- Native `input.py`/`reference.py`/`shapes.json` is required for these constructors. SOL contracts without that ABI receive a recorded unsupported advisory. Their full-workload correctness remains required; this supplemental route does not synthesize a native ABI for SOL. Explicit SSH can execute the same native Atrex-Bench probes when that ABI is present.
 
 ## Report and repair
 

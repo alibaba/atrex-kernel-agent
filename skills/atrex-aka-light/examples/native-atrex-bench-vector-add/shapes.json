@@ -1,0 +1,26 @@
+{
+  "small": {
+    "init_kwargs": {
+      "alpha": 1.0
+    },
+    "input_kwargs": {
+      "numel": 1024
+    }
+  },
+  "medium": {
+    "init_kwargs": {
+      "alpha": 0.5
+    },
+    "input_kwargs": {
+      "numel": 65536
+    }
+  },
+  "large": {
+    "init_kwargs": {
+      "alpha": 2.0
+    },
+    "input_kwargs": {
+      "numel": 1048576
+    }
+  }
+}

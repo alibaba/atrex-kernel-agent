@@ -89,8 +89,9 @@ reachable commit and privately exports the correct single-file or source-tree la
 policy identities match.
 
 SOL full-workload correctness is supported with explicit `single_file`, but Light's
-native ABBA promotion path requires Agate Atrex-Bench. Use
-[Legacy verification](legacy-workflow.md) for SOL/SSH campaigns needing that path.
+native ABBA promotion path requires Agate Atrex-Bench. Explicit SSH supports that native
+Atrex-Bench ABBA path for `source_tree` and CUDA-manifest candidates; SOL campaigns that
+need a non-native comparison path still require [Legacy verification](legacy-workflow.md).
 
 ## Promotion evidence and recovery
 

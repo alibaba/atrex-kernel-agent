@@ -18,7 +18,7 @@ from aka.light.workflow.output_limit import (
     dependency_policy_recovery_prompt,
     output_limit_continuation_prompt,
 )
-from aka.light.agent.runtime.adapter import ClaudeAdapter, PiAdapter
+from aka.light.agent.runtime.adapter import DEFAULT_BACKEND_REGISTRY
 from aka.light.agent.runtime.process import (
     OUTPUT_LIMIT_EXIT_STATUS,
     OUTPUT_LIMIT_INTERRUPT_MARKER,
@@ -158,8 +158,12 @@ class LongSessionRunner:
         if resume_session and not session_id:
             raise ValueError("resume_session requires an existing session_id")
         session_id = session_id or str(uuid.uuid4())
-        is_codex = self.agent_cli == "codex"
-        active_session_id = session_id if resume_session else ("" if is_codex else session_id)
+        assigns_session_id = self.agent_cli not in {"codex", "dsh"}
+        active_session_id = (
+            session_id
+            if resume_session
+            else (session_id if assigns_session_id else "")
+        )
         if handoff_path is not None:
             if completion_check is None:
                 raise ValueError("completion_check is required when handoff_path is configured")
@@ -291,10 +295,11 @@ class LongSessionRunner:
                     output_limit_recovery_count(workspace, session_id),
                 )
                 failure_kind, provider_error_code = (
-                    ClaudeAdapter().classify_terminal_failure(stdout, active_session_id)
-                    if self.agent_cli == "claude" else
-                    PiAdapter().classify_terminal_failure(stdout, active_session_id)
-                    if self.agent_cli == "pi" else (None, None)
+                    DEFAULT_BACKEND_REGISTRY.create(
+                        self.agent_cli
+                    ).classify_terminal_failure(stdout, active_session_id)
+                    if self.agent_cli in DEFAULT_BACKEND_REGISTRY.ids
+                    else (None, None)
                 )
                 if (
                     self.agent_cli == "claude"

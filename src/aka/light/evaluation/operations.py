@@ -26,24 +26,28 @@ from aka.light.evaluation.projection import (
 
 
 def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
-    if args.command or args.ssh:
-        raise ValueError("Check/Disassemble require the typed Gateway; no command or SSH transport")
+    if args.command:
+        raise ValueError("Check/Disassemble do not accept a command override")
     request = gateway.build_typed_request(
         workspace, args.hardware, args.timeout, args.env, [], args.kind,
         arch=args.arch, sanitize=args.sanitize, disassembly_format=args.disassembly_format,
         requirements=args.requirement or (), deps_mode=args.deps_mode,
+        ssh=bool(args.ssh),
     )
     from aka.light.evaluation.agate_native import apply_request
     request = apply_request(request, args, args.kind)
     if args.dry_run:
         print(json.dumps({"kind": args.kind, "candidate_bytes": len(request["candidate"].encode())}))
         return 0
-    # Inline and source-tree diagnostics share the same typed SDK lifecycle.
-    # Do not rediscover or invoke the ``agate`` executable: doing so would give
-    # one source layout different serialization, retry and authentication
-    # semantics from the others.
-    from aka.light.evaluation.source_transport import run as run_tree
-    process = run_tree(gateway, args, request, args.kind, queue_wait_grace)
+    if args.ssh:
+        from aka.light.evaluation.ssh_transport import run
+        process = run(gateway, args, workspace, request, args.kind)
+    else:
+        # All Agate Gateway diagnostics share the typed SDK lifecycle.  The
+        # explicit SSH transport above is independent of Agate and does not
+        # reintroduce CLI or direct-HTTP Gateway fallbacks.
+        from aka.light.evaluation.source_transport import run as run_tree
+        process = run_tree(gateway, args, request, args.kind, queue_wait_grace)
     source_error = candidate_source_rejection(process)
     if source_error is not None:
         print(SOURCE_ERROR_PREFIX + json.dumps(source_error))

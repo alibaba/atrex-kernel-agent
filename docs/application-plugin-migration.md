@@ -32,8 +32,9 @@ problem path are separate inputs.
 
 The installed parser accepts retained optimization arguments after the mandatory `--`
 separator. Their workflow applicability is profile-specific: Light uses unified Episodes,
-not Legacy Fast/Full stages. Light's source-tree and ABBA path requires native Agate
-Atrex-Bench; select the [Legacy workflow](legacy-workflow.md) for SOL/SSH campaigns. Profile-selected environment values and absence are captured for children and recovery.
+not Legacy Fast/Full stages. Light's source-tree and ABBA path requires native
+Atrex-Bench through Agate or [SSH](ssh-backend.md); select the [Legacy workflow](legacy-workflow.md)
+for SOL campaigns. Profile-selected environment values and absence are captured for children and recovery.
 The removed `orchestrator/optimize.py` shim is not a compatibility interface; automation must invoke
 the installed command.
 

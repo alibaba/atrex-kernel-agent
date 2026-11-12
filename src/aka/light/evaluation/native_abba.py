@@ -392,8 +392,11 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     from aka.light.execution.gateway_jobs import eval_retry_kind, payload_identity
 
     validate_comparison(args)
-    if args.ssh or (workspace / "workload.jsonl").exists():
-        raise ValueError("Native Eval ABBA requires an Agate Atrex-Bench input/Shape contract; SOL/SSH Dev fallback is disabled")
+    if (workspace / "workload.jsonl").exists():
+        raise ValueError(
+            "Native Eval ABBA requires an Atrex-Bench input/Shape contract; "
+            "the SOL Dev fallback is disabled"
+        )
     from aka.light.workspace.sources import read_path
     baseline = read_path(workspace / args.baseline_path)
     command = ["python3", "test_kernel.py"]
@@ -410,6 +413,7 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     request = gateway.build_typed_request(
         workspace, args.hardware, allocation_timeout, args.env, command, "run", evaluation_mode="full",
         requirements=args.requirement or (), deps_mode=args.deps_mode,
+        ssh=bool(args.ssh),
     )
     from .agate_native import apply_request
     request = apply_request(request, args, "run")
@@ -423,7 +427,9 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     if not shapes:
         raise ValueError("Native ABBA requires at least one Shape")
     if args.dry_run:
-        print(json.dumps({"kind": "same_allocation_abba", "transport": "agate_native_eval_abba",
+        print(json.dumps({"kind": "same_allocation_abba", "transport": (
+                              "ssh_native_eval_abba" if args.ssh else "agate_native_eval_abba"
+                          ),
                           "shape_count": len(shapes), "comparison_repeats": args.comparison_repeats}))
         return 0
     schedule = verification_schedule(args.comparison_repeats)
@@ -457,8 +463,13 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
 
     def run_batch(ids):
         batch = shape_batch_request(request, ids)
-        identity = {"transport": "agate_native_eval_abba", "request": payload_identity(batch),
+        identity = {"transport": (
+                        "ssh_native_eval_abba" if args.ssh else "agate_native_eval_abba"
+                    ), "request": payload_identity(batch),
                     "schedule": schedule, "shape_ids": ids}
+        if args.ssh:
+            from .ssh_transport import endpoint_identity
+            identity.update(endpoint_identity(execution_args))
         if store and (saved := store.load(identity)) is not None:
             retain_in_record(identity, saved)
             return saved["payload"], None
@@ -467,6 +478,15 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             retry_identity = (
                 {"abba_wall_clock_retry": attempt} if attempt else None
             )
+            if args.ssh:
+                from .ssh_transport import run
+                return run(
+                    gateway,
+                    execution_args,
+                    workspace,
+                    batch,
+                    "run",
+                )
             # Native ABBA is an Eval request regardless of whether either side
             # needs an uploaded source archive.  The SDK transport accepts both
             # inline and archive-backed sources, so there is no CLI/direct-HTTP

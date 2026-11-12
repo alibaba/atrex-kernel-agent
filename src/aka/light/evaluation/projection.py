@@ -147,6 +147,33 @@ def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
             "If the result is still needed, retry the same Runtime operation later; Runtime "
             "retains the private accepted-job checkpoint and will not blindly submit a duplicate."
         )
+    elif (
+        isinstance(error, dict)
+        and error.get("reason") == "gateway_submission_timeout"
+    ):
+        timeout_s = error.get("timeout_s")
+        duration = (
+            f" after waiting {timeout_s:g} seconds"
+            if isinstance(timeout_s, (int, float))
+            and not isinstance(timeout_s, bool)
+            and math.isfinite(timeout_s)
+            and timeout_s > 0
+            else ""
+        )
+        result["next_action"] = (
+            f"Runtime could not confirm whether Agate accepted this submission{duration}; "
+            "this is not a Kernel verdict. Runtime did not create a non-idempotent "
+            "replacement Job. Retry only if the operation is still needed; SDK-backed "
+            "requests reuse their persisted idempotency key."
+        )
+    elif (
+        isinstance(error, dict)
+        and error.get("reason") == "ssh_gpu_busy"
+    ):
+        result["next_action"] = (
+            "The assigned SSH GPU is busy. Retry after the current allocation releases it; "
+            "this is not a Kernel correctness verdict or an environment failure."
+        )
     elif value.get("outcome") == "unknown":
         from aka.light.runtime.request_errors import UNKNOWN_OUTCOME
         result["next_action"] = UNKNOWN_OUTCOME
@@ -594,7 +621,7 @@ def profile_result(result: dict[str, Any], *, generalized: bool = False) -> dict
         projected["source_view"] = result["source_view"]
     if not generalized and isinstance(exports, dict):
         projected_exports = {}
-        for name in ("metrics.csv", "source.txt", "sass.txt", "ptx.txt"):
+        for name in ("metrics.csv", "source.txt", "sass.txt", "ptx.txt", "isa.txt"):
             item = exports.get(name)
             if not isinstance(item, dict):
                 continue

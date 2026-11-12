@@ -1,4 +1,4 @@
-"""Provide one Agent module with the four existing backend adapters."""
+"""Provide one Agent module with the built-in backend adapters."""
 
 from aka.core.keys import ServiceKey
 

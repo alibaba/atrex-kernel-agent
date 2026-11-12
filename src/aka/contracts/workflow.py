@@ -52,8 +52,6 @@ class WorkflowSettings:
     def __post_init__(self):
         if type(self.specify_dsl) is not bool:
             raise TypeError("specify_dsl must be a boolean")
-        if type(self.expose_evaluator_shapes) is not bool:
-            raise TypeError("expose_evaluator_shapes must be a boolean")
         references = tuple(tuple(item) for item in self.agent_reference_paths)
         names = []
         for item in references:

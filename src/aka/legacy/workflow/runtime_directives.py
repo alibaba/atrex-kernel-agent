@@ -1,7 +1,7 @@
 """Workflow-owned instructions for the selected Agent backend."""
 
 def _agent_runtime_directive(agent_cli: str) -> str:
-    if agent_cli in {'codex', 'pi'}:
+    if agent_cli in {'codex', 'pi', 'dsh'}:
         directory = '.agents/skills'
     else:
         directory = '.qoder/skills' if agent_cli=='qodercli' else '.claude/skills'
@@ -11,6 +11,12 @@ def _agent_runtime_directive(agent_cli: str) -> str:
 
 
 def _baseline_driver_directive(agent_cli: str) -> str:
+    if agent_cli == "dsh":
+        return (
+            "Read `.agents/skills/gpu-kernel-baseline/SKILL.md` and complete its baseline "
+            "workflow directly in this DSH session. Wait for every submitted tool request "
+            "to finish before returning."
+        )
     if agent_cli == "codex":
         return (
             "Use the `$gpu-kernel-baseline` skill and complete its baseline workflow in this "
@@ -38,6 +44,13 @@ def _baseline_driver_directive(agent_cli: str) -> str:
 def _plan_generator_directive(agent_cli: str, version: int) -> str:
     draft = f"plans/v{version}_draft.md"
     plan = f"plans/v{version}_plan.md"
+    if agent_cli == "dsh":
+        return (
+            f"Read `.agents/skills/gen-plan/SKILL.md` and execute it in this DSH session "
+            f"with `{draft}` as input and `{plan}` as output in direct/no-discussion mode. "
+            "Complete the skill's proposal, independent reviews and synthesis, then wait "
+            "for the plan file before continuing."
+        )
     if agent_cli == "codex":
         return (
             f"Invoke the `$gen-plan` skill with `{draft}` as input and `{plan}` as "

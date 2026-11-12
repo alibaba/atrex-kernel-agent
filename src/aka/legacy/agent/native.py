@@ -61,6 +61,11 @@ def resume_session_command(
     *,
     runtime=None,
 ) -> list[str]:
+    if agent_cli == "dsh":
+        command = fresh_session_command(prompt, session_id, reasoning_effort, agent_cli, runtime=runtime)
+        index = command.index("--")
+        command[index:index] = ["--session-id", session_id]
+        return command
     if agent_cli == "codex":
         command = fresh_session_command(
             prompt, session_id, reasoning_effort, agent_cli, runtime=runtime
@@ -99,7 +104,7 @@ def session_environment(agent_cli: str = "claude") -> dict[str, str]:
 
 
 def supports_same_session_resume(agent_cli: str) -> bool:
-    return agent_cli in {"claude", "codex"}
+    return agent_cli in {"claude", "codex", "dsh"}
 
 
 def session_id_from_stream(
@@ -107,10 +112,13 @@ def session_id_from_stream(
 ) -> str:
     """Return the persistent CLI session id observed in one stream.
 
-    Claude accepts the supervisor-provided id. Codex creates its own thread id
-    and reports it in the initial ``thread.started`` JSONL event, so recovery
-    must use that observed id rather than the supervisor's bookkeeping UUID.
+    Claude accepts the supervisor-provided id. Codex and DSH allocate native
+    identities and announce them in their opening JSONL events. Recovery uses
+    the observed identity rather than the supervisor's bookkeeping UUID.
     """
+    if agent_cli == "dsh":
+        from .dsh import session_id_from_stream as dsh_session_id
+        return dsh_session_id(stdout)
     if agent_cli != "codex":
         return requested_session_id
     return codex_thread_id_from_stream(stdout)
@@ -230,7 +238,15 @@ class NativeSession:
         self._setup_errors = codex_setup_errors
         self._ledger_usable = codex_ledger_usable
         self._stdout_usage = codex_stdout_session_usage
-        self._session_id = "" if is_codex else session_id
+        self._session_id = "" if runtime_id in {"codex", "dsh"} else session_id
+        if runtime_id == "dsh":
+            from .dsh import native_session_files
+            try:
+                native_session_files(environment, session_id)
+            except ValueError:
+                pass
+            else:
+                self._session_id = session_id
         self._requested_session_id = session_id
         self._executor = executor
         self._closed = False
@@ -261,6 +277,13 @@ class NativeSession:
         self._closed = True
         self._observer = None
 
+    def _normalize_stream(self, stdout):
+        return normalize_stream(
+            self.runtime_id, stdout, session_id=self._session_id,
+            codex_observer=(self._observer if self._ledger_usable else None),
+            adapter=self._runtime._adapter,
+        )
+
     def invoke(self, prompt, *, resume=False, reasoning_effort="max", environment=None):
         if self._check_open is not None:
             self._check_open()
@@ -288,9 +311,16 @@ class NativeSession:
             )
         if environment:
             self.environment.update(environment)
-        stdout, stderr, exit_status, timed_out = self._executor(
-            command, self.workspace, None, self.environment
+        self.environment = self._runtime._adapter.prepare_environment(
+            self.environment, reasoning_effort=reasoning_effort,
         )
+        try:
+            stdout, stderr, exit_status, timed_out = self._executor(
+                command, self.workspace, None, self.environment
+            )
+        finally:
+            self._runtime._adapter.release_environment(self.environment)
+        exit_status = self._runtime._adapter.validated_exit_status(stdout, exit_status)
         is_codex = self.runtime_id == "codex"
         observed_session_id = session_id_from_stream(
             self.runtime_id, stdout, self._requested_session_id
@@ -298,13 +328,7 @@ class NativeSession:
         if observed_session_id:
             self._session_id = observed_session_id
         stream_session_usage = terminal_usage_from_stream(stdout) if is_codex else None
-        events, terminal_usage, capabilities, observation_errors = normalize_stream(
-            self.runtime_id,
-            stdout,
-            session_id=self._session_id,
-            codex_observer=(self._observer if self._ledger_usable else None),
-            adapter=self._runtime._adapter,
-        )
+        events, terminal_usage, capabilities, observation_errors = self._normalize_stream(stdout)
         if not self._invoked and self._setup_errors:
             observation_errors = self._setup_errors + observation_errors
         ledger_failed = any(
@@ -320,6 +344,8 @@ class NativeSession:
             ledger_usage_observed
             and not any(value.startswith("codex_") for value in observation_errors)
         )
+        if self.runtime_id == "dsh":
+            resume_usage_qualified = terminal_usage.measurement == "exact"
         if is_codex and not ledger_usage_observed:
             fallback_usage = _codex_invocation_usage(
                 stream_session_usage or TokenUsage.unavailable(),

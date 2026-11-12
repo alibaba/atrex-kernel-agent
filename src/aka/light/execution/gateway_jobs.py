@@ -60,6 +60,25 @@ def request_is_infrastructure(process) -> bool:
     )
 
 
+def replay_forbidden(job: object) -> bool:
+    """Return whether explicit Gateway evidence forbids a replacement Job."""
+    if not isinstance(job, dict):
+        return False
+    policy = job.get("replay_policy")
+    if policy is not None and policy not in {"allow", "legacy"}:
+        return True
+    error = job.get("error") if isinstance(job.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    return (
+        job.get("execution_state") == "unknown"
+        or error.get("reason") == "dev_submission_ambiguous"
+        or any(
+            row.get("retry_advice") == "never"
+            for row in (job, error, details)
+        )
+    )
+
+
 class SubmissionUncertain(RuntimeError):
     """A transport failure; replay is allowed only with a persisted wire key."""
 
@@ -133,7 +152,7 @@ def retry_kind(job: object) -> str | None:
     """Classify retryable terminal Jobs consistently for every operation."""
     if not isinstance(job, dict) or job.get("status") not in {
         "failed", "cancelled", "canceled",
-    }:
+    } or replay_forbidden(job):
         return None
     error = job.get("error") or {}
     if not isinstance(error, dict):
@@ -301,6 +320,36 @@ def gateway_collection_timeout(
     )
 
 
+def gateway_submission_timeout(
+    process: subprocess.CompletedProcess,
+    timeout_s: float,
+) -> subprocess.CompletedProcess:
+    """Return a bounded non-verdict when submission has no confirmed Job ID.
+
+    SDK callers may safely retry the same persisted idempotency key.  A
+    non-idempotent transport is never replaced automatically because the
+    original submission may already have reached the service.
+    """
+    duration = max(0.0, float(timeout_s))
+    error = {
+        "error_class": "timeout",
+        "reason": "gateway_submission_timeout",
+        "message": "Runtime could not confirm the Agate submission outcome.",
+    }
+    if math.isfinite(duration) and duration > 0:
+        error["timeout_s"] = duration
+    return subprocess.CompletedProcess(
+        process.args,
+        75,
+        json.dumps({
+            "status": "timed_out",
+            "outcome": "timeout",
+            "error": error,
+        }),
+        "Runtime could not confirm the Agate submission outcome.",
+    )
+
+
 def bundle_digest(data: bytes) -> str:
     """Ignore gzip/tar timestamps, but retain exact uploaded bytes and modes."""
     entries = {}
@@ -417,9 +466,10 @@ def execute_job(
     terminal result is returned directly.  An unreadable, queued or running
     accepted Job produces a structured collection timeout immediately after the
     current bounded wait; its ID remains private so a later identical Runtime
-    request can probe the same Job.  A definitively missing Job may still use the
-    bounded fresh-submission recovery path.  A prior transport submission without a
-    confirmed ID also gets one bounded fresh submission on the later invocation.
+    request can probe the same Job. A definitively missing Job may still use the
+    bounded fresh-submission recovery path. An ambiguous submission without a
+    confirmed Job ID is replayed only when the SDK persisted an idempotency key;
+    otherwise it returns a structured submission timeout without replacement.
 
     Explicit infrastructure terminal failures are retried only while
     ``max_infra_retries`` allows another attempt.  When that value is ``None``,
@@ -482,6 +532,16 @@ def execute_job(
     def retry_wait(*, previous_job_id: str | None = None) -> bool:
         """Start one fresh wait window by resubmitting the Agate task once."""
         nonlocal deadline, state, wire_key, wait_retries
+        data = state.get("process")
+        if isinstance(data, dict) and replay_forbidden(job_from_process(
+            subprocess.CompletedProcess(
+                [],
+                data.get("returncode", 1),
+                data.get("stdout", ""),
+                data.get("stderr", ""),
+            )
+        )):
+            return False
         if wait_retries >= max_wait_retries:
             return False
         wait_retries += 1
@@ -505,31 +565,21 @@ def execute_job(
     rejection = None
     if state.get("phase") == "submitting":
         data = state.get("process")
+        saved_process = None
         if isinstance(data, dict):
-            rejection = submission_rejection(subprocess.CompletedProcess(
-                [], data["returncode"], data["stdout"], data["stderr"]))
-        if rejection is None and not idempotent_submission:
-            # A previous transport invocation returned without a confirmed Job ID.
-            # There is no ID to collect, so a later identical Runtime call gets
-            # one bounded fresh submission instead of remaining permanently
-            # stuck on an unrecoverable checkpoint.  Count this as the call's
-            # wait recovery so it cannot also create another replacement after
-            # the new Job exhausts its polling window.
-            if wait_retries >= max_wait_retries:
-                raise EvidenceUnavailable(
-                    "Prior Gateway submission has no confirmed job ID and automatic resubmission is disabled"
-                )
-            wait_retries += 1
-            state = save("retry_pending")
-            print(
-                "[sandbox] Prior Gateway submission has no confirmed job ID; "
-                "resubmitting the saved request once",
-                file=sys.stderr,
-                flush=True,
+            saved_process = subprocess.CompletedProcess(
+                [], data["returncode"], data["stdout"], data["stderr"]
             )
-        # A definitive rejection follows the normal rejection path.  A bare
-        # pre-POST marker or unparseable transport response takes the bounded fresh
-        # submission path above.
+            rejection = submission_rejection(saved_process)
+        if rejection is None and not idempotent_submission:
+            # The old request may already have reached the service.  Without an
+            # idempotency key or Job ID a replacement can duplicate GPU work.
+            return gateway_submission_timeout(
+                saved_process or subprocess.CompletedProcess([], 75, "", ""),
+                wait_budget,
+            )
+        # A definitive rejection follows the normal rejection path.  An SDK
+        # request with a persisted wire key retries that same identity below.
 
     while True:
         remaining = deadline - time.monotonic()
@@ -567,13 +617,13 @@ def execute_job(
                         # uncertain submission, never guess that retry is safe.
                         save("submitting", process)
                         if not idempotent_submission:
-                            return process
+                            return gateway_submission_timeout(process, wait_budget)
                         count = retries.get("transport", 0) + 1
                         retries["transport"] = count
                         save("submitting", process)
                         delay = retry_delay(count)
                         if deadline - time.monotonic() <= delay:
-                            raise EvidenceUnavailable("Gateway submission pending reconciliation; retry deadline reached")
+                            return gateway_submission_timeout(process, wait_budget)
                         print(f"[sandbox] Submission transport unavailable; retrying the SAME idempotency key in {delay}s",
                               file=sys.stderr, flush=True)
                         time.sleep(delay)

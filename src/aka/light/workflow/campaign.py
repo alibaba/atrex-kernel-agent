@@ -70,8 +70,8 @@ class ManagedCampaign(Campaign):
         from aka.light.runtime.paths import supervisor_campaign_root
         search_root = supervisor_campaign_root(self.workspace) / "search"
         if self.module_options.search is not None:
-            if not self.atrex_bench_root or self.sandbox_ssh:
-                raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA; SOL/SSH search is not supported")
+            if not self.atrex_bench_root:
+                raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA")
             from .search import PooledSearch
             from .search_driver import EpisodeSearchDriver
             driver = EpisodeSearchDriver(self, search_root)
@@ -103,8 +103,8 @@ class ManagedCampaign(Campaign):
     def setup_baseline(self):
         initial = self.problem.initial_source
         if self.module_options.source_tree:
-            if initial.kind == "sol" or not self.atrex_bench_root or self.sandbox_ssh:
-                raise ValueError("Source trees require native Atrex-Bench Eval, not SOL/SSH")
+            if initial.kind == "sol" or not self.atrex_bench_root:
+                raise ValueError("Source trees require native Atrex-Bench Eval, not SOL")
             from aka.contracts.content import SourceContent, WorkspaceFile
             from aka.light.workspace.sources import initial_snapshot, unpack
             source = initial_snapshot(self.workspace, self.module_options.source_tree)
@@ -126,9 +126,9 @@ class ManagedCampaign(Campaign):
         # Native tasks enter the unified representation before V0 is committed
         # or measured.  Framework Baseline therefore edits the same source tree
         # whose identity is recorded by V0 instead of migrating a measured raw
-        # kernel.py after the fact.  SOL/SSH remains on its legacy wire contract.
+        # kernel.py after the fact. SOL remains on its legacy wire contract.
         if (not self.module_options.source_tree and initial.kind != "sol"
-                and self.atrex_bench_root and not self.sandbox_ssh):
+                and self.atrex_bench_root):
             from aka.contracts.content import SourceContent, WorkspaceFile
             from aka.light.workspace.sources import default_tree, pack
 
@@ -151,7 +151,7 @@ class ManagedCampaign(Campaign):
             )
 
         if self.module_options.source_tree or (
-            initial.kind != "sol" and self.atrex_bench_root and not self.sandbox_ssh
+            initial.kind != "sol" and self.atrex_bench_root
         ):
             self._selected_initial_source = source
         else:

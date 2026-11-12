@@ -231,7 +231,8 @@ def should_use_generalized_problem(
     Shapes directly. The two modes intentionally have no partial-prefix state.
     """
     return (
-        not expose_evaluator_shapes
+        optimization_mode == "production"
+        and not expose_evaluator_shapes
         and not is_sol_op(op_dir)
         and (op_dir / "shapes.json").is_file()
         and find_atrex_bench_root(op_dir) is not None

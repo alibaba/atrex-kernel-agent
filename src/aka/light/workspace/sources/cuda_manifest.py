@@ -86,7 +86,7 @@ class CudaManifest:
     def seed_metadata(self, workspace, framework, name, *, native_eval):pass
     def prepare_source(self, request, source_provider, *, options, state_root, native_eval):
         if request.initial.kind == 'sol' or not native_eval:
-            raise ValueError('CUDA manifests require native Atrex-Bench Eval, not SOL/SSH')
+            raise ValueError('CUDA manifests require native Atrex-Bench Eval')
         # V0 is an evaluator-owned reference input; the candidate starts at V1.
         return source_provider.prepare(request)
     name = 'cuda_manifest'

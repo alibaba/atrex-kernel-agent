@@ -42,6 +42,10 @@ class HostSessionTranscripts:
                 ".pi/agent",
                 ("sessions/**/*.jsonl",),
             ),
+            "dsh": (
+                "DSH_HOME", home / ".dsh", ".dsh",
+                ("aka-sessions/*/*/session*.jsonl",),
+            ),
         }.get(backend, ("", home, "", ()))
         self.root = Path(environment.get(variable) or default).expanduser().resolve()
         self.label = "provider/native/" + label
@@ -120,6 +124,11 @@ class HostSessionTranscripts:
                 event = json.loads(line)
             except ValueError:
                 continue
+            if self.backend == "dsh" and isinstance(event, dict) and event.get("type") == "session":
+                identity, parent = event.get("id", ""), event.get("parentSession", "")
+                if isinstance(identity, str) and identity and isinstance(parent, str):
+                    self._metadata[path] = (fingerprint, (identity, parent))
+                    return identity, parent
             if not isinstance(event, dict) or event.get("type") != "session_meta":
                 continue
             body = event.get("payload")
@@ -142,8 +151,19 @@ class HostSessionTranscripts:
             return {}
         paths = list(self._discovered_paths(force=force or identity != self._discovery_session_id))
         self._discovery_session_id = identity
-        if self.backend == "codex":
+        if self.backend in {"codex", "dsh"}:
             identities = {path: self._codex_identity(path) for path in paths}
+            if self.backend == "dsh":
+                # A migration publishes another immutable generation. Observe
+                # only the highest canonical generation in each Session.
+                latest = {}
+                for path in identities:
+                    match = re.fullmatch(r"session(?:\.v([1-9][0-9]*))?\.jsonl", path.name)
+                    if match:
+                        version = int(match[1] or 0)
+                        if path.parent not in latest or version > latest[path.parent][0]:
+                            latest[path.parent] = (version, path)
+                identities = {path: identities[path] for _, path in latest.values()}
             family = {identity}
             while True:
                 children = {child for child, parent in identities.values() if parent in family}

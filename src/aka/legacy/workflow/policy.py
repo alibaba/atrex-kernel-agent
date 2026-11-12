@@ -23,10 +23,17 @@ def requested_evaluator_shape_visibility(
     mode: str,
     expose_evaluator_shapes: bool,
 ) -> str:
-    """Return the evaluator visibility requested for this workspace."""
+    """Return the visibility of the evaluator flow actually staged in workspace.
+
+    Hidden-shape handling is active only after production staging has produced
+    ``agent_problem.json``.  This prevents SOL or an incompletely staged native
+    workspace from claiming a privacy boundary that does not actually exist.
+    """
     return (
         "hidden"
-        if mode == "production" and not expose_evaluator_shapes
+        if mode == "production"
+        and not expose_evaluator_shapes
+        and (workspace / "agent_problem.json").is_file()
         else "exposed"
     )
 
@@ -219,8 +226,6 @@ def install_workspace_policy(
         raise ValueError("agent_runtime must be a non-empty runtime id")
     if type(expose_evaluator_shapes) is not bool:
         raise TypeError("expose_evaluator_shapes must be a boolean")
-    requested_visibility = "exposed" if expose_evaluator_shapes else "hidden"
-
     workspace.mkdir(parents=True, exist_ok=True)
     requested_visibility = requested_evaluator_shape_visibility(
         workspace, mode, expose_evaluator_shapes
@@ -234,19 +239,11 @@ def install_workspace_policy(
             raise RuntimeError(f"invalid optimization-mode state: {state_path}") from exc
         existing_mode = state.get("mode")
         existing_framework = state.get("framework")
-        existing_visibility = state.get("evaluator_shape_visibility")
-        if existing_visibility is None:
-            existing_visibility = "hidden" if (workspace / "agent_problem.json").is_file() else "exposed"
-        if (
-            existing_mode != mode
-            or existing_framework != framework
-            or existing_visibility != requested_visibility
-        ):
+        if existing_mode != mode or existing_framework != framework:
             raise RuntimeError(
                 "workspace policy mismatch: "
-                "recorded mode/framework/shape_visibility="
-                f"{existing_mode}/{existing_framework}/{existing_visibility}, "
-                f"requested={mode}/{framework}/{requested_visibility}"
+                f"recorded mode/framework={existing_mode}/{existing_framework}, "
+                f"requested={mode}/{framework}"
             )
         existing_visibility = state.get("evaluator_shape_visibility")
         if existing_visibility is None:

@@ -321,7 +321,7 @@ class Campaign:
     sandbox_url: str = ""  # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int | None = None
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
-    agent_cli: str = "claude"  # episode backend: claude, qodercli, codex, or pi
+    agent_cli: str = "claude"  # episode backend selected from the Agent registry
     agent_sandbox: str = "none"  # opt-in coordinator isolation, independent of GPU transport
     bwrap_executable: str = "bwrap"
     agent_read_only_paths: tuple[str, ...] = ()
@@ -422,14 +422,28 @@ class Campaign:
     @property
     def private_reference_dir(self) -> Path | None:
         """Return evaluator-only native inputs behind a generalized public problem."""
-        op_dir = Path(self.kernel_demo).resolve().parent
-        use_generalized = (
-            not self.expose_evaluator_shapes
-            and not is_sol_op(op_dir)
-            and (op_dir / "shapes.json").is_file()
-        )
-        if not self.atrex_bench_root or not use_generalized:
+        if self.expose_evaluator_shapes:
             return None
+        op_dir = Path(self.kernel_demo).resolve().parent
+        if self.optimization_mode != "production":
+            raise ValueError(
+                "--no-expose-evaluator-shapes is supported only for production "
+                "Native Atrex-Bench tasks"
+            )
+        if is_sol_op(op_dir):
+            raise ValueError(
+                "--no-expose-evaluator-shapes is incompatible with SOL tasks: "
+                "SOL has no generalized agent_problem.json projection"
+            )
+        if not (op_dir / "shapes.json").is_file():
+            raise ValueError(
+                "--no-expose-evaluator-shapes requires Native Atrex-Bench shapes.json"
+            )
+        if not self.atrex_bench_root:
+            raise ValueError(
+                "--no-expose-evaluator-shapes requires the canonical Native Atrex-Bench "
+                "runtime so Light can create agent_problem.json"
+            )
         shapes_path = op_dir / "shapes.json"
         validate_private_shapes(shapes_path)
         if has_agent_problem(op_dir):

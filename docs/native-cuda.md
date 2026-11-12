@@ -33,7 +33,8 @@ gateway-owned source; English documentation is checked against its reviewed
 upstream and translation digests. `<gpu_arch>` preproduction exercised native CUDA Evaluate,
 multi-file CUTLASS, targeted numerical inputs, Profile, two-shape native ABBA and a
 deliberately incorrect candidate. One ABBA allocation encountered repository networking
-failure; the existing infrastructure retry recovered it and both shapes passed. Check/Disassemble and SOL/SSH do not accept native manifests; unsupported
+failure; the existing infrastructure retry recovered it and both shapes passed. Gateway and
+explicit SSH support native manifests and typed diagnostics; SOL does not. Unsupported
 native requests stop without a Dev fallback.
 
 

@@ -15,6 +15,7 @@ from aka.light.experiment.store import (
     JOB_ROOT_ENV,
     DuplicateTask,
     RecordNotFound,
+    digest,
     private_write,
     private_write_bytes,
     read_json,
@@ -38,6 +39,61 @@ def _completed_abba_timeout(sample: object, states: list[dict], *, truncated: bo
         and all(state.get("phase") == "terminal" for state in states)
         and not truncated
     )
+
+
+def _abba_acceptance_states(states: list[dict]) -> list[dict]:
+    """Use a complete exact replacement batch without deleting old evidence.
+
+    Gateway replacement may leave an accepted state that can no longer be
+    collected.  A successful terminal receipt from a different endpoint is a
+    valid replacement only when the complete typed batch payload -- including
+    source, evaluator, hardware, Shapes and ABBA schedule -- has the same
+    digest.  All original state files remain available for audit.
+    """
+    if not any(state.get("phase") == "accepted" for state in states):
+        return states
+
+    def batch_identity(state: dict) -> tuple[str, str] | None:
+        identity = state.get("identity", {})
+        payload = identity.get("payload")
+        endpoint = identity.get("url_fingerprint")
+        if (
+            identity.get("kind") == "eval"
+            and isinstance(endpoint, str)
+            and endpoint
+            and isinstance(payload, dict)
+            and payload.get("abba")
+        ):
+            return digest(payload), endpoint
+        return None
+
+    completed: dict[str, set[str]] = {}
+    for state in states:
+        batch = batch_identity(state)
+        if batch is None or state.get("phase") != "terminal":
+            continue
+        process = state.get("process", {})
+        job = job_from_process(subprocess.CompletedProcess(
+            [],
+            process.get("returncode", 1),
+            process.get("stdout", ""),
+            process.get("stderr", ""),
+        ))
+        if job and job.get("status") == "succeeded" and cacheable_job(
+            job, state.get("identity")
+        ):
+            request_digest, endpoint = batch
+            completed.setdefault(request_digest, set()).add(endpoint)
+
+    current = []
+    for state in states:
+        batch = batch_identity(state) if state.get("phase") == "accepted" else None
+        if batch is not None:
+            request_digest, endpoint = batch
+            if completed.get(request_digest, set()) - {endpoint}:
+                continue
+        current.append(state)
+    return current
 
 
 def correctness_identity(request: dict) -> dict | None:
@@ -243,6 +299,8 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                 responses.append(response)
                 sample = evaluation.result(response, operation)
                 states = [read_json(path) for path in directory.glob("**/jobs/*/state.json")]
+                if operation == "same_allocation_abba":
+                    states = _abba_acceptance_states(states)
                 pending = pending or any(state.get("phase") != "terminal" for state in states)
                 cacheable = cacheable and bool(states) and all(
                     state.get("phase") == "terminal" and cacheable_job(job_from_process(subprocess.CompletedProcess(

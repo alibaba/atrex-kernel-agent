@@ -82,8 +82,7 @@ class LongSessionRunner:
         output_directory: Path | None = None,
     ) -> SessionResult:
         session_id = session_id or str(uuid.uuid4())
-        is_codex = self.agent_cli == "codex"
-        active_session_id = "" if is_codex else session_id
+        active_session_id = "" if self.agent_cli in {"codex", "dsh"} else session_id
         handoff_path.parent.mkdir(parents=True, exist_ok=True)
         handoff_path.unlink(missing_ok=True)
         native = self.agent.open_session(

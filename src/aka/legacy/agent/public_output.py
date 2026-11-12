@@ -49,6 +49,19 @@ def _conversation_events(runtime, stdout, sequence):
             continue
         if not isinstance(record,dict):
             continue
+        if runtime == 'dsh':
+            event_type = record.get('type')
+            if event_type in {'text', 'thinking', 'tool_call', 'tool_result'}:
+                content = record.get('text', record.get('input', record.get('result', '')))
+                result.append({
+                    'sequence': sequence + len(result),
+                    'kind': {'text': 'message', 'thinking': 'message'}.get(event_type, event_type),
+                    'role': 'assistant' if event_type in {'text', 'thinking'} else 'tool',
+                    'tool_name': record.get('tool'), 'tool_id': record.get('callId'),
+                    'content': (content if isinstance(content, str)
+                                else json.dumps(content, ensure_ascii=False))[:16000],
+                })
+            continue
         message=record.get('message')
         blocks=message.get('content',[]) if isinstance(message,dict) else []
         if isinstance(blocks,str): blocks=[{'type':'text','text':blocks}]

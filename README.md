@@ -19,7 +19,8 @@ verifies correctness and performance before promoting an improvement.
 Its lightweight workflow keeps the optimization loop focused, while a plugin architecture
 lets users configure and replace agents, workspaces, evaluation, execution, and knowledge providers.
 
-AKA supports Claude, Qoder, Codex, and Pi, with CUDA, Triton, CuTeDSL, FlyDSL, and TileLang
+AKA supports Claude, Qoder, Codex, Pi, and [DSH](docs/dsh-harness-adapter.md),
+with CUDA, Triton, CuTeDSL, FlyDSL, and TileLang
 tooling for supported NVIDIA, AMD, and T-Head PPU environments. Native Atrex-Bench evaluation
 runs through Agate; GPU Wiki provides optimization knowledge.
 

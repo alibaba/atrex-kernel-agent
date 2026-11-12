@@ -27,7 +27,7 @@ def _agent_runtime_directive(
     pause_agent_during_requests: bool = True,
     knowledge_skills=("KernelWiki",),
 ) -> str:
-    root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
+    root = ".agents" if agent_cli in {"codex", "pi", "dsh"} else ".qoder" if agent_cli == "qodercli" else ".claude"
     extra = ", PPU profiling" if is_ppu else ""
     knowledge = "".join(f", `{name}`" for name in knowledge_skills) if wiki else ""
     suspension = (

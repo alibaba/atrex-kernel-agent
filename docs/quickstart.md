@@ -119,7 +119,9 @@ The operator directory and AKA's `--repo-root` are separate inputs.
 Exact evaluator Shapes are exposed by default through `shapes.json`. Pass
 `--no-expose-evaluator-shapes` to use a supplied or Supervisor-derived generalized
 `agent_problem.json` instead. In hidden mode, every Agent-visible Agate response is Shape-redacted;
-in exposed mode it is not. Evaluator generators and generated tensor values remain Supervisor-owned.
+in exposed mode it is not. Hidden mode is supported only for Production Native Atrex-Bench tasks;
+an unsupported request fails before the Campaign starts instead of silently running exposed.
+Evaluator generators and generated tensor values remain Supervisor-owned.
 
 The default `--optimization-mode leaderboard` exposes the benchmark contract and uses
 the permissive acceptance policy. Select `production` explicitly for production review.
@@ -262,8 +264,9 @@ Use it with `--framework Cuda`. CUDA sources, headers, and `solution.json` form 
 candidate; Agate compiles and binds its launcher. The layout is fixed for the task.
 See [source imports and native CUDA](native-cuda.md).
 
-SOL/SSH requires `single_file` in Light, but Light ABBA has no SOL/SSH fallback.
-Use [Legacy](legacy-workflow.md) for campaigns needing that verification path.
+SOL requires `single_file` in Light and has no native ABBA fallback. Explicit SSH supports
+Native Atrex-Bench `source_tree`, CUDA manifest, Evaluate, ABBA and typed diagnostics; see
+[Light OpenSSH backend](ssh-backend.md).
 
 ## Budgets and recovery
 

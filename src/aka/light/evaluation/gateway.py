@@ -49,7 +49,9 @@ extracted locally.
 ``~/.ssh/config``). ``ATREX_SANDBOX_SSH_INIT`` optionally activates the remote
 runtime before each command and health probe. SSH jobs are always executed in a
 Bubblewrap namespace with no network, no host home, and only explicitly bound
-runtime paths and one explicitly assigned physical NVIDIA GPU. SSH, gateway
+runtime paths and one explicitly assigned physical GPU. Device isolation exposes
+only that card's nodes. Explicit runtime isolation uses visibility selectors
+while permitting the driver to initialize other device nodes. SSH, gateway
 profile, and gateway URL transports are mutually exclusive.
 """
 
@@ -238,6 +240,7 @@ MAX_DEV_JOB_TIMEOUT = 600
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
+SSH_GPU_LOCK_ACQUIRED_MARKER = "__ATREX_SSH_GPU_LOCK_ACQUIRED__"
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
 SSH_WATCHDOG_SOURCE = r"""
@@ -263,6 +266,7 @@ raise SystemExit(status)
 """.strip()
 RUNTIME_CHUNK_BYTES = 20 * 1024
 OSS_OUTPUT_ARCHIVE = "__atrex_outputs.tar.gz"
+ACTIVE_SSH_JOBS: dict[str, tuple[str, str]] = {}
 EVALUATION_INPUT_PATHS = frozenset(
     {
         "agent_problem.json",
@@ -373,7 +377,8 @@ def read_workspace_override(
 def _run_environment_query(args: argparse.Namespace) -> int:
     """Retry read-only discovery within a deadline; never classify it as a Kernel failure."""
     if args.ssh:
-        raise SystemExit("sandbox: --kind env requires an Agate Gateway endpoint")
+        from aka.light.evaluation.ssh_transport import environment
+        return environment(sys.modules[__name__], args)
     from aka.light.evaluation.source_transport import (
         _load_sdk_client,
         _sdk_error_process,
@@ -1144,6 +1149,7 @@ def build_typed_request(
     evaluation_mode: str | None = None,
     evaluation_step_timeout: int = DEFAULT_EVALUATION_STEP_TIMEOUT,
     gpu_clock_mhz: int | None = None,
+    ssh: bool = False,
 ) -> dict[str, Any]:
     """Build a Gateway typed request without importing the agate package."""
     dependency_specs = list(requirements)
@@ -1379,7 +1385,11 @@ def build_typed_request(
             request["deps_mode"] = deps_mode
     from aka.light.evaluation.source_transport import attach, diagnostic_request
     request = _runtime_pins(request, include_bench_version=kind == "run")
-    return attach(request, workspace) if kind == "run" else diagnostic_request(request, workspace, kind, timeout=timeout)
+    return (
+        attach(request, workspace)
+        if kind == "run" or ssh
+        else diagnostic_request(request, workspace, kind, timeout=timeout)
+    )
 
 
 def _make_atrex_bench_runtime_bundle(
@@ -1898,7 +1908,7 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
     )
     parser.add_argument(
         "--profiler",
-        choices=("ncu", "rocprofv3"),
+        choices=("ncu", "rocprofv3", "acu"),
         default=None,
         help="Typed profile backend (default: gateway vendor auto-detection).",
     )
@@ -2142,6 +2152,10 @@ class SSHTransportError(RuntimeError):
     """A failure to connect to or transfer data through OpenSSH."""
 
 
+class SSHGPUBusy(EvidenceUnavailable):
+    """The SSH allocation lock is occupied, not a broken GPU environment."""
+
+
 def _validate_ssh_target(target: str) -> str:
     value = target.strip()
     if not value or value.startswith("-"):
@@ -2211,7 +2225,6 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
         "/dev",
         "/etc",
         "/proc",
-        "/root",
         "/sys",
         "/var/lib",
         "/var/log",
@@ -2222,6 +2235,7 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
         "/atrex",
         "/bin",
         "/home",
+        "/root",
         "/lib",
         "/lib64",
         "/opt",
@@ -2243,12 +2257,12 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
     # arbitrary project/home subtrees are not runtime allowlists.
     if (
         len(source_parts) > 1
-        and source_parts[1] == "home"
-        and source_path.name not in {".venv", "venv"}
+        and source_parts[1] in {"home", "root"}
+        and source_path.name not in {".venv", "venv", "env"}
         and source_path.parent.name != "envs"
     ):
         raise ValueError(
-            "SSH runtime bind source below /home must be a .venv/venv or a direct "
+            "SSH runtime bind source below /home or /root must be a virtualenv or direct "
             f"Conda envs child: {paths[0]!r}"
         )
 
@@ -2330,57 +2344,31 @@ def _resolve_ssh_runtime_binds(
     return validated
 
 
-SSH_GPU_RESOLVER_SOURCE = r"""
-import subprocess
-import sys
-
-index = int(sys.argv[1])
-result = subprocess.run(
-    [
-        "nvidia-smi",
-        "--query-gpu=index,uuid,mig.mode.current",
-        "--format=csv,noheader,nounits",
-    ],
-    capture_output=True,
-    text=True,
-)
-if result.returncode:
-    sys.stderr.write(result.stderr or result.stdout)
-    raise SystemExit(result.returncode)
-for line in result.stdout.splitlines():
-    fields = [field.strip() for field in line.split(",", 2)]
-    if len(fields) != 3 or fields[0] != str(index):
-        continue
-    if fields[2].lower() == "enabled":
-        print("MIG-enabled GPUs are unsupported without capability-node assignment", file=sys.stderr)
-        raise SystemExit(2)
-    if fields[1].startswith("GPU-"):
-        print(fields[1])
-        raise SystemExit(0)
-print(f"physical NVIDIA GPU index {index} was not found", file=sys.stderr)
-raise SystemExit(2)
-""".strip()
-
-
 def _ssh_gpu_index(value: str) -> int:
     if not re.fullmatch(r"[0-9]+", value.strip()):
-        raise ValueError(
-            "SSH GPU must be a physical NVIDIA index; MIG/UUID selectors are not yet supported"
-        )
+        raise ValueError("SSH GPU must be a physical GPU index")
     index = int(value)
     if index > 31:
         raise ValueError("SSH GPU index must be in the range 0..31")
     return index
 
 
-def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> str:
-    """Resolve an assigned physical index to a stable CUDA visibility UUID."""
+def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> dict:
+    """Resolve device nodes and runtime visibility for the allocated GPU."""
+    from aka.light.evaluation import ssh_devices
     try:
         result = subprocess.run(
             [
                 *_ssh_base(ssh, target),
                 shlex.join(
-                    ["python3", "-c", SSH_GPU_RESOLVER_SOURCE, str(gpu_index)]
+                    [
+                        "python3",
+                        "-c",
+                        Path(ssh_devices.__file__).read_text(),
+                        str(gpu_index),
+                        os.environ.get("ATREX_SANDBOX_SSH_GPU_ISOLATION", "device"),
+                        os.environ.get("ATREX_SANDBOX_SSH_DEVICE_MAP", "null"),
+                    ]
                 ),
             ],
             capture_output=True,
@@ -2389,11 +2377,24 @@ def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> str:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SSHTransportError(f"cannot resolve assigned SSH GPU: {exc}") from exc
-    uuid = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-    if result.returncode != 0 or not re.fullmatch(r"GPU-[0-9A-Fa-f-]+", uuid):
+    if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[-1000:]
         raise SSHTransportError(f"cannot resolve assigned SSH GPU: {detail}")
-    return uuid
+    try:
+        assignment = json.loads(result.stdout.strip().splitlines()[-1])
+        if not assignment["devices"] or not assignment["environment"]:
+            raise ValueError("empty GPU assignment")
+        if not isinstance(assignment["uuid"], str) or not assignment["uuid"]:
+            raise ValueError("missing stable GPU identity")
+        for key, value in assignment["environment"].items():
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", key) or not isinstance(value, str):
+                raise ValueError("invalid GPU visibility environment")
+        for device in assignment["devices"]:
+            if not device.startswith("/dev/") or ".." in PurePosixPath(device).parts:
+                raise ValueError("invalid GPU device path")
+        return assignment
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise SSHTransportError("invalid remote GPU assignment") from exc
 
 
 def _ssh_bwrap_command(
@@ -2401,13 +2402,19 @@ def _ssh_bwrap_command(
     command: list[str],
     *,
     gpu_index: int,
-    gpu_uuid: str,
+    gpu_uuid: dict,
     remote_dir: str | None = None,
+    lock_timeout: int = 60,
 ) -> str:
     """Build the only remote execution path: a restricted Bubblewrap namespace."""
     binds = [_ssh_runtime_bind(value) for value in runtime_binds]
+    launcher = os.environ.get("ATREX_SANDBOX_SSH_BWRAP")
+    if launcher is not None and not PurePosixPath(launcher).is_absolute():
+        raise ValueError(
+            "ATREX_SANDBOX_SSH_BWRAP must be an absolute remote executable path"
+        )
     args = [
-        "bwrap",
+        launcher or "bwrap",
         "--die-with-parent",
         "--new-session",
         "--unshare-net",
@@ -2446,15 +2453,8 @@ def _ssh_bwrap_command(
         "--dir",
         "/tmp/atrex-home",
     ]
-    for device in (
-        "/dev/nvidiactl",
-        "/dev/nvidia-uvm",
-        "/dev/nvidia-uvm-tools",
-        "/dev/nvidia-modeset",
-    ):
-        args.extend(("--dev-bind-try", device, device))
-    assigned_device = f"/dev/nvidia{gpu_index}"
-    args.extend(("--dev-bind", assigned_device, assigned_device))
+    for device in gpu_uuid["devices"]:
+        args.extend(("--dev-bind", device, device))
 
     created: set[str] = set()
     for source, destination in binds:
@@ -2480,11 +2480,44 @@ def _ssh_bwrap_command(
             "HOME=/tmp/atrex-home",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "LANG=C.UTF-8",
-            f"CUDA_VISIBLE_DEVICES={gpu_uuid}",
+            *(f"{key}={value}" for key, value in gpu_uuid["environment"].items()),
             *command,
         )
     )
-    return shlex.join(args)
+    key = hashlib.sha256(gpu_uuid["uuid"].encode()).hexdigest()[:24]
+    acquired = f'echo {SSH_GPU_LOCK_ACQUIRED_MARKER} >&2\nexec "$@"'
+    return shlex.join(
+        [
+            "flock",
+            "--exclusive",
+            "--wait",
+            str(lock_timeout),
+            "--conflict-exit-code",
+            str(ENVIRONMENT_TEMPFAIL),
+            f"/tmp/aka-ssh-gpu-{key}.lock",
+            "bash",
+            "-c",
+            acquired,
+            "aka-ssh",
+            *args,
+        ]
+    )
+
+
+def _check_ssh_lock_result(result: subprocess.CompletedProcess[str]) -> None:
+    lines = result.stderr.splitlines(keepends=True)
+    acquired = any(
+        line.rstrip("\r\n") == SSH_GPU_LOCK_ACQUIRED_MARKER for line in lines
+    )
+    result.stderr = "".join(
+        line
+        for line in lines
+        if line.rstrip("\r\n") != SSH_GPU_LOCK_ACQUIRED_MARKER
+    )
+    if result.returncode == ENVIRONMENT_TEMPFAIL and not acquired:
+        raise SSHGPUBusy(
+            "SSH GPU busy: allocation lock wait expired; retry when the GPU is free"
+        )
 
 
 def _ssh_base(executable: str, target: str) -> list[str]:
@@ -2504,6 +2537,24 @@ def _ssh_shell_script(init_command: str, command: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def _ssh_visibility(assignment: dict) -> str:
+    environment = dict(
+        assignment["environment"],
+        ATREX_SSH_GPU_VENDOR=assignment.get("vendor", ""),
+        ATREX_SSH_GPU_INDEX=str(assignment["index"]),
+    )
+    return (
+        "unset CUDA_VISIBLE_DEVICES HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES "
+        "NVIDIA_VISIBLE_DEVICES GPU_DEVICE_ORDINAL ATREX_BENCH_CLOCK_DEVICE "
+        "ATREX_BENCH_CLOCKS_LOCKED SOL_EXECBENCH_CLOCKS_LOCKED "
+        "ATREX_BENCH_CLOCK_LOCK_SOURCE\n"
+        + "\n".join(
+            f"export {key}={shlex.quote(value)}"
+            for key, value in environment.items()
+        )
+    )
+
+
 def _run_ssh_health(
     target: str,
     init_command: str,
@@ -2519,7 +2570,9 @@ def _run_ssh_health(
     try:
         resolved_binds = _resolve_ssh_runtime_binds(ssh, target, runtime_binds)
         gpu_uuid = _resolve_ssh_gpu(ssh, target, gpu_index)
-        script = _ssh_shell_script(init_command, health_command)
+        script = _ssh_shell_script(
+            init_command, _ssh_visibility(gpu_uuid) + "\n" + health_command
+        )
         remote_command = _ssh_bwrap_command(
             resolved_binds,
             [
@@ -2533,11 +2586,12 @@ def _run_ssh_health(
             ],
             gpu_index=gpu_index,
             gpu_uuid=gpu_uuid,
+            lock_timeout=0,
         )
     except ValueError as exc:
         raise SSHTransportError(str(exc)) from exc
     try:
-        return subprocess.run(
+        result = subprocess.run(
             [*_ssh_base(ssh, target), remote_command],
             capture_output=True,
             text=True,
@@ -2545,6 +2599,8 @@ def _run_ssh_health(
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SSHTransportError(f"SSH health probe failed: {exc}") from exc
+    _check_ssh_lock_result(result)
+    return result
 
 
 def _remote_temp_dir(stdout: str) -> str:
@@ -2557,6 +2613,7 @@ def _remote_temp_dir(stdout: str) -> str:
 def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir):
         return False
+    _cancel_ssh_job(ssh, target, remote_dir)
     try:
         result = subprocess.run(
             [
@@ -2570,6 +2627,39 @@ def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
+
+
+def _cancel_ssh_job(ssh: str, target: str, remote_dir: str) -> None:
+    # Find only this allocation's host-side namespace launcher. Candidate code
+    # can modify /atrex, so do not trust a PID file inside that mount.
+    script = '''import os, signal, sys
+from pathlib import Path
+binding = [b"--bind", os.fsencode(sys.argv[1]), b"/atrex"]
+for path in Path("/proc").glob("[0-9]*/cmdline"):
+    try:
+        args = path.read_bytes().split(b"\\0")
+        if b"--unshare-pid" in args and any(args[i:i+3] == binding for i in range(len(args)-2)):
+            os.kill(int(path.parent.name), signal.SIGKILL)
+    except (ProcessLookupError, FileNotFoundError, PermissionError):
+        pass
+'''
+    try:
+        subprocess.run(
+            [
+                *_ssh_base(ssh, target),
+                shlex.join(["python3", "-c", script, remote_dir]),
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def _cancel_active_ssh_jobs() -> None:
+    for remote_dir, (ssh, target) in list(ACTIVE_SSH_JOBS.items()):
+        _cancel_ssh_job(ssh, target, remote_dir)
 
 
 def _run_ssh_job(
@@ -2607,6 +2697,7 @@ def _run_ssh_job(
     entry_lines.append('cd "$1"')
     for key, value in environment.items():
         entry_lines.append(f"export {key}={shlex.quote(value)}")
+    entry_lines.append(_ssh_visibility(gpu_uuid))
     entry_lines.append(
         "exec "
         + shlex.join(
@@ -2641,6 +2732,7 @@ def _run_ssh_job(
         detail = (create.stderr or create.stdout).strip()[-1000:]
         raise SSHTransportError(f"cannot create remote workspace: {detail}")
     remote_dir = _remote_temp_dir(create.stdout)
+    ACTIVE_SSH_JOBS[remote_dir] = (ssh, target)
     try:
         transfer = subprocess.run(
             [
@@ -2665,6 +2757,7 @@ def _run_ssh_job(
                 gpu_index=gpu_index,
                 gpu_uuid=gpu_uuid,
                 remote_dir=remote_dir,
+                lock_timeout=timeout,
             )
         except ValueError as exc:
             raise SSHTransportError(str(exc)) from exc
@@ -2673,10 +2766,11 @@ def _run_ssh_job(
                 [*_ssh_base(ssh, target), remote_command],
                 capture_output=True,
                 text=True,
-                timeout=timeout + SSH_CONNECT_TIMEOUT + 15,
+                timeout=2 * timeout + SSH_CONNECT_TIMEOUT + 15,
             )
         except subprocess.TimeoutExpired as exc:
             raise SSHTransportError(f"SSH command wait timed out: {exc}") from exc
+        _check_ssh_lock_result(result)
 
         if sync_outputs:
             local_archive = temp / "ssh_outputs.tar.gz"
@@ -2727,6 +2821,7 @@ def _run_ssh_job(
         raise SSHTransportError(f"SSH transfer failed: {exc}") from exc
     finally:
         cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
+        ACTIVE_SSH_JOBS.pop(remote_dir, None)
         if not cleanup_succeeded:
             _record_pending_ssh_cleanup(target=target, remote_dir=remote_dir)
     if result is None:
@@ -2800,8 +2895,9 @@ def parse_job_response(stdout: str) -> dict | None:
 
 
 def _interrupt_sdk_job(_signum: int, _frame: object) -> None:
-    # SDK polling owns the accepted Job ID and cancels it when interruption
-    # unwinds through source_transport.run_sdk_job().
+    # SDK polling owns accepted Agate jobs; explicit SSH jobs are tracked here
+    # and need a best-effort remote namespace cancellation on interruption.
+    _cancel_active_ssh_jobs()
     raise KeyboardInterrupt
 
 def configured_queue_wait_grace(environment: Mapping[str, str] | None = None) -> int:
@@ -3265,6 +3361,7 @@ def _run_typed_gateway(
                 DEFAULT_EVALUATION_STEP_TIMEOUT,
             ),
             gpu_clock_mhz=getattr(args, "gpu_clock_mhz", None),
+            ssh=bool(getattr(args, "ssh", "")),
         )
         from aka.light.evaluation.agate_native import apply_request
         request = apply_request(request, args, kind)
@@ -3382,6 +3479,9 @@ def _run_typed_gateway(
                     if eval_store is not None
                     else None
                 )
+                if batch_identity is not None and getattr(args, "ssh", ""):
+                    from aka.light.evaluation.ssh_transport import endpoint_identity
+                    batch_identity.update(endpoint_identity(batch_args))
                 if eval_store is not None and batch_identity is not None and (
                     saved := eval_store.load(batch_identity)
                 ) is not None:
@@ -3395,24 +3495,36 @@ def _run_typed_gateway(
                 from aka.light.evaluation.evaluation_failures import (
                     embedded_candidate_wall_clock_timeouts,
                 )
-                from aka.light.evaluation.source_transport import run as run_tree
                 import sys
 
                 process = None
                 for attempt in range(2):
                     retry_context = {"eval_wall_clock_retry": attempt} if attempt else None
-                    process = run_tree(
-                        sys.modules[__name__],
-                        batch_args,
-                        batch_request,
-                        kind,
-                        queue_wait_grace,
-                        **(
-                            {"identity_extra": retry_context}
-                            if retry_context is not None
-                            else {}
-                        ),
-                    )
+                    if getattr(args, "ssh", ""):
+                        from aka.light.evaluation.ssh_transport import run
+                        process = run(
+                            sys.modules[__name__],
+                            batch_args,
+                            workspace,
+                            batch_request,
+                            kind,
+                        )
+                    else:
+                        # Gateway execution stays SDK-only.  SSH is the sole
+                        # alternate transport and is selected explicitly above.
+                        from aka.light.evaluation.source_transport import run as run_tree
+                        process = run_tree(
+                            sys.modules[__name__],
+                            batch_args,
+                            batch_request,
+                            kind,
+                            queue_wait_grace,
+                            **(
+                                {"identity_extra": retry_context}
+                                if retry_context is not None
+                                else {}
+                            ),
+                        )
                     job = parse_job_response(process.stdout or "")
                     if kind != "run" or not embedded_candidate_wall_clock_timeouts(job) or attempt:
                         break
@@ -3747,9 +3859,7 @@ def _main(argv: list[str] | None = None) -> int:
                 f"sandbox: invalid distributed evaluator contract: {exc}"
             ) from exc
     if gateway_kind in TYPED_KINDS:
-        if args.ssh:
-            typed_limitation = "SSH uses the portable sandbox command runner"
-        elif (
+        if (
             gateway_kind == "profile"
             and args.profile_level == "deep"
             and not (args.kernel_regex or args.kernel_name)
@@ -4415,6 +4525,18 @@ def main(argv: list[str] | None = None) -> int:
         )
         if isinstance(exc, GatewayConfigurationError):
             raise SystemExit(f"sandbox: {exc} {exc.response['error']['next_action']}") from None
+        if isinstance(exc, SSHGPUBusy):
+            print(GATEWAY_ERROR_PREFIX + json.dumps(gateway_error_result({
+                "operation": category,
+                "status": "failed",
+                "outcome": "unavailable",
+                "error": {
+                    "error_class": "infra",
+                    "reason": "ssh_gpu_busy",
+                    "message": str(exc),
+                },
+            })))
+            return ENVIRONMENT_TEMPFAIL
         if isinstance(exc, (EvidenceUnavailable, TimeoutError, subprocess.TimeoutExpired)):
             timed_out = isinstance(exc, (TimeoutError, subprocess.TimeoutExpired))
             print(GATEWAY_ERROR_PREFIX + json.dumps(gateway_error_result({

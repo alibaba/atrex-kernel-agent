@@ -276,7 +276,13 @@ def extend_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
                         option.choices,
                     )
                     continue
-                existing.choices = option.choices
+                # ACU is implemented by Light's SSH backend even when the
+                # installed Agate catalog advertises only NCU/rocprofv3.
+                existing.choices = (
+                    tuple(dict.fromkeys([*existing.choices, *option.choices]))
+                    if existing.dest == "profiler"
+                    else option.choices
+                )
             if option.help:
                 existing.help = option.help
             setattr(existing, "agate_commands", supported)
