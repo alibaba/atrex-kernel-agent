@@ -153,7 +153,9 @@ DEFAULT_PERFORMANCE_TIMEOUT = 300
 DEFAULT_ABBA_RUN_TIMEOUT = 300
 DEFAULT_ABBA_REPEATS = 2
 ABBA_SCHEDULING_OVERHEAD = 30
-DEFAULT_EVALUATION_PREPARATION_OVERHEAD = 120
+# Reserve dependency installation, scheduling and compilation headroom outside
+# the unchanged inner limits. The default 1230-second schedule totals 1800s.
+DEFAULT_EVALUATION_PREPARATION_OVERHEAD = 570
 
 
 def derived_evaluation_timeout(
@@ -166,9 +168,9 @@ def derived_evaluation_timeout(
 ) -> int:
     """Include preparation allowance in new default allocations.
 
-    Preserve Light's former 120-second outer allowance without tying the Job
-    limit to client waiting. The backend owns queue deadlines; explicit and
-    retained allocations are not recomputed by this default factory.
+    Reserve outer headroom even when the gateway decides to install dependencies
+    after submission. The backend owns queue deadlines; client waiting does not
+    extend the Job, and explicit or retained allocations are not recomputed.
     """
     values = {
         "repeats": repeats,
