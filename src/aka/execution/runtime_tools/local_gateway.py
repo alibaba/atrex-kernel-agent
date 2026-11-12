@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import csv
 import fcntl
+import hashlib
 import importlib.util
 import json
 import math
@@ -1592,6 +1593,8 @@ class LocalGateway:
         )
         self._env_lock = threading.Lock()
         self._env_cache: dict[str, Any] | None = None
+        # A scheduler restart cannot certify reuse of the previous allocation.
+        self._allocation_id = secrets.token_hex(32)
 
     def start(self) -> None:
         self.scheduler.start()
@@ -1637,8 +1640,31 @@ class LocalGateway:
             if self._env_cache is None or force:
                 self._env_cache = _probe_environment()
             result = dict(self._env_cache)
+            device_identity = result.pop("_device_identity", None)
             result["aliases"] = sorted(self.gpu_aliases)
+            result["environment_identity"] = None
+            if result.get("source") == "probe" and result.get("arch") and result.get("toolchain", {}).get("torch"):
+                # Timestamps and diagnostics describe the observation, not the
+                # allocation. Hash measured facts without publishing private IDs.
+                facts = {key: result.get(key) for key in (
+                    "vendor", "gpu_model", "arch", "sm_count", "total_memory_mb",
+                    "driver_version", "toolchain", "frameworks")}
+                result["environment_identity"] = hashlib.sha256(json.dumps(
+                    {"allocation": self._allocation_id, "device": device_identity, "facts": facts},
+                    sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
             return result
+
+    def capabilities(self, force: bool = False) -> dict[str, Any]:
+        environment = self.environment(force=force)
+        return {
+            "operations": ["run", "profile", "dev", "same_allocation_abba"],
+            "supported_languages": {name: facts["available"] for name, facts in environment.get("frameworks", {}).items()
+                                    if type(facts.get("available")) is bool},
+            "max_gpus": 1,
+            "features": {"source_archives": True},
+            "limits": {"max_job_timeout_s": MAX_JOB_TIMEOUT, "max_job_timeout_s_dev": MAX_JOB_TIMEOUT},
+            "environment_identity": environment["environment_identity"],
+        }
 
 
 def _probe_environment() -> dict[str, Any]:
@@ -1683,12 +1709,21 @@ def _probe_environment() -> dict[str, Any]:
 
     try:
         code = (
-            "import json, torch; p=torch.cuda.get_device_properties(0); "
+            "import importlib, json, torch; p=torch.cuda.get_device_properties(0); "
             "hip=getattr(torch.version,'hip',None); "
             "arch=(getattr(p,'gcnArchName','').split(':')[0] if hip else "
             "'sm_%d%d'%torch.cuda.get_device_capability(0)); "
+            "frameworks={'pytorch':{'available':True,'version':torch.__version__}}; "
+            "\ntry:\n"
+            " triton=importlib.import_module('triton')\n"
+            " frameworks['triton']={'available':True,'version':triton.__version__}\n"
+            "except Exception:\n"
+            " frameworks['triton']={'available':False}\n"
             "print(json.dumps({'arch':arch,'sm_count':p.multi_processor_count,"
-            "'torch':torch.__version__,'runtime':hip or torch.version.cuda}))"
+            "'torch':torch.__version__,'runtime':hip or torch.version.cuda,"
+            "'gpu_model':p.name,'total_memory_mb':p.total_memory//(1024*1024),"
+            "'device_identity':str(getattr(p,'uuid','')),"
+            "'frameworks':frameworks}))"
         )
         result = subprocess.run(
             [sys.executable, "-c", code],
@@ -1704,6 +1739,10 @@ def _probe_environment() -> dict[str, Any]:
             torch=runtime["torch"],
             runtime=runtime["runtime"],
         )
+        info["frameworks"] = runtime["frameworks"]
+        info["gpu_model"] = runtime["gpu_model"]
+        info["total_memory_mb"] = runtime["total_memory_mb"]
+        info["_device_identity"] = runtime["device_identity"]
         info["source"] = "probe"
         if info["vendor"] == "unknown":
             info["vendor"] = "amd" if str(runtime["arch"]).startswith("gfx") else "nvidia"
@@ -1732,13 +1771,14 @@ class GatewayRequestHandler(BaseHTTPRequestHandler):
             self._send_json(HTTPStatus.OK, {"env": [env]})
             return
         if path.startswith("/v1/env/"):
-            gpu = unquote(path.removeprefix("/v1/env/"))
-            if gpu != "local":
+            gpu, _, suffix = unquote(path.removeprefix("/v1/env/")).partition("/")
+            if gpu not in self.gateway.gpu_aliases or suffix not in {"", "capabilities"}:
                 self._not_found("environment_not_found", f"environment {gpu!r} not found", trace_id)
                 return
             self._send_json(
                 HTTPStatus.OK,
-                self.gateway.environment(force=self._bool_query(query, "force")),
+                (self.gateway.capabilities if suffix else self.gateway.environment)(
+                    force=self._bool_query(query, "force")),
             )
             return
         if path == "/v1/jobs":
