@@ -14,15 +14,22 @@ for a campaign spanning different machines or GPU architectures.
 ## Start a campaign
 
 ```bash
+export ATREX_SANDBOX_SSH=gpu-worker
+export ATREX_SANDBOX_SSH_GPU=5
+export ATREX_SANDBOX_SSH_RUNTIME_BINDS='["/opt/venv", "/opt/rocm"]'
+export ATREX_SANDBOX_SSH_INIT='export PATH=/opt/venv/bin:/opt/rocm/bin:$PATH; export LD_LIBRARY_PATH=/opt/rocm/lib'
+
 aka optimize --repo-root "$PWD" \
   --problem /path/to/atrex-bench/operators/my_operator \
-  --platform MI300X --sandbox-hardware MI300X --framework Triton \
-  --sandbox-ssh gpu-worker --sandbox-ssh-gpu 5 \
-  --sandbox-ssh-runtime-bind /opt/venv \
-  --sandbox-ssh-runtime-bind /opt/rocm \
-  --sandbox-ssh-init 'export PATH=/opt/venv/bin:/opt/rocm/bin:$PATH; export LD_LIBRARY_PATH=/opt/rocm/lib' \
+  --platform MI300X --hardware MI300X --framework Triton \
   --workspace-base /path/to/runs --max-iters 20
 ```
+
+The Workflow request parser accepts `--platform` and `--hardware`; SSH transport
+belongs to Execution's environment configuration. The named Light profiles inherit
+the `ATREX_SANDBOX_SSH*` allowlist from the Workflow profile. Use the default
+Legacy Execution provider for SSH; the Gateway provider rejects SSH configuration.
+Clear `ATREX_SANDBOX_URL` and `ATREX_SANDBOX_PROFILE` before selecting SSH.
 
 Use an OpenSSH host or `~/.ssh/config` alias. Authentication must work without
 interactive input. The evaluator checkout is inferred from the operator directory.
@@ -176,6 +183,13 @@ Git repositories bound at `/opt/aka-dependencies/<id>`. The declared Git ref and
 optional commit must match that checkout. Dependencies are never downloaded
 inside the network-isolated worker. Native CUDA remains a CUDA toolchain
 contract; this does not make CUDA source portable to an AMD HIP compiler.
+
+SSH supports typed prepared requests, source archives, explicit input files and
+same-allocation ABBA. It does not transport closed `PreparedExecutionInputs`.
+Light whole-tree diagnostics and private portable Profile paths that need that
+closure raise `UnsupportedExecution` before dispatch. Supervisor conversion of an
+authorized Dev input view is subject to the same restriction; use a supported
+typed request or a backend advertising closed-input transport.
 
 SOL does not provide Light's native ABBA contract; use the Legacy workflow for
 SOL verification. Each SSH allocation owns one GPU; distributed evaluator

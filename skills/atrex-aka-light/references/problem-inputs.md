@@ -1,6 +1,6 @@
 # AKA Light problem inputs
 
-Read this file before passing an operator to `--op-dir`. AKA Light accepts two
+Read this file before passing an operator to `--problem`. AKA Light accepts two
 problem families. Candidate file systems such as `source_tree`, `single_file`, and
 `cuda_manifest` describe what the Agent edits after the problem is loaded; they are
 not additional problem-input formats.
@@ -25,7 +25,7 @@ of the two layouts below.
 
 A concrete minimum Native input is available under
 [`examples/native-atrex-bench-vector-add/`](../examples/native-atrex-bench-vector-add/README.md).
-Copy it under a canonical Atrex-Bench checkout before passing it to `--op-dir`.
+Copy it under a canonical Atrex-Bench checkout before passing it to `--problem`.
 
 ## Native Atrex-Bench operators
 
@@ -40,7 +40,7 @@ atrex-bench-root/
 │   └── run_eval.py                 # required runtime marker
 ├── src/
 │   └── atrex_bench/                # required runtime package
-└── data/.../operator-name/         # pass this directory to --op-dir
+└── data/.../operator-name/         # pass this directory to --problem
     ├── reference.py                # required: authoritative operator semantics
     ├── input.py                    # required: input construction/calling contract
     ├── shapes.json                 # required: non-empty evaluator cases
@@ -50,7 +50,7 @@ atrex-bench-root/
     └── agent_problem.json          # optional hidden-shape public contract
 ```
 
-`--op-dir` points to `operator-name`, not to the checkout root. AKA walks its parent
+`--problem` points to `operator-name`, not to the checkout root. AKA walks its parent
 directories until it finds both `scripts/run_eval.py` and `src/atrex_bench/`. A copied
 operator directory outside that checkout is not a complete Native problem unless the
 same canonical runtime is placed in an ancestor directory.
@@ -182,7 +182,7 @@ After problem ingestion, one candidate file system remains fixed for the Campaig
 
 An advanced Native task may seed a larger source tree explicitly through a candidate
 composition patch containing both a source manifest and exactly one of a local
-`directory` or Git `repository`. This is not inferred from files in `--op-dir`. The
+`directory` or Git `repository`. This is not inferred from files in `--problem`. The
 imported tree must contain UTF-8 source only, include no symlinks or prebuilt binary
 artifacts, stay within 4,096 files / 64 MiB total / 16 MiB per file, and must not
 already contain `kernel.py`; the manifest's adapter becomes the managed `kernel.py`.
@@ -191,7 +191,7 @@ already contain `kernel.py`; the manifest's adapter becomes the managed `kernel.
 
 Before launch, verify all of the following:
 
-- `--op-dir` is a directory and contains every required file for exactly one supported
+- `--problem` is a directory and contains every required file for exactly one supported
   family;
 - JSON files parse successfully and use the schema expected by the selected checkout;
 - a Native operator is under a canonical Atrex-Bench root with `scripts/run_eval.py`

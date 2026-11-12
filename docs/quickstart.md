@@ -1,6 +1,5 @@
 # Quick Start
 
-The installed `aka optimize` command starts the default **Light** workflow: managed
 `aka optimize` starts the Light workflow with unified Episodes. Native Atrex-Bench
 runs through Agate or the [OpenSSH backend](ssh-backend.md). For SOL or the
 explicit Fast/Full workflow, use the [Legacy guide](legacy-workflow.md).

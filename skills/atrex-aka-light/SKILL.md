@@ -5,21 +5,20 @@ description: Use AKA Light to validate accepted operator inputs and to install, 
 
 # atrex-aka-light
 
-**Current module branch:** read [Current branch entrypoints](references/current-branch.md)
-first. This branch uses the public Workflow request CLI and Agent Unix-socket
-tools; the inherited upstream `main` examples below describe the older CLI.
-Follow the current branch entrypoints when commands or defaults differ.
+Applies to the 0.2.0 module distributions with the public Workflow request CLI.
+Use a resource checkout matching the installed source revision. Agent tools use
+the managed Unix socket; launch examples below use the current request contract.
 
-AKA Light runs supervised GPU-kernel optimization campaigns and sends GPU work to Agate. The coordinator needs the AKA packages, an Agent CLI and Agate access; it does not need the target GPU locally. Use `aka optimize --repo-root REPO -- --help` for the exact options exposed by the installed revision.
+AKA Light runs supervised GPU-kernel optimization campaigns and sends GPU work to Agate. The coordinator needs the AKA packages, an Agent CLI and Agate access; it does not need the target GPU locally. Use `aka optimize --repo-root REPO --help` for the exact options exposed by the installed revision.
 
 ## Choose a task
 
 | Purpose | Command or action | Inputs and boundaries |
 |---|---|---|
-| Install or update Light | `bash ~/.codex/skills/atrex-aka-light/scripts/install_light.sh AKA_REPO_ROOT` | Builds matching framework, legacy and Light wheels from one checkout; read [installation](references/installation.md) |
-| Inspect launch options | `aka optimize --repo-root AKA_REPO_ROOT -- --help` | Launch options go before `--`; optimization options go after it |
-| Start a campaign | `aka optimize --repo-root AKA_REPO_ROOT -- ...` | Requires an operator, platform, framework or intentional auto-dispatch, Agent backend, mode and workspace |
-| Resume a campaign | Rerun the matching launch command | Mode, visibility, candidate layout, framework, composition and workspace identity must match |
+| Install or update Light | `bash /path/to/atrex-kernel-agent/skills/atrex-aka-light/scripts/install_light.sh AKA_REPO_ROOT` | Builds matching framework, legacy and Light wheels from one checkout; read [installation](references/installation.md) |
+| Inspect launch options | `aka optimize --repo-root AKA_REPO_ROOT --help` | All launch and request options belong to the same parser |
+| Start a campaign | `aka optimize --repo-root AKA_REPO_ROOT --problem OPERATOR --platform GPU ...` | Requires an operator, platform, framework or intentional auto-dispatch, Agent backend, mode and workspace |
+| Resume a campaign | Use its recorded `--workflow-request` | Mode, visibility, candidate layout, framework, composition and workspace identity must match |
 | Inspect status or performance | Run the matching `observability/light_*.py` script | Read-only; use JSON for calculations and tables for user summaries |
 | Export exact source or evidence | `export_light_source.py` or `export_light_evidence.py` | Select by accepted Git revision, Kernel identity or Gateway Record identity |
 | Stop a campaign | Stop it through its owning Supervisor or workload | Verify Agent, Runtime and child processes exit; do not use broad process-name kills |
@@ -44,16 +43,21 @@ three-file template.
 
 ## Installation
 
+This skill and the `observability/` scripts are checkout resources. To install
+this skill in an Agent's skill directory, copy the complete `skills/atrex-aka-light/`
+directory, including references, scripts and examples. Commands here use the
+original checkout paths. Read [installation](references/installation.md) for runtime dependencies.
+
 Create an isolated Python environment, then install all three matching distributions from one AKA checkout:
 
 ```bash
 python3 -m venv /path/to/aka-venv
 source /path/to/aka-venv/bin/activate
-bash ~/.codex/skills/atrex-aka-light/scripts/install_light.sh \
+bash /path/to/atrex-kernel-agent/skills/atrex-aka-light/scripts/install_light.sh \
   /path/to/atrex-kernel-agent
 ```
 
-The checkout later passed through `--repo-root` must come from the same revision as the installed wheels. The packages commonly all report version `0.1.0`; rebuild and force-reinstall after source changes rather than comparing only version strings. See [installation and verification](references/installation.md) for interpreter selection, retained wheels, manual installation and upgrades.
+The checkout later passed through `--repo-root` must come from the same revision as the installed wheels. The packages commonly all report version `0.2.0`; rebuild and force-reinstall after source changes rather than comparing only version strings. See [installation and verification](references/installation.md) for interpreter selection, retained wheels, manual installation and upgrades.
 
 ## Choose an optimization mode
 
@@ -76,7 +80,7 @@ Evaluator shapes are exposed by default on current main in both modes. A support
 
 | Profile | Workflow and workspace | Agent boundary | When to use it |
 |---|---|---|---|
-| `light` (default; omit `--profile`) | Managed drafts, unified Light Episodes and private HTTP measurement/record services | Native process, session capture enabled | Normal Light runs on macOS or Linux when cooperative same-UID isolation is sufficient |
+| `light` (default; omit `--profile`) | Managed drafts, unified Light Episodes and managed Unix-socket tools and shared Experiment records | Native process, session capture enabled | Normal Light runs on macOS or Linux when cooperative same-UID isolation is sufficient |
 | `light-sandbox` | Same complete Light Workflow and services as `light` | Bubblewrap filesystem/process isolation, session capture enabled | Light runs on Linux when the Agent should see only the mounted workspace/resources |
 | `workflow` | Legacy Setup/Fast/Full/goal Workflow and Legacy workspace | Legacy Agent behavior | Explicit compatibility with the old Workflow; not an AKA Light campaign |
 | `observed` | Legacy Workflow and workspace | Native Light Agent with session capture | Diagnose Legacy behavior while retaining the Legacy Workflow |
@@ -93,17 +97,17 @@ The CLI also accepts an explicit Profile JSON path for advanced composition work
 `--platform` is the required logical target hardware token, for example `L20D`, `H20`, `B200`, `MI308X` or a PPU product token. It serves four purposes:
 
 - identifies the intended target to the Agent, prompts and GPU Wiki;
-- defaults the Agate worker token when `--sandbox-hardware` is not supplied;
+- defaults the Agate worker token when `--hardware` is not supplied;
 - participates in hardware-vendor detection when a runtime architecture probe is unavailable;
 - participates in the child Campaign workspace name and resume identity.
 
 Use the exact hardware token accepted by the configured Agate environment. If the logical product name and the remote worker alias differ, keep the logical value in `--platform` and pass the executor alias separately:
 
 ```bash
---platform L20D --sandbox-hardware AGATE_WORKER_ALIAS
+--platform L20D --hardware AGATE_WORKER_ALIAS
 ```
 
-`AGATE_WORKER_ALIAS` is a placeholder, not a literal token. For the usual L20D configuration, omit the override and write only `--platform L20D`; AKA then submits `L20D` to Agate. Use `--sandbox-hardware` only when the selected Agate environment names that worker differently.
+`AGATE_WORKER_ALIAS` is a placeholder, not a literal token. For the usual L20D configuration, omit the override and write only `--platform L20D`; AKA then submits `L20D` to Agate. Use `--hardware` only when the selected Agate environment names that worker differently.
 
 `--platform` is not the CUDA/ROCm architecture. Runtime probing normally determines values such as `sm_89`, `sm_100` or `gfx942`; use `--arch` only when that probe fails or must be overridden deliberately.
 
@@ -146,30 +150,30 @@ The most common optional controls are:
 | Goal | Controls |
 |---|---|
 | Bound search | `--max-iters`, `--token-budget`, `--max-stall`, `--target-util`, `--convert-after` |
-| Control V1 and recovery | `--framework-baseline`, `--framework-baseline-timeout`, `--handoff-resumes`, `--v1-ask-codex`, `--v1-ask-qoder` |
+| Control V1 and recovery | `--framework-baseline`, `--framework-baseline-timeout`, `--handoff-resumes`, repeatable `--framework-baseline-reviewers codex` or `qodercli` |
 | Set promotion evidence | `--verify-repeats`, `--verify-run-timeout`, `--min-improvement-pct` |
-| Select Agate execution | `--sandbox-hardware`, `--sandbox-profile`, `--sandbox-url`, or the mutually exclusive SSH controls |
+| Select Agate execution | `--hardware`, Execution profile configuration or its endpoint environment |
 | Configure Agent/Runtime modules | launch-level `--patch` for Episode active time, Agent pause, Wiki, generated memory, research records, candidate layout or pooled search |
 
-Read [configuration](references/configuration.md) before changing defaults. It gives the default, purpose, interaction and resume impact of every Light-applicable public flag, documents composition fields, and identifies shared-parser flags that are currently Legacy-only despite being accepted by the CLI.
+Read [configuration](references/configuration.md) before changing defaults. It explains public request fields, composition ownership and continuation identity; the matching CLI/dataclasses own exact field lists and defaults.
 
 ## Launch a campaign
 
-Launch options belong before `--`; optimization arguments belong after it:
+Pass all launch and request options to the same parser, without a `--` separator:
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox -- \
-  --op-dir /path/to/atrex-bench/operator \
+  --profile light-sandbox \
+  --problem /path/to/atrex-bench/operator \
   --platform L20D \
   --framework CuteDSL \
   --agent-cli claude \
   --optimization-mode production \
-  --workspace /path/to/campaign-root \
+  --workspace-base /path/to/campaign-root \
   --max-iters 20
 ```
 
-Omit `--profile` for native Light. `--profile light-sandbox` is an Agent isolation boundary on the coordinator; it is unrelated to provisioning an Aone Sandbox. Use only Agate options shown by the installed `aka optimize ... --help`; Light rejects sensitive or operation-incompatible native options.
+Omit `--profile` for native Light. `--profile light-sandbox` is an Agent isolation boundary on the coordinator; it is unrelated to provisioning an Aone Sandbox. Workflow help lists request fields; safe Agate-native options belong to the Agent's installed `tools/sandbox.py` schema.
 
 Resolve these inputs before launch:
 
@@ -186,7 +190,7 @@ Do not print credentials. Inspect the checkout and preserve uncommitted user cha
 ## Candidate layouts and baseline sequence
 
 Candidate layouts describe the source the Agent edits after the problem is loaded;
-they are not alternate `--op-dir` formats. Native V0 is derived from `reference.py`,
+they are not alternate `--problem` formats. Native V0 is derived from `reference.py`,
 not from an adjacent user-provided `kernel.py` or `impl/` directory.
 
 - Native Atrex-Bench tasks default to `source_tree`: editable `kernel.py` may contain the implementation or import editable helpers from `impl/`.
@@ -195,6 +199,15 @@ not from an adjacent user-provided `kernel.py` or `impl/` directory.
 - Candidate layout is fixed for the campaign and must match on resume.
 
 The normal sequence is V0 full-workload measurement, optional framework baseline V1, then optimization Episodes. `--framework-baseline` controls V1, not V0: `auto` follows mode/layout policy, `always` requests V1 and `never` starts Episodes from measured V0. A failed V0 stops before V1; current main does not skip V0 and go directly to Framework Baseline.
+
+DSH is selected by `--agent-cli dsh`; configure its headless profile and provider
+authentication before launch. It uses a private session Home, JSON events and
+checkpoints; native child-attempt usage excludes seeded or resumed history.
+Bubblewrap execution requires Linux and the matching DSH installation.
+
+New requests expose Shapes by default. Historical serialized requests without
+that field retain their original hidden-shape behavior. Immutable historical
+candidate adapters retain their pinned source policy.
 
 Each Episode edits a managed draft, evaluates an exact source, submits an evidence-backed report, seals the candidate and compares it with the incumbent. A passing or faster ordinary Evaluate does not itself promote a candidate; terminal verification and the promotion gate decide that.
 
@@ -247,4 +260,4 @@ The output path must not already exist. Read [observability and evidence export]
 | Launch syntax, mode exceptions, V0/V1, layouts, budgets, resume, stop or cleanup | [Operations](references/operations.md) |
 | Runtime health, latency, correctness, promotion, Agate, tokens, tools, GPU Wiki, source or evidence | [Observability](references/observability.md) |
 
-For non-trivial launches, prefer the selected checkout's `aka optimize --repo-root REPO -- --help` over remembered flags. For inspection, anchor conclusions to durable timestamps and report fields that are missing instead of guessing.
+For non-trivial launches, prefer the selected checkout's `aka optimize --repo-root REPO --help` over remembered flags. For inspection, anchor conclusions to durable timestamps and report fields that are missing instead of guessing.
