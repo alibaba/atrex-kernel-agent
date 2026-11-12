@@ -117,6 +117,12 @@ def bound_executor(executor):
     if budget is None:
         return executor
     class PhaseExecutor:
+        @property
+        def capabilities(self):
+            return executor.capabilities
+        @property
+        def resource_identity(self):
+            return executor.resource_identity
         def __getattr__(self, name):
             return getattr(executor, name)
         def run(self, command):
