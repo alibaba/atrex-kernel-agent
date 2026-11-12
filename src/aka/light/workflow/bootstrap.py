@@ -71,6 +71,7 @@ from aka.light.acceptance.policy_modes import (
     permits_hidden_shapes,
     requires_explicit_dsl,
 )
+from aka.legacy.acceptance.review import _validate_production_review
 from aka.light.workflow.session_io import (
     SessionResult,
     _production_review_candidate_paths,
@@ -79,7 +80,6 @@ from aka.light.workflow.session_io import (
     _render,
     _sandbox_command,
     _test_result_from_stdout,
-    _validate_production_review,
     sandbox_directive,
 )
 from aka.light.workspace.state import (
@@ -1000,6 +1000,7 @@ class Campaign:
 
         errors: list[str]
         review_payload: object | None = None
+        derived_review: dict[str, object] | None = None
         review_summary = ""
         effective_dsl_policy = dsl_policy(
             self.optimization_mode,
@@ -1123,7 +1124,7 @@ class Campaign:
                     review_payload = json.loads(
                         review_path.read_text(encoding="utf-8")
                     )
-                    errors, review_summary = _validate_production_review(
+                    errors, review_summary, derived_review = _validate_production_review(
                         review_payload,
                         candidate_files=frozenset(source_hashes),
                         dsl_policy=effective_dsl_policy,
@@ -1187,6 +1188,7 @@ class Campaign:
             "errors": errors,
             "summary": review_summary,
             "review": review_payload,
+            "derived_review": derived_review,
             "session_archive": {
                 "session_id": result.session_id,
                 "conversation_path": session_archive.conversation.relative_to(

@@ -21,8 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from aka.legacy.acceptance.review import _validate_production_review, _validate_review_item
-
 import aka.light.agent.runtime as _agent_runtime
 from aka.light.workflow.constants import (
     DEFAULT_SANDBOX_TIMEOUT,

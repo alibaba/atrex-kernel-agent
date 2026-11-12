@@ -12,6 +12,7 @@ from aka.light.agent.session_capture import SessionCapture
 from aka.light.agent.session_usage import estimate_usage_from_conversation
 from aka.light.runtime.paths import supervisor_campaign_root
 from aka.light.workflow.token_checkpoints import capture_token_checkpoint
+from aka.legacy.acceptance.review import _validate_production_review
 from aka.legacy.agent import dsh
 from observability.light_token_time import snapshot as token_time_snapshot
 
@@ -446,3 +447,135 @@ def test_ssh_device_map_uses_explicit_character_devices():
     assert assignment["devices"] == ["/dev/null"]
     with pytest.raises(ValueError, match="device or runtime"):
         ssh_devices.resolve(0, isolation="process", device_map={})
+
+
+def _mixed_compute_fact_review():
+    evidence = ["candidate/kernel.py:1"]
+    return {
+        "schema_version": 3,
+        "framework": {
+            "technologies": ["triton", "torch_aten"],
+            "evaluator_supported": True,
+            "configured_framework_used": False,
+            "required_phase_used": False,
+            "unexpected_core_technologies": [],
+            "reason": "both technologies are visible and evaluator-supported",
+            "evidence": evidence,
+        },
+        "compute_origins": [
+            {
+                "kind": "self_authored",
+                "technology": "triton",
+                "role": "primary",
+                "declared": True,
+                "reproducible": True,
+                "hidden_dispatch": False,
+                "reason": "candidate-authored Triton is the primary path",
+                "evidence": evidence,
+            },
+            {
+                "kind": "framework_builtin",
+                "technology": "torch_aten",
+                "role": "fallback",
+                "declared": True,
+                "reproducible": True,
+                "hidden_dispatch": False,
+                "reason": "visible Torch fallback handles excluded inputs",
+                "evidence": evidence,
+            },
+        ],
+        "dependency_inventory": {
+            "complete": True,
+            "reason": "Torch and Triton are both inventoried",
+            "evidence": evidence,
+        },
+        "external_code_loading": {
+            "status": "none",
+            "declared": True,
+            "reproducible": True,
+            "hidden_dispatch": False,
+            "reason": "no external implementation is loaded",
+            "evidence": evidence,
+        },
+        "solution_manifest": {
+            "status": "not_applicable",
+            "reason": "this source-tree candidate has no manifest",
+            "evidence": evidence,
+        },
+        "dependencies": [
+            {
+                "name": name,
+                "kind": "framework_runtime",
+                "role": role,
+                "declared": True,
+                "reproducible": True,
+                "hidden_dispatch": False,
+                "reason": reason,
+                "evidence": evidence,
+            }
+            for name, role, reason in (
+                ("triton", "kernel compiler", "Triton compiles the candidate source"),
+                ("torch", "tensor and fallback runtime", "Torch exposes the fallback"),
+            )
+        ],
+        "summary": "self-authored Triton with a visible Torch fallback",
+    }
+
+
+def test_runtime_derives_final_source_verdict_from_reviewer_facts():
+    review = _mixed_compute_fact_review()
+    fast_errors, _, fast = _validate_production_review(
+        review,
+        candidate_files=frozenset({"kernel.py"}),
+        dsl_policy="open",
+        compute_policy="declared_external_allowed",
+    )
+    strict_errors, _, strict = _validate_production_review(
+        review,
+        candidate_files=frozenset({"kernel.py"}),
+        dsl_policy="guided",
+        compute_policy="self_authored_only",
+    )
+
+    assert fast_errors == []
+    assert fast["verdict"] == "allow"
+    assert strict["verdict"] == "reject"
+    assert any("torch_aten" in error for error in strict_errors)
+
+
+def test_reviewer_cannot_supply_policy_decision_or_verdict():
+    review = _mixed_compute_fact_review()
+    review["compute_origins"][1]["decision"] = "reject"
+    with pytest.raises(ValueError, match="facts, not decision"):
+        _validate_production_review(
+            review,
+            candidate_files=frozenset({"kernel.py"}),
+            dsl_policy="open",
+            compute_policy="declared_external_allowed",
+        )
+
+
+def test_runtime_enforces_pinned_framework_from_reviewer_facts():
+    review = _mixed_compute_fact_review()
+    review["framework"].update({
+        "unexpected_core_technologies": ["triton"],
+    })
+    errors, _, derived = _validate_production_review(
+        review,
+        candidate_files=frozenset({"kernel.py"}),
+        dsl_policy="pinned",
+        compute_policy="declared_external_allowed",
+    )
+    assert derived["verdict"] == "reject"
+    assert any("framework_compliance" in error for error in errors)
+
+
+def test_final_source_reviewer_prompt_requests_facts_not_policy_decisions():
+    prompt = (
+        Path(__file__).resolve().parents[1]
+        / "src/aka/light/workflow/prompts/dependency_review.md"
+    ).read_text(encoding="utf-8")
+    assert '"schema_version": 3' in prompt
+    assert '"compute_origins"' in prompt
+    assert '"decision":' not in prompt
+    assert '"verdict":' not in prompt

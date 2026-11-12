@@ -838,8 +838,9 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             Path(__file__).resolve().parents[1]
             / "src/aka/legacy/workflow/prompts/dependency_review.md"
         ).read_text(encoding="utf-8")
-        self.assertIn("candidate/<replace-with-an-actual-file>:line-or-field", dependency_review)
-        self.assertIn("native manifest candidate", dependency_review)
+        self.assertIn("candidate/<actual-file>:line-or-field", dependency_review)
+        self.assertIn('"compute_origins"', dependency_review)
+        self.assertIn("Do not include `decision` or `verdict`", dependency_review)
 
     def test_every_research_module_combination_renders_one_complete_prompt(self):
         expected_heading = {

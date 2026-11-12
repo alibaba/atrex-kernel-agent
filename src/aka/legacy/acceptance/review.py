@@ -1,64 +1,58 @@
-"""Acceptance review implementation and callable interface."""
+"""Acceptance review facts and deterministic policy evaluation."""
+
 from __future__ import annotations
 
-from pathlib import Path
 import hashlib
-DEPENDENCY_REVIEW_SCHEMA_VERSION = 2
 import re
+from pathlib import Path
+
+DEPENDENCY_REVIEW_SCHEMA_VERSION = 3
 
 
-_DEPENDENCY_ALLOW_CATEGORIES = {
-    "toolchain_plumbing",
-    "framework_runtime",
-    "support_utility",
-}
-
-
-_DEPENDENCY_REJECT_CATEGORIES = {
-    "prebuilt_compute",
-    "alternate_framework",
-    "hidden_dispatch",
-    "external_code",
+_COMPUTE_KINDS = {
+    "self_authored",
+    "framework_builtin",
+    "prebuilt_operator",
+    "external_source",
     "unresolved",
 }
 
+_COMPUTE_ROLES = {
+    "primary",
+    "fallback",
+    "partial",
+    "dispatch_only",
+}
 
-_PRODUCTION_REVIEW_CHECK_CATEGORIES = {
-    "framework_compliance": {
-        "allow": {"framework_compliant"},
-        "reject": {"alternate_framework", "unresolved"},
-    },
-    "compute_provenance": {
-        "allow": {"self_authored_compute"},
-        "reject": {
-            "prebuilt_compute",
-            "torch_compute",
-            "hidden_dispatch",
-            "external_code",
-            "unresolved",
-        },
-    },
-    "dependency_inventory": {
-        "allow": {"inventory_complete"},
-        "reject": {"unresolved"},
-    },
-    "external_code_loading": {
-        "allow": {"no_external_code"},
-        "reject": {"external_code", "hidden_dispatch", "unresolved"},
-    },
-    "solution_manifest": {
-        "allow": {"manifest_consistent", "not_applicable"},
-        "reject": {"manifest_mismatch", "unresolved"},
-    },
+_DEPENDENCY_KINDS = {
+    "toolchain_plumbing",
+    "framework_runtime",
+    "support_utility",
+    "prebuilt_operator",
+    "external_source",
+    "alternate_framework",
+    "unresolved",
+}
+
+_EXTERNAL_CODE_STATUSES = {
+    "none",
+    "candidate_source",
+    "declared_dependency",
+    "hidden_dispatch",
+    "unresolved",
+}
+
+_MANIFEST_STATUSES = {
+    "consistent",
+    "not_applicable",
+    "mismatch",
+    "unresolved",
 }
 
 
 def _production_review_candidate_paths(workspace: Path) -> list[Path]:
     """Return the complete, bounded source set shown to the production reviewer."""
-    paths = [
-        workspace / "kernel.py",
-        workspace / "solution.json",
-    ]
+    paths = [workspace / "kernel.py", workspace / "solution.json"]
     return [path for path in paths if path.is_file()]
 
 
@@ -81,53 +75,38 @@ def _production_review_digest(
     return digest.hexdigest()
 
 
-def _validate_review_item(
-    item: object,
+def _require_object(value: object, *, label: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"production review {label} must be an object")
+    return value
+
+
+def _require_text(value: object, *, label: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"production review {label} must be non-empty")
+    return value.strip()
+
+
+def _validate_evidence(
+    value: object,
     *,
     label: str,
-    allow_categories: set[str],
-    reject_categories: set[str],
     candidate_files: frozenset[str],
-) -> tuple[str, str, str]:
-    if not isinstance(item, dict):
-        raise ValueError(f"production review {label} must be an object")
-    decision = item.get("decision")
-    category = item.get("category")
-    reason = item.get("reason")
-    evidence = item.get("evidence")
-    if decision not in {"allow", "reject"}:
-        raise ValueError(f"production review decision is invalid for {label}")
-    categories = allow_categories if decision == "allow" else reject_categories
-    if category not in categories:
-        raise ValueError(
-            f"production review category {category!r} is inconsistent with "
-            f"decision {decision!r} for {label}"
-        )
-    if not isinstance(reason, str) or not reason.strip():
-        raise ValueError(f"production review reason is empty for {label}")
+) -> list[str]:
     if (
-        not isinstance(evidence, list)
-        or not evidence
-        or not all(isinstance(value, str) and value.strip() for value in evidence)
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item.strip() for item in value)
     ):
         raise ValueError(f"production review evidence is invalid for {label}")
+    evidence = [str(item).strip() for item in value]
     candidate_evidence_found = False
-    for value in evidence:
-        stripped = value.strip()
-        # The supplied file set is authoritative. Legacy supplies kernel.py and
-        # solution.json; source-tree owners may include additional pinned files.
-        match = re.fullmatch(
-            r"candidate/([^:]+)(?::.+)?",
-            stripped,
-        )
+    for item in evidence:
+        match = re.fullmatch(r"candidate/([^:]+)(?::.+)?", item)
         if match is not None and match.group(1) in candidate_files:
             candidate_evidence_found = True
             continue
-        # The review request is trusted supervisor context rather than candidate
-        # evidence.  Reviewers occasionally cite it alongside candidate source when
-        # explaining the selected framework.  Permit that supplemental citation,
-        # while still requiring source-backed candidate evidence for every item.
-        if re.fullmatch(r"review_request\.json:[A-Za-z0-9_.-]+", stripped):
+        if re.fullmatch(r"review_request\.json:[A-Za-z0-9_.-]+", item):
             continue
         raise ValueError(
             "production review evidence may only cite supplied candidate files "
@@ -135,9 +114,42 @@ def _validate_review_item(
         )
     if not candidate_evidence_found:
         raise ValueError(
-            f"production review evidence must cite a supplied candidate file for {label}"
+            "production review evidence must cite a supplied candidate file "
+            f"for {label}"
         )
-    return decision, str(category), reason.strip()
+    return evidence
+
+
+def _validate_explanation(
+    value: object,
+    *,
+    label: str,
+    candidate_files: frozenset[str],
+) -> tuple[str, list[str]]:
+    item = _require_object(value, label=label)
+    if "decision" in item or "verdict" in item:
+        raise ValueError(
+            f"production review {label} must report facts, not decision or verdict"
+        )
+    reason = _require_text(item.get("reason"), label=f"reason for {label}")
+    evidence = _validate_evidence(
+        item.get("evidence"), label=label, candidate_files=candidate_files
+    )
+    return reason, evidence
+
+
+def _derived_check(
+    check_id: str,
+    *,
+    rejected_reasons: list[str],
+    facts: object,
+) -> dict[str, object]:
+    return {
+        "id": check_id,
+        "decision": "reject" if rejected_reasons else "allow",
+        "reasons": rejected_reasons,
+        "facts": facts,
+    }
 
 
 def _validate_production_review(
@@ -146,8 +158,8 @@ def _validate_production_review(
     candidate_files: frozenset[str] = frozenset({"kernel.py", "solution.json"}),
     dsl_policy: str = "pinned",
     compute_policy: str = "self_authored_only",
-) -> tuple[list[str], str]:
-    """Validate a complete candidate verdict and translate rejections into errors."""
+) -> tuple[list[str], str, dict[str, object]]:
+    """Validate reviewer facts and deterministically apply final-source policy."""
     if dsl_policy not in {"open", "guided", "pinned"}:
         raise ValueError(f"unsupported production review dsl_policy: {dsl_policy!r}")
     if compute_policy not in {
@@ -157,100 +169,248 @@ def _validate_production_review(
         raise ValueError(
             f"unsupported production review compute_policy: {compute_policy!r}"
         )
-    check_categories = {
-        name: {
-            "allow": set(categories["allow"]),
-            "reject": set(categories["reject"]),
-        }
-        for name, categories in _PRODUCTION_REVIEW_CHECK_CATEGORIES.items()
-    }
-    dependency_allow = set(_DEPENDENCY_ALLOW_CATEGORIES)
-    dependency_reject = set(_DEPENDENCY_REJECT_CATEGORIES)
-    if compute_policy == "declared_external_allowed":
-        for category in {"prebuilt_compute", "torch_compute", "external_code"}:
-            check_categories["compute_provenance"]["reject"].discard(category)
-            check_categories["compute_provenance"]["allow"].add(category)
-        check_categories["external_code_loading"]["reject"].discard("external_code")
-        check_categories["external_code_loading"]["allow"].add("external_code")
-        for category in {"prebuilt_compute", "external_code"}:
-            dependency_reject.discard(category)
-            dependency_allow.add(category)
-    if not isinstance(payload, dict):
-        raise ValueError("production review must be a JSON object")
-    if payload.get("schema_version") != DEPENDENCY_REVIEW_SCHEMA_VERSION:
+
+    review = _require_object(payload, label="payload")
+    if review.get("schema_version") != DEPENDENCY_REVIEW_SCHEMA_VERSION:
         raise ValueError("production review has an unsupported schema_version")
-    verdict = payload.get("verdict")
-    if verdict not in {"allow", "reject"}:
-        raise ValueError("production review verdict must be allow or reject")
-    summary = payload.get("summary")
-    if not isinstance(summary, str) or not summary.strip():
-        raise ValueError("production review summary must be non-empty")
-    checks = payload.get("checks")
-    if not isinstance(checks, list):
-        raise ValueError("production review checks must be a list")
-
-    expected = set(check_categories)
-    reviewed: set[str] = set()
-    rejected: list[str] = []
-    for item in checks:
-        if not isinstance(item, dict):
-            raise ValueError("production review check must be an object")
-        check_id = item.get("id")
-        if not isinstance(check_id, str) or check_id not in expected:
-            raise ValueError(
-                f"production review returned unexpected check id: {check_id!r}"
-            )
-        if check_id in reviewed:
-            raise ValueError(f"production review duplicated check id: {check_id}")
-        categories = check_categories[check_id]
-        decision, _category, reason = _validate_review_item(
-            item,
-            label=f"check {check_id}",
-            allow_categories=categories["allow"],
-            reject_categories=categories["reject"],
-            candidate_files=candidate_files,
+    if "verdict" in review or "decision" in review:
+        raise ValueError(
+            "production review must report source facts; Runtime derives "
+            "decisions and verdict"
         )
-        reviewed.add(check_id)
-        if decision == "reject":
-            rejected.append(
-                "final-source candidate rejected by independent reviewer: "
-                f"{check_id}: {reason}"
+    summary = _require_text(review.get("summary"), label="summary")
+
+    errors: list[str] = []
+    checks: list[dict[str, object]] = []
+
+    framework = _require_object(review.get("framework"), label="framework")
+    framework_reason, _ = _validate_explanation(
+        framework, label="framework", candidate_files=candidate_files
+    )
+    technologies = framework.get("technologies")
+    if (
+        not isinstance(technologies, list)
+        or not technologies
+        or not all(isinstance(item, str) and item.strip() for item in technologies)
+    ):
+        raise ValueError("production review framework technologies are invalid")
+    for field in (
+        "evaluator_supported",
+        "configured_framework_used",
+        "required_phase_used",
+    ):
+        if not isinstance(framework.get(field), bool):
+            raise ValueError(f"production review framework {field} must be boolean")
+    unexpected_technologies = framework.get("unexpected_core_technologies")
+    if not isinstance(unexpected_technologies, list) or not all(
+        isinstance(item, str) and item.strip() for item in unexpected_technologies
+    ):
+        raise ValueError(
+            "production review framework unexpected_core_technologies is invalid"
+        )
+    framework_rejections = []
+    if not framework["evaluator_supported"]:
+        framework_rejections.append(framework_reason)
+    if dsl_policy == "pinned" and (
+        not framework["configured_framework_used"]
+        or not framework["required_phase_used"]
+        or bool(unexpected_technologies)
+    ):
+        framework_rejections.append(framework_reason)
+    checks.append(
+        _derived_check(
+            "framework_compliance",
+            rejected_reasons=framework_rejections,
+            facts=framework,
+        )
+    )
+
+    origins = review.get("compute_origins")
+    if not isinstance(origins, list) or not origins:
+        raise ValueError("production review compute_origins must be a non-empty list")
+    origin_rejections: list[str] = []
+    derived_origins: list[dict[str, object]] = []
+    for index, value in enumerate(origins):
+        label = f"compute origin {index}"
+        origin = _require_object(value, label=label)
+        reason, _ = _validate_explanation(
+            origin, label=label, candidate_files=candidate_files
+        )
+        kind = origin.get("kind")
+        role = origin.get("role")
+        technology = _require_text(
+            origin.get("technology"), label=f"technology for {label}"
+        )
+        if kind not in _COMPUTE_KINDS:
+            raise ValueError(f"production review kind is invalid for {label}")
+        if role not in _COMPUTE_ROLES:
+            raise ValueError(f"production review role is invalid for {label}")
+        for field in ("declared", "reproducible", "hidden_dispatch"):
+            if not isinstance(origin.get(field), bool):
+                raise ValueError(
+                    f"production review {field} must be boolean for {label}"
+                )
+
+        rejected = (
+            kind == "unresolved"
+            or bool(origin["hidden_dispatch"])
+            or not bool(origin["declared"])
+            or not bool(origin["reproducible"])
+            or (
+                kind in {"framework_builtin", "prebuilt_operator", "external_source"}
+                and compute_policy != "declared_external_allowed"
             )
+        )
+        if rejected:
+            origin_rejections.append(f"{technology} ({role}, {kind}): {reason}")
+        derived_origin = dict(origin)
+        derived_origin["decision"] = "reject" if rejected else "allow"
+        derived_origins.append(derived_origin)
+    checks.append(
+        _derived_check(
+            "compute_provenance",
+            rejected_reasons=origin_rejections,
+            facts=derived_origins,
+        )
+    )
 
-    missing = sorted(expected - reviewed)
-    if missing:
-        raise ValueError("production review omitted check ids: " + ", ".join(missing))
+    inventory = _require_object(
+        review.get("dependency_inventory"), label="dependency_inventory"
+    )
+    inventory_reason, _ = _validate_explanation(
+        inventory,
+        label="dependency_inventory",
+        candidate_files=candidate_files,
+    )
+    if not isinstance(inventory.get("complete"), bool):
+        raise ValueError(
+            "production review dependency_inventory complete must be boolean"
+        )
+    inventory_rejections = [] if inventory["complete"] else [inventory_reason]
+    checks.append(
+        _derived_check(
+            "dependency_inventory",
+            rejected_reasons=inventory_rejections,
+            facts=inventory,
+        )
+    )
 
-    dependencies = payload.get("dependencies")
+    external = _require_object(
+        review.get("external_code_loading"), label="external_code_loading"
+    )
+    external_reason, _ = _validate_explanation(
+        external,
+        label="external_code_loading",
+        candidate_files=candidate_files,
+    )
+    external_status = external.get("status")
+    if external_status not in _EXTERNAL_CODE_STATUSES:
+        raise ValueError("production review external_code_loading status is invalid")
+    for field in ("declared", "reproducible", "hidden_dispatch"):
+        if not isinstance(external.get(field), bool):
+            raise ValueError(
+                f"production review external_code_loading {field} must be boolean"
+            )
+    external_rejected = (
+        external_status in {"hidden_dispatch", "unresolved"}
+        or bool(external["hidden_dispatch"])
+        or not bool(external["declared"])
+        or not bool(external["reproducible"])
+        or (
+            external_status == "declared_dependency"
+            and compute_policy != "declared_external_allowed"
+        )
+    )
+    external_rejections = [external_reason] if external_rejected else []
+    checks.append(
+        _derived_check(
+            "external_code_loading",
+            rejected_reasons=external_rejections,
+            facts=external,
+        )
+    )
+
+    manifest = _require_object(
+        review.get("solution_manifest"), label="solution_manifest"
+    )
+    manifest_reason, _ = _validate_explanation(
+        manifest,
+        label="solution_manifest",
+        candidate_files=candidate_files,
+    )
+    manifest_status = manifest.get("status")
+    if manifest_status not in _MANIFEST_STATUSES:
+        raise ValueError("production review solution_manifest status is invalid")
+    manifest_rejections = (
+        [] if manifest_status in {"consistent", "not_applicable"} else [manifest_reason]
+    )
+    checks.append(
+        _derived_check(
+            "solution_manifest",
+            rejected_reasons=manifest_rejections,
+            facts=manifest,
+        )
+    )
+
+    dependencies = review.get("dependencies")
     if not isinstance(dependencies, list):
         raise ValueError("production review dependencies must be a list")
     dependency_names: set[str] = set()
-    for item in dependencies:
-        if not isinstance(item, dict):
-            raise ValueError("production review dependency must be an object")
-        name = item.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("production review dependency name must be non-empty")
-        normalized_name = name.strip().lower()
+    derived_dependencies: list[dict[str, object]] = []
+    dependency_rejections: list[str] = []
+    for index, value in enumerate(dependencies):
+        label = f"dependency {index}"
+        dependency = _require_object(value, label=label)
+        reason, _ = _validate_explanation(
+            dependency, label=label, candidate_files=candidate_files
+        )
+        name = _require_text(dependency.get("name"), label=f"name for {label}")
+        normalized_name = name.lower()
         if normalized_name in dependency_names:
-            raise ValueError(f"production review duplicated dependency: {name.strip()}")
+            raise ValueError(f"production review duplicated dependency: {name}")
         dependency_names.add(normalized_name)
-        decision, _category, reason = _validate_review_item(
-            item,
-            label=f"dependency {name.strip()}",
-            allow_categories=dependency_allow,
-            reject_categories=dependency_reject,
-            candidate_files=candidate_files,
-        )
-        if decision == "reject":
-            rejected.append(
-                "final-source dependency rejected by independent reviewer: "
-                f"{name.strip()}: {reason}"
+        kind = dependency.get("kind")
+        if kind not in _DEPENDENCY_KINDS:
+            raise ValueError(f"production review kind is invalid for dependency {name}")
+        _require_text(dependency.get("role"), label=f"role for dependency {name}")
+        for field in ("declared", "reproducible", "hidden_dispatch"):
+            if not isinstance(dependency.get(field), bool):
+                raise ValueError(
+                    f"production review {field} must be boolean for dependency {name}"
+                )
+        rejected = (
+            kind in {"alternate_framework", "unresolved"}
+            or bool(dependency["hidden_dispatch"])
+            or not bool(dependency["declared"])
+            or not bool(dependency["reproducible"])
+            or (
+                kind in {"prebuilt_operator", "external_source"}
+                and compute_policy != "declared_external_allowed"
             )
-
-    expected_verdict = "reject" if rejected else "allow"
-    if verdict != expected_verdict:
-        raise ValueError(
-            f"production review verdict {verdict!r} disagrees with item decisions"
         )
-    return rejected, summary.strip()
+        if rejected:
+            dependency_rejections.append(f"{name}: {reason}")
+        derived_dependency = dict(dependency)
+        derived_dependency["decision"] = "reject" if rejected else "allow"
+        derived_dependencies.append(derived_dependency)
+
+    for check in checks:
+        if check["decision"] == "reject":
+            for reason in check["reasons"]:
+                errors.append(
+                    "final-source candidate rejected by deterministic policy: "
+                    f"{check['id']}: {reason}"
+                )
+    for reason in dependency_rejections:
+        errors.append(
+            "final-source dependency rejected by deterministic policy: " + reason
+        )
+
+    derived = {
+        "verdict": "reject" if errors else "allow",
+        "dsl_policy": dsl_policy,
+        "compute_policy": compute_policy,
+        "checks": checks,
+        "dependencies": derived_dependencies,
+    }
+    return errors, summary, derived
