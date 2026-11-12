@@ -1674,6 +1674,7 @@ class Campaign:
             health_command=self.sandbox_health_command,
             gateway_kind="run",
             private_reference_dir=self.private_reference_dir,
+            evaluation_step_timeout=self.evaluation_step_timeout,
             gpu_clock_mhz=self.gpu_clock_mhz,
             # V0 is mandatory campaign evidence.  Keep polling/retrying through
             # infrastructure failures exactly like the later terminal candidate

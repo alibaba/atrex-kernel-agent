@@ -3255,6 +3255,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 platform="cuda",
                 framework="cuda",
                 work_dir=directory,
+                evaluation_step_timeout=317,
             )
             with (
                 patch(
@@ -3275,6 +3276,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
 
         self.assertEqual(measured, result)
         self.assertIs(sandbox.call_args.kwargs["terminal_validation"], True)
+        self.assertEqual(sandbox.call_args.kwargs["evaluation_step_timeout"], 317)
 
     def test_v0_terminal_recovery_does_not_retry_incorrect_result(self):
         result = {
