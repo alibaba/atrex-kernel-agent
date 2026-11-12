@@ -195,11 +195,9 @@ SOL does not provide Light's native ABBA contract; use the Legacy workflow for
 SOL verification. Each SSH allocation owns one GPU; distributed evaluator
 contracts and MIG selection require a separate allocation implementation.
 
-## Validation
-
-Validation evidence and hardware coverage are recorded in the pull request.
-Local smoke checks cover source-tree Evaluate/ABBA, diagnostics, device visibility,
-synchronized Dev outputs, an incorrect candidate, cancellation and timeout handling.
-For this shared-module integration, local regression evidence is stored outside the
-source checkout in the refactor workspace's validations directory. NVIDIA, PPU
-and native CUDA hardware coverage remains pending; upstream evidence covers AMD SSH.
+The remote launcher requires `flock` with `--exclusive`, `--wait` and
+`--conflict-exit-code` support. Missing or incompatible launch dependencies stop
+with a capability diagnostic, retaining the original stderr. Lock expiry (exit 75
+before the acquisition marker) is GPU contention; candidate exit 75 after acquisition
+is a command failure. Environment discovery reports SSH network/auth/DNS failures
+as unavailable and remote probe failures as rejected.

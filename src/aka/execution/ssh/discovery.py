@@ -57,10 +57,25 @@ def main():
     except sandbox.SSHGPUBusy:
         print(json.dumps({'result': {}, 'diagnostics': ['ssh_gpu_busy']}))
         return 0
+    except sandbox.SSHDependencyError:
+        print(json.dumps({'result': {}, 'diagnostics': ['ssh-flock-unsupported']}))
+        return 0
+    except sandbox.SSHTransportError:
+        print(json.dumps({'result': {}, 'diagnostics': ['ssh-environment-probe-unavailable']}))
+        return 0
+    if process.returncode == 255:
+        print(json.dumps({'result': {}, 'diagnostics': ['ssh-environment-probe-unavailable']}))
+        return 0
     if process.returncode:
         print(json.dumps({'result': {}, 'diagnostics': ['ssh-environment-probe-rejected']}))
         return 0
-    result = json.loads(process.stdout.splitlines()[-1])
+    try:
+        result = json.loads(process.stdout.splitlines()[-1])
+        if not isinstance(result, dict):
+            raise ValueError('SSH environment probe must return an object')
+    except (ValueError, IndexError):
+        print(json.dumps({'result': {}, 'diagnostics': ['ssh-environment-probe-rejected']}))
+        return 0
     identity = {'route': route_identity(os.environ, request['target']),
                 'facts': {key: value for key, value in result.items()
                           if key not in {'counters', 'counters_truncated', 'probed_at'}}}

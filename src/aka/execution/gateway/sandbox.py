@@ -259,8 +259,6 @@ TYPED_KINDS = frozenset({"run", "profile"})
 EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 
 
-
-
 def _find_agate() -> str | None:
     """Require an explicit campaign wrapper; auto-discover only when unset."""
     configured = os.environ.get("ATREX_AGATE_EXECUTABLE", "").strip()
@@ -472,12 +470,6 @@ def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
     raise ValueError(f"sandbox input does not exist: {value!r}")
 
 
-
-
-
-
-
-
 def _referenced_workspace_inputs(workspace: Path, parts: list[str]) -> set[str]:
     """Return existing workspace paths explicitly referenced by the command."""
     selected: set[str] = set()
@@ -565,26 +557,6 @@ def _command_input_paths(
     return frozenset(selected)
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def _json_object(path: Path, *, required: bool = False) -> dict[str, Any] | None:
     if not path.is_file():
         if required:
@@ -631,27 +603,6 @@ def _runtime_requirements(
         raise ValueError("runtime requirements file exceeds 128 KiB")
     from aka.execution.environment_query import select_requirements
     return list(select_requirements(contents, candidate_languages))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _make_atrex_bench_runtime_bundle(
@@ -1142,7 +1093,6 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
     return paths[0], paths[1]
 
 
-
 SSH_RUNTIME_RESOLVER_SOURCE = r"""
 import json
 import os
@@ -1224,7 +1174,6 @@ def _ssh_gpu_index(value: str) -> int:
     return index
 
 
-
 def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> dict:
     """Resolve the allocated device nodes and runtime visibility together."""
     from aka.execution.ssh import devices as ssh_devices
@@ -1262,7 +1211,6 @@ def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> dict:
         return assignment
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         raise SSHTransportError('invalid remote GPU assignment') from exc
-
 
 
 def _ssh_bwrap_command(
@@ -1363,7 +1311,6 @@ def _ssh_bwrap_command(
                        'bash', '-c', acquired, 'aka-ssh', *args])
 
 
-
 def _ssh_base(executable: str, target: str) -> list[str]:
     return [
         executable,
@@ -1427,7 +1374,6 @@ def _run_ssh_health(
     return result
 
 
-
 def _remote_temp_dir(stdout: str) -> str:
     value = stdout.strip().splitlines()[-1] if stdout.strip() else ""
     if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", value):
@@ -1452,7 +1398,6 @@ def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
-
 
 
 def _run_ssh_job(
@@ -1647,7 +1592,6 @@ def _run_ssh_job(
         )
     result.remote_id = remote_dir
     return result
-
 
 
 def _environment_failure_path() -> Path | None:
@@ -2043,7 +1987,6 @@ def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
     raise KeyboardInterrupt
 
 
-
 def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int | None = None) -> int:
     """Keep the backend attempt budget independent of client queue tolerance."""
     from .requests import effective_budget, hard_limit, typed_gateway_job_timeout
@@ -2341,9 +2284,6 @@ def _typed_agate_command(
     return command
 
 
-
-
-
 def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
     args = build_parser().parse_args(argv) if parsed_arguments is None else parsed_arguments
     if not args.hardware:
@@ -2432,6 +2372,10 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                 args.ssh_runtime_bind,
                 args.ssh_gpu,
             )
+        except SSHDependencyError as exc:
+            emit_diagnostic({'failure_class': 'capability', 'reason': 'ssh-dependency-unavailable', 'detail': str(exc)})
+            print(f"sandbox: SSH dependency unavailable: {exc}", file=sys.stderr)
+            return 2
         except SSHTransportError as exc:
             health = subprocess.CompletedProcess(
                 args=["ssh", args.ssh], returncode=1, stdout="", stderr=str(exc)
@@ -2773,6 +2717,10 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                     sync_paths=sync_paths,
                     max_output_file_bytes=args.max_output_file_bytes or args.max_output_file_mb * 1024 * 1024,
                 )
+            except SSHDependencyError as exc:
+                emit_diagnostic({'failure_class': 'capability', 'reason': 'ssh-dependency-unavailable', 'detail': str(exc)})
+                print(f"sandbox: SSH dependency unavailable: {exc}", file=sys.stderr)
+                return 2
             except SSHTransportError as exc:
                 _record_environment_failure(
                     target=args.ssh,
@@ -3044,6 +2992,8 @@ def _run_agate_once(*args, **kwargs):
         return process
 
 
+class SSHDependencyError(SSHTransportError):
+    """The remote launcher lacks a required dependency or option."""
 
 
 class SSHGPUBusy(RuntimeError):
@@ -3054,6 +3004,11 @@ def _check_ssh_lock_result(result: subprocess.CompletedProcess[str]) -> None:
     lines = result.stderr.splitlines(keepends=True)
     acquired = any(line.rstrip('\r\n') == SSH_GPU_LOCK_ACQUIRED_MARKER for line in lines)
     result.stderr = ''.join(line for line in lines if line.rstrip('\r\n') != SSH_GPU_LOCK_ACQUIRED_MARKER)
+    if result.returncode and not acquired and 'flock:' in result.stderr and any(
+        reason in result.stderr.lower() for reason in
+        ('unrecognized option', 'invalid option', 'illegal option', 'unknown option', 'command not found')
+    ):
+        raise SSHDependencyError('SSH requires flock with --conflict-exit-code support: ' + result.stderr.strip())
     if result.returncode == ENVIRONMENT_TEMPFAIL and not acquired:
         raise SSHGPUBusy('SSH GPU busy: allocation lock wait expired; retry when the GPU is free')
 
