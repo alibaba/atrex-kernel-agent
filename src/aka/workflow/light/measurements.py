@@ -297,6 +297,12 @@ class SharedMeasurements(RecordedMeasurements):
                 existing = None
             if existing is not None:
                 if existing.phase != "complete" or existing.lifecycle != "terminal":
+                    if self.environment_identity:
+                        prepared = (self.command_evaluator if isinstance(request, CommandSpec) else self.evaluator).prepare(request)
+                        replacement = experiment.replacement_abba(existing.ref, prepared.measurement_identities,
+                            environment_identity=self.environment_identity)
+                        if replacement is not None:
+                            return self._response(experiment, replacement, reused=True)
                     record = experiment.resume_recorded(request, request_id=identity, max_remeasurements=0)
                     return self._response(experiment, record)
                 else:

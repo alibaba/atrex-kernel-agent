@@ -116,6 +116,46 @@ class LegacyExperiment:
             item.completeness == "complete" and item.validity == "valid" and item.comparability == "comparable"
             for item in measurements) and len({item.environment_identity for item in measurements}) == 1
 
+    def replacement_abba(self, original_ref, identities, *, environment_identity):
+        """Read complete replacement evidence without changing or replaying old jobs."""
+        if not identities or not environment_identity or any(identity.method != "atrex-bench/abba" for identity in identities):
+            return None
+        original = self.get(original_ref)
+        original_identities = tuple(step.measurement_identity for step in original.steps
+                                    if step.measurement_identity is not None)
+        if tuple(item.digest for item in original_identities) != tuple(item.digest for item in identities):
+            return None
+        pending = {attempt.task_id: attempt for attempt in original.attempts}
+        pending = {key: attempt for key, attempt in pending.items() if attempt.disposition in {"intent", "unknown"}}
+        if not pending:
+            return None
+        from .queries import _measurements
+        for record in reversed(tuple(self.iter_records())):
+            if record.ref == original_ref or not self.reusable(record.ref, identities):
+                continue
+            measurements = _measurements(record)
+            if any(item.environment_identity != environment_identity for item in measurements):
+                continue
+            from aka.evaluation.native_abba import recorded_comparison
+            try:
+                recorded_comparison(record.evaluation, identities)
+            except ValueError:
+                continue
+            latest = {attempt.task_id: attempt for attempt in record.attempts}
+            for task_id, old in pending.items():
+                new = latest.get(task_id)
+                old_refs = old.result.job_references if old.result is not None else ()
+                new_refs = new.result.job_references if new is not None and new.result is not None else ()
+                if (len(old_refs) != 1 or len(new_refs) != 1
+                        or old_refs[0].backend != "gateway" or new_refs[0].backend != "gateway"
+                        or not old_refs[0].endpoint or not new_refs[0].endpoint
+                        or old_refs[0].endpoint == new_refs[0].endpoint
+                        or new.result.transport_status != "succeeded" or new.result.returncode != 0):
+                    break
+            else:
+                return record
+        return None
+
     def _request_data(self, request):
         if isinstance(request, CommandSpec):
             import hashlib

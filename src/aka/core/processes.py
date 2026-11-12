@@ -90,7 +90,35 @@ def _linux_process(pid: int, boot_id: str) -> ProcessRecord | None:
     return ProcessRecord(pid, ppid, pgid, f"linux:{boot_id}:{start_ticks}", "")
 
 
+def _darwin_session_processes() -> dict[int, ProcessRecord]:
+    """Read a PID census without spawning ps on each suspension poll."""
+    try:
+        list_pids = ctypes.CDLL("/usr/lib/libproc.dylib").proc_listallpids
+        list_pids.argtypes = [ctypes.c_void_p, ctypes.c_int]
+        list_pids.restype = ctypes.c_int
+        count = list_pids(None, 0)
+        if count <= 0:
+            return {}
+        capacity = count + 64
+        for _ in range(2):
+            pids = (ctypes.c_int * capacity)()
+            count = list_pids(pids, ctypes.sizeof(pids))
+            if count <= 0:
+                return {}
+            if count < capacity:
+                records = (_darwin_process(pid) for pid in pids[:count] if pid > 0)
+                return {record.pid: record for record in records if record is not None}
+            capacity *= 2
+    except (AttributeError, OSError):
+        pass
+    return {}
+
+
 def process_snapshot() -> dict[int, ProcessRecord]:
+    if sys.platform == "darwin":
+        records = _darwin_session_processes()
+        if records:
+            return records
     proc = Path("/proc")
     boot_id_path = Path("/proc/sys/kernel/random/boot_id")
     if proc.is_dir() and boot_id_path.is_file():
