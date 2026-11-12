@@ -11,12 +11,13 @@ OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workf
 - An authenticated coding CLI on `PATH`: `claude`, `qodercli`, `codex`, or `pi`.
 - A configured Agate endpoint and GPU worker with the workload's framework and GPU stack.
 - A native Atrex-Bench operator in its owning Bench checkout.
-- For coordinator isolation: Linux, Bubblewrap, and permission to create the required
-  namespaces. `light-sandbox` with `proc_mode: projected` also requires a working C compiler
-  and libc development headers in the exact execution container (`gcc glibc-devel` on the
-  supported DNF image). Run `python3 -m aka.light.agent.preflight` there before launch; startup
-  now fails closed if this compile check does not pass. macOS supports native Light; it does not
-  support `light-sandbox` directly.
+- For coordinator isolation, `light-sandbox` requires Linux, the `bwrap` executable, and
+  permission to create the required namespaces. Native `light` does not require Bubblewrap.
+  `light-sandbox` with `proc_mode: projected` also requires a working C compiler and libc
+  development headers in the exact execution environment (`gcc glibc-devel` on the supported
+  DNF image, or `build-essential libc6-dev` on Ubuntu). Run
+  `python3 -m aka.light.agent.preflight` there before launch; startup fails closed if this
+  compile check does not pass. macOS supports native Light but cannot run Bubblewrap directly.
 
 NVIDIA profiling requires the appropriate NCU tools on the worker; AMD and PPU profiling
 use their respective worker toolchains. Initialize only the reference-project submodules
@@ -40,6 +41,74 @@ Keep all three distributions and the resource checkout at the same revision. The
 package metadata uses `0.1.0`, so installing a changed checkout requires reinstalling its
 wheels even when the version string has not changed. Missing Light is an installation error.
 See [installed startup](application-plugin-migration.md) for package and continuation details.
+
+### macOS: run `light-sandbox` in Lima
+
+To use Bubblewrap isolation from macOS, run the AKA coordinator inside a Linux VM. Lima's
+default Ubuntu template is sufficient; GPU execution still happens remotely through Agate, so
+the VM does not need GPU passthrough.
+
+On the macOS host:
+
+```bash
+brew install lima
+limactl start --name=aka-light template:default
+limactl shell aka-light
+```
+
+Then, inside the Lima VM:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y bubblewrap build-essential libc6-dev git python3 python3-venv
+git clone https://github.com/alibaba/atrex-kernel-agent.git
+cd atrex-kernel-agent
+# Follow "Install from a matching checkout" above, then verify the guest:
+python3 -m aka.light.agent.preflight
+```
+
+Install AKA and launch `--profile light-sandbox` from inside that VM. Keep the checkout,
+Python environment, Agent CLI credentials and campaign workspace inside (or explicitly mounted
+into) the VM; running only the Agent subprocess in Lima is not a supported split deployment.
+
+### Aone Sandbox: use the projected `/proc` shim
+
+The current Aone Sandbox container policy does not allow a nested Bubblewrap process to mount a
+fresh procfs. Keep Bubblewrap isolation enabled, but select Light's bundled projected-proc shim.
+Save this composition patch inside the Aone Sandbox:
+
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "agent", "config": {
+    "sandbox": "bwrap",
+    "capture": true,
+    "proc_mode": "projected"
+  }}]
+}
+```
+
+Install the local prerequisites in the same Aone execution image, then run the preflight:
+
+```bash
+sudo dnf install -y bubblewrap gcc glibc-devel
+python3 -m aka.light.agent.preflight
+```
+
+Launch with the patch before the `--` separator:
+
+```bash
+aka optimize --repo-root /path/to/atrex-kernel-agent \
+  --profile light-sandbox --patch /path/to/aone-projected-proc.json -- \
+  --op-dir /path/to/atrex-bench/operator \
+  --platform L20D --specify-dsl --framework Cuda --agent-cli claude \
+  --optimization-mode production --workspace /workspace/aka-opt
+```
+
+Light compiles and loads the packaged compatibility shim automatically. Do not manually mount
+the host `/proc`, expose the host process tree, or configure `LD_PRELOAD`. The projected view
+contains only the bounded process metadata needed by the Agent CLI. Startup fails before the
+Campaign begins if the shim cannot compile.
 
 ## Prepare the problem
 

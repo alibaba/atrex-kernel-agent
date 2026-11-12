@@ -14,9 +14,25 @@ aka optimize --repo-root "$PWD" --profile light-sandbox -- \
   --workspace /path/to/new-runs
 ```
 
-The coordinator needs `bwrap` and permission to create the required user/mount/PID
-namespaces. A remote GPU gateway does not satisfy this local requirement.
-On macOS, use native Light or run the coordinator in an appropriately configured Linux VM.
+The coordinator needs the `bwrap` executable and permission to create the required
+user/mount/PID namespaces. A remote GPU gateway does not satisfy this local requirement.
+Native `light` does not require Bubblewrap. On macOS, use native Light or run the complete
+coordinator in a Linux VM. A minimal Lima setup is:
+
+```bash
+# macOS host
+brew install lima
+limactl start --name=aka-light template:default
+limactl shell aka-light
+
+# inside the default Ubuntu guest
+sudo apt-get update
+sudo apt-get install -y bubblewrap build-essential libc6-dev git python3 python3-venv
+```
+
+Install AKA, the Agent CLI and its credentials inside the guest, then launch
+`--profile light-sandbox` there. The GPU workload remains remote in Agate; Lima does not need GPU
+passthrough. Run `python3 -m aka.light.agent.preflight` in the guest after installing AKA.
 
 Configure custom isolation through the Agent provider, with a composition patch before `--`:
 
@@ -124,6 +140,25 @@ Reserved assets are refreshed from trusted sources. See
 Use `proc_mode: projected` only when deliberately selecting the supported restricted-container
 view. It preserves namespace and filesystem isolation while exposing a bounded Session process
 view. It requires a compiler/development headers and ordinary namespace/bind permissions.
+
+This is the required Bubblewrap mode in the current Aone Sandbox environment: its outer
+container policy rejects Bubblewrap's normal nested procfs mount. Use an Agent composition patch
+that retains the complete `light-sandbox` settings:
+
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "agent", "config": {
+    "sandbox": "bwrap",
+    "capture": true,
+    "proc_mode": "projected"
+  }}]
+}
+```
+
+Pass it as `--profile light-sandbox --patch /path/to/patch.json` before the optimizer's `--`
+separator. The shim is a packaged Light component and is compiled and loaded automatically; the
+user must not create a host `/proc` mount or set `LD_PRELOAD` manually.
 
 The installed, model-free compiler preflight is:
 
