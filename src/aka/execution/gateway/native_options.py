@@ -57,8 +57,8 @@ BLOCKED = frozenset({
 # credential, endpoint, upload, image/setup, filesystem or scheduling control
 # from becoming Agent-visible before Light has reviewed and modeled it.
 SENSITIVE_OPTION = re.compile(
-    r"(?:^|[-_\s])(?:token|secret|credential|password|passwd|auth|api[-_ ]?key|"
-    r"access[-_ ]?key|url|endpoint|oss|bucket|upload|image|setup|command|entrypoint|"
+    r"token|secret|credential|password|passwd|auth|api[-_ ]?key|access[-_ ]?key|"
+    r"(?:^|[-_\s])(?:url|endpoint|oss|bucket|upload|image|setup|command|entrypoint|"
     r"file|path|directory|working[-_ ]?dir|scheduler|schedule|queue|priority)"
     r"(?:$|[-_\s])",
     re.IGNORECASE,
