@@ -917,7 +917,6 @@ class EpisodeSearchDriver:
                 usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0)
             runner.cancel_event = self.cancel_event
             LongHorizonCampaign(base_campaign=child, max_episodes=episode,
-                                verifier=None,
                                 session_runner=runner).run()
         if self._state(child)["episodes"] != episode:
             raise RuntimeError("Episode did not reach a durable terminal outcome")

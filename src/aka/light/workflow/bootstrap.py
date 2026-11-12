@@ -1829,7 +1829,6 @@ class Campaign:
             base_campaign=self,
             max_episodes=self.max_iters,
             token_budget=self.token_budget,
-            verifier=None,
             session_runner=LongSessionRunner(agent=self.agent, agent_cli=self.agent_cli,
                 usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0),
         )
