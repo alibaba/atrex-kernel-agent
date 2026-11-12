@@ -229,7 +229,10 @@ def search_state(workspace: Path) -> dict[str, Any] | None:
 
 
 def startup_stage(workspace: Path) -> str:
-    """Return the durable pre-Episode stage for session-trace attribution."""
+    """Classify only legacy sibling captures; current Episode 0 is not startup."""
+    episode_zero = workspace / ".atrex_long_horizon" / "episodes" / "e0000"
+    if episode_zero.is_dir():
+        return "bootstrap"
     live = read_json(workspace / "memory/live.json", default={})
     if isinstance(live, dict):
         if live.get("episode_branch") == "framework-baseline":

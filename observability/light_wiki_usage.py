@@ -55,7 +55,9 @@ def _knowledge_ids(value: object) -> set[str]:
 
 def _journal_adoption(scope) -> tuple[set[str], set[str], list[dict]]:
     query_ids, wiki_ids, usages = set(), set(), []
-    for path in sorted((scope.workspace / ".atrex_long_horizon" / "episodes").glob("e*/episode_runtime/journal.json")):
+    # Journals are Supervisor-private. The Agent workspace contains only
+    # projections and must not be treated as the authoritative store.
+    for path in sorted((scope.audit_root / "journals" / "episodes").glob("e*/journal.json")):
         value = read_json(path, default={})
         if not isinstance(value, dict):
             continue

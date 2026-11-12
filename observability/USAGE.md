@@ -37,6 +37,7 @@ python3 observability/light_runtime_status.py "$CAMPAIGN" --compact
 | Agate 调用与故障 | `light_agate_status.py` |
 | Token 与时间 | `light_token_time.py` |
 | Runtime Tool 使用 | `light_tool_usage.py` |
+| Research Board 与 Review | `light_research_status.py` |
 | 源码与可复现性 | `export_light_evidence.py`、`export_light_source.py` |
 | GPU Wiki | `light_wiki_usage.py` |
 
@@ -44,18 +45,23 @@ python3 observability/light_runtime_status.py "$CAMPAIGN" --compact
 
 ```mermaid
 flowchart LR
-    workflow["Workflow export<br/>progress / episodes / candidates"]
+    attempts["Supervisor Attempt state<br/>Episode 0 and later Episodes"]
+    progress["Writer / active Episode state"]
+    baseline["Private V0 baseline"]
     measurements["Measurement store<br/>records / kernels / jobs"]
     search["Pooled-search state<br/>trajectory ownership"]
     audit["Audit and trusted-job receipts"]
+    research["Research Store<br/>Directions / Experiments / Reviews"]
     sessions["Session captures<br/>conversation / token usage"]
     wiki["GPU Wiki receipts and journals"]
 
-    workflow --> runtime["light_runtime_status.py"]
-    workflow --> performance["light_performance.py"]
-    workflow --> latency["light_latency_status.py"]
-    workflow --> acceptance["light_acceptance.py"]
-    workflow --> tokens["light_token_time.py"]
+    progress --> runtime["light_runtime_status.py"]
+    attempts --> runtime
+    attempts --> performance["light_performance.py"]
+    attempts --> latency["light_latency_status.py"]
+    attempts --> acceptance["light_acceptance.py"]
+    attempts --> tokens["light_token_time.py"]
+    baseline --> performance
     measurements --> performance
     measurements --> latency
     measurements --> acceptance
@@ -64,6 +70,7 @@ flowchart LR
     search --> runtime
     audit --> agate
     audit --> tools["light_tool_usage.py"]
+    research --> research_status["light_research_status.py"]
     sessions --> runtime
     sessions --> tokens
     sessions --> tools
@@ -106,8 +113,9 @@ python3 observability/light_runtime_status.py "$CAMPAIGN" --stale-after 900
 - `completed`、`failed`、`interrupted`、`stopped`：Campaign 终态。
 
 第一张表展示 Campaign/轨迹级状态。`Campaign Phase` 是 Workflow 阶段，`Episode` 是当前轮次，
-`Active Sessions` 是当前状态仍为 `running` 的 Agent invocation 数量。正式 Episode 从 Episode
-目录读取；Bootstrap／Framework Baseline 从 workspace 同级的 `.atrex-session-traces` 读取：
+`Active Sessions` 是当前状态仍为 `running` 的 Agent invocation 数量。Framework Baseline 是
+Episode 0，与其他 Episode 一样从 Episode 目录读取；只有建立 Episode 之前的 Bootstrap capture
+来自 workspace 同级的 `.atrex-session-traces`：
 
 ```text
 Scope  Campaign Phase  Episode  Done  Health    Stale(s)  Active Sessions
@@ -122,7 +130,7 @@ t0003  completed       5        5     completed  30.2     0
 Active Agent Sessions
 Scope  Stage               Episode  Session       Backend  Agent Phase    Tool      Phase(s)  Health
 t0001  episode             3        run-a1b2c3    claude   thinking       —         18.4      active
-t0002  framework_baseline  0        session-xyz   claude   waiting_agate  run       742.1     stalled
+t0002  episode             0        session-xyz   claude   waiting_agate  run       742.1     stalled
 ```
 
 Agent Phase 的含义：
@@ -140,7 +148,7 @@ Agent Phase 的含义：
 
 阶段由当前 `run-*/conversation.jsonl` 中“已发出但尚未出现 tool result”的最后一个工具调用判断；
 Session 身份来自同一 invocation 的 `token-usage.json`。正式 Episode 使用其 Episode 目录；启动阶段
-使用 Supervisor 写入的 `memory/live.json` 区分 `bootstrap` 和 `framework_baseline`，不按时间猜测关联。
+当前 Framework Baseline 使用 Episode 0 的 Session 目录并计入 Episode；兄弟目录中的 `.atrex-session-traces` 只用于 pre-Episode bootstrap。旧 Campaign 若尚未采用 Episode 0，工具仍用 `memory/live.json` 识别 legacy framework-baseline capture。
 
 状态推导对应 `light_runtime_status.py` 的 `_conversation_phase`、`_tool_phase` 和 scope health 逻辑：
 
@@ -197,7 +205,7 @@ python3 observability/light_performance.py "$CAMPAIGN" --json
 |---|---|
 | 当前已接受实现的最好 latency | `accepted_best` |
 | 所有成功 Full Evaluate 的最好 latency | `best_passing_full_eval` |
-| Bootstrap 和 Framework Baseline latency | `baselines[].bootstrap`、`baselines[].framework_baseline.result` |
+| V0 和 Framework Baseline latency | `baselines[].v0`、`baselines[].framework_baseline.result` |
 | 每个 Episode／Attempt latency | `episodes[]` |
 | 每个 Shape latency 和正确性 | `shape_results[]` |
 | 每个 Shape 当前最快通过的 Kernel | `best_by_shape` |
@@ -215,7 +223,7 @@ AKA Light 中一个优化 Attempt 对应一个 Episode，所以脚本以 Episode
 ```text
 Metric                  GeoMean(us)  Kernel/Commit  Record           Evidence
 accepted_best           123.450000   012345...      gateway-abcd...  verified
-best_passing_full_eval  119.820000   kernel-abcd... gateway-1234...  full_eval_record
+best_passing_full_eval  119.820000   89abcdef...    gateway-1234...  full_eval_record
 
 Scope  Episode  Version  Promoted  State  Latency(us)
 t0001  1        2        True      pass   141.200000
@@ -223,11 +231,10 @@ t0001  2        3        False     rejected 138.700000
 ```
 
 `accepted_best.gateway_record_id` 是该候选终态晋升时引用的 ABBA/Evaluate Record。
-脚本会验证 Record 中的 candidate Kernel 内容身份等于 accepted Git commit，并通过
+脚本会验证 Record 中的 candidate `kernel_commit_id` 等于 accepted Agent Git commit，并通过
 `accepted_best.verification_evidence` 返回结果：
 
 - `verified`：Episode、通过的 verification、Record 和 Kernel 源码四者一致；
-- `bootstrap_has_no_episode_verification`：最佳实现仍是 Bootstrap，没有 Episode 晋升 Record；
 - 其他状态：Attempt、Record 或源码不可读／不一致；如果 Attempt 中确实声明了 Record ID，
   脚本仍会将其保留，但不能把它当成已经完成内容校验的证据。
 
@@ -299,8 +306,8 @@ python3 observability/light_acceptance.py "$CAMPAIGN" --json
 | 被拒绝的具体原因 | `decision_reason`、`status` |
 | 晋升对应轨迹、Episode 和证据 | `scope`、`trajectory`、`episode`、`evidence` |
 
-`evidence` 中可能包含 `gateway_record_id`，以及终态验收保存的 Evaluate 类型、时间、
-latency 和源码 SHA256。
+`evidence` 仅列出 Attempt 直接引用的稳定 `gateway_record_id`。完整请求、逐 Shape 结果、
+底层 Job 与源码身份应从对应 Measurement Record 查询，工具不会在接受摘要里复制一份。
 
 预期输出：
 
@@ -337,7 +344,7 @@ python3 observability/light_agate_status.py "$CAMPAIGN" --json
 | 计划项 | JSON 字段 |
 |---|---|
 | 各类调用次数 | `summary.operation_counts` |
-| Bootstrap／Framework Baseline 物理任务 | `summary.trusted_operation_counts`、`physical_jobs[].source == "trusted"` |
+| V0／pre-Episode bootstrap 的 trusted 物理任务 | `summary.trusted_operation_counts`、`physical_jobs[].source == "trusted"` |
 | 排队、运行和完成的 Agate job | `physical_jobs[].status`、`summary.physical_job_status_counts` |
 | 当前未完成 job、执行阶段和等待时长 | `pending_jobs[].job_id`、`execution_phase`、`pending_seconds` |
 | 排队、执行和总耗时 | `physical_jobs[].timing.queue_seconds`、`execution_seconds`、`total_seconds` |
@@ -377,10 +384,11 @@ flowchart TD
     evidence -- no --> unverified["do not claim verified evidence<br/>preserve declared Record ID and reason"]
 ```
 
-`summary.operation_counts` 只统计有完整 Measurement Record 身份的逻辑调用。启动阶段的 trusted
-任务没有 `gateway_record_id`，因此单独计入 `trusted_operation_counts`，并与普通 Record job 一起
-出现在 `physical_jobs`。文本输出会额外显示 `Pending Agate jobs` 表，直接列出尚未终态的 Job ID、
-Agate execution phase 和当前等待秒数。
+`summary.operation_counts` 只统计有完整 Measurement Record 身份的逻辑调用。V0 和少量
+pre-Episode trusted 任务没有普通 Agent Runtime `gateway_record_id`，因此单独计入
+`trusted_operation_counts`。Framework Baseline 已是 Episode 0，其 Agent Runtime 请求按普通 Record
+统计。文本输出会额外显示 `Pending Agate jobs` 表，直接列出尚未终态的 Job ID、Agate execution
+phase 和当前等待秒数。
 
 分批字段示例：
 
@@ -442,7 +450,8 @@ python3 observability/light_token_time.py "$CAMPAIGN" --json
 | 计划项 | JSON 字段 |
 |---|---|
 | 每个 Session Token | `sessions[].usage` |
-| Bootstrap／Framework Baseline Token | `sessions[].stage`、`startup_totals` |
+| Bootstrap Token | `sessions[].stage`、`startup_totals` |
+| Framework Baseline Episode 0 Token | `sessions[].episode == 0`、`episodes[]` |
 | 每条轨迹和 Episode Token | `episodes[].usage` |
 | 每个 Attempt 平均 Token | `average_tokens_per_attempt` |
 | Agent 工作时间和墙钟时间 | `sessions[].wall_seconds`、`episodes[].wall_seconds`、`episodes[].active_seconds` |
@@ -467,9 +476,9 @@ Token 使用结构：
 当前主线没有单独的 `reasoning_tokens` 计数；不同 Agent 后端可能将推理计入
 `output_tokens`。脚本不会自行拆分。当前主线也没有持久化精确 Agent active time 和 Agate
 wait time，所以这两项为 `null`；已结束 Session 的墙钟时间仍可读取。
-Bootstrap 和 Framework Baseline Session 来自 workspace 同级的 `.atrex-session-traces`，以
-`episode=0` 和相应的 `stage` 返回；它们计入 `totals` 和 `startup_totals`，但不计入
-“每个 Episode／Attempt 平均 Token”，避免把启动成本伪装成优化 Attempt。
+Framework Baseline 是普通 Episode 0，Session 位于 Episode capture 下并计入 Episode/Attempt
+统计；只有 Episode 建立之前的 Bootstrap Session 使用 `.atrex-session-traces` 并进入
+`startup_totals`。
 如果运行中或中断的 Episode 已有 Session capture、但尚未生成 `telemetry.summary.json`，脚本会将
 该 Episode 的 Session token 相加并标记 `measurement=session_capture_fallback`。因此 Campaign
 `totals` 不会漏掉这类 Episode，同时已有 telemetry 的 Episode 不会再重复计算 Session token。
@@ -547,26 +556,37 @@ python3 observability/export_light_evidence.py "$CAMPAIGN" \
 
 - `job_id`：原始 Agate Job ID；
 - `agate_response`：Agate 原始结构化返回；
-- `raw_process`：执行 Agate CLI 时捕获的 stdout、stderr 和返回码；
+- `raw_process`：SDK Gateway 或 SSH transport 的底层进程 stdout、stderr 和返回码；
 - `submission`、`retries`、`checkpoint_phase`：提交与恢复状态。
 
-如果只有 accepted best 的 Git commit，使用：
+如果只有 Agent Kernel commit，使用：
 
 ```bash
 python3 observability/export_light_source.py "$CAMPAIGN" \
-  --git-commit 0123456789abcdef0123456789abcdef01234567 \
+  --kernel-commit-id 0123456789abcdef0123456789abcdef01234567 \
   --output /tmp/accepted-kernel
 ```
 
-也可以按 Kernel ID 或 Gateway Record ID 单独导出源码：
+也可以按 Gateway Record ID 单独导出源码：
 
 ```bash
 python3 observability/export_light_source.py "$CAMPAIGN" \
-  --kernel-id kernel-0123456789abcdef0123456789abcdef \
+  --gateway-record-id gateway-0123456789abcdef0123456789abcdef \
   --output /tmp/measured-kernel
 ```
 
-## 9. GPU Wiki
+## 9. Research Board
+
+```bash
+python3 observability/light_research_status.py "$CAMPAIGN"
+python3 observability/light_research_status.py "$CAMPAIGN" --json
+```
+
+该命令从 Supervisor 私有 Research event log 重建状态，展示各 scope 启用的模块、本地和共享
+Direction 排序、暂停/关闭状态、Experiments、Agent Kernel commit、promotion 历史和 Claim
+Review 审计计数。根目录 `PROGRESS.md` 只是 Agent 可见的精简投影，不是权威存储。
+
+## 10. GPU Wiki
 
 运行：
 
@@ -595,7 +615,7 @@ t0002  wiki-query  completed  True   24         0          False    async copy a
 `adopted=true` 表示后续 Experiment Journal 明确引用了该 query 或知识条目；它不等同于已经
 证明该知识改善了性能。是否改善需要再结合 `light_performance.py` 和对应 Episode 的晋升证据判断。
 
-## 10. 一次性采集全部状态
+## 11. 一次性采集全部状态
 
 ```bash
 mkdir -p /tmp/light-observability
@@ -612,6 +632,8 @@ python3 observability/light_token_time.py "$CAMPAIGN" --json \
   > /tmp/light-observability/token-time.json
 python3 observability/light_tool_usage.py "$CAMPAIGN" --json \
   > /tmp/light-observability/tools.json
+python3 observability/light_research_status.py "$CAMPAIGN" --json \
+  > /tmp/light-observability/research.json
 python3 observability/light_wiki_usage.py "$CAMPAIGN" --json \
   > /tmp/light-observability/wiki.json
 ```

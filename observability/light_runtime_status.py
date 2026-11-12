@@ -20,9 +20,9 @@ from observability.common import (
     KIND_PATTERN,
     add_output_arguments,
     age_seconds,
+    attempt_documents,
     discover_scopes,
     emit,
-    load_snapshot,
     main_error,
     observed_at,
     read_json,
@@ -30,19 +30,23 @@ from observability.common import (
     startup_stage,
     table,
 )
+from aka.legacy.workflow.public_state import writer_active
 
 
 AGATE_KINDS = frozenset(
     {"run", "evaluate", "same_allocation_abba", "abba", "profile", "check", "disassemble", "dev"}
 )
-def _episode_rows(snapshot) -> list[dict]:
-    active = snapshot.progress.episode if snapshot.progress.writer_active else None
+def _episode_rows(attempts: list[dict], active: int | None) -> list[dict]:
     rows = []
-    for episode in snapshot.episodes:
-        status = episode.status
-        if episode.accepted:
+    for attempt in attempts:
+        episode = attempt.get("episode")
+        if type(episode) is not int:
+            continue
+        status = str(attempt.get("status") or "unmeasured")
+        accepted = attempt.get("accepted") is True
+        if accepted:
             category = "completed"
-        elif episode.episode == active:
+        elif episode == active:
             category = "running"
         elif status in TERMINAL_EPISODE_STATUSES:
             category = "failed" if status in {"failed", "invalid_handoff", "interrupted"} else "completed"
@@ -50,22 +54,22 @@ def _episode_rows(snapshot) -> list[dict]:
             category = "stalled"
         rows.append(
             {
-                "episode": episode.episode,
-                "version": episode.version,
+                "episode": episode,
+                "version": attempt.get("version", attempt.get("memory_version")),
                 "status": status,
                 "category": category,
-                "accepted": episode.accepted,
-                "session_id": episode.session_id,
-                "summary": episode.summary,
-                "violation": episode.violation,
+                "accepted": accepted,
+                "session_id": attempt.get("session_id"),
+                "summary": attempt.get("summary"),
+                "violation": attempt.get("violation"),
             }
         )
     if active is not None and all(row["episode"] != active for row in rows):
         rows.append(
             {
                 "episode": active,
-                "version": snapshot.progress.version,
-                "status": snapshot.progress.phase,
+                "version": None,
+                "status": "running",
                 "category": "running",
                 "accepted": False,
                 "session_id": None,
@@ -76,19 +80,65 @@ def _episode_rows(snapshot) -> list[dict]:
     return sorted(rows, key=lambda row: row["episode"])
 
 
-def _session_rows(snapshot) -> list[dict]:
-    return [
-        {
-            "session_id": session.session_id,
-            "runtime": session.runtime,
-            "episode": session.episode,
-            "status": session.status,
-            "updated_at": session.updated_at,
-            "resume_supported": session.resume_supported,
-            "active": False,
-        }
-        for session in snapshot.sessions
-    ]
+def _session_rows(scope) -> list[dict]:
+    rows = []
+    root = scope.workspace / ".atrex_long_horizon" / "episodes"
+    for usage_path in sorted(root.glob("e*/sessions/run-*/token-usage.json")):
+        value = read_json(usage_path, default={})
+        if not isinstance(value, dict):
+            continue
+        try:
+            episode = int(usage_path.parents[2].name[1:])
+        except (ValueError, IndexError):
+            episode = None
+        rows.append(
+            {
+                "session_id": value.get("session_id") or usage_path.parent.name,
+                "runtime": value.get("backend"),
+                "episode": episode,
+                "status": value.get("state"),
+                "updated_at": _mtime(usage_path),
+                "resume_supported": value.get("session_id") is not None,
+                "active": value.get("state") == "running",
+            }
+        )
+    return rows
+
+
+def _progress(scope) -> dict:
+    root = scope.workspace / ".atrex_long_horizon"
+    state = read_json(root / "state.json", default={})
+    state = state if isinstance(state, dict) else {}
+    active = read_json(root / "active_episode.json", default={})
+    active = active if isinstance(active, dict) else {}
+    identity = read_json(root / "public-identity.json", default={})
+    identity = identity if isinstance(identity, dict) else {}
+    running = writer_active(scope.workspace)
+    terminal = read_json(scope.workspace / "trace-retention-manifest.json", default={})
+    terminal = terminal if isinstance(terminal, dict) else {}
+    if running:
+        phase = str(active.get("phase") or "running")
+    elif (root / "pause-requested").exists():
+        phase = "paused"
+    else:
+        phase = str(terminal.get("status") or "stopped")
+    paths = [root / "state.json", root / "active_episode.json", scope.workspace / "memory/live.json"]
+    updated = max((value for value in (_mtime(path) for path in paths) if value), default=None)
+    current_episode = active.get("episode") if type(active.get("episode")) is int else None
+    current_version = (
+        active.get("memory_version")
+        if type(active.get("memory_version")) is int
+        else None
+    )
+    return {
+        "campaign_id": identity.get("campaign_id"),
+        "phase": phase,
+        "writer_active": running,
+        "episode": current_episode,
+        "version": current_version,
+        "completed_episodes": state.get("episodes"),
+        "updated_at": updated,
+    }
 
 
 def _mtime(path: Path) -> str | None:
@@ -229,7 +279,7 @@ def _active_session_rows(scope, *, current_episode: int | None, writer_active: b
 
 
 def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
-    """Read Bootstrap/Framework Baseline captures made before Episode storage exists."""
+    """Read pre-Episode bootstrap captures and legacy baseline captures."""
     root = scope.workspace.parent / ".atrex-session-traces" / scope.workspace.name
     rows = []
     for usage_path in sorted(root.glob("run-*/token-usage.json")):
@@ -278,21 +328,21 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
     scopes = discover_scopes(workspace)
     rows = []
     for scope in scopes:
-        public = load_snapshot(scope)
-        episodes = _episode_rows(public)
+        progress = _progress(scope)
+        episodes = _episode_rows(attempt_documents(scope), progress["episode"])
         active_sessions = _active_session_rows(
             scope,
-            current_episode=public.progress.episode,
-            writer_active=public.progress.writer_active,
+            current_episode=progress["episode"],
+            writer_active=progress["writer_active"],
             stale_after=stale_after,
         )
-        if not active_sessions and not public.progress.writer_active:
+        if not active_sessions:
             active_sessions = _active_startup_session_rows(
                 scope,
                 stale_after=stale_after,
             )
         activity_points = [
-            (age_seconds(public.progress.updated_at), public.progress.updated_at),
+            (age_seconds(progress["updated_at"]), progress["updated_at"]),
             *[
                 (session["stagnation_seconds"], session["updated_at"])
                 for session in active_sessions
@@ -304,15 +354,15 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
             key=lambda point: point[0],
         )
         age, latest_activity_at = latest_activity
-        if public.progress.phase in TERMINAL_CAMPAIGN_PHASES:
-            health = public.progress.phase
-        elif (public.progress.writer_active or active_sessions) and (age is None or age <= stale_after):
+        if progress["phase"] in TERMINAL_CAMPAIGN_PHASES:
+            health = progress["phase"]
+        elif (progress["writer_active"] or active_sessions) and (age is None or age <= stale_after):
             health = "healthy"
-        elif public.progress.writer_active or active_sessions:
+        elif progress["writer_active"] or active_sessions:
             health = "stalled"
         else:
             health = "inactive"
-        recorded_sessions = _session_rows(public)
+        recorded_sessions = _session_rows(scope)
         active_ids = {row["session_id"] for row in active_sessions}
         for session in recorded_sessions:
             session["active"] = session["session_id"] in active_ids
@@ -321,13 +371,12 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                 "scope": scope.label,
                 "trajectory": scope.trajectory,
                 "workspace": str(scope.workspace),
-                "campaign_id": public.campaign.id,
-                "phase": public.progress.phase,
-                "writer_active": public.progress.writer_active,
-                "current_episode": public.progress.episode,
-                "current_version": public.progress.version,
-                "completed_episodes": public.progress.completed_episodes,
-                "updated_at": public.progress.updated_at,
+                "campaign_id": progress["campaign_id"],
+                "phase": progress["phase"],
+                "writer_active": progress["writer_active"],
+                "current_episode": progress["episode"],
+                "current_version": progress["version"],
+                "completed_episodes": progress["completed_episodes"],
                 "latest_activity_at": latest_activity_at,
                 "stagnation_seconds": age,
                 "health": health,
@@ -359,7 +408,7 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
             ],
         }
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": observed_at(),
         "campaign_workspace": str(scopes[0].workspace),
         "stale_after_seconds": stale_after,

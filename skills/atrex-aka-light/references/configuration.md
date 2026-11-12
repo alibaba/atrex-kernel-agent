@@ -41,11 +41,13 @@ These options appear after `--`.
 | `--op-dir PATH` | required | A [supported Native Atrex-Bench or SOL operator directory](problem-inputs.md). AKA snapshots the problem contract and derives the initial candidate from it; candidate layouts are not alternate problem formats. |
 | `--platform TOKEN` | required | Logical target product shown to the Agent and Wiki and, unless overridden, sent to Agate as the worker token. Examples include `L20D`, `H20`, `B200` and PPU product tokens. |
 | `--framework DSL` | auto-dispatch | Run one child Campaign in the named DSL. If omitted, AKA starts one independent child per framework supported by the detected vendor. In Production it is an acceptance constraint; in Leaderboard it is a preferred direction. |
+| `--[no-]specify-dsl` | enabled | Name and constrain the selected DSL in prompts and final Production acceptance. `--no-specify-dsl` lets one Agent choose any supported self-authored GPU DSL. Development probes may use other tools either way; the constraint applies to the submitted candidate. |
 | `--optimization-mode MODE` | `leaderboard` | `leaderboard` permits evidence-backed mixed implementations; `production` requires a deployable implementation in the selected framework and adds fail-closed source review. |
 | `--[no-]expose-evaluator-shapes` | exposed | Expose `shapes.json` and detailed evaluator metadata, or request the generalized hidden-shape Production flow. Visibility is part of workspace identity. |
 | `--workspace PATH` | current directory | Base directory under which AKA creates the child `kernel_opt_*` workspace. Use an absolute path for durable launches. |
 | `--notes TEXT` | `none` | Extra operator constraints or known bottlenecks injected into Agent instructions. Do not put credentials here. |
 | `--arch ARCH` | auto-probed | Override runtime architecture such as `sm_89`, `sm_100` or `gfx942`. Use only when probing fails or an intentional override is required; it is not the same as `--platform`. |
+| `--agent-reference-dir DIR...` | none | Repeatable read-only knowledge mounts at `references/<basename>/`. Requires a Bubblewrap Agent profile; basenames must be unique. |
 
 Mode, shape visibility, framework, candidate layout, composition and problem snapshot identity must match on resume. Start a fresh workspace when intentionally changing them.
 
@@ -54,11 +56,10 @@ Mode, shape visibility, framework, candidate layout, composition and problem sna
 | Option | Default | Purpose and effect |
 |---|---:|---|
 | `--agent-cli CLI` | `claude` | Coding provider used by Framework Baseline and optimization Episodes: `claude`, `qodercli`, `codex` or `pi`. Authentication comes from the provider's existing configuration. |
-| `--framework-baseline MODE` | `auto` | Controls V1: `auto` normally runs or pins V1 in Production, `always` requests it in Leaderboard too, and `never` starts Episodes from measured V0. It does not skip V0. |
-| `--framework-baseline-timeout SECONDS` | `28800` | Wall-clock ceiling for the V1 Framework Baseline session. This is separate from optimization Episode active time and Agate timeouts. |
+| `--framework-baseline MODE` | `auto` | Controls Episode 0: `auto` normally runs it in Production, `always` requests it in Leaderboard too, and `never` starts optimization Episodes from measured V0. It does not skip V0. Episode 0 uses the ordinary Runtime, Git, Research and `episode-report` contract, but does not require incumbent ABBA. |
+| `--framework-baseline-timeout SECONDS` | `28800` | Provider wall-clock ceiling for the Episode 0 Agent session. Runtime waits pause Agent active time; this is independent of Agate request limits. |
 | `--setup-timeout SECONDS` | `7200` | In current Light, the per-attempt timeout for automatically authoring `agent_problem.json` when hidden-shape Production lacks one; at most two attempts are made. It is not the V1 timeout. |
 | `--handoff-resumes N` | `2` | Same-session repair turns allowed after an optimization Episode produces an incomplete terminal handoff. `0` disables these repairs. |
-| `--production-review-timeout SECONDS` | `600` | Timeout for each independent read-only Production policy review session. The review is separate from evaluator correctness. |
 | `--[no-]v1-ask-codex` | off | Ask Codex for bounded, read-only correctness-first guidance during V1. It does not edit or approve the candidate. |
 | `--[no-]v1-ask-qoder` | off | Ask Qoder for the same V1 guidance. Both reviewers may be enabled. |
 
@@ -85,10 +86,12 @@ Pooled multi-trajectory search uses its own `epochs × trajectories × episodes_
 | `--sandbox-url URL` | normal Agate config | Explicit Agate endpoint, including a local gateway. Mutually exclusive with endpoint profile and SSH transport. |
 | `--sandbox-timeout SECONDS` | derived | Advanced enclosing Eval/ABBA execution allocation. By default AKA derives it from candidate, performance and ABBA run limits; queue grace is separate. An explicit value must contain the full ABBA schedule. |
 | `--verify-repeats N` | `2` | Native ABBA measurements per side. Light requires an even value from 2 through 16; `2` represents one A/B/B/A block. |
-| `--verify-run-timeout SECONDS` | `300` | Execution budget for each individual A or B measurement. The enclosing allocation is derived from this and `--verify-repeats` unless explicitly overridden. |
+| `--evaluation-step-timeout SECONDS` | `60` | Unified per-Shape candidate/correctness, performance, and individual A/B run budget. Explicit Runtime-tool values are honored; impossible enclosing schedules fail with the computed reason. |
+| `--verify-shape-batch-size N` | `10` | Maximum Shape IDs in one outer Eval/ABBA batch. Light sends the complete reference bundle, selects the batch with native `shape_ids`, and forces `shape_shards=1` for that Ray Data request. |
+| `--gpu-clock-mhz MHZ` | compatibility only | Accepted for old resume identities, but current Light sends only `lock_clocks=true`; Agate selects the realizable clock bin and no explicit MHz goes on the wire. |
 | `--min-improvement-pct PCT` | `0` | Candidate GeoMean latency improvement must be strictly greater than this percentage to promote. Correctness and complete evidence remain mandatory. |
 
-Current Light measurement defaults are one Shape per batch, up to 16 batches in parallel, 600 seconds for candidate initialization/correctness, 300 seconds for steady-state performance, five warmups and 20 timing iterations. These are measurement-policy defaults rather than all being public Campaign flags.
+Current Light uses up to 10 Shapes per outer batch and up to 16 outer batches in parallel. Each request sets `shape_shards=1`, uses 20 warmups, 100 timing iterations and five deterministic correctness cases. Eval and terminal ABBA both request best-effort clock locking without an explicit MHz. The benchmark's declared performance objective is applied only after all outer batches are merged.
 
 ## SSH execution options
 
@@ -122,8 +125,7 @@ Composition patches are JSON files passed with launch-level `--patch` before `--
         "numerical_validation": false,
         "goal_episodes": false,
         "generate_memory": false,
-        "output_limit_recovery_retries": 2,
-        "episode_timeout_seconds": 14400
+        "output_limit_recovery_retries": 2
       }
     },
     {
@@ -143,21 +145,23 @@ Composition patches are JSON files passed with launch-level `--patch` before `--
 |---|---|
 | `agent` | `sandbox` (`none`/`bwrap`), session `capture`, provider `timeout_seconds` (default 28800), Bubblewrap executable, `proc_mode` (`private`/`projected`) and additional absolute read-only paths. The named `light-sandbox` Profile already selects the intended sandbox/capture combination. |
 | `tool_runtime` | Measurement aggregation repetitions (`1` or `3`), whether to pause the Agent during authenticated Runtime requests (default true), GPU/Wiki request queue and request timeouts, Wiki enablement, and Wiki model/effort/timeouts/concurrency. These do not replace Agate's own execution limits. |
-| `workflow` | Optimization Episode active-time limit (default 14400 seconds), optional supplemental numerical validation, Goal Episodes, generated memory summaries, output-limit recovery count (default 2), pooled search topology, and advanced source-tree import. |
+| `workflow` | Optional Episode active-time limit (default: no limit), optional supplemental numerical validation (default off), Goal Episodes, generated memory summaries, output-limit recovery count, pooled search topology, and advanced source-tree import. A numeric `episode_timeout_seconds` enables the limit. |
 | `candidate` / `workspace` | Candidate filesystem (`source_tree`, `single_file`, or `cuda_manifest`) and whether custom reusable state is inherited across Episodes. Layout is fixed for the Campaign. |
-| `light_journal` | `research_records`: enable or disable Direction/Experiment research records. Evaluator facts, candidate reports and promotion evidence remain required either way. |
+| `light_journal` | `tool_modules`: choose any subset of `directions` and `experiments`; an empty list disables both. Evaluator facts, candidate reports and promotion evidence remain required regardless. |
 | `wiki` | Knowledge root or a replacement provider. The Tool Runtime separately decides whether Wiki is enabled and how queries execute. |
 
 For pooled search, `workflow.config.search` accepts:
 
 | Field | Default | Meaning |
 |---|---:|---|
-| `epochs` | `10` | Number of barriered search Epochs. |
-| `trajectories` | `2` | Number of private trajectory workspaces. |
+| `epochs` | `10` | Number of search Epochs. |
+| `trajectories` | `3` | Number of private trajectory workspaces. |
 | `episodes_per_trajectory` | `1` | Sequential Episodes each trajectory runs during one Epoch. |
-| `max_parallel_episodes` | `2` | Maximum simultaneously running trajectory Episodes; it cannot exceed `trajectories`. |
+| `max_parallel_episodes` | `3` | Maximum simultaneously running trajectory Episodes; it cannot exceed `trajectories`. |
+| `synchronization` | `synchronous` | `synchronous` publishes at an Epoch barrier; `asynchronous` publishes after terminal Episodes. |
+| `role_specialization` | `false` | Add trajectory role prompts. Disabled by default so trajectories use the same optimization contract. |
 
-Completed Epoch winners publish only verified Kernel bytes and performance facts. Live drafts, Skills, tools, scratch, Conversation history and research state are not merged between trajectories.
+Completed publications share verified Agent Git history/refs, terminal Gateway Records, reviewed Directions and Experiments, queue state, and measured Kernel facts. Live drafts, scratch and Conversation history are not merged. Peer research remains read-only until a trajectory explicitly absorbs it into local work.
 
 ## Related environment controls
 
@@ -183,7 +187,6 @@ The optimization CLI is shared with Legacy. On current `main`, the following acc
 | `--gateway-candidate-recovery` | Legacy Framework Baseline candidate-repair policy; Light uses its own typed feedback and recovery path. |
 | `--resume-framework-candidate` | Legacy retained-candidate adoption switch; Light restores V1 from its own durable state. |
 | `--conversion-budget-action` | Legacy behavior at a conversion budget boundary. Light fails explicitly when mandatory conversion remains incomplete at its budget boundary. |
-| `--verify-shape-batch-size` | Legacy ABBA batch control. Current Light uses one Shape per batch with bounded parallelism and does not consume this CLI field. |
 
 If a later `main` wires one of these settings into `ManagedCampaign`, update this reference from the implementation rather than inferring support from parser acceptance alone.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explain candidate gates, promotion decisions and their evidence."""
+"""Explain Episode handoff, acceptance and promotion from Supervisor Attempts."""
 from __future__ import annotations
 
 import argparse
@@ -16,29 +16,39 @@ from observability.common import (
     discover_scopes,
     emit,
     finite_positive,
-    load_snapshot,
     main_error,
     observed_at,
     table,
 )
 
 
-def _reason(attempt: dict, candidate) -> str | None:
-    verification = attempt.get("verification") if isinstance(attempt.get("verification"), dict) else {}
-    return next(
-        (
-            str(value)
-            for value in (
-                attempt.get("violation"),
-                verification.get("error"),
-                attempt.get("summary"),
-                candidate.result.gate if candidate else None,
-                candidate.result.correctness if candidate else None,
-                candidate.result.state if candidate else None,
-            )
-            if value not in (None, "", "PASS", "pass")
-        ),
-        None,
+def _verification(attempt: dict) -> dict:
+    value = attempt.get("verification")
+    return value if isinstance(value, dict) else {}
+
+
+def _reason(attempt: dict) -> str | None:
+    verification = _verification(attempt)
+    for value in (
+        attempt.get("violation"),
+        verification.get("error"),
+        attempt.get("summary"),
+        attempt.get("status"),
+    ):
+        if value not in (None, "", "PASS", "pass", "candidate_ready"):
+            return str(value)
+    return None
+
+
+def _record_ids(attempt: dict) -> list[str]:
+    verification = _verification(attempt)
+    values = (
+        attempt.get("gateway_record_id"),
+        verification.get("gateway_record_id"),
+        verification.get("artifact"),
+    )
+    return list(
+        dict.fromkeys(value for value in values if isinstance(value, str) and value)
     )
 
 
@@ -46,97 +56,63 @@ def snapshot(workspace: Path) -> dict:
     rows = []
     promotions = []
     for scope in discover_scopes(workspace):
-        public = load_snapshot(scope)
-        candidates = {candidate.version: candidate for candidate in public.candidates}
-        attempts = {row["episode"]: row for row in attempt_documents(scope)}
         incumbent_latency = None
-        for candidate in sorted(public.candidates, key=lambda item: item.version):
-            attempt = attempts.get(candidate.episode, {})
-            verification = attempt.get("verification") if isinstance(attempt.get("verification"), dict) else {}
-            candidate_latency = finite_positive(
-                verification.get("candidate_latency_us")
-            ) or finite_positive(candidate.result.latency_us)
-            previous = incumbent_latency
-            if candidate_latency is not None and previous is not None:
+        for attempt in attempt_documents(scope):
+            verification = _verification(attempt)
+            episode = attempt.get("episode")
+            accepted = attempt.get("accepted") is True
+            is_promotion = accepted and type(episode) is int and episode > 0
+            candidate_latency = (
+                finite_positive(verification.get("candidate_latency_us"))
+                or finite_positive(attempt.get("latency_us_geomean"))
+            )
+            previous = (
+                finite_positive(verification.get("incumbent_latency_us"))
+                or incumbent_latency
+            )
+            improvement = verification.get("improvement_pct")
+            if improvement is None and candidate_latency is not None and previous is not None:
                 improvement = (previous - candidate_latency) * 100.0 / previous
-            else:
-                improvement = verification.get("improvement_pct")
-            evidence = []
-            record_id = verification.get("gateway_record_id")
-            if isinstance(record_id, str) and record_id:
-                evidence.append(record_id)
-            episode = next((item for item in public.episodes if item.episode == candidate.episode), None)
-            if episode and episode.final_candidate:
-                for evaluation in episode.final_candidate.evaluations:
-                    evidence.append(
-                        {
-                            "kind": evaluation.kind,
-                            "timestamp": evaluation.timestamp,
-                            "state": evaluation.result.state,
-                            "latency_us": evaluation.result.latency_us,
-                            "source_sha256": dict(evaluation.source_sha256),
-                        }
-                    )
-            accepted = candidate.promoted and candidate.result.state == "pass"
-            is_promotion = accepted and candidate.episode is not None
+            gate = verification.get("gate")
+            if gate is None and episode == 0 and accepted:
+                gate = "PASS"
             row = {
                 "scope": scope.label,
                 "trajectory": scope.trajectory,
-                "episode": candidate.episode,
-                "version": candidate.version,
-                "git_commit": candidate.revision,
-                "gate": verification.get("gate", candidate.result.gate),
-                "correctness": candidate.result.correctness,
+                "episode": episode,
+                "version": attempt.get("version", attempt.get("memory_version")),
+                "kernel_commit_id": (
+                    attempt.get("candidate_kernel_commit_id")
+                    or attempt.get("candidate_commit")
+                ),
+                "gate": gate,
+                "correctness": "PASS" if gate == "PASS" else None,
                 "candidate_latency_us": candidate_latency,
-                "incumbent_latency_us": finite_positive(verification.get("incumbent_latency_us")) or previous,
+                "incumbent_latency_us": previous,
                 "improvement_pct": improvement,
                 "promoted": is_promotion,
                 "accepted": accepted,
                 "decision_reason": (
                     "promotion gate passed" if is_promotion
-                    else "baseline accepted" if accepted
-                    else _reason(attempt, candidate)
+                    else "framework baseline Episode 0 accepted" if accepted and episode == 0
+                    else _reason(attempt)
                 ),
                 "status": attempt.get("status"),
-                "evidence": evidence,
+                "evidence": _record_ids(attempt),
             }
             rows.append(row)
             if is_promotion:
                 promotions.append(row)
-            # The accepted Bootstrap/Framework Baseline is the incumbent for
-            # the first Episode even though it is not itself a promotion.
             if accepted and candidate_latency is not None:
                 incumbent_latency = candidate_latency
-        # Terminal attempts may have no CandidateFact when source capture failed.
-        known = {row["episode"] for row in rows if row["scope"] == scope.label}
-        for episode, attempt in sorted(attempts.items()):
-            if episode in known:
-                continue
-            verification = attempt.get("verification") if isinstance(attempt.get("verification"), dict) else {}
-            rows.append(
-                {
-                    "scope": scope.label,
-                    "trajectory": scope.trajectory,
-                    "episode": episode,
-                    "version": attempt.get("version"),
-                    "git_commit": attempt.get("candidate_commit"),
-                    "gate": verification.get("gate"),
-                    "correctness": None,
-                    "candidate_latency_us": finite_positive(verification.get("candidate_latency_us")),
-                    "incumbent_latency_us": finite_positive(verification.get("incumbent_latency_us")),
-                    "improvement_pct": verification.get("improvement_pct"),
-                    "promoted": attempt.get("accepted") is True,
-                    "accepted": attempt.get("accepted") is True,
-                    "decision_reason": _reason(attempt, candidates.get(attempt.get("version"))),
-                    "status": attempt.get("status"),
-                    "evidence": [verification["gateway_record_id"]]
-                    if isinstance(verification.get("gateway_record_id"), str)
-                    else [],
-                }
-            )
-    rows.sort(key=lambda row: (str(row["scope"]), row["version"] if isinstance(row["version"], int) else -1))
+    rows.sort(
+        key=lambda row: (
+            str(row["scope"]),
+            row["episode"] if isinstance(row["episode"], int) else -1,
+        )
+    )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
         "candidates": rows,

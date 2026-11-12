@@ -8,10 +8,8 @@ import json
 import math
 from pathlib import Path
 import re
-import subprocess
 import sys
 import time
-from typing import Iterable
 
 
 # Allow direct execution from a source checkout without installing AKA.
@@ -20,16 +18,13 @@ SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from aka.legacy.workflow.export import RetainedWorkflowExport  # noqa: E402
 from aka.light.evaluation.provider import result_from_response  # noqa: E402
 from aka.light.experiment.store import (  # noqa: E402
+    KERNEL_ID,
     MeasurementStore,
     RECORD_ID,
-    source_identity,
 )
 from aka.light.runtime.paths import supervisor_campaign_root  # noqa: E402
-from aka.light.workflow.search import read_state  # noqa: E402
-from aka.light.workspace.sources import from_git  # noqa: E402
 
 
 def finite_latency(value: object) -> float | None:
@@ -43,31 +38,6 @@ def finite_latency(value: object) -> float | None:
     return float(value)
 
 
-def _search_accepted_candidates(state: dict) -> Iterable[dict]:
-    """Yield published and already-terminal accepted search candidates."""
-    seed = state.get("seed")
-    if isinstance(seed, dict):
-        yield seed
-
-    active = state.get("active")
-    if not isinstance(active, dict):
-        return
-    jobs = active.get("jobs")
-    if not isinstance(jobs, list):
-        return
-    for job in jobs:
-        if not isinstance(job, dict) or job.get("status") != "completed":
-            continue
-        result = job.get("result")
-        if not isinstance(result, dict):
-            continue
-        retained = result.get("retained_kernel")
-        if isinstance(retained, dict):
-            # retained_kernel is populated only after the Episode's acceptance
-            # gate passes. It can exist before the rest of the Epoch finishes.
-            yield retained
-
-
 def _document(path: Path) -> dict | None:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
@@ -76,47 +46,55 @@ def _document(path: Path) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
-def _episode_attempt(workspace: Path, episode: int) -> dict | None:
+def _attempts(workspace: Path) -> list[dict]:
     root = workspace / ".atrex_long_horizon"
-    for path in (
-        root / "episodes" / f"e{episode:04d}" / "attempt.json",
-        root / "episodes" / f"e{episode:08d}" / "attempt.json",
-    ):
-        value = _document(path)
-        if isinstance(value, dict) and value.get("episode") == episode:
-            return value
+    rows: dict[int, dict] = {}
     state = _document(root / "state.json") or {}
     for value in state.get("attempts") or []:
-        if isinstance(value, dict) and value.get("episode") == episode:
-            return value
-    return None
+        if isinstance(value, dict) and type(value.get("episode")) is int:
+            rows[value["episode"]] = value
+    for path in sorted((root / "episodes").glob("e*/attempt.json")):
+        value = _document(path)
+        if isinstance(value, dict) and type(value.get("episode")) is int:
+            rows[value["episode"]] = value
+    return [rows[key] for key in sorted(rows)]
 
 
-def _accepted_evidence(owner: Path, candidate: dict) -> dict:
+def _attempt_commit(attempt: dict) -> str | None:
+    value = attempt.get("candidate_kernel_commit_id") or attempt.get("candidate_commit")
+    return value if isinstance(value, str) and KERNEL_ID.fullmatch(value) else None
+
+
+def _attempt_record_id(attempt: dict) -> str | None:
+    value = attempt.get("gateway_record_id")
+    verification = attempt.get("verification")
+    if not isinstance(value, str) and isinstance(verification, dict):
+        value = verification.get("gateway_record_id") or verification.get("artifact")
+    return value if isinstance(value, str) and RECORD_ID.fullmatch(value) else None
+
+
+def _attempt_latency(attempt: dict) -> float | None:
+    value = finite_latency(attempt.get("latency_us_geomean"))
+    verification = attempt.get("verification")
+    if value is None and isinstance(verification, dict):
+        value = finite_latency(verification.get("candidate_latency_us"))
+    return value
+
+
+def _accepted_evidence(owner: Path, candidate: dict, attempt: dict) -> dict:
     """Resolve an accepted Candidate to its exact terminal verification Record."""
     unavailable = {
         "gateway_record_id": None,
-        "verification_kernel_id": None,
+        "verification_kernel_commit_id": None,
+        "verification_kernel_artifact_digest": None,
         "verification_operation": None,
     }
     episode = candidate.get("episode")
-    if type(episode) is not int or episode <= 0:
-        return {**unavailable, "verification_evidence": "bootstrap_has_no_episode_verification"}
-    attempt = _episode_attempt(owner, episode)
-    if attempt is None:
-        return {**unavailable, "verification_evidence": "attempt_not_available"}
+    if type(episode) is not int or episode < 0:
+        return {**unavailable, "verification_evidence": "episode_identity_not_available"}
     if attempt.get("accepted") is not True:
         return {**unavailable, "verification_evidence": "attempt_not_accepted"}
-    version = candidate.get("version")
-    if type(version) is int and attempt.get("version") != version:
-        return {**unavailable, "verification_evidence": "attempt_version_mismatch"}
-    verification = attempt.get("verification")
-    if not isinstance(verification, dict) or verification.get("gate") != "PASS":
-        return {**unavailable, "verification_evidence": "passing_verification_not_available"}
-    record_id = verification.get("gateway_record_id")
-    if not isinstance(record_id, str) or RECORD_ID.fullmatch(record_id) is None:
-        legacy = verification.get("artifact")
-        record_id = legacy if isinstance(legacy, str) and RECORD_ID.fullmatch(legacy) else None
+    record_id = _attempt_record_id(attempt)
     if record_id is None:
         return {**unavailable, "verification_evidence": "gateway_record_id_not_available"}
     store_root = supervisor_campaign_root(owner) / "measurements"
@@ -130,28 +108,27 @@ def _accepted_evidence(owner: Path, candidate: dict) -> dict:
                 "verification_evidence": "gateway_record_not_readable"}
     identity = record.get("kernels", {}).get("candidate")
     identity = identity if isinstance(identity, dict) else {}
-    revision = candidate.get("git_commit")
-    try:
-        expected = source_identity(from_git(owner, revision))
-    except (OSError, ValueError, TypeError, subprocess.SubprocessError):
+    commit = candidate.get("kernel_commit_id")
+    # MeasurementStore.read() already verifies the source snapshot and digest.
+    # The remaining public-identity check is the Agent's own Git commit ID;
+    # never try to resolve it in the Supervisor/controller repository.
+    if identity.get("kernel_id") != commit:
         return {
             **unavailable,
             "gateway_record_id": record_id,
-            "verification_kernel_id": identity.get("kernel_id"),
-            "verification_operation": record.get("operation"),
-            "verification_evidence": "accepted_source_not_readable",
-        }
-    if identity != expected:
-        return {
-            **unavailable,
-            "gateway_record_id": record_id,
-            "verification_kernel_id": identity.get("kernel_id"),
+            "verification_kernel_commit_id": identity.get("kernel_id"),
+            "verification_kernel_artifact_digest": identity.get(
+                "kernel_artifact_digest"
+            ),
             "verification_operation": record.get("operation"),
             "verification_evidence": "candidate_kernel_identity_mismatch",
         }
     return {
         "gateway_record_id": record_id,
-        "verification_kernel_id": identity["kernel_id"],
+        "verification_kernel_commit_id": identity["kernel_id"],
+        "verification_kernel_artifact_digest": identity.get(
+            "kernel_artifact_digest"
+        ),
         "verification_operation": record.get("operation"),
         "verification_evidence": "verified",
     }
@@ -159,72 +136,40 @@ def _accepted_evidence(owner: Path, candidate: dict) -> dict:
 
 def accepted_best(workspace: Path, campaign_root: Path) -> dict | None:
     """Return the lowest-latency candidate already accepted by Light."""
-    search_state = campaign_root / "search" / "state.json"
-    if search_state.is_file():
-        rows = []
-        for kernel in _search_accepted_candidates(read_state(search_state)):
-            latency = finite_latency(kernel.get("latency_us_geomean"))
-            if latency is None:
-                continue
-            trajectory = kernel.get("trajectory")
-            owner = (
-                campaign_root / "search" / "trajectories" / f"t{trajectory:04d}"
-                if type(trajectory) is int and trajectory > 0
-                else workspace
-            )
-            raw_version = (kernel.get("record") or {}).get("version") if isinstance(kernel.get("record"), dict) else None
-            version = int(raw_version[1:]) if isinstance(raw_version, str) and re.fullmatch(r"v\d+", raw_version) else None
-            rows.append(
-                {
-                    "latency_us_geomean": latency,
-                    "git_commit": kernel.get("commit"),
-                    "trajectory": trajectory,
-                    "episode": kernel.get("episode"),
-                    "version": version,
-                    "source_sha256": kernel.get("sha256"),
-                    "_owner": owner,
-                }
-            )
-        selected = min(
-            rows,
-            key=lambda row: (
-                row["latency_us_geomean"],
-                str(row.get("git_commit")),
-            ),
-            default=None,
-        )
-        if selected is None:
-            return None
-        owner = selected.pop("_owner")
-        return {**selected, **_accepted_evidence(owner, selected)}
-
-    snapshot = RetainedWorkflowExport().read(workspace)
     rows = []
-    for candidate in snapshot.candidates:
-        latency = finite_latency(candidate.result.latency_us)
-        if (
-            not candidate.promoted
-            or candidate.result.state != "pass"
-            or latency is None
-        ):
-            continue
-        rows.append(
-            {
+    for owner in measurement_workspaces(workspace, campaign_root):
+        trajectory = None
+        if owner != workspace:
+            match = re.fullmatch(r"t0*([1-9][0-9]*)", owner.name)
+            trajectory = int(match.group(1)) if match else None
+        for attempt in _attempts(owner):
+            commit = _attempt_commit(attempt)
+            latency = _attempt_latency(attempt)
+            if attempt.get("accepted") is not True or commit is None or latency is None:
+                continue
+            row = {
                 "latency_us_geomean": latency,
-                "git_commit": candidate.revision,
-                "version": candidate.version,
-                "episode": candidate.episode,
+                "kernel_commit_id": commit,
+                "trajectory": trajectory,
+                "episode": attempt.get("episode"),
+                "version": attempt.get("version", attempt.get("memory_version")),
+                "_owner": owner,
+                "_attempt": attempt,
             }
-        )
+            rows.append(row)
     selected = min(
         rows,
         key=lambda row: (
             row["latency_us_geomean"],
-            row["version"],
+            str(row["kernel_commit_id"]),
         ),
         default=None,
     )
-    return {**selected, **_accepted_evidence(workspace, selected)} if selected else None
+    if selected is None:
+        return None
+    owner = selected.pop("_owner")
+    attempt = selected.pop("_attempt")
+    return {**selected, **_accepted_evidence(owner, selected, attempt)}
 
 
 def measurement_workspaces(workspace: Path, campaign_root: Path) -> list[Path]:
@@ -315,11 +260,11 @@ def best_passing_in_store(store: MeasurementStore, owner: Path) -> list[dict]:
                 )
 
             identity = record["kernels"]["candidate"]
-            kernel_id = identity["kernel_id"]
+            kernel_commit_id = identity["kernel_id"]
             rows.append(
                 {
                     "latency_us_geomean": latency,
-                    "kernel_id": kernel_id,
+                    "kernel_commit_id": kernel_commit_id,
                     "kernel_artifact_digest": identity.get("kernel_artifact_digest"),
                     "gateway_record_id": record_id,
                     "shape_count": len(latencies),
@@ -354,7 +299,7 @@ def best_passing_full_eval(workspace: Path, campaign_root: Path) -> dict | None:
         rows,
         key=lambda row: (
             row["latency_us_geomean"],
-            str(row.get("kernel_id")),
+            str(row.get("kernel_commit_id")),
             str(row.get("gateway_record_id")),
         ),
         default=None,
@@ -368,7 +313,7 @@ def campaign_snapshot(workspace: Path) -> dict:
         raise ValueError(f"Campaign workspace does not exist: {workspace}")
     campaign_root = supervisor_campaign_root(workspace)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": datetime.now(timezone.utc).isoformat(),
         "campaign_workspace": str(workspace),
         "accepted_best": accepted_best(workspace, campaign_root),

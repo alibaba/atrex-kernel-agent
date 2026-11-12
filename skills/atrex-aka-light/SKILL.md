@@ -16,7 +16,8 @@ AKA Light runs supervised GPU-kernel optimization campaigns and sends GPU work t
 | Start a campaign | `aka optimize --repo-root AKA_REPO_ROOT -- ...` | Requires an operator, platform, framework or intentional auto-dispatch, Agent backend, mode and workspace |
 | Resume a campaign | Rerun the matching launch command | Mode, visibility, candidate layout, framework, composition and workspace identity must match |
 | Inspect status or performance | Run the matching `observability/light_*.py` script | Read-only; use JSON for calculations and tables for user summaries |
-| Export exact source or evidence | `export_light_source.py` or `export_light_evidence.py` | Select by accepted Git revision, Kernel identity or Gateway Record identity |
+| Inspect Research Board | `observability/light_research_status.py` | Read private Direction/Experiment state, queue order, sharing and Review audit summaries |
+| Export exact source or evidence | `export_light_source.py` or `export_light_evidence.py` | Select by Agent Kernel commit ID or Gateway Record ID |
 | Stop a campaign | Stop it through its owning Supervisor or workload | Verify Agent, Runtime and child processes exit; do not use broad process-name kills |
 
 ## Choose a supported problem input
@@ -57,7 +58,7 @@ Optimization modes control which candidates may be accepted. They do not select 
 | Mode | Use it for | Candidate policy |
 |---|---|---|
 | `leaderboard` (default) | Finding the fastest correct benchmark implementation | The selected framework is a preferred direction. Evidence-backed mixed or alternate implementations and third-party helper/kernel libraries are allowed. The result need not be self-contained or deployable solely in that framework. |
-| `production` | Producing a deployable, framework-constrained implementation | After the V0 reference exception, GPU computation must use the selected framework. Prebuilt compute, alternate DSLs, PyTorch compute fallback, hidden dispatch and external implementation loading are rejected. Source checks and an independent read-only policy review fail closed. |
+| `production` | Producing a deployable, framework-constrained implementation | The final submitted candidate must use the selected framework and reject prebuilt compute, alternate-DSL wrappers, PyTorch compute fallback, hidden dispatch and external implementation loading. Development may use other languages, libraries and probes; they must not remain in the submitted source. Source checks and an independent read-only policy review fail closed. |
 
 Both modes still require evaluator correctness, full Evaluate evidence, exact candidate sealing, incumbent comparison, native ABBA evidence and the configured improvement threshold. Production adds policy gates; leaderboard does not remove measurement gates.
 
@@ -108,7 +109,7 @@ Use the exact hardware token accepted by the configured Agate environment. If th
 --platform L20D --framework CuteDSL
 ```
 
-In Leaderboard mode the framework is a preferred direction; in Production it becomes a hard candidate constraint. Framework availability still depends on the selected worker.
+In Leaderboard mode the framework is a preferred direction; in Production it becomes a final-candidate constraint. `--no-specify-dsl` lets one Agent choose any supported self-authored GPU DSL. Framework availability still depends on the selected worker.
 
 Omitting `--framework` auto-dispatches one independent child Campaign per framework supported by the detected vendor:
 
@@ -126,7 +127,7 @@ Runtime architecture is authoritative for NVIDIA/AMD vendor detection; the platf
 `--max-iters 20` makes `v20` the highest canonical version that one serial child Campaign may create. It does **not** mean 20 successful optimizations, 20 model turns, or 20 evaluations. The default is `20`.
 
 - V0 is recorded as `v0`.
-- If Framework Baseline establishes V1, optimization Episodes use `v2` through `v20`, leaving at most 19 Episode slots.
+- Framework Baseline is Episode 0 and normally establishes V1; later optimization Episodes use `v2` through `v20`, leaving at most 19 optimization slots.
 - Without V1, optimization Episodes use `v1` through `v20`, leaving at most 20 Episode slots.
 - Every terminal Episode consumes its version slot, whether it is promoted, rejected, blocked, pivoted, invalid, or recovered as interrupted.
 - The limit is checked before admitting the next Episode. An admitted Episode finishes and records its outcome; a later resume continues from the recorded version rather than resetting the budget.
@@ -141,8 +142,9 @@ The most common optional controls are:
 | Goal | Controls |
 |---|---|
 | Bound search | `--max-iters`, `--token-budget`, `--max-stall`, `--target-util`, `--convert-after` |
-| Control V1 and recovery | `--framework-baseline`, `--framework-baseline-timeout`, `--handoff-resumes`, `--v1-ask-codex`, `--v1-ask-qoder` |
-| Set promotion evidence | `--verify-repeats`, `--verify-run-timeout`, `--min-improvement-pct` |
+| Control Episode 0 and recovery | `--framework-baseline`, `--framework-baseline-timeout`, `--handoff-resumes`, `--v1-ask-codex`, `--v1-ask-qoder` |
+| Set measurement and promotion evidence | `--verify-repeats`, `--evaluation-step-timeout`, `--verify-shape-batch-size`, `--min-improvement-pct` |
+| Select DSL visibility and reference knowledge | `--[no-]specify-dsl`, repeatable `--agent-reference-dir` |
 | Select Agate execution | `--sandbox-hardware`, `--sandbox-profile`, `--sandbox-url`, or the mutually exclusive SSH controls |
 | Configure Agent/Runtime modules | launch-level `--patch` for Episode active time, Agent pause, Wiki, generated memory, research records, candidate layout or pooled search |
 
@@ -189,13 +191,13 @@ not from an adjacent user-provided `kernel.py` or `impl/` directory.
 - Native CUDA without a Python loader uses `cuda_manifest`; use the checkout's documented composition instead of inventing a manifest layout.
 - Candidate layout is fixed for the campaign and must match on resume.
 
-The normal sequence is V0 full-workload measurement, optional framework baseline V1, then optimization Episodes. `--framework-baseline` controls V1, not V0: `auto` follows mode/layout policy, `always` requests V1 and `never` starts Episodes from measured V0. A failed V0 stops before V1; current main does not skip V0 and go directly to Framework Baseline.
+The normal sequence is V0 full-workload measurement, optional Framework Baseline Episode 0 producing V1, then optimization Episodes. Episode 0 is an ordinary Light Episode for Agent Git, Runtime tools, Research records, `episode-report`, sealing and policy/correctness gates; only incumbent ABBA is skipped. Its accepted Agent commit, Research state and provider Session continue into Episode 1. `--framework-baseline` controls Episode 0, not V0: `auto` follows mode/layout policy, `always` requests it and `never` starts from measured V0. A failed V0 stops first.
 
 Each Episode edits a managed draft, evaluates an exact source, submits an evidence-backed report, seals the candidate and compares it with the incumbent. A passing or faster ordinary Evaluate does not itself promote a candidate; terminal verification and the promotion gate decide that.
 
 ## Resume, failures and cleanup
 
-Resume with the same checkout behavior, workspace, composition, framework, candidate layout, optimization mode and visibility policy. Light can reconcile accepted Agate job IDs, completed Evaluate/ABBA batches, an interrupted Framework Baseline and an interrupted Episode from durable state.
+Resume with the same checkout behavior, workspace, composition, framework, candidate layout, optimization mode and visibility policy. Light can reconcile accepted Agate job IDs, completed Evaluate/ABBA batches, an interrupted Episode 0 and later interrupted Episodes from durable state.
 
 - Do not clear a workspace merely because a process exited. Inspect Workflow, Session and Agate state first.
 - A timeout, queue failure, missing evidence or protocol error is not proof that the candidate is incorrect.
@@ -218,9 +220,10 @@ python3 "$AKA_REPO/observability/light_runtime_status.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_performance.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_agate_status.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_token_time.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_research_status.py" "$CAMPAIGN" --json
 ```
 
-Distinguish `accepted_best` from `best_passing_full_eval`: the fastest passing full Evaluate may not have been promoted. Distinguish Agent phase, candidate Workflow state and Agate Job state. Preserve unavailable values as unavailable rather than estimating them.
+All public Kernel identities in these outputs are Agent Git `kernel_commit_id` values. Supervisor archive commits remain private audit data. Distinguish `accepted_best` from `best_passing_full_eval`: the fastest passing full Evaluate may not have been promoted. Distinguish Agent phase, candidate Workflow state and Agate Job state. Preserve unavailable values as unavailable rather than estimating them.
 
 Export exact source and raw/Agent-visible evidence before destructive cleanup or deep comparison:
 

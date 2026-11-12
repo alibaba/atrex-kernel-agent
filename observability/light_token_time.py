@@ -13,11 +13,11 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from observability.common import (
     add_output_arguments,
+    attempt_documents,
     discover_scopes,
     elapsed_seconds,
     emit,
     finite_positive,
-    load_snapshot,
     main_error,
     observed_at,
     read_json,
@@ -44,6 +44,26 @@ def _summed_session_usage(rows: list[dict]) -> dict:
         values = [row["usage"].get(key) for row in rows if type(row["usage"].get(key)) is int]
         usage[key] = sum(values) if values else None
     return usage | {"reasoning_tokens": None, "measurement": "session_capture_fallback"}
+
+
+def _attempt_latency(attempt: dict | None) -> float | None:
+    if not isinstance(attempt, dict):
+        return None
+    verification = attempt.get("verification")
+    verification = verification if isinstance(verification, dict) else {}
+    return finite_positive(verification.get("candidate_latency_us")) or finite_positive(
+        attempt.get("latency_us_geomean")
+    )
+
+
+def _previous_accepted_latency(attempts: dict[int, dict], episode: int) -> float | None:
+    for number in sorted((value for value in attempts if value < episode), reverse=True):
+        attempt = attempts[number]
+        if attempt.get("accepted") is True:
+            latency = _attempt_latency(attempt)
+            if latency is not None:
+                return latency
+    return None
 
 
 def _session_rows(scope) -> list[dict]:
@@ -116,9 +136,11 @@ def snapshot(workspace: Path) -> dict:
     episodes = []
     incidents = Counter()
     for scope in discover_scopes(workspace):
-        public = load_snapshot(scope)
-        candidates = {candidate.episode: candidate for candidate in public.candidates if candidate.episode is not None}
-        episode_facts = {episode.episode: episode for episode in public.episodes}
+        attempts = {
+            attempt["episode"]: attempt
+            for attempt in attempt_documents(scope)
+            if type(attempt.get("episode")) is int
+        }
         scope_sessions = _session_rows(scope)
         sessions.extend(scope_sessions)
         session_by_episode: dict[int, list[dict]] = {}
@@ -147,15 +169,9 @@ def snapshot(workspace: Path) -> dict:
                     incidents["output_truncation"] += 1
                 if "rate" in kind or "rate" in code or "throttl" in code:
                     incidents["rate_limit"] += 1
-            candidate = candidates.get(episode)
-            latency = finite_positive(candidate.result.latency_us) if candidate else None
-            prior = None
-            earlier = [
-                item for item in public.candidates
-                if item.promoted and candidate is not None and item.version < candidate.version
-            ]
-            if earlier:
-                prior = finite_positive(max(earlier, key=lambda item: item.version).result.latency_us)
+            candidate = attempts.get(episode)
+            latency = _attempt_latency(candidate)
+            prior = _previous_accepted_latency(attempts, episode) if isinstance(episode, int) else None
             total = terminal.get("total_tokens")
             improvement = ((prior - latency) if prior and latency else None)
             episodes.append(
@@ -188,27 +204,22 @@ def snapshot(workspace: Path) -> dict:
             if episode in telemetry_episodes:
                 continue
             terminal = _summed_session_usage(episode_sessions)
-            candidate = candidates.get(episode)
-            latency = finite_positive(candidate.result.latency_us) if candidate else None
-            earlier = [
-                item for item in public.candidates
-                if item.promoted and candidate is not None and item.version < candidate.version
-            ]
-            prior = (
-                finite_positive(max(earlier, key=lambda item: item.version).result.latency_us)
-                if earlier else None
-            )
+            candidate = attempts.get(episode)
+            latency = _attempt_latency(candidate)
+            prior = _previous_accepted_latency(attempts, episode)
             improvement = (prior - latency) if prior and latency else None
             total = terminal.get("total_tokens")
-            fact = episode_facts.get(episode)
             episodes.append(
                 {
                     "scope": scope.label,
                     "trajectory": scope.trajectory,
                     "episode": episode,
-                    "version": candidate.version if candidate else None,
-                    "status": fact.status if fact else "running_or_interrupted",
-                    "accepted": fact.accepted if fact else False,
+                    "version": (
+                        candidate.get("version", candidate.get("memory_version"))
+                        if candidate else None
+                    ),
+                    "status": candidate.get("status") if candidate else "running_or_interrupted",
+                    "accepted": candidate.get("accepted") is True if candidate else False,
                     "resume_count": None,
                     "invocation_count": None,
                     "usage": terminal,
@@ -227,8 +238,8 @@ def snapshot(workspace: Path) -> dict:
                     ),
                 }
             )
-        for episode in public.episodes:
-            if episode.status == "invalid_handoff":
+        for attempt in attempts.values():
+            if attempt.get("status") == "invalid_handoff":
                 incidents["invalid_handoff"] += 1
         counts = Counter(
             row["episode"] for row in scope_sessions
@@ -251,7 +262,7 @@ def snapshot(workspace: Path) -> dict:
     }
     episode_totals = [row["usage"].get("total_tokens") for row in episodes if isinstance(row["usage"].get("total_tokens"), int)]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
         "totals": token_totals,
@@ -296,7 +307,7 @@ def render(value: dict) -> str:
     ))
     startup_sessions = [row for row in value["sessions"] if row["stage"] != "episode"]
     if startup_sessions:
-        lines += ["", "Bootstrap / Framework Baseline Sessions"]
+        lines += ["", "Pre-Episode / Legacy Baseline Sessions"]
         lines.append(table(
             ["Scope", "Stage", "Session", "Backend", "State", "Tokens", "Wall(s)"],
             [[

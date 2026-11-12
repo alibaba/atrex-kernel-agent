@@ -13,40 +13,91 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from observability.common import (
     add_output_arguments,
+    attempt_documents,
     discover_scopes,
     emit,
     evaluation_result,
     finite_positive,
     iter_records,
-    load_snapshot,
     main_error,
     observed_at,
-    read_json,
     table,
 )
 from observability.light_latency_status import accepted_best, best_passing_full_eval
+from aka.light.workspace.baseline import read_baseline_record
 
 
 SHAPE_FAILURE = re.compile(r"(?:sid|shape(?:_id)?)=([^: ,]+).*?(?:correctness|compile|performance)", re.I)
 
 
-def _result(value) -> dict | None:
-    if value is None:
+def _attempt_result(attempt: dict | None) -> dict | None:
+    if not isinstance(attempt, dict):
         return None
+    verification = attempt.get("verification")
+    verification = verification if isinstance(verification, dict) else {}
+    gate = verification.get("gate")
+    if gate is None and attempt.get("episode") == 0 and attempt.get("accepted") is True:
+        gate = "PASS"
+    latency = finite_positive(verification.get("candidate_latency_us")) or finite_positive(
+        attempt.get("latency_us_geomean")
+    )
+    if verification.get("error") or gate == "ERROR":
+        state = "infrastructure_error"
+    elif attempt.get("accepted") is True:
+        state = "pass"
+    elif gate in {"FAIL", "REJECT"}:
+        state = "rejected"
+    else:
+        state = str(attempt.get("status") or "unmeasured")
     return {
-        "state": value.state,
-        "correctness": value.correctness,
-        "gate": value.gate,
-        "complete": value.complete,
-        "latency_us": value.latency_us,
-        "case_latencies_us": dict(value.case_latencies_us),
-        "expected_case_ids": list(value.expected_case_ids),
-        "score": value.score,
-        "metrics": dict(value.metrics),
+        "state": state,
+        "correctness": "PASS" if gate == "PASS" else None,
+        "gate": gate,
+        "complete": attempt.get("accepted") is True,
+        "latency_us": latency,
+        "case_latencies_us": {},
+        "expected_case_ids": [],
+        "score": verification.get("candidate_performance_score"),
+        "metrics": {
+            key: value
+            for key, value in {
+                "improvement_pct": verification.get("improvement_pct"),
+                "incumbent_latency_us": verification.get("incumbent_latency_us"),
+            }.items()
+            if value is not None
+        },
     }
 
 
-def _shape_rows(result: dict, record_id: str, kernel_id: str | None, scope: str) -> list[dict]:
+def _v0_result(record: dict | None) -> dict | None:
+    if not isinstance(record, dict):
+        return None
+    correctness = record.get("correctness")
+    correctness = correctness if isinstance(correctness, dict) else {}
+    performance = record.get("performance")
+    performance = performance if isinstance(performance, dict) else {}
+    status = str(correctness.get("status") or "").upper() or None
+    latency = finite_positive(performance.get("latency_us_geomean"))
+    return {
+        "state": "pass" if status == "PASS" else "correctness_failure",
+        "correctness": status,
+        "gate": "PASS" if status == "PASS" else "FAIL",
+        "complete": status == "PASS" and latency is not None,
+        "latency_us": latency,
+        "case_latencies_us": dict(performance.get("latency_us_by_shape") or {}),
+        "expected_case_ids": sorted(str(key) for key in (performance.get("latency_us_by_shape") or {})),
+        "score": performance.get("performance_score"),
+        "metrics": {
+            key: performance[key]
+            for key in ("latency_us_arith_mean", "performance_objective")
+            if key in performance
+        },
+    }
+
+
+def _shape_rows(
+    result: dict, record_id: str, kernel_commit_id: str | None, scope: str
+) -> list[dict]:
     latencies = result.get("latency_us_by_shape")
     latencies = latencies if isinstance(latencies, dict) else {}
     failed = set()
@@ -70,7 +121,7 @@ def _shape_rows(result: dict, record_id: str, kernel_id: str | None, scope: str)
                 else "unknown"
             ),
             "gateway_record_id": record_id,
-            "kernel_id": kernel_id,
+            "kernel_commit_id": kernel_commit_id,
             "scope": scope,
         }
         for shape in sorted(known)
@@ -89,41 +140,45 @@ def snapshot(workspace: Path) -> dict:
     winners: dict[str, dict] = {}
 
     for scope in scopes:
-        public = load_snapshot(scope)
-        framework_marker = read_json(scope.workspace / "framework_baseline.json", default=None)
-        framework_version = None
-        if isinstance(framework_marker, dict):
-            raw_version = framework_marker.get("version")
-            if isinstance(raw_version, str) and raw_version.startswith("v") and raw_version[1:].isdigit():
-                framework_version = int(raw_version[1:])
-        framework_candidate = next(
-            (candidate for candidate in public.candidates if candidate.version == framework_version),
-            None,
+        attempts = attempt_documents(scope)
+        framework_attempt = next(
+            (row for row in attempts if row.get("episode") == 0), None
         )
+        accepted_attempts = [row for row in attempts if row.get("accepted") is True]
+        incumbent_attempt = accepted_attempts[-1] if accepted_attempts else None
         baseline_rows.append(
             {
                 "scope": scope.label,
                 "trajectory": scope.trajectory,
-                "bootstrap": _result(public.baseline.result) if public.baseline else None,
+                "v0": _v0_result(
+                    read_baseline_record(scope.workspace, migrate_legacy=False)
+                ),
                 "framework_baseline": {
-                    "marker": framework_marker,
-                    "result": _result(framework_candidate.result) if framework_candidate else None,
-                } if framework_marker is not None else None,
-                "incumbent": _result(public.incumbent.result) if public.incumbent else None,
+                    "episode": 0,
+                    "result": _attempt_result(framework_attempt),
+                    "attempt": framework_attempt,
+                } if framework_attempt is not None else None,
+                "incumbent": _attempt_result(incumbent_attempt),
             }
         )
-        by_episode = {episode.episode: episode for episode in public.episodes}
-        for candidate in public.candidates:
-            episode = by_episode.get(candidate.episode)
+        for attempt in attempts:
             episode_rows.append(
                 {
                     "scope": scope.label,
                     "trajectory": scope.trajectory,
-                    "episode": candidate.episode,
-                    "version": candidate.version,
-                    "promoted": candidate.promoted,
-                    "status": episode.status if episode else None,
-                    "result": _result(candidate.result),
+                    "episode": attempt.get("episode"),
+                    "version": attempt.get("version", attempt.get("memory_version")),
+                    "kernel_commit_id": (
+                        attempt.get("candidate_kernel_commit_id")
+                        or attempt.get("candidate_commit")
+                    ),
+                    "promoted": (
+                        attempt.get("accepted") is True
+                        and isinstance(attempt.get("episode"), int)
+                        and attempt["episode"] > 0
+                    ),
+                    "status": attempt.get("status"),
+                    "result": _attempt_result(attempt),
                 }
             )
         for row in iter_records(scope):
@@ -134,12 +189,12 @@ def snapshot(workspace: Path) -> dict:
             if result is None:
                 continue
             identity = record.get("kernels", {}).get("candidate", {})
-            kernel_id = identity.get("kernel_id") if isinstance(identity, dict) else None
+            kernel_commit_id = identity.get("kernel_id") if isinstance(identity, dict) else None
             result_row = {
                 "scope": scope.label,
                 "trajectory": scope.trajectory,
                 "gateway_record_id": row["gateway_record_id"],
-                "kernel_id": kernel_id,
+                "kernel_commit_id": kernel_commit_id,
                 "created_at": record.get("created_at"),
                 "cacheable": record.get("cacheable") is True,
                 "all_pass": result.get("all_pass"),
@@ -150,7 +205,9 @@ def snapshot(workspace: Path) -> dict:
                 "failures": [str(value) for value in (result.get("failures") or [])],
             }
             evaluations.append(result_row)
-            for shape in _shape_rows(result, row["gateway_record_id"], kernel_id, scope.label):
+            for shape in _shape_rows(
+                result, row["gateway_record_id"], kernel_commit_id, scope.label
+            ):
                 shapes.append(shape)
                 latency = shape["latency_us"]
                 if shape["correctness"] != "pass" or latency is None:
@@ -160,7 +217,7 @@ def snapshot(workspace: Path) -> dict:
                     winners[shape["shape_id"]] = shape
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": observed_at(),
         "campaign_workspace": str(top.workspace),
         "accepted_best": accepted,
@@ -183,7 +240,7 @@ def render(value: dict) -> str:
     for name in ("accepted_best", "best_passing_full_eval"):
         row = value[name]
         headline.append([name, _latency(row.get("latency_us_geomean")) if row else None,
-                         (row or {}).get("git_commit") or (row or {}).get("kernel_id"),
+                         (row or {}).get("kernel_commit_id"),
                          (row or {}).get("gateway_record_id"),
                          (row or {}).get("verification_evidence") or (
                              "full_eval_record" if (row or {}).get("gateway_record_id") else None
@@ -199,7 +256,7 @@ def render(value: dict) -> str:
     lines += ["", "Per-Shape best"]
     lines.append(table(
         ["Shape", "Latency(us)", "Kernel", "Record"],
-        [[shape, _latency(row["latency_us"]), row["kernel_id"], row["gateway_record_id"]]
+        [[shape, _latency(row["latency_us"]), row["kernel_commit_id"], row["gateway_record_id"]]
          for shape, row in value["best_by_shape"].items()],
     ))
     return "\n".join(lines)

@@ -21,6 +21,7 @@ supports `--json` or `--compact` for machine-readable output.
 | Agate jobs, retries, batches, timeouts and errors | `light_agate_status.py` |
 | Session/Episode tokens, wall time and token efficiency | `light_token_time.py` |
 | Runtime Tool counts, outcomes, duration and attribution | `light_tool_usage.py` |
+| Research Board, Direction/Experiment queues, sharing and Review audit | `light_research_status.py` |
 | Kernel source, raw Agate jobs and Agent-visible response | `export_light_evidence.py` |
 | GPU Wiki queries, latency, results and adoption | `light_wiki_usage.py` |
 
@@ -33,6 +34,7 @@ python3 observability/light_acceptance.py /path/to/campaign
 python3 observability/light_agate_status.py /path/to/campaign --json
 python3 observability/light_token_time.py /path/to/campaign
 python3 observability/light_tool_usage.py /path/to/campaign
+python3 observability/light_research_status.py /path/to/campaign
 python3 observability/light_wiki_usage.py /path/to/campaign
 ```
 
@@ -69,13 +71,12 @@ The new directory contains:
 - `best_passing_full_eval`: the lowest GeoMean latency observed in a passing,
   standard full Agate Eval, whether or not that Kernel was later promoted.
 
-Accepted Workflow state stores a Git `commit` or `revision`; the script exposes
-that value as `accepted_best.git_commit`. For an Episode promotion it also
-resolves `attempt.json`'s passing verification Record, validates that Record's
-candidate source against the accepted Git revision, and returns
-`accepted_best.gateway_record_id`. Measurement Records on current `main` name a
-content-derived `kernel_id` plus `kernel_artifact_digest`; the script deliberately
-keeps these identities distinct.
+Current Light uses the Agent's clean Git HEAD as the public Kernel identity. Both
+accepted state and Measurement Records expose it as `kernel_commit_id`; the
+Supervisor's separate archive commit remains private audit data. The script
+resolves each accepted `attempt.json`, checks that its terminal Gateway Record
+names the same Agent commit, and returns the immutable Record identity and
+verified source-artifact digest.
 
 The exact state and Measurement Record sources are documented in
 [`light-latency-data-sources.md`](light-latency-data-sources.md).
@@ -113,16 +114,16 @@ unmeasured synthetic Kernel.
 
 ## Export a reported Kernel source package
 
-Export an accepted result by its Campaign Git revision:
+Export an accepted or measured result by its Agent Kernel commit:
 
 ```bash
 python3 /path/to/atrex-kernel-agent/observability/export_light_source.py \
   /path/to/light-campaign-workspace \
-  --git-commit 0123456789abcdef0123456789abcdef01234567 \
+  --kernel-commit-id 0123456789abcdef0123456789abcdef01234567 \
   --output /path/to/exported-source
 ```
 
-Export a measured result by its Gateway Record or content-derived Kernel ID:
+Export a measured result by its Gateway Record:
 
 ```bash
 python3 /path/to/atrex-kernel-agent/observability/export_light_source.py \
@@ -131,15 +132,8 @@ python3 /path/to/atrex-kernel-agent/observability/export_light_source.py \
   --output /path/to/exported-source
 ```
 
-```bash
-python3 /path/to/atrex-kernel-agent/observability/export_light_source.py \
-  /path/to/light-campaign-workspace \
-  --kernel-id kernel-0123456789abcdef0123456789abcdef \
-  --output /path/to/exported-source
-```
-
 The latency status JSON can be consumed directly. The exporter uses
-`git_commit` for `accepted_best`, and prefers the evidence-bound
+`kernel_commit_id` for either result, and prefers the evidence-bound
 `gateway_record_id` for `best_passing_full_eval`:
 
 ```bash

@@ -20,6 +20,7 @@ python3 "$AKA_REPO/observability/light_runtime_status.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_performance.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_agate_status.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_token_time.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_research_status.py" "$CAMPAIGN" --json
 ```
 
 Summarize per scope/trajectory: current stage and Episode, health and active Session phase, accepted and measured best latency, candidate state, pending/failed Agate jobs, token totals, and newest durable timestamp.
@@ -35,9 +36,10 @@ Summarize per scope/trajectory: current stage and Episode, health and active Ses
 | Agate calls/jobs, retries, batches, timeouts and error classes | `light_agate_status.py` |
 | Session/Episode tokens, wall time and token efficiency | `light_token_time.py` |
 | Runtime Tool calls, outcomes, durations and attribution | `light_tool_usage.py` |
+| Research modules, Direction queues, Experiments, sharing and Review audit | `light_research_status.py` |
 | GPU Wiki queries, results, latency and adoption | `light_wiki_usage.py` |
 | Exact measured source plus raw/Agent-visible evidence | `export_light_evidence.py` |
-| Source package by Git commit, Kernel ID or Gateway Record ID | `export_light_source.py` |
+| Source package by Agent Kernel commit ID or Gateway Record ID | `export_light_source.py` |
 
 Use `--help` on the selected script before relying on optional filters or watch flags.
 
@@ -76,7 +78,9 @@ Current main does not durably persist every fact. Exact reasoning-token splits, 
 
 ## Token and tool analysis
 
-Use `light_token_time.py` for Session, startup, trajectory and Episode totals, average tokens per Attempt, incidents, and latency improvement per million tokens. Bootstrap and Framework Baseline belong to startup totals and should not be folded into ordinary Attempt averages.
+Use `light_token_time.py` for Session, startup, trajectory and Episode totals, average tokens per Attempt, incidents, and latency improvement per million tokens. Framework Baseline is Episode 0 and belongs to Episode accounting; only pre-Episode bootstrap work belongs to startup totals.
+
+Use `light_research_status.py` to inspect enabled modules, local and shared Direction order, paused/closed states, Experiments, public Agent commit identities, promotion history and private Review-audit counts. `PROGRESS.md` is only the compact Agent projection; the private Research event log is authoritative.
 
 Use `light_tool_usage.py` for authoritative Runtime audit counts and durations. Session attribution is a separate source; do not join it to audit receipts by timestamp when the checkout lacks a stable identity.
 
@@ -101,11 +105,11 @@ python3 "$AKA_REPO/observability/export_light_evidence.py" "$CAMPAIGN" \
 
 The output contains the exact source package, physical Agate Job IDs and raw responses, the response Light exposed to the Agent, and a provenance manifest. The output path must not already exist.
 
-Export only source by accepted Git revision or measured identity:
+Export only source by Agent Kernel commit ID or measured Gateway Record:
 
 ```bash
 python3 "$AKA_REPO/observability/export_light_source.py" "$CAMPAIGN" \
-  --git-commit 0123456789abcdef0123456789abcdef01234567 \
+  --kernel-commit-id 0123456789abcdef0123456789abcdef01234567 \
   --output /path/to/new-source-directory
 
 python3 "$AKA_REPO/observability/export_light_source.py" "$CAMPAIGN" \

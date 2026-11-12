@@ -80,7 +80,7 @@ The result may be valid for the benchmark without being self-contained or deploy
 
 ### `production`
 
-Choose `production` when accepted and exported candidates must be deployable and conform to the selected framework:
+Choose `production` when accepted and exported candidates must be deployable and conform to the selected framework. These are final-candidate rules: the Agent may use other languages, libraries and tools for bounded development probes, but they must not remain in the submitted source:
 
 - V0 may be the PyTorch reference wrapper, but optimized candidates must implement GPU computation in the selected framework;
 - self-authored build, compiler, header, ABI, and launch support may be accepted;
@@ -107,7 +107,7 @@ The current Light sequence is:
 
 1. prepare the selected initial source;
 2. run and commit the full-workload V0 measurement;
-3. optionally establish a framework baseline V1;
+3. optionally run Framework Baseline Episode 0 and establish V1;
 4. begin optimization Episodes.
 
 `--framework-baseline` controls V1, not V0:
@@ -116,7 +116,7 @@ The current Light sequence is:
 - `always`: enable the V1 stage in leaderboard mode too;
 - `never`: optimize directly from measured V0.
 
-Current main does not support skipping V0 and going directly to Framework Baseline. A failed V0 stops before V1. Confirm this invariant in `src/aka/light/workflow/bootstrap.py` before describing a newer branch.
+Episode 0 uses the same persistent Agent workspace, Agent Git, Runtime tools, Research Store, `episode-report`, source sealing, correctness and policy gates as later Episodes. It skips only incumbent ABBA because no optimized incumbent exists yet. Its provider Session, commit history and reviewed Research state are resumed by Episode 1. Current main does not support skipping V0 and going directly to Episode 0; a failed V0 stops first.
 
 ## Platform, framework and candidate layout
 
@@ -132,7 +132,7 @@ The alias in this example is a placeholder. If Agate accepts `L20D`, omit `--san
 
 `--platform` is distinct from runtime architecture. AKA normally probes the actual worker and obtains an architecture such as `sm_89`, `sm_100` or `gfx942`. Runtime architecture is authoritative for NVIDIA/AMD vendor selection; the platform name is a fallback. PPU is recognized from product tokens beginning with `PPU` or `ZW` because its borrowed architecture token is ambiguous. Use `--arch` only for an intentional override or when probing fails.
 
-Supplying one `--framework` runs one child Campaign in that DSL. In Production the assigned framework is a hard acceptance constraint; in Leaderboard it is a preferred direction. Supported auto-dispatch sets are:
+Supplying one `--framework` runs one child Campaign in that DSL. In Production the assigned framework is a hard final-candidate acceptance constraint; in Leaderboard it is a preferred direction. `--no-specify-dsl` removes the named-DSL constraint for that child and lets the Agent choose a supported self-authored DSL. Supported auto-dispatch sets are:
 
 | Detected vendor | Frameworks when `--framework` is omitted |
 |---|---|
@@ -151,7 +151,7 @@ For optional modules or pooled search, read `docs/optional-light-modules.md` fro
 
 ## Budgets
 
-On current main, ordinary optimization Episodes default to four hours of Agent active time; blocking Runtime Tool waits pause the Agent and do not consume that allowance. Framework Baseline has a separate eight-hour wall-clock default. Agate queue/execution timeouts remain independent.
+Ordinary Episodes have no active-time limit unless `workflow.config.episode_timeout_seconds` is set. Blocking Runtime Tool waits pause Agent active time. Framework Baseline Episode 0 also has the provider wall-clock guard selected by `--framework-baseline-timeout` (default eight hours). Agate queue/execution limits remain independent.
 
 `--max-iters N` is an inclusive canonical-version ceiling for each serial child Campaign. The default is `20`, so `--max-iters 20` means that the Campaign may record through `v20` and then stops admitting new Episodes.
 
@@ -185,7 +185,7 @@ Prefer a background service or declared workload for long runs; do not keep an i
 
 ## Resume
 
-Resume with the same checkout behavior, workspace, composition, framework, source layout, mode, and visibility settings. Light reconciles accepted Agate job IDs, completed batches, an interrupted Framework Baseline, and an interrupted Episode from durable state.
+Resume with the same checkout behavior, workspace, composition, framework, source layout, mode, and visibility settings. Light reconciles accepted Agate job IDs, completed `shape_ids` batches, an interrupted Episode 0, and later interrupted Episodes from durable state. Public candidate identity is always the Agent's clean Git HEAD; Supervisor archive commits are private and never a checkout instruction for the Agent.
 
 Do not clear a workspace merely because a process exited. First inspect runtime, Agate, and acceptance status. If the user requests a clean rerun that preserves Bootstrap/V0, identify the exact supported reset boundary for that checkout; do not manually delete arbitrary state directories.
 
