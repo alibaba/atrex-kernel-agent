@@ -316,6 +316,8 @@ class LegacyExperiment:
                 if result is not None:
                     observed = replace(observed, attempts=(*result.attempts, *observed.attempts),
                                        causes=(*result.causes, *observed.causes),
+                                       diagnostics=(*(item for item in result.diagnostics if item.category == "recovery"),
+                                                    *observed.diagnostics),
                                        budgets=observed.budgets or result.budgets,
                                        environment_identity=observed.environment_identity or result.environment_identity,
                                        environment_snapshot=observed.environment_snapshot or result.environment_snapshot,
@@ -330,7 +332,8 @@ class LegacyExperiment:
             if assessment is not None:
                 records.assessed(ref, attempt.attempt_id, assessment)
             retryable = result is not None and result.transport_status in {"infrastructure", "timed_out"}
-            if result is not None and any(cause.code == "replay-forbidden" for cause in result.causes):
+            from .retry import replay_allowed
+            if result is not None and not replay_allowed(result.as_dict()):
                 retryable = False
             if assessment is not None and (assessment.validity == "invalid" or assessment.completeness == "complete"):
                 retryable = False

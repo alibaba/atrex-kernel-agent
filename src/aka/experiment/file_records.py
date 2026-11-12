@@ -73,6 +73,13 @@ def _cause(value):
     return ExecutionCause(**data)
 
 
+def _retained_diagnostics(data):
+    """Read the withdrawn local instruction format without rewriting old records."""
+    return tuple(map(_diagnostic, data["diagnostics"])) + tuple(
+        ExecutionDiagnostic("recovery", "retained-instruction", {"payload": json.dumps(item)})
+        for item in data.pop("instructions", ()))
+
+
 def _job(value):
     if value is None:
         return None
@@ -91,12 +98,12 @@ def _job(value):
     facts = dict(data["facts"])
     facts["cleanup_diagnostics"] = tuple(map(_diagnostic, facts["cleanup_diagnostics"]))
     data["facts"] = ExecutionFacts(**facts)
-    data["diagnostics"] = tuple(map(_diagnostic, data["diagnostics"]))
+    data["diagnostics"] = _retained_diagnostics(data)
     attempts = []
     for item in data["attempts"]:
         item = dict(item)
         item["resource"] = ResourceIdentity(**item["resource"]) if item["resource"] else None
-        item["diagnostics"] = tuple(map(_diagnostic, item["diagnostics"]))
+        item["diagnostics"] = _retained_diagnostics(item)
         item["causes"] = tuple(_cause(cause) for cause in item.get("causes", ()))
         attempts.append(ExecutionAttempt(**item))
     data["attempts"] = tuple(attempts)

@@ -1,4 +1,7 @@
 """Preserve original backend causes and distinguish terminal from cleanup evidence."""
+import json
+
+from aka.contracts.execution import ExecutionDiagnostic
 from aka.contracts.execution_recovery import ExecutionCause
 
 _TYPED_LIMITATIONS = ("kind_not_supported", "invalid_source",
@@ -20,16 +23,19 @@ def report_typed_limitation(detail):
                          "limitation": reason})
 
 
-def replay_forbidden(job):
+def recovery_diagnostics(job):
+    """Retain native policy values; Experiment decides whether to execute again."""
     if not isinstance(job, dict):
-        return False
-    policy = job.get("replay_policy")
+        return ()
     error = job.get("error") if isinstance(job.get("error"), dict) else {}
     details = error.get("details") if isinstance(error.get("details"), dict) else {}
-    return (policy is not None and policy not in {"allow", "legacy"}
-            or job.get("execution_state") == "unknown"
-            or error.get("reason") == "dev_submission_ambiguous"
-            or any(row.get("retry_advice") == "never" for row in (job, error, details)))
+    values = {name: job[name] for name in ("replay_policy", "retry_advice", "execution_state") if name in job}
+    for prefix, source in (("error", error), ("error.details", details)):
+        if "retry_advice" in source:
+            values[prefix + ".retry_advice"] = source["retry_advice"]
+    # Diagnostic details are scalar. JSON preserves unfamiliar values and types.
+    return (ExecutionDiagnostic("recovery", "gateway-policy", {
+        "payload": json.dumps(values, separators=(",", ":"))}),) if values else ()
 
 
 def causes_from_job(job):
@@ -56,10 +62,7 @@ def causes_from_job(job):
             tuple(decode(child, depth + 1) for child in children),
         )
     error = job.get("error") if isinstance(job, dict) else None
-    causes = (decode(error),) if error else ()
-    if replay_forbidden(job):
-        causes += (ExecutionCause("recovery", "replay-forbidden", "Backend requires original-job reconciliation."),)
-    return causes
+    return (decode(error),) if error else ()
 
 
 def remote_termination(job):

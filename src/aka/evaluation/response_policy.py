@@ -10,11 +10,13 @@ SOURCE_VIOLATION = re.compile(
     r"(?:Blocked import|Forbidden attribute access|Forbidden name): [A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
     r"|Forbidden string literal matching: [A-Za-z_]\w*"
 )
+INFORMATION_CATEGORIES = frozenset({"recovery", "observation", "budget"})
 
 
 def execution_error(result: JobResult) -> dict[str, Any] | None:
     """Interpret captured execution failure facts without inferring dispatch from text."""
-    if result.returncode == 0 and not result.diagnostics and result.transport_status in {"succeeded", "failed", "unknown"}:
+    diagnostics = tuple(item for item in result.diagnostics if item.category not in INFORMATION_CATEGORIES)
+    if result.returncode == 0 and not diagnostics and result.transport_status in {"succeeded", "failed", "unknown"}:
         return None
     candidate_rejected = (
         result.facts.disposition == "not_submitted" and not result.job_references
@@ -42,11 +44,12 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
             "next_action": "Replace the reported forbidden names, imports or attribute accesses in the candidate. "
                 "Use the documented APIs for the pinned runtime version, then validate the repaired source. "
                 "Do not bypass source validation through Dev."}
-    primary = result.primary_diagnostic or (result.diagnostics[0] if result.diagnostics else None)
+    primary = result.primary_diagnostic if result.primary_diagnostic in diagnostics else None
+    primary = primary or (diagnostics[0] if diagnostics else None)
     message = result.stderr.strip() or result.stdout.strip()
     if not message:
         message = "; ".join(f"{item.category}/{item.code}: {dict(item.details)}"
-            for item in result.diagnostics)
+            for item in diagnostics)
     if not message:
         message = f"Execution failed: status={result.transport_status}; exit={result.returncode}"
     return {"status": "failed", "outcome": result.facts.disposition, "error": {
@@ -55,7 +58,7 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
         "candidate_repairable": False,
         "execution_status": result.transport_status,
         "diagnostics": [{"category": item.category, "code": item.code,
-            "details": dict(item.details)} for item in result.diagnostics]},
+            "details": dict(item.details)} for item in diagnostics]},
         "next_action": "Inspect the returned error and original execution receipt. "
             "An unknown execution outcome requires original-job reconciliation; do not resubmit blindly."}
 

@@ -29,7 +29,8 @@ from pathlib import Path
 # Wire contract with the Supervisor; keep this client independent of its modules.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
-MAX_RESPONSE_BYTES = 1024 * 1024
+# Canonical result payload limit, matching the Supervisor's compact ASCII JSON.
+MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 WIKI_KINDS = {"wiki-query": "query_nl", "wiki-search": "query_wiki", "wiki-hardware": "query_hardware"}
 REQUEST_KINDS = {"update-direction": "direction_update", "record-experiment": "experiment_record", "episode-report": "episode_report"}
 LIST_KINDS = {"list-directions": "directions_list", "list-experiments": "experiments_list"}
@@ -127,7 +128,7 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
         if status >= 400:
             print(json.dumps(result), file=sys.stderr)
             return 2 if status in {400, 404, 413, 422} else 75
-        raw = json.dumps(result).encode()
+        raw = json.dumps(result, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()
     except (ValueError, UnicodeError):
         client_error("invalid_runtime_response", "The operation reply is invalid.",
                      "Inspect saved records; do not resubmit blindly.")
@@ -137,12 +138,14 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
             raise ValueError("response exceeds limit")
         result = json.loads(raw)
         if (isinstance(result, dict) and isinstance(result.get("operation"), str)
-                and result.get("status") in {"completed", "failed", "cancelled"}
+                and result.get("status") in {"completed", "failed", "cancelled", "unknown"}
                 and isinstance(result.get("result"), dict)):
             print(json.dumps(result, ensure_ascii=False, allow_nan=False, sort_keys=True))
             # Reading a failed measurement succeeds; it is not a failed query.
             if record_read:
                 return 0
+            if result["status"] == "unknown" or result["result"].get("outcome") == "unknown":
+                return 75
             # Preserve the executor's tempfail/candidate exit classification
             # without putting the compatibility stream envelope back in JSON.
             if execution_exit_code is not None:

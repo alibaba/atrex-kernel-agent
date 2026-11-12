@@ -29,13 +29,46 @@ def _safe_to_retry(error):
         and _safe_facts(result.as_dict()))
 
 
-def _safe_facts(result):
+def replay_allowed(result):
+    """Apply recovery policy internally, including retained historical receipts."""
+    if not isinstance(result, dict):
+        return False
     def forbidden(value):
         if isinstance(value, dict):
-            return value.get("code") == "replay-forbidden" or any(forbidden(item) for item in value.values())
+            return value.get("code") in {"replay-forbidden", "dev_submission_ambiguous"} or any(forbidden(item) for item in value.values())
         return isinstance(value, (list, tuple)) and any(forbidden(item) for item in value)
+    if (forbidden(result.get("causes", ())) or forbidden(result.get("instructions", ()))
+            or forbidden(result.get("diagnostics", ()))):
+        return False
+    for item in result.get("diagnostics", ()):
+        if item.get("category") == "recovery" and item.get("code") == "retained-instruction":
+            try:
+                instruction = json.loads(item["details"]["payload"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if forbidden(instruction):
+                return False
+        if item.get("category") == "recovery" and item.get("code") == "gateway-policy":
+            try:
+                values = json.loads(item["details"]["payload"])
+            except (KeyError, TypeError, ValueError):
+                return False
+            if not isinstance(values, dict):
+                return False
+            # Unknown policy stays unknown; it does not grant automatic replay.
+            if values.get("replay_policy") not in (None, "allow", "legacy"):
+                return False
+            if values.get("execution_state") == "unknown":
+                return False
+            if any(values.get(name) == "never" for name in
+                   ("retry_advice", "error.retry_advice", "error.details.retry_advice")):
+                return False
+    return all(replay_allowed(attempt) for attempt in result.get("attempts", ()))
+
+
+def _safe_facts(result):
     return (isinstance(result, dict) and result.get("transport_status") == "infrastructure"
-        and not forbidden(result.get("causes", ()))
+        and replay_allowed(result)
         and isinstance(result.get("facts"), dict) and result["facts"].get("disposition") == "not_submitted"
         and not result["facts"].get("cancellation_requested")
         and result.get("output_scope") == "transport" and result.get("exit_code") is None

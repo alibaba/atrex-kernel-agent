@@ -24,7 +24,7 @@ from aka.contracts.execution_recovery import (
 )
 
 
-from .diagnostics import causes_from_job, remote_termination
+from .diagnostics import causes_from_job, recovery_diagnostics, remote_termination
 
 
 def causes_from_error(error):
@@ -91,6 +91,7 @@ def result_from_job(job, reference, *, operation="query", diagnostics=(), cancel
     exit_code = raw.get("exit_code") if isinstance(raw, dict) else None
     exit_code = exit_code if type(exit_code) is int else None
     causes = causes_from_job(job)
+    diagnostics = (*diagnostics, *recovery_diagnostics(job))
     root = causes[0] if causes else None
     category = root.category if root else ""
     status = "unknown"

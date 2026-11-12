@@ -1744,6 +1744,9 @@ def _run_direct_job(
 def _observe_job_wait(job_id, job, started):
     """Publish observation data without inferring a queue state from a failed read."""
     value = job or {}
+    from .diagnostics import recovery_diagnostics
+    for item in recovery_diagnostics(job):
+        emit_diagnostic({"failure_class": item.category, "reason": item.code, **item.details})
     emit_fact({"event": "job_wait", "identifier": job_id,
         "wait_elapsed_ms": int((time.monotonic() - started) * 1000),
         "status": value.get("status", "unknown"),

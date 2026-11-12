@@ -24,6 +24,16 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 def with_execution_error(response: dict, receipt) -> dict:
     """Project an explicit failed receipt before a consumer looks for numeric output."""
+    information = [{"category": item.category, "code": item.code, "details": dict(item.details)}
+                   for item in receipt.diagnostics if item.category in {"recovery", "observation", "budget"}
+                   and item.code not in {"replay-forbidden", "retained-instruction"}]
+    for item in information:
+        if item["category"] == "recovery" and item["code"] == "gateway-policy":
+            try:
+                item["details"] = json.loads(item["details"]["payload"])
+            except (KeyError, TypeError, ValueError):
+                pass  # Preserve unrecognized retained information without interpreting it.
+    response = {**response, **({"diagnostics": information} if information else {})}
     stdout = response.get("stdout", "")
     for line in stdout.splitlines():
         prefix = next((p for p in (*PREFIXES.values(), *ERROR_PREFIXES) if line.startswith(p)), None)
@@ -247,6 +257,8 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
         result["truncated"] = True
     if response.get("diagnostic_truncation"):
         result["diagnostic_truncation"] = response["diagnostic_truncation"]
+    if response.get("diagnostics"):
+        result["diagnostics"] = deepcopy(response["diagnostics"])
     if missing_result:
         diagnostic = response.get("stderr", "").strip() or "\n".join(notes).strip()
         result.update(error={"code": "execution_failed" if response.get("exit_code") else "unrecognized_execution_output",

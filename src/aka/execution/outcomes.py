@@ -31,10 +31,13 @@ _SAFE_DETAILS = frozenset((
 
 
 def diagnostic(record):
+    safe_details = _SAFE_DETAILS
+    if record.get("failure_class") == "recovery" and record.get("reason") == "gateway-policy":
+        safe_details = safe_details | {"payload"}
     return ExecutionDiagnostic(
         str(record.get("failure_class", "protocol")), str(record.get("reason", "unknown")),
         {key: value for key, value in record.items()
-         if key in _SAFE_DETAILS and type(value) in (str, int, bool)},
+         if key in safe_details and type(value) in (str, int, bool)},
     )
 
 
@@ -90,12 +93,14 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
     result = job.get("result")
     code = result.get("exit_code") if isinstance(result, dict) else None
     identifier = job.get("job_id")
-    from .gateway.diagnostics import causes_from_job, remote_termination
+    from .gateway.diagnostics import causes_from_job, recovery_diagnostics, remote_termination
     causes = causes_from_job(job)
     native_diagnostics = []
     if causes:
         category = {"infra": "infrastructure", "validation": "request", "code": "measurement"}.get(causes[0].category, causes[0].category)
         native_diagnostics.append({"failure_class": category, "reason": causes[0].code})
+    native_diagnostics.extend({"failure_class": item.category, "reason": item.code,
+                              **item.details} for item in recovery_diagnostics(job))
     def encode(cause):
         return {"category": cause.category, "code": cause.code, "message": cause.message,
                 "details": _json(cause.details), "causes": [encode(item) for item in cause.causes]}
