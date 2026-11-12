@@ -18,11 +18,18 @@ def merge_token_usage_evidence(left: TokenUsage, right: TokenUsage) -> TokenUsag
     if left.total_tokens is None and right.total_tokens is None:
         return TokenUsage.unavailable()
     values = {}
-    for key in ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"):
+    for key in (
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+        "reasoning_tokens",
+    ):
         known = [getattr(row, key) for row in (left, right) if getattr(row, key) is not None]
         values[key] = max(known) if known else None
     total = max(
-        left.total_tokens or 0, right.total_tokens or 0, sum(v or 0 for v in values.values())
+        left.total_tokens or 0,
+        right.total_tokens or 0,
+        sum(values[key] or 0 for key in (
+            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"
+        )),
     )
     return TokenUsage(**values, total_tokens=total, measurement="partial")
 

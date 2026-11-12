@@ -8,11 +8,238 @@ import pytest
 from aka.light.evaluation import agate_native, response_policy, ssh_devices
 from aka.light.evaluation import ssh_native, ssh_worker
 from aka.light.experiment import records
+from aka.light.agent.session_capture import SessionCapture
+from aka.light.agent.session_usage import estimate_usage_from_conversation
+from aka.light.runtime.paths import supervisor_campaign_root
+from aka.light.workflow.token_checkpoints import capture_token_checkpoint
 from aka.legacy.agent import dsh
+from observability.light_token_time import snapshot as token_time_snapshot
 
 
 def _jsonl(*events):
     return "\n".join(json.dumps(event) for event in events) + "\n"
+
+
+def test_conversation_token_fallback_is_explicitly_estimated(tmp_path):
+    conversation = _jsonl(
+        {
+            "type": "message",
+            "source": "runtime_input",
+            "role": "user",
+            "content": [{"type": "text", "text": "Implement vector add."}],
+        },
+        {
+            "type": "provider_event",
+            "path": "provider/stdout.stream-json",
+            "event": {
+                "type": "assistant",
+                "message": {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "Use one CUDA thread per element."},
+                        {"type": "text", "text": "Implemented and measured."},
+                    ],
+                },
+            },
+        },
+    )
+    usage, detail = estimate_usage_from_conversation(conversation)
+    assert usage.measurement == "estimated"
+    assert usage.input_tokens > 0
+    assert usage.output_tokens > 0
+    assert usage.reasoning_tokens > 0
+    assert usage.total_tokens == usage.input_tokens + usage.output_tokens
+    assert usage.cache_read_tokens is None
+    assert detail["method"] == "conversation_text_cjk_plus_utf8_bytes_v1"
+
+    capture = SessionCapture(
+        tmp_path / "sessions",
+        backend="claude",
+        command=["claude", "Count this archived prompt."],
+        context={"workspace": str(tmp_path)},
+        native_environment={},
+    )
+    capture.finish(exit_status=0)
+    report = json.loads((capture.root / "token-usage.json").read_text())
+    assert report["total"]["measurement"] == "estimated"
+    assert report["total"]["total_tokens"] > 0
+    assert report["accounting_basis"] == "conversation_text_estimate"
+    assert report["terminal"]["total_tokens"] is None
+
+    exact = SessionCapture(
+        tmp_path / "exact-sessions",
+        backend="claude",
+        command=["claude", "Use the provider receipt."],
+        context={"workspace": str(tmp_path)},
+        native_environment={},
+    )
+    exact._chunks["stdout"].append(_jsonl({
+        "type": "result",
+        "usage": {
+            "input_tokens": 12,
+            "output_tokens": 3,
+            "cache_read_input_tokens": 0,
+            "cache_creation_input_tokens": 0,
+        },
+    }))
+    exact.finish(exit_status=0)
+    exact_report = json.loads((exact.root / "token-usage.json").read_text())
+    assert exact_report["total"]["measurement"] == "exact"
+    assert exact_report["total"]["total_tokens"] == 15
+    assert "conversation_estimate" not in exact_report
+
+
+def test_kernel_milestone_token_checkpoint_separates_main_and_reviews(tmp_path):
+    workspace = tmp_path / "campaign"
+    workspace.mkdir()
+    audit_root = supervisor_campaign_root(workspace)
+    capture_root = workspace / ".atrex_long_horizon/episodes/e0002/sessions"
+    first = workspace / ".atrex_long_horizon/episodes/e0001/sessions/run-first"
+    current = capture_root / "run-current"
+    first.mkdir(parents=True)
+    current.mkdir(parents=True)
+    (first / "token-usage.json").write_text(json.dumps({
+        "session_id": "first",
+        "started_at": "2026-11-12T01:00:00+00:00",
+        "finished_at": "2026-11-12T01:10:00+00:00",
+        "state": "finished",
+        "accounting_basis": "provider_result_usage",
+        "total": {
+            "input_tokens": 80,
+            "output_tokens": 20,
+            "reasoning_tokens": 10,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_tokens": 100,
+            "measurement": "exact",
+        },
+    }), encoding="utf-8")
+    (current / "token-usage.json").write_text(json.dumps({
+        "session_id": "current",
+        "started_at": "2026-11-12T02:00:00+00:00",
+        "state": "running",
+        "accounting_basis": "main_response_fallback",
+        "total": {
+            "input_tokens": 40,
+            "output_tokens": 10,
+            "reasoning_tokens": 5,
+            "cache_read_tokens": None,
+            "cache_write_tokens": None,
+            "total_tokens": 50,
+            "measurement": "estimated",
+        },
+    }), encoding="utf-8")
+    review = audit_root / "review-usage/final_source_policy_review/review.json"
+    review.parent.mkdir(parents=True)
+    review.write_text(json.dumps({
+        "schema": "atrex.light-review-usage.v1",
+        "review_kind": "final_source_policy_review",
+        "label": "source review",
+        "recorded_at": "2026-11-12T02:04:00+00:00",
+        "usage": {
+            "input_tokens": 20,
+            "output_tokens": 5,
+            "reasoning_tokens": 2,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_tokens": 25,
+            "measurement": "exact",
+        },
+    }), encoding="utf-8")
+
+    reference, stored = capture_token_checkpoint(
+        audit_root=audit_root,
+        session_capture_root=capture_root,
+        event="accepted-submit-kernel",
+        checkpoint_id="submission-test",
+        occurred_at="2026-11-12T02:05:00+00:00",
+        identity={"kernel_commit_id": "a" * 40},
+    )
+
+    assert reference["main_agent_total_tokens"] == 150
+    assert reference["review_total_tokens"] == 25
+    assert reference["total_tokens"] == 175
+    assert reference["reasoning_tokens"] == 17
+    assert reference["measurement"] == "estimated"
+    assert stored["reviews_by_kind"]["final_source_policy_review"]["usage"][
+        "total_tokens"
+    ] == 25
+    report = token_time_snapshot(workspace)
+    assert report["accepted_submission_token_checkpoints"][0]["usage"][
+        "total_tokens"
+    ] == 175
+
+
+def test_passing_full_evaluate_records_a_token_checkpoint(tmp_path):
+    from aka.light.workflow.journal_service import SupervisorJournalService
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    campaign_root = tmp_path / "supervisor" / "journals"
+    evidence_root = campaign_root / "episodes/e00000001"
+    evidence_root.mkdir(parents=True)
+    capture_root = tmp_path / "sessions/e0001/sessions"
+    usage = capture_root / "run-main/token-usage.json"
+    usage.parent.mkdir(parents=True)
+    usage.write_text(json.dumps({
+        "session_id": "main",
+        "started_at": "2026-11-12T01:00:00+00:00",
+        "state": "running",
+        "total": {
+            "input_tokens": 90,
+            "output_tokens": 10,
+            "reasoning_tokens": 5,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_tokens": 100,
+            "measurement": "exact",
+        },
+    }), encoding="utf-8")
+    service = SupervisorJournalService(
+        workspace=workspace,
+        campaign_root=campaign_root,
+        evidence_root=evidence_root,
+        research_root=tmp_path / "research",
+        session_capture_root=capture_root,
+    )
+    record_id = "gateway-" + "1" * 32
+    kernel_id = "a" * 40
+    result = {
+        "all_pass": True,
+        "mode": "full",
+        "latency_us_by_shape": {"shape-0": 4.0, "shape-1": 9.0},
+        "latency_us_geomean": 6.0,
+    }
+    record = {
+        "gateway_record_id": record_id,
+        "operation": "evaluate",
+        "cacheable": True,
+        "created_at": "2026-11-12T01:05:00+00:00",
+        "kernels": {"candidate": {"kernel_id": kernel_id}},
+        "request": {
+            "operation": "evaluate",
+            "options": {
+                "command": ["python3", "test_kernel.py"],
+                "evaluation_mode": "full",
+                "evaluation_policy": {"mode": "full"},
+            },
+        },
+        "response": {
+            "exit_code": 0,
+            "truncated": False,
+            "stdout": "[test_kernel] RESULT_JSON=" + json.dumps(result) + "\n",
+        },
+    }
+
+    reference = service.record_passing_full_evaluate_checkpoint(record)
+
+    assert reference is not None
+    assert reference["checkpoint_id"] == record_id
+    assert reference["total_tokens"] == 100
+    saved = json.loads((campaign_root.parent / reference["path"]).read_text())
+    assert saved["event"] == "passing-full-evaluate"
+    assert saved["identity"]["kernel_commit_id"] == kernel_id
+    assert saved["identity"]["latency_us_geomean"] == 6.0
 
 
 def test_dsh_runtime_connection_is_private_and_ephemeral(tmp_path):

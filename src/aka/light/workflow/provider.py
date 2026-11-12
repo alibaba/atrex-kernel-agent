@@ -53,7 +53,7 @@ class LightWorkflow:
         if not getattr(agent, "supports_tool_runtime", False):
             raise ValueError("light Workflow requires aka.light.agent.plugin (sandbox may remain none)")
         if not getattr(candidate, "managed_drafts", False):
-            raise ValueError("light Workflow requires aka.light.workspace.plugin for sealed candidates")
+            raise ValueError("light Workflow requires aka.light.workspace.plugin for managed Agent workspaces")
         self.agent, self.problem, self.source, self.candidate = agent, problem, source, candidate
         self.options = options
         self.tool_runtime = tool_runtime

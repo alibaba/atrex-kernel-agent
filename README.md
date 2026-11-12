@@ -13,8 +13,10 @@
 ## Overview
 
 Atrex Kernel Agent (AKA) optimizes GPU kernels through an iterative loop of research,
-implementation, profiling, and evaluation. Coding agents propose candidates; the Supervisor
-verifies correctness and performance before promoting an improvement.
+implementation, profiling, and evaluation. In the lightweight workflow, one persistent coding
+Session owns its Git history from measured V0 onward. The Supervisor provides measured evidence,
+final-source policy review, private audit storage, and optional peer-history exchange; it does not
+install a winner or force one trajectory to follow another.
 
 Its lightweight workflow keeps the optimization loop focused, while a plugin architecture
 lets users configure and replace agents, workspaces, evaluation, execution, and knowledge providers.
@@ -26,13 +28,11 @@ runs through Agate; GPU Wiki provides optimization knowledge.
 
 ## How AKA works
 
-![AKA architecture: baseline, coding agent, private Tool Runtime, Agate GPU execution, acceptance, and incumbent; the Supervisor verifies and promotes each candidate.](assets/aka-architecture-v0.4.0.png)
-
-1. **Establish a baseline.** Freeze the operator's evaluator inputs and measure the initial implementation.
-2. **Explore and measure.** The agent researches, edits a managed source draft, and uses private tools to evaluate and profile candidates.
-3. **Submit evidence.** A report binds the candidate to its exact source snapshot and measurement records.
-4. **Verify and promote.** The Supervisor checks correctness and applicable policy, then compares candidate and incumbent in the same GPU allocation using ABBA measurements. Only a verified improvement is promoted.
-5. **Continue or finish.** Retain evidence and reusable knowledge across Episodes, recover interrupted work, and export the retained implementation.
+1. **Establish V0.** Freeze evaluator inputs, measure the initial implementation, and create one canonical Agent Git root.
+2. **Explore and measure.** The Agent researches, edits, commits, and calls Runtime Evaluate/Profile/Dev/Command as needed.
+3. **Submit a measured commit when useful.** `submit-kernel` requires a saved full Evaluate whose correctness check passed and whose per-Shape performance result is complete and parseable for the exact commit, then applies the selected Fast, Performance or Ultra final-source policy. Submission imposes no performance threshold. It does not launch another Evaluate, run ABBA, promote, or roll back.
+4. **Continue in the same Session.** An Episode is only an Agent-chosen audit segment; the next segment resumes the same conversation, workspace, branches, and WIP.
+5. **Share without overwriting.** Pooled trajectories exchange immutable peer Git refs, research claims, and Gateway Records. Each lineage winner and the global best are derived from accepted `submit-kernel` commits with passing full Evaluate evidence and broadcast for inspection; they never replace another trajectory's HEAD.
 
 ## News
 
@@ -50,19 +50,14 @@ runs through Agate; GPU Wiki provides optimization knowledge.
 
 ## Quick Start
 
-Choose the optimization policy and DSL policy independently:
+Choose one final-source policy:
 
-- **Production with a fixed DSL:** use `--optimization-mode production
-  --specify-dsl --framework Cuda`.
-- **Leaderboard with one Agent free to choose or mix supported DSLs:** use
-  `--optimization-mode leaderboard --no-specify-dsl`. Do not pass a framework;
-  the launch log must report `frameworks=open_dsl`.
-- **One independent campaign per supported DSL:** omit `--framework` while leaving
-  `--specify-dsl` enabled. This is multi-campaign dispatch, not open-DSL selection
-  inside one campaign.
-
-Mode alone does not select the DSL policy. In particular, passing `--framework Cuda`
-to a Leaderboard launch still asks the Agent for a CUDA candidate.
+- **Fast:** `--optimization-mode fast`; the Agent chooses a DSL and may use declared,
+  reproducible compute libraries.
+- **Performance:** `--optimization-mode performance`; the Agent chooses a DSL using expert
+  guidance, while submitted core computation must be self-authored.
+- **Ultra:** `--optimization-mode ultra --framework Cuda`; submitted core computation must be
+  self-authored in the explicitly configured DSL. Ultra rejects launch when `--framework` is absent.
 
 **Recommended: launch through a prompt.** Open this repository in your coding agent and
 give it the operator path, target GPU, framework, and optimization budget:
@@ -70,18 +65,18 @@ give it the operator path, target GPU, framework, and optimization budget:
 ```text
 Read docs/quickstart.md and set up the matching AKA packages from this checkout.
 Optimize /path/to/atrex-bench/operator on a <gpu_arch> Agate worker using CUDA,
-Claude as the coding agent, production mode, and up to 20 iterations.
+Claude as the coding agent, Ultra mode with CUDA, and up to 20 iterations.
 Use ~/aka-opt as the workspace. Check the required environment, launch the
 campaign, and report the verified result and output location.
 ```
 
 Replace the example values with your workload and configured GPU environment.
-For an open-DSL Leaderboard run, replace the framework instruction with:
+For a Fast run, replace the framework instruction with:
 
 ```text
-Run one leaderboard campaign with --no-specify-dsl so the Agent chooses the
-implementation DSL from measured evidence. Use --framework-baseline always if
-the PyTorch V0 must first be translated into a self-contained GPU Kernel.
+Run one Fast campaign so the Agent chooses the implementation DSL freely and may use
+declared reproducible compute libraries. The persistent optimization Session starts directly
+from V0 and may perform bring-up, diagnostics and optimization in any order.
 ```
 
 See the [setup guide](docs/quickstart.md) for prerequisites and problem preparation.

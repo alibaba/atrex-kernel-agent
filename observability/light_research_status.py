@@ -173,7 +173,6 @@ def snapshot(workspace: Path) -> dict:
                 "directions": directions,
                 "experiments": experiments,
                 "lineages": state["lineages"],
-                "promotions": state["promotions"],
                 "claim_reviews": _claim_review_summary(scope),
                 "progress_projection": {
                     "path": str(progress),
@@ -183,7 +182,7 @@ def snapshot(workspace: Path) -> dict:
             }
         )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
         "scopes": scopes,

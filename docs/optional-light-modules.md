@@ -77,14 +77,14 @@ launch support is judged by actual use rather than package name. A missing,
 invalid or rejecting policy verdict prevents candidate acceptance. Legacy's
 default prompt, gate and scoring behavior are unchanged.
 
-Light adapts only the workflow-facing instructions (Supervisor report submission
-instead of Agent commits; returned numerical feedback instead of a private file)
+Light adapts only the workflow-facing instructions (`submit-kernel` records an
+exact Agent-owned Git commit; returned numerical feedback replaces private files)
 and the bounded multi-file source contract. A tree candidate retains fixed-file
 and editable-root checks and the same semantic review, with citations restricted
 to the supplied candidate files. The reviewer prompt has a single Legacy owner.
 The existing multi-GPU Agate source-policy exception remains; it does not disable
-correctness, numerical or performance checks. Light keeps its own GeoMean-based
-promotion path and optional features.
+correctness, numerical or performance checks. Light keeps its own accepted-submission
+winner selection and optional features.
 
 Local GPU/JIT imports remain prohibited by the execution instructions, including
 FlashInfer and similar packages; remote probes do not waive production candidate
@@ -214,7 +214,7 @@ timing receipts, redaction and revision pinning:
 
 | Provider member | Contract |
 | --- | --- |
-| `catalog_root` | Plugin directory. Tools declared with `"runtime_tool": "wiki"` are the Agent-visible operations (`python3 tools/plugin.py list/call`); input is validated before dispatch, output after. It may contribute Skills and `wiki_episode`, `wiki_conversion`, `wiki_framework_baseline` and `wiki_hardware_evidence` instruction files, which replace the built-in Wiki prompt fragments. |
+| `catalog_root` | Plugin directory. Tools declared with `"runtime_tool": "wiki"` are the Agent-visible operations (`python3 tools/plugin.py list/call`); input is validated before dispatch, output after. It may contribute Skills and `wiki_episode`, `wiki_conversion` and `wiki_hardware_evidence` instruction files, which replace the built-in Light Wiki prompt fragments. Legacy plugins may additionally provide their legacy workflow scopes. |
 | `cli_root` | Directory implementing `query_nl.py`/`query_wiki.py`/`query_hardware.py`, or `None`. Only then are `tools/sandbox.py --kind wiki-*` requests served; otherwise they return `wiki_operation_unsupported`. |
 | `revision()` | Identity of the served knowledge. The first value is pinned in the Campaign's private `wiki/revision.json`; a different value after restart fails closed with `wiki_revision_changed`. It is part of every cache key. |
 | `invoke(call)` | Executes one operation against `call.revision` within `call.deadline`. `call.run` launches bounded, cancellable subprocesses. Raise `WikiProviderError`: `retryable` failures return 503 with retry guidance, `repairable` ones return 400 for the Agent to correct, others are operator blockers. |
@@ -264,7 +264,7 @@ restricted to the local query prefix. Each row retains `disposition`, `use` and
 with invalid attribution fail before writing and return repairable field issues and
 the complete request schema; resubmit corrected fields with the same Gateway Record
 IDs without rerunning GPU work. Previously stored malformed attribution remains
-diagnostic on read. This does not waive candidate correctness or promotion gates.
+diagnostic on read. This does not waive candidate correctness or submission review.
 
 ### Other module options
 
@@ -293,12 +293,12 @@ the required `startup` service and prevents the CLI from launching the campaign.
 | `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `pause_agent_during_requests: true`, `wiki: true`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
 | `aka.light.wiki.plugin` | `root: ""` (the selected checkout's `gpu-wiki`); see [Wiki providers](#wiki-providers) |
 | `aka.light.workflow.plugin` | `startup: false` in the standalone provider, set to `true` by CLI profiles; `numerical_validation: false`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 5`, no Episode active-time limit by default; pooled three-trajectory synchronous `search` is enabled by default and an explicit empty mapping selects serial execution; optional `source_tree` import compatibility |
-| `aka.light.workspace.plugin` | `inherit_state: true`; carry custom Skills/tools across Episodes independently of Kernel promotion |
+| `aka.light.workspace.plugin` | `inherit_state: true`; carry custom Skills/tools across Episode audit segments independently of accepted submissions |
 | `aka.light.execution.plugin` | No options; endpoint/timeouts remain prepared Execution request values |
 | `aka.light.evaluation.plugin` | No options; constructs measurement plans and projects/aggregates results |
 | `aka.light.experiment.plugin` | No options; injects the selected Evaluation and opens Campaign-scoped stores |
-| `aka.light.acceptance.plugin` | No options; preserves the existing candidate correctness and ABBA policies |
-| `aka.light.workflow.journal_plugin` | `tool_modules: [directions, experiments]`; select either module independently or use an empty list for report-only mode |
+| `aka.light.acceptance.plugin` | No options; supplies source-policy review used by `submit-kernel`; ordinary Evaluate remains the correctness/performance evidence authority |
+| `aka.light.workflow.journal_plugin` | `tool_modules: [directions, experiments]`; select either module independently or use an empty list to disable both research annotations |
 
 Capture can be switched without enabling isolation. Wiki disabling removes its mounted Skill and required-query prompt fragments as well as rejecting the endpoint. Supplemental numerical planning is disabled by default and can be enabled independently. Leaving it disabled does not disable ordinary evaluator correctness, five-case Atrex-Bench validation, full SOL workload coverage, production constraints, or ABBA acceptance. Three-repetition aggregation is opt-in; untimed correctness checks are not repeated three times.
 
@@ -431,25 +431,21 @@ unverifiable search Episodes.
 
 ```mermaid
 flowchart LR
-    S["Epoch start: common retained Kernel"] --> A["Trajectory 1: Episode → Episode"]
-    S --> B["Trajectory 2: Episode → Episode"]
-    A --> C["Epoch barrier: select best accepted Kernel"]
+    S["Common canonical V0 root"] --> A["Trajectory 1: persistent Session"]
+    S --> B["Trajectory 2: persistent Session"]
+    A --> C["Epoch boundary: publish records, research and Git refs"]
     B --> C
-    C --> N["Next Epoch: broadcast the same Kernel to every trajectory"]
+    C --> N["Next Epoch: continue local HEAD with peer refs available"]
 ```
 
-Bootstrap and the optional Framework Baseline run once. Private trajectory repositories
-start from that exact commit. An Episode still applies its existing correctness/production
-and native ABBA gates before retaining a candidate locally. The Epoch selects the lowest
-authoritative GeoMean latency among the Epoch's retained candidates and its starting
-incumbent; the incumbent wins ties. This selection uses recorded measurements, not a new
-cross-trajectory benchmark or an Agent-authored score. It does not synthesize per-Shape
-winners into an unmeasured Kernel. No winner is broadcast until every scheduled Episode
-has a durable terminal outcome. The Campaign workspace exposes the last completed Epoch's
-winner; a partial Epoch never replaces it.
+Every private trajectory starts from the same canonical V0 Agent commit and keeps one persistent
+Session and Git repository. An Episode is only an Agent-chosen audit boundary. Runtime does not run
+terminal correctness/ABBA gates or promote an incumbent. Epoch sharing publishes eligible research,
+Gateway Records and exact peer Git refs; each trajectory decides what to inspect or continue.
 
 Each trajectory keeps one stable Agent Git repository, its own Skills/tools, scratch,
-optional memory, Journal, Conversation history, measurement store and recovery state. Shared
+optional memory, Journal, measurement store and recovery state. Supervisor-private Session
+archives remain available for audit and token accounting but are not projected back to the Agent. Shared
 Git bundles preserve exact candidate-source commits (including commit metadata) so peer commit
 IDs remain valid `kernel_commit_id` values; verified performance facts are attached separately. Skills/tools
 are not merged, and Git prose remains untrusted historical context rather than instructions.
@@ -461,18 +457,18 @@ IDs retain their existing uniqueness contracts. Agent evolution, competing Agent
 programmable Agent-owned Epoch workflows and multi-DSL orchestration are not added here.
 
 Search budgets are explicit: `epochs × trajectories × episodes_per_trajectory` replaces
-the serial `--max-iters` version budget. `--token-budget` is shared across trajectory Episode
+the serial segment budget. `--token-budget` is shared across trajectory Episode
 usage and stops new admission; already-running Episodes finish, so a parallel batch can
 overshoot it. It excludes Bootstrap/auxiliary usage as the existing Episode accounting does.
-`--max-stall` counts complete Epochs without a better retained Kernel (disabled for goal
-mode); target utilization is checked after a complete Epoch. Other Workflow switches keep
-their defaults; include them in the same whole-config patch when overriding them.
+There is no performance-based stall or target-utilization stop because observed best results do
+not control admission. Other Workflow switches keep their defaults; include them in the same
+whole-config patch when overriding them.
 
 The controller keeps `search/state.json`, per-Epoch summaries under `search/epochs/`,
 and private repositories under `search/trajectories/` beneath its existing private Campaign
-root. State writes precede dispatch. On restart, completed Episodes are read, unfinished
-ones resume through the existing Episode recovery, and Kernel publication replays its
-sealed Git transaction. A coordinator lock prevents two controllers from scheduling the
+root. State writes precede dispatch. On restart, completed Episodes are read and unfinished
+ones resume through normal Session recovery. Peer publication replays only immutable evidence
+and Git-bundle export. A coordinator lock prevents two controllers from scheduling the
 same search. Corrupt state, changed configuration or unrelated controller edits fail closed.
 An interrupt stops admission, revokes trajectory Runtime capabilities and cancels outage
 waits; active model turns keep their existing bounded process lifecycle before shutdown.
@@ -483,8 +479,7 @@ Local validation covers 38 search checks: scheduling/concurrency, shared budgets
 barriers, exact recovery, Git publication crash points and preservation of unrelated edits.
 A controlled subprocess harness also runs the real Episode engine, HTTP Report submission,
 Session capture and archival for two trajectories over two Epochs (four Episodes), checking
-separate tool inheritance, scratch reset, historical Conversation visibility and restart
-without replay. No real model/GPU campaign or new Bubblewrap
+separate tool inheritance, scratch reset and restart without replay. No real model/GPU campaign or new Bubblewrap
 end-to-end run was performed for pooled search.
 
 ### Single-file and contracted source-tree Kernels
@@ -569,11 +564,17 @@ Skills, scratch and controller metadata); a manifest colliding with them is reje
 explicitly. Put package documentation inside its imported package directory.
 
 The full Agent Git commit ID is exposed as `kernel_commit_id`. Runtime verifies that its complete source
-snapshot—not only the adapter—matches measurement identity, report binding, the independently
-sealed Supervisor commit, promotion and Epoch broadcast.
-A rejected/pivoted source tree is not broadcast. Custom tools/Skills keep their
+snapshot—not only the adapter—matches measurement and commit-review identity. The Supervisor may
+archive the same bytes under a private audit commit, but never exposes that ID or changes Agent Git.
+Peer Epoch publication exports each trajectory's current reachable history. It also derives each
+`lineage_winner` and the cross-lineage `global_best` from accepted `submit-kernel` commits with
+passing full Evaluate evidence, then broadcasts those commits, records and latencies. These winner
+labels are observational: publication never checks out a winner, changes another trajectory's HEAD,
+or turns the observation into promotion state. A passing Evaluate without an accepted submission
+remains visible only as a Measurement Record and is excluded from Pareto and winner projections.
+Custom tools/Skills keep their
 independent inheritance policy. Explicitly imported source-tree tasks retain the pinned initial package
-as their framework baseline instead of asking a V1 Agent to rewrite the adapter.
+as V0.
 
 Evaluate and ABBA upload exact source archives to native Agate Eval, using persisted
 upload references and idempotency keys across recovery. There is no Eval-to-Dev
@@ -656,70 +657,21 @@ baseline and terminal Episodes. To enable summaries, pass a composition patch:
 ```
 
 Enabled summaries retain performance, experience, Profile evidence and open directions.
-Disabled runs do not compile the experience/Profile summaries. Instead, the controller
-commits only version, measurement, correctness and outcome facts in `.atrex_versions/vN.json`,
-atomically with promotion/outcome commits. This control directory is excluded from Agent
-drafts and GPU inputs; it is not an alternative memory summary. Version numbering, baseline
-performance, stop conditions, promotion audits and crash recovery therefore do not depend
-on generating memory. Native mode remains cooperative, not an OS security boundary.
-
-The public Workflow export (including CI baseline, per-case latency and source
-artifacts) reads these committed facts even when memory generation is disabled.
-For the same version, `.atrex_versions/vN.json` takes precedence over a memory
-summary; memory-only Legacy histories remain supported. Both paths retain the
-same Git/content verification and accepted-incumbent selection checks.
+Disabled runs do not compile the experience/Profile summaries. Measurements and exact-source
+identities remain in the private MeasurementStore, while accepted submissions and winner facts
+remain in the Journal/Research Store. No controller-owned candidate commit or promotion record is
+created. Native mode remains cooperative, not an OS security boundary.
 
 Change the option at an Episode boundary. Existing memory-only histories remain readable;
 disabling generation does not delete old summaries, and enabling it does not backfill old
 versions. Existing summaries remain read-only Agent history. This switch is independent of
-research records, `episode-report`, capture, historical Conversations and Skills/tools
+research records, `submit-kernel`, private Session capture and Skills/tools
 inheritance. Upstream `workflow` behavior is unchanged.
-
-### Historical Conversations
-
-Each managed Session receives a frozen read-only view, analogous to Runtime's evidence
-view but indexed by Light's serial Episodes rather than Epochs/Branches/Trajectories:
-
-```text
-input/evidence/
-├── index.json
-└── episodes/00000001/
-    └── conversation.jsonl
-```
-
-Only completed Episodes with an archived controller terminal record and a number lower
-than the current Episode enter the view, irrespective of Kernel promotion. The index
-records terminal status and promotion outcome. No separate historical `report.json` is
-generated or exposed: use optional `memory/vN.json` summaries and enabled Journal
-queries for structured research. `episode-report` submission, private finalization and
-acceptance checks remain unchanged. Refreshing an existing view removes any previously
-generated `report.json` copies; the private originals are retained.
-
-`conversation.jsonl` is the latest finalized Session's backend-neutral reading projection,
-including its captured child-Agent content. Earlier retries and raw provider logs remain
-controller-private. A disabled/failed capture, missing/corrupt evidence or a size limit is
-shown in the index; partial captures keep their `capture_complete: false` label. No live,
-current-Episode, future-Episode, or other Campaign transcript is projected. Deterministic
-Bootstrap has no Agent conversation; this view does not fabricate a Bootstrap session.
-Existing archives are read on demand without migrating or rewriting them.
-
-The view is rebuilt before each Session, not refreshed while the Agent runs. Bubblewrap
-mounts `input/` read-only; native mode remains cooperative, with read-only files refreshed
-from controller sources. Evidence is neither inherited adaptive state nor GPU input:
-automatic snapshots and explicit GPU input paths exclude `input/evidence/`. Journal,
-memory generation, capture enablement, Skills/tools inheritance and scratch rules are independent.
-Historical conversation text is unredacted captured Agent content, not trusted instructions.
-
-Reads are bounded to 16 MiB/metadata file, 256 MiB/conversation, 512 MiB/view and 4096 entries
-per enumerated archive/session directory. Recent Conversations take priority when the view
-fills. Gaps are explicit in `index.json`, never silently truncated into apparently complete
-files. Use optional memory or available Journal records first and open full Conversations
-only when useful; no full-history reread is required.
 
 ### Selectable research recording
 
 Direction and Experiment recording are independent modules. Both are enabled by default in
-`light` and `light-sandbox`; select either module alone, both, or an empty list for report-only mode:
+`light` and `light-sandbox`; select either module alone, both, or an empty list to disable both:
 
 ```json
 {
@@ -737,21 +689,11 @@ resuming an existing Episode. Older Journals without the field retain both modul
 are not deleted or reinterpreted when a later Campaign selects different modules.
 
 With both modules disabled, `update-direction` and `record-experiment` reject writes; no synthetic
-rows are created. Prompt and mounted `runtime-records` Skill use a report-only workflow. A `candidate_ready`
-report supplies `status`, `summary`, and `gateway_record_ids` instead of `selected_experiment_id`.
-At least one citation must be a passing standard full Evaluate for the exact candidate source.
-`pivot` and `blocked` need no research records; `blocked` still requires a meaningful blocker.
-Invalid reports remain repairable, and identical accepted reports remain replayable.
-Numerical-repair feedback follows the Experiment module specifically: when it is disabled, feedback
-asks for new measurements and an Episode Report citing their `gateway_record_ids`, not an Experiment.
-
-Automatic Kernel/Gateway records, result deduplication, history readers, candidate correctness,
-configured numerical checks, Git sealing, ABBA promotion and the independent memory-generation
-option are unaffected. Enabled modules project visible shared history as normal files; disabled
-modules are absent from the Agent workspace and Runtime mutation contract. These options control
-research annotations, not the Experiment service's measurement ledger or the
-durable Episode report. Completion verifies direct citations against the private report rather
-than trusting the Agent-writable compatibility projection.
+rows are created. `evaluate` continues to write immutable Gateway Records, and `submit-kernel`
+continues to accept an exact Agent commit only when it already has a passing complete Evaluate and
+complete performance data and passes applicable source-policy review. Enabled modules project
+visible shared research as normal files; disabled modules are absent from the Agent workspace and
+Runtime mutation contract. These options control research annotations, not measurement or submission.
 
 ### Agent measurement results
 
@@ -772,8 +714,8 @@ Correctness-only latency summaries are null and its per-Shape latency map is emp
 ABBA keeps side summaries, correctness diagnostics and speedup, without schedules, repetition
 arrays, batch counts or measurement-aggregation metadata. `improvement_pct` means
 `(baseline_latency / candidate_latency - 1) * 100`, matching Runtime's public aggregate.
-Promotion still uses its separately configured GeoMean latency-reduction threshold; this
-response-format change does not alter admission, retries, deduplication or promotion decisions.
+Accepted-submission winner selection reads the task's configured objective from complete Evaluate
+records; this response-format change does not alter admission, retries, or deduplication.
 
 A successful read exits zero even for a failed historical operation. Inspect `status` and
 `result.correct`; a completed evaluator can reject a Kernel. Initial failed operations retain
@@ -792,11 +734,11 @@ Rejected Journal calls include the effective JSON `request_schema`; Gateway call
 public CLI option types and choices. These contracts omit Supervisor authority flags and resolved
 configuration values. Enabled plugin input errors use the plugin's declared input schema.
 
-With the Experiment module disabled, `episode-report` feedback describes direct
-`gateway_record_ids`, not `selected_experiment_id`. Disabled Direction/Experiment writes return an unavailable contract,
-not instructions to create research records. Report validation rejection leaves the Episode open:
-correct the indicated fields or evidence, then resubmit. Missing/malformed IDs are repairable;
-corrupt or inaccessible private evidence is an operator/storage failure, not a reason to remeasure.
+Disabled Direction/Experiment writes return an unavailable contract, not instructions to create
+research records. `submit-kernel` rejection identifies missing full-Evaluate evidence, incomplete
+performance data, unreachable Agent commits, or source-policy failures; correct the issue and
+resubmit the same or a newer commit. Missing/malformed IDs are repairable; corrupt or inaccessible
+private evidence is an operator/storage failure, not a reason to remeasure.
 
 Completed duplicate tasks return `previous_gateway_record_id` and the corresponding `records/<ID>.json` path;
 in-progress duplicates tell the Agent to wait for the original call. A confirmed pre-dispatch queue
@@ -851,11 +793,11 @@ flowchart LR
   or private native transcripts. Observation files are excluded from candidate Git
   commits and GPU request snapshots; an observation-write failure is diagnostic,
   not a reason to discard the completed Agent result.
-- **Task:** the existing Problem loader supplies public input, initial implementation and host-only evaluation roles. The selected SourceProvider supplies V0; it need not equal the reference implementation. CandidateWorkspace installs resources, creates isolated drafts, performs private Git operations and publishes the sealed candidate. The light implementation currently supports native Atrex-Bench and SOL, not arbitrary Setup-agent-generated evaluator layouts.
+- **Task:** the existing Problem loader supplies public input, initial implementation and host-only evaluation roles. The selected SourceProvider supplies V0; it need not equal the reference implementation. CandidateWorkspace installs resources and initializes the persistent Agent-owned Git repository. Runtime never seals, commits, promotes, or rolls back Agent source. The light implementation currently supports native Atrex-Bench and SOL, not arbitrary Setup-agent-generated evaluator layouts.
 - **Tool Runtime:** Session capabilities authorize exact workspaces. The host stages exact source and trusted evaluator inputs, then delegates to selected services. `MeasurementEffects` supplies only execution/audit/publication callbacks; Experiment does not receive the whole Runtime or Campaign. `ExecutionControl` binds deadline, liveness and slot ownership without passing Session tokens to the executor implementation.
 - **Evaluation and Experiment:** Evaluation builds the immutable-input plan and interprets results; Experiment coordinates repetitions, checkpoints and private records. Agent duplicate requests return an error with the previous Gateway Record ID; trusted acceptance can reuse compatible records. Transport replay requires persisted idempotency; accepted jobs are polled by the same ID, and explicitly failed infrastructure jobs receive replacements. Candidate-class execution timeouts remain Candidate outcomes, while explicitly infra-class timeouts use infrastructure recovery. Operator evaluator-version/dependency pins are frozen into the plan and its identity before execution.
-- **Journal and Acceptance:** `episode-report` remains the handoff interface. Direction/Experiment list/load tools and Record/Kernel query tools are removed; Runtime projects visible evidence as normal files and reachable Git refs. Runtime continuously projects root `PROGRESS.md`, including a per-Shape frontier derived from the Campaign's visible passing standard full Evaluations across Episodes and imported peer history: each Shape's observed minimum, winning Kernel/Record IDs, distinct winner IDs and counts. This file exists independently of Direction/Experiment recording, submits no GPU work, and does not imply a composite Kernel has been measured. Journal claims reference measured evidence. Acceptance receives explicit evidence/liveness callbacks through `CandidateValidation`; it does not authorize HTTP or commit Git. Invalid reports return repair instructions; identical accepted reports can be replayed. Later draft edits do not change a sealed candidate. The existing report transaction still coordinates validation and sealing through the Workspace to retain crash-recovery behavior.
-- **Workflow:** deterministic V0, optional framework baseline, unified Episodes, selected Agent sessions, budget/stall control, acceptance and promotion recovery. Legacy Fast/Setup flags do not select stages in this implementation. Goal Episodes and supplemental numerical planning are explicit options. The upstream Workflow remains available unchanged.
+- **Journal and commit review:** Direction/Experiment list/load tools and Record/Kernel query tools are removed; Runtime projects visible evidence as normal files and reachable Git refs. Runtime continuously projects root `PROGRESS.md`, including a per-Shape frontier derived from visible passing standard full Evaluations across Episode segments and imported peer history. `submit-kernel` accepts one exact reachable Agent commit only when that commit already has passing standard full-Evaluate evidence and source/DSL/applicable Production-policy review passes. It launches no new Evaluate or ABBA, performs no promotion or rollback, and Runtime never commits Agent work.
+- **Workflow:** deterministic V0 followed by one persistent Agent Session divided into Agent-chosen Episode audit segments. Campaign budgets control admission of another segment, not a terminal candidate gate. The upstream Legacy Workflow remains available unchanged.
 
 Core disposes selected providers. The light Workflow closes the private servers it creates, but does not close its borrowed Agent or Task services; the composition owns them. Closing the Agent prevents further invocation. Stateless Evaluation/Acceptance/Journal factories are composition-owned; Experiment stores and Journals are scoped to Campaigns and Episodes. The private HTTP host owns Session capabilities and request concurrency.
 
@@ -870,8 +812,8 @@ parallel implementations or import aliases:
 | `execution/` | Dispatch, Gateway-job recovery, infrastructure retry and configuration |
 | `evaluation/` | Gateway CLI, native Eval/ABBA, Profile, result projection and measurement policy |
 | `experiment/` | Exact-source/measurement store, task identity, deduplication, checkpoints and history queries |
-| `acceptance/` | Correctness/numerical validation, recorded verification, promotion audit and repair |
-| `workflow/` | Bootstrap, Episode loop, search, Journal/report transaction, memory and prompts |
+| `acceptance/` | Source-policy and optional numerical review used by explicit Runtime operations |
+| `workflow/` | Bootstrap, persistent Session, Episode audit segmentation, search, memory and prompts |
 | `runtime/` | HTTP host, capabilities, request feedback, thin clients and private plugin execution |
 
 The existing `wiki/` service and `profiles/` configuration remain separate modules.
@@ -1005,14 +947,6 @@ inspection and framework conversion; SSH and single-GPU retain review. Correctne
 performance remain required, and supplemental numerical checks follow the selected configuration.
 
 Light promotion now matches Runtime: compare the candidate and incumbent's GeoMean latency from the same native Eval ABBA measurement. Improvement is `(incumbent_us - candidate_us) / incumbent_us * 100`, and must strictly exceed the configured threshold (floating-point roundoff at equality is not an improvement). `performance_score` remains diagnostic, not a promotion gate. The existing Triton-to-Gluon conversion tolerance remains separate. The upstream `workflow` composition retains its original score-based rule.
-
-Light's V1 framework-baseline gate and historical measurement readers likewise do
-not require `performance_score` or the reference-score `performance_objective`
-label. Missing reference metadata leaves the score unavailable; it does not make
-valid latency evidence unusable. V1 still requires passing correctness, positive
-finite GeoMean/per-Shape latencies and full V0 Shape coverage. Historical reads
-retain their passing-status, Shape-coverage and Episode source-binding checks,
-and carry a valid reference score when present. The Legacy gates are unchanged.
 
 Light's shared defaults are defined in `aka.light.evaluation.policy`. Performance sampling uses 100 timing iterations and 20 warmup iterations. One Runtime-owned 300-second per-Shape step budget applies consistently to candidate construction, correctness, Performance, and each A/B run. With the default two measurements per side, the enclosing ABBA allocation is 1230 seconds, including 30 seconds of scheduling overhead. If a request increases ABBA repeats without explicitly increasing the allocation, the implicit per-run limit is reduced to the equal share that fits; an explicit per-run limit is never silently reduced. Clock locking remains enabled. Full Evaluate, correctness-only Evaluate, and ABBA use 5 correctness cases per Shape (base plus 4 additional). Evaluate and ABBA batch up to 4 Shapes per job, with up to 16 batches in parallel. Shape batch size is a Runtime-owned Campaign setting and participates in task identity. Changing these defaults changes measurement identity, so records made with older policies remain readable but are not reused for new default requests.
 

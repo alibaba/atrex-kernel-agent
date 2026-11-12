@@ -227,7 +227,6 @@ and excludes symlinked campaign directories. Only the adapter interprets this la
 | `.atrex_long_horizon/episodes/eNNNN/attempt.json` | Accepted/rejected/pivot/blocked/interrupted outcome and verification |
 | `.atrex_long_horizon/episodes/eNNNN/telemetry.summary.json` | Structured usage, phase attribution, measurement quality and reason codes |
 | `memory/vN.json` | Canonical correctness, certified performance and comparability metadata |
-| `framework_baseline.json`, baseline crash progress | Framework baseline or interrupted baseline observation |
 | `trace-retention-manifest.json` | Timestamped historical terminal status and hardware labels |
 
 Verified legacy records without schema declarations remain readable. Declared live,

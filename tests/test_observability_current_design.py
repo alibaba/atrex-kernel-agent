@@ -5,47 +5,44 @@ from observability import (
     common,
     export_light_source,
     light_acceptance,
+    light_gateway_jobs,
     light_latency_status,
     light_research_status,
     light_runtime_status,
+    submissions,
 )
 from observability.light_wiki_usage import _journal_adoption
 from aka.light.experiment.store import private_write
 
 
-def test_episode_zero_accepted_evidence_uses_agent_commit(monkeypatch, tmp_path):
+def test_submission_acceptance_uses_private_journal_and_exact_eval(monkeypatch, tmp_path):
     commit = "a" * 40
     record_id = "gateway-" + "b" * 32
-    measurement_root = tmp_path / "private" / "measurements"
-    measurement_root.mkdir(parents=True)
-    (measurement_root / "identity.key").write_bytes(b"x" * 32)
+    workspace = tmp_path / "agent"
+    audit = tmp_path / "private"
+    workspace.mkdir()
+    journal = audit / "journals" / "episodes" / "e00000002" / "journal.json"
+    private_write(journal, {"episode": 2, "kernel_submissions": [{
+        "kernel_commit_id": commit, "accepted": True,
+        "evaluation_evidence": {"status": "passed", "gateway_record_id": record_id},
+    }]})
 
     class Store:
-        def __init__(self, root):
-            assert root == measurement_root
-
         def read(self, value):
             assert value == record_id
-            return {
-                "operation": "evaluate",
-                "kernels": {"candidate": {"kernel_id": commit}},
-            }
+            return {"kernels": {"candidate": {"kernel_id": commit}}}
 
-    monkeypatch.setattr(light_latency_status, "supervisor_campaign_root", lambda _: tmp_path / "private")
-    monkeypatch.setattr(light_latency_status, "MeasurementStore", Store)
-    attempt = {
-        "episode": 0,
-        "accepted": True,
-        "candidate_kernel_commit_id": commit,
-        "gateway_record_id": record_id,
-    }
-    result = light_latency_status._accepted_evidence(
-        tmp_path,
-        {"episode": 0, "kernel_commit_id": commit},
-        attempt,
-    )
-    assert result["verification_evidence"] == "verified"
-    assert result["verification_kernel_commit_id"] == commit
+    scope = SimpleNamespace(label="campaign", trajectory=None, workspace=workspace, audit_root=audit)
+    monkeypatch.setattr(submissions, "discover_scopes", lambda _: [scope])
+    monkeypatch.setattr(submissions, "existing_store", lambda _: Store())
+    monkeypatch.setattr(submissions, "eligible_full_eval", lambda _: {
+        "all_pass": True, "latency_us_geomean": 4.0, "latency_us_by_shape": {"0": 4.0},
+    })
+    monkeypatch.setattr(submissions, "full_eval_rows", lambda _: [])
+    result = light_acceptance.snapshot(workspace)
+    assert result["submissions"][0]["accepted"] is True
+    assert result["submissions"][0]["evidence_status"] == "verified"
+    assert result["lineage_best"][0]["kernel_commit_id"] == commit
 
 
 def test_source_export_reads_agent_commit_from_measurement_store(monkeypatch, tmp_path):
@@ -118,44 +115,9 @@ def test_wiki_usage_reads_supervisor_private_journal(tmp_path):
     assert usages[0]["experiment_id"] == "experiment_example"
 
 
-def test_acceptance_uses_attempts_and_treats_episode_zero_as_baseline(
-    monkeypatch, tmp_path
-):
-    scope = SimpleNamespace(label="campaign", trajectory=None)
-    attempts = [
-        {
-            "episode": 0,
-            "memory_version": 1,
-            "accepted": True,
-            "status": "candidate_ready",
-            "candidate_kernel_commit_id": "d" * 40,
-            "latency_us_geomean": 8.0,
-        },
-        {
-            "episode": 1,
-            "version": 2,
-            "accepted": True,
-            "status": "candidate_ready",
-            "candidate_kernel_commit_id": "e" * 40,
-            "verification": {
-                "gate": "PASS",
-                "candidate_latency_us": 4.0,
-                "incumbent_latency_us": 8.0,
-                "improvement_pct": 50.0,
-                "gateway_record_id": "gateway-" + "f" * 32,
-            },
-        },
-    ]
-    monkeypatch.setattr(light_acceptance, "discover_scopes", lambda _: [scope])
-    monkeypatch.setattr(light_acceptance, "attempt_documents", lambda _: attempts)
-    result = light_acceptance.snapshot(tmp_path)
-    assert result["schema_version"] == 2
-    assert result["candidates"][0]["promoted"] is False
-    assert result["candidates"][0]["decision_reason"].startswith(
-        "framework baseline Episode 0"
-    )
-    assert result["candidates"][1]["promoted"] is True
-    assert result["promotions"][0]["kernel_commit_id"] == "e" * 40
+def test_acceptance_is_compatibility_alias():
+    from observability import light_submission_status
+    assert light_acceptance.snapshot is light_submission_status.snapshot
 
 
 def test_current_episode_zero_session_is_not_startup_framework_stage(tmp_path):
@@ -215,7 +177,115 @@ def test_runtime_status_reads_episode_zero_attempt_without_legacy_export(tmp_pat
     )
     result = light_runtime_status.snapshot(tmp_path)
     scope = result["scopes"][0]
-    assert result["schema_version"] == 2
+    assert result["schema_version"] == 3
     assert scope["campaign_id"] == "campaign-example"
     assert scope["episodes"][0]["episode"] == 0
-    assert scope["episodes"][0]["accepted"] is True
+    assert "accepted" not in scope["episodes"][0]
+    assert "version" not in scope["episodes"][0]
+
+
+def test_job_attempt_rows_retains_failed_retry_and_success(tmp_path):
+    import json
+
+    record = tmp_path / "gateway-" / "repetition-0001"
+    job = record / "jobs" / "checkpoint"
+    job.mkdir(parents=True)
+
+    def write(name, submission, phase, job_id, status, reason=None):
+        response = {"job_id": job_id, "status": status}
+        if reason:
+            response["error"] = {
+                "error_class": "infra",
+                "reason": reason,
+                "message": "retryable failure",
+            }
+        value = {
+            "phase": phase,
+            "submission": submission,
+            "retries": {"infra": max(0, submission - 1)},
+            "identity": {"kind": "eval", "shape_ids": ["0", "1"]},
+            "process": {
+                "returncode": 0 if status == "succeeded" else 1,
+                "stdout": json.dumps(response),
+                "stderr": "",
+            },
+        }
+        (job / name).write_text(json.dumps(value))
+        return value
+
+    write("submission-0001-accepted.json", 1, "accepted", "ev_failed", "queued")
+    write(
+        "submission-0001-terminal.json",
+        1,
+        "terminal",
+        "ev_failed",
+        "failed",
+        "job_deadline_exceeded",
+    )
+    final = write("submission-0002-terminal.json", 2, "terminal", "ev_ok", "succeeded")
+    (job / "state.json").write_text(json.dumps(final))
+
+    rows = common.job_attempt_rows(record)
+    assert [(row["submission"], common.job_identifier(row["job"])) for row in rows] == [
+        (1, "ev_failed"),
+        (2, "ev_ok"),
+    ]
+    assert [common.normalized_job_status(row) for row in rows] == ["failed", "succeeded"]
+    assert (
+        common.job_error_details(rows[0]["job"])["reason"]
+        == "job_deadline_exceeded"
+    )
+
+
+def test_gateway_jobs_snapshot_reports_status_and_error(monkeypatch, tmp_path):
+    import json
+
+    workspace = tmp_path / "campaign"
+    workspace.mkdir()
+    private = tmp_path / "private"
+    record_id = "gateway-" + "a" * 32
+    record = private / "measurements" / "records" / record_id
+    job = record / "repetition-0001" / "jobs" / "checkpoint"
+    job.mkdir(parents=True)
+    (record / "request.json").write_text('{"operation":"evaluate"}\n')
+    (record / "record.json").write_text(
+        '{"operation":"evaluate","cacheable":true,"response":{}}\n'
+    )
+    state = {
+        "phase": "terminal",
+        "submission": 1,
+        "retries": {},
+        "identity": {"kind": "eval", "shape_ids": ["4", "5"]},
+        "process": {
+            "returncode": 1,
+            "stdout": json.dumps(
+                {
+                    "job_id": "ev_failed",
+                    "status": "failed",
+                    "error": {
+                        "error_class": "timeout",
+                        "reason": "job_deadline_exceeded",
+                        "message": "job deadline exceeded",
+                    },
+                }
+            ),
+            "stderr": "",
+        },
+    }
+    (job / "submission-0001-terminal.json").write_text(json.dumps(state))
+    (job / "state.json").write_text(json.dumps(state))
+    monkeypatch.setattr(common, "supervisor_campaign_root", lambda _: private)
+
+    value = light_gateway_jobs.snapshot(workspace, record_id)
+    assert value["summary"] == {
+        "record_location_count": 1,
+        "submission_attempt_count": 1,
+        "physical_job_id_count": 1,
+        "reused_attempt_count": 0,
+        "status_counts": {"failed": 1},
+    }
+    attempt = value["attempts"][0]
+    assert attempt["job_id"] == "ev_failed"
+    assert attempt["status"] == "failed"
+    assert attempt["shape_ids"] == ["4", "5"]
+    assert attempt["error"]["reason"] == "job_deadline_exceeded"

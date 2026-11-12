@@ -21,7 +21,7 @@ accepts --baseline-commit FULL_GIT_COMMIT; Runtime exports it internally.
 Root PROGRESS.md includes enabled Direction state and each Shape's fastest measured Kernel;
 complete Experiments are normal files under experiments/ when that module is enabled.
 Possible Runtime mutations include update-direction, prioritize-direction, record-experiment,
-and episode-report --request-file FILE. The installed
+and submit-kernel --request-file FILE. The installed
 runtime-records Skill lists the module-specific subset available in this Episode; disabled calls
 are rejected. Research/report mutation tools require a registered Long Horizon Episode.
 No direct Agate fallback is performed when the Runtime is unavailable.
@@ -49,7 +49,7 @@ REQUEST_KINDS = {
     "update-direction": "direction_update",
     "prioritize-direction": "direction_prioritize",
     "record-experiment": "experiment_record",
-    "episode-report": "episode_report",
+    "submit-kernel": "kernel_submit",
 }
 
 

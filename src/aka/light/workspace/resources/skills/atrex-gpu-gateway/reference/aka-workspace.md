@@ -71,5 +71,7 @@ covers correctness and performance. Change JSON and native sources together;
 any file, build option or dependency change creates a different Kernel identity.
 ABBA accepts a reachable `--baseline-commit`; Runtime exports its native source tree privately.
 Temporary experiments belong in scratch/, not source.files. Leave the final exact
-candidate in place and use the usual episode-report flow. The Agent owns engineering Git and
-commits; the Supervisor independently validates and seals the exact reported HEAD.
+candidate in place and submit its exact Agent Git commit with `submit-kernel` when final-source
+policy feedback is useful, after a standard full Evaluate passes for that exact commit. The Agent
+owns engineering Git and commits; submission verifies saved evidence but launches no Evaluate or
+ABBA and performs no promotion, rollback, or handoff.

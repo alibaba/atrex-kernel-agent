@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from aka.legacy.acceptance import source_policy as legacy_policy
-from aka.legacy.acceptance.source_policy import ProductionReviewer, reject_production_commit
+from aka.legacy.acceptance.source_policy import ProductionReviewer
 from aka.legacy.task.source.inspection import framework_key, source_uses_gluon
 from aka.legacy.workflow import policy as workflow_policy
 from aka.legacy.workflow.policy import (
@@ -14,6 +14,10 @@ from aka.legacy.workflow.policy import (
     historical_evaluator_shape_visibility,
     requested_evaluator_shape_visibility,
     visibility_mismatch_message,
+)
+from aka.light.acceptance.policy_modes import (
+    canonical_submission_policy,
+    dsl_policy,
 )
 
 
@@ -38,11 +42,20 @@ def optimization_mode_directive(
             "## Optimization mode: leaderboard\n\n"
             "Follow the workspace `CLAUDE.md` and the injected task constraints. " + dsl + "\n"
         )
-    if not specify_dsl and mode == "production":
+    policy = canonical_submission_policy(mode, specify_dsl=specify_dsl)
+    if policy == "fast":
+        return (
+            "## Optimization mode: fast\n\n"
+            "Choose any evaluator-supported GPU implementation DSL or compatible mixture. "
+            "Declared, reproducible third-party or prebuilt compute libraries may implement core "
+            "computation. Dependencies, dynamic loading and manifests must remain explicit and "
+            "auditable; hidden dispatch, undeclared downloads, secret external paths and unresolved "
+            "implementation provenance are rejected.\n"
+        )
+    if policy == "performance":
         review_policy = (
-            "The Supervisor independently reviews a Framework Baseline candidate when that optional "
-            "stage is enabled, and each candidate_ready submission, for source provenance, "
-            "dependencies, loaders and manifest "
+            "The Supervisor independently reviews each submit-kernel candidate for source "
+            "provenance, dependencies, loaders and manifest "
             "consistency without imposing a selected DSL.\n"
             if source_checks_enabled
             else "Independent source review is disabled for this task; correctness and the open "
@@ -54,10 +67,16 @@ def optimization_mode_directive(
             else "Supplemental numerical review is disabled for this campaign.\n"
         )
         return (
-            "## Optimization mode: production (open DSL)\n\n"
-            "No DSL is prescribed. Choose any supported GPU implementation framework, or a "
-            "compatible mixture, from evidence. Every final production candidate submitted for "
-            "Framework Baseline admission or through a candidate_ready report must implement the "
+            (
+                "## Optimization mode: production (open DSL)\n\n"
+                if mode == "production"
+                else "## Optimization mode: performance\n\n"
+            )
+            +
+            "No DSL is prescribed. Choose a supported GPU implementation framework, or a compatible "
+            "mixture, using the supplied expert guidance and measurement evidence. Recommendations "
+            "inform the choice but are not hard submission constraints. Every final candidate submitted through "
+            "submit-kernel must implement the "
             "operator's GPU computation directly with self-authored kernels. Compiler bindings, "
             "header discovery, ABI/launch plumbing and ordinary non-compute utilities are allowed; "
             "in the submitted candidate, PyTorch/ATen compute fallbacks, prebuilt "
@@ -71,9 +90,11 @@ def optimization_mode_directive(
             "`metadata.json` when present; every declared correctness condition must pass. "
             + review_policy + numerical_policy
         )
+    if policy != "ultra":
+        raise ValueError(f"unsupported optimization mode: {mode!r}")
     if not source_checks_enabled:
         return workflow_policy.optimization_mode_directive(
-            mode,
+            "production",
             framework,
             source_checks_enabled=False,
             numerical_validation_enabled=numerical_validation_enabled,
@@ -98,14 +119,18 @@ def optimization_mode_directive(
         else "Supplemental numerical review is disabled for this campaign."
     )
     return (
-        "## Optimization mode: production (hard gate)\n\n"
+        (
+            "## Optimization mode: production (hard gate)\n\n"
+            if mode == "production"
+            else "## Optimization mode: ultra\n\n"
+        )
+        +
         f"- {framework_rule}\n"
         "- During development, you may use any language or DSL, PyTorch/ATen, prebuilt or "
         "third-party implementations, compiler probes, and temporary prototypes. Remove them from "
         "the submitted Kernel source tree and runtime compute path unless they satisfy the final policy.\n"
-        "- V0 is the only admitted PyTorch baseline exception. When the optional Framework Baseline "
-        "stage is enabled, its accepted V1 and every candidate_ready production candidate must "
-        "implement the GPU computation directly with self-authored Kernel code.\n"
+        "- V0 is the only admitted PyTorch baseline exception. Every submit-kernel production "
+        "candidate must implement the GPU computation directly with self-authored Kernel code.\n"
         "- The independent Production Review examines actual final use. Compiler, header, ABI, "
         "launch, and non-compute support plumbing is allowed; PyTorch/ATen compute fallback, "
         "prebuilt Kernels, third-party compute libraries performing core computation, dynamically loaded external implementations, "
@@ -115,7 +140,7 @@ def optimization_mode_directive(
         "Do not assume, invent, or override tolerances; one passing check never overrides another reported failure.\n"
         f"- {numerical_rule}\n"
         "- Keep editable `solution.json`, when present, consistent with the implementation. The "
-        "Supervisor returns review or validation failures for repair before accepting the report.\n"
+        "Supervisor returns review or validation failures for repair before accepting the submission.\n"
     )
 
 

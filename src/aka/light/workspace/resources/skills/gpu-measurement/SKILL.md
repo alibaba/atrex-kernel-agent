@@ -7,8 +7,8 @@ description: Run Kernel evaluation, ABBA comparison, profiling, and GPU probes t
 
 Use `python3 tools/sandbox.py`; the Supervisor owns hardware, credentials, evaluator inputs,
 timeouts, retries, and result persistence. The local workspace is CPU-only: do not run or import the
-Kernel locally or invoke Agate directly. Framework Baseline uses these same Runtime operations to
-establish correctness before the Supervisor performs independent final validation.
+Kernel locally or invoke Agate directly. Initial bring-up uses these same Runtime operations before
+the Supervisor performs independent submission review.
 
 ## Measurement loop
 

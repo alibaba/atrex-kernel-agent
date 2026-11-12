@@ -15,15 +15,13 @@ from typing import Optional
 
 # Re-export shared facts/fields for existing callers; policy stays local.
 from aka.legacy.task.candidate_workspace.state import (
-    git_head,
+    git_head as git_head,
     v0_baseline_commit,
-    read_framework_baseline,
-    resolve_framework_baseline_commit as _legacy_resolve_framework_baseline_commit,
     _normalize_commit_hash,
 )
-from aka.legacy.task.git import git_path_blob, git_worktree_blob
+from aka.legacy.task.git import git_path_blob as git_path_blob
 
-from aka.light.workflow.constants import FRAMEWORK_BASELINE_FILE, STALL_STATE_FILE
+from aka.light.workflow.constants import STALL_STATE_FILE
 from aka.light.workspace.baseline import read_baseline_record
 from aka.light.workspace.versions import STATE_DIRECTORY, version_record_path
 
@@ -122,9 +120,7 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     by kernel provenance, not by assuming ``latest_version > 0`` means an
     optimized kernel was accepted.
 
-    Once the framework-baseline stage lands v1 this returns False, because the
-    accepted framework kernel is a real kernel change.  The framework baseline
-    is tracked by ``framework_baseline.json``, not by this predicate.
+    It becomes false as soon as the Agent commits a different candidate source.
     """
     baseline_commit = v0_baseline_commit(workspace)
     if not baseline_commit:
@@ -184,46 +180,3 @@ def peak_util(mem: Optional[dict]) -> float:
     perf = mem.get("performance") or {}
     vals = [perf.get("tflops_peak_utilization_pct"), perf.get("bandwidth_peak_utilization_pct")]
     return max([float(v) for v in vals if isinstance(v, (int, float))] or [0.0])
-
-
-def best_validated_latency_us(workspace: Path, *, from_version: Optional[int] = None) -> Optional[float]:
-    """Best correctness-passing measured latency in a workspace.
-
-    Versions before a pinned framework baseline are excluded by default: production cannot ship
-    the PyTorch V0 wrapper, so treating its (typically much faster, library-backed) latency as the
-    incumbent would reject every candidate a from-scratch DSL kernel can produce.
-    """
-    if from_version is None:
-        _pinned_commit, pinned_version = resolve_framework_baseline_commit(workspace)
-        from_version = pinned_version
-    best: Optional[float] = None
-    for version in range(from_version, latest_version(workspace) + 1):
-        memory = read_memory(workspace, version)
-        if not memory:
-            continue
-        gate = (memory.get("quality_gate") or {}).get("result")
-        correctness = (memory.get("correctness") or {}).get("status")
-        if gate != "PASS" and correctness != "PASS":
-            continue
-        latency = (memory.get("performance") or {}).get("latency_us")
-        if isinstance(latency, (int, float)):
-            best = float(latency) if best is None else min(best, float(latency))
-    return best
-
-
-def resolve_framework_baseline_commit(workspace: Path) -> tuple[str, int]:
-    marker = read_framework_baseline(workspace)
-    if not marker or not marker.get("source_sha256"):
-        return _legacy_resolve_framework_baseline_commit(workspace)
-    from aka.light.workspace.sources import from_git
-    import hashlib
-    commit = _normalize_commit_hash(marker.get("commit"))
-    if not commit or subprocess.run(["git", "merge-base", "--is-ancestor", commit, "HEAD"],
-                                    cwd=workspace, capture_output=True).returncode:
-        raise RuntimeError("Framework baseline source commit is not an ancestor of HEAD")
-    if hashlib.sha256(from_git(workspace, commit)).hexdigest() != marker["source_sha256"]:
-        raise RuntimeError("Framework baseline source digest does not match its commit")
-    version = re.fullmatch(r"v(\d+)", str(marker.get("version", "")))
-    if version is None:
-        raise RuntimeError("Invalid framework baseline version")
-    return commit, int(version[1])

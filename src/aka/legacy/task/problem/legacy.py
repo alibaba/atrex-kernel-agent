@@ -16,7 +16,7 @@ from .layout import (
 
 @dataclass(frozen=True)
 class LegacyProblemProvider:
-    optimization_mode: str = "leaderboard"
+    optimization_mode: str = "fast"
     native_harness: Path | None = None
     worker_requirements: Path | None = None
 
@@ -32,7 +32,8 @@ class LegacyProblemProvider:
         optimization_mode = optimization_mode or self.optimization_mode
         snapshot_mode = optimization_mode + (
             ":expose-evaluator-shapes"
-            if optimization_mode == "production" and expose_evaluator_shapes
+            if optimization_mode in {"production", "performance", "ultra"}
+            and expose_evaluator_shapes
             else ""
         )
         d = Path(directory).resolve()
@@ -40,7 +41,7 @@ class LegacyProblemProvider:
             from .snapshot import restore
             restored = restore(snapshot_directory.resolve(), d, snapshot_mode)
             if not expose_evaluator_shapes and (
-                optimization_mode != "production"
+                optimization_mode not in {"production", "performance", "ultra"}
                 or restored.evaluation is None
                 or restored.evaluation.private_reference_dir is None
             ):
@@ -58,9 +59,9 @@ class LegacyProblemProvider:
         provided_problem = has_agent_problem(d)
         shapes_path = d / "shapes.json"
         if not expose_evaluator_shapes:
-            if optimization_mode != "production":
+            if optimization_mode not in {"production", "performance", "ultra"}:
                 raise SystemExit(
-                    "--no-expose-evaluator-shapes is supported only for production "
+                    "--no-expose-evaluator-shapes is supported only for performance/ultra "
                     "Native Atrex-Bench tasks"
                 )
             if is_sol_op(d):

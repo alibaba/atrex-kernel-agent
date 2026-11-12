@@ -1,15 +1,15 @@
 ---
 name: runtime-records
-description: Manage research Directions and Experiments, inspect durable evidence, and submit a validated Episode Report.
+description: Manage research Directions and Experiments, inspect durable evidence, and review exact Kernel commits.
 allowed-tools: "Bash Read"
 ---
 
 # Runtime records
 
 Use `python3 tools/sandbox.py`. Runtime owns immutable measurements, exact measured source, and
-report validation; the Agent owns optimization objectives, plans, and interpretations.
+commit review; the Agent owns optimization objectives, plans, and interpretations.
 
-Start with `PROGRESS.md`. Open `frontier.json` only for the complete frontier, then only relevant
+Start with `PROGRESS.md`. Open `frontier.json` only for the complete accepted-submission frontier, then only relevant
 Direction, Experiment, and `records/<gateway_record_id>.json` files. Projections are read-only.
 Gateway Records are measurement authority; all analysis is fallible.
 Read or query `records/<gateway_record_id>.json` directly with ordinary file operations. Select only
@@ -42,15 +42,17 @@ the fields or bounded text needed; do not print an entire Record or long stdout/
   reasonably abandoned.
 - Runtime returns the full Review once with the mutation result. `archive_status` reports storage,
   `claim_review_quality` reports `not_reviewed`, reviewer availability, or scientific support, and
-  `evidence_eligible` controls terminal use.
+  `evidence_eligible` controls terminal research conclusions and peer publication.
   `runtime_action` is workflow guidance; `scientific_next_check` is the evidence follow-up. Only projected
   `claim_review_quality`, `scope_safe_interpretation`, and `scientific_next_check` remain Agent-visible afterward; full receipts and reviewer
   conversations are Supervisor-private. Partial or unreviewed claims remain trajectory-local and
-  cannot support terminal conclusions or handoff.
+  cannot support terminal research conclusions or peer publication.
 
-Submit `episode-report` only under the Session Prompt's handoff conditions. A `candidate_ready`
-report requires a passing standard full Evaluate of the exact clean HEAD. Report acceptance is a
-handoff, not promotion.
+Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the
+current mode. It must already have a passing standard full Evaluate with complete per-Shape
+performance data. Submit when ready, not mechanically after every Evaluate. Fast permits declared reproducible compute libraries;
+Performance requires self-authored core compute with Agent-selected DSL; Ultra additionally enforces
+its configured DSL.
 
 - [Research mutations and report schemas](references/journal.md)
 - [Saved results and source](references/records.md)

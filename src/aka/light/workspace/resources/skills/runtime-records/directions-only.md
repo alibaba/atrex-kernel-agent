@@ -1,6 +1,6 @@
 ---
 name: runtime-records
-description: Manage research Directions and submit an Episode Report; Experiment recording is disabled.
+description: Manage research Directions and review exact Kernel commits; Experiment recording is disabled.
 allowed-tools: "Bash Read"
 ---
 
@@ -16,7 +16,7 @@ probes; a single implementation, parameter choice, capability probe, or mechanis
 bounded step under an existing Direction. Check for duplicates and rank by expected benefit and
 applicability. Multiple local Directions may be `in_progress`; the most recently started or prioritized one is the focus. Choose executable work from the Local work queue; restart paused work explicitly. The Shared direction pool is discovery-only: absorb compatible peer ideas into one local derivative and cite every source ID in `derived_from_direction_ids`. Continue bounded probe/edit/measurement/revert-or-keep cycles while useful work remains.
 
-Use `update-direction` and `prioritize-direction` for mutations. Routine execution of plan steps does not require a Runtime mutation; use `action=revise` only when the claim or remaining plan changes materially. Omit `supporting_experiment_ids`; Experiment-derived genealogy is unavailable. Claim-bearing Direction requests may cite their own measurement evidence with `gateway_record_ids`, allowing the independent Review to inspect the corresponding Records. For `candidate_ready`, separately cite `gateway_record_ids` containing a passing standard full Evaluate of the exact clean HEAD. Follow [the exact Direction and report schemas](references/journal.md) and [saved result/source semantics](references/records.md). Never invent IDs or measured results.
+Use `update-direction` and `prioritize-direction` for mutations. Routine execution of plan steps does not require a Runtime mutation; use `action=revise` only when the claim or remaining plan changes materially. Omit `supporting_experiment_ids`; Experiment-derived genealogy is unavailable. Claim-bearing Direction requests may cite their own measurement evidence with `gateway_record_ids`, allowing the independent Review to inspect the corresponding Records. Use `submit-kernel` when you judge an exact Agent Git commit ready to serve as a final implementation for the current mode; it must already have a passing standard full Evaluate with complete per-Shape performance. Submit when ready, not mechanically after every Evaluate. Follow [the exact Direction and submission schemas](references/journal.md) and [saved result/source semantics](references/records.md). Never invent IDs or measured results.
 
 Lifecycle is `proposed --start--> in_progress`. Only `in_progress` may `complete`, `abandon`,
 `defer`, or `block`; restart `deferred` or `blocked` work with `start`. `completed` and `abandoned`

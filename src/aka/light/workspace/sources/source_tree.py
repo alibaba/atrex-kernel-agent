@@ -138,7 +138,7 @@ def instructions(policy):
             "helper, host, CUDA and header sources below impl/. "
             "Keep probes and temporary build outputs in scratch/; use custom tools/ or skills/ "
             "only for genuinely reusable Agent helpers. "
-            "Evaluate, Profile, Check, Disassemble, sealed reports and broadcasts bind the entire tree. "
+            "Evaluate, Profile, Check, Disassemble, commit review and broadcasts bind the entire tree. "
             "For ABBA, pass a reachable Git commit with --baseline-commit; Runtime exports it privately.\n")
 
 def _git_sources(repository, revision, paths):

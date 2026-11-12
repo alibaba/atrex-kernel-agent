@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Literal, Optional, Protocol, TypedDict, Union
 
 OBSERVATION_VERSION = 2
-Measurement = Literal["exact", "partial", "unavailable"]
+Measurement = Literal["exact", "estimated", "partial", "unavailable"]
 
 
 class ObservationProtocolError(ValueError):
@@ -36,6 +36,7 @@ class TokenUsage(TypedDict):
     output_tokens: Optional[int]
     cache_read_tokens: Optional[int]
     cache_write_tokens: Optional[int]
+    reasoning_tokens: Optional[int]
     total_tokens: Optional[int]
     measurement: Measurement
 

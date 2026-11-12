@@ -1,8 +1,8 @@
 """Controlled local Git for one Agent trajectory.
 
-The repository is an engineering aid and its full clean HEAD commit is the
-Agent-visible Kernel identity. Promotion still requires sealed Measurement Records
-whose stored source bytes match that commit exactly.
+The repository is Agent-owned engineering history and its full clean HEAD commit is
+the Agent-visible Kernel identity. Runtime may initialize V0 and import peer refs,
+but it never mirrors, promotes, rolls back, or rewrites Agent work.
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import uuid
 from pathlib import Path
 from typing import Any
@@ -20,7 +19,7 @@ from typing import Any
 IGNORED = (
     "scratch/", "tools/", "skills/", "memory/", "input/", "eval/", "profiles/",
     "plans/", "directions/", "experiments/", "records/", "reference/",
-    "reference-projects/", "references/", "gpu-wiki/", "atrex-bench/", "input/evidence/",
+    "reference-projects/", "references/", "gpu-wiki/", "atrex-bench/",
     ".atrex_*/", ".orchestrator_mode.json", ".orchestrator_state.json",
     ".claude/", ".qoder/", ".agents/",
     "README.md", "CLAUDE.md", "WORKSPACE.md", "PROGRESS.md", "frontier.json", "agent_problem.json",
@@ -72,13 +71,6 @@ def initialize_gitignore(workspace: Path) -> None:
 _RESUME_REMOTE_PREFIX = "refs/remotes/atrex-resume/heads/"
 _RESUME_BRANCH_PREFIX = "refs/atrex/resume-branch/"
 GIT_COMMIT_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
-
-
-def supervisor_archive_ref(agent_commit_id: str) -> str:
-    """Private Supervisor ref mapping one Agent identity to its audit snapshot."""
-    if GIT_COMMIT_ID.fullmatch(agent_commit_id) is None:
-        raise ValueError("Agent Kernel identity is not a Git commit ID")
-    return f"refs/atrex/private-kernels/by-agent/{agent_commit_id}"
 
 
 class DirtyKernelWorktree(ValueError):
@@ -422,167 +414,6 @@ class AgentGit:
                 [], "HEAD does not contain the exact Kernel source submitted for evaluation"
             )
         return head
-
-    def archive_into(
-        self,
-        supervisor_workspace: Path,
-        commit_id: str,
-        expected_source: bytes,
-        *,
-        install_source: bool = False,
-    ) -> str:
-        """Archive one Agent commit as a distinct private Supervisor commit.
-
-        ``commit_id`` remains the only public Kernel identity. The returned ID is
-        private archival state and must never be projected to the Agent.
-        """
-        if GIT_COMMIT_ID.fullmatch(commit_id) is None:
-            raise ValueError("Agent Kernel identity is not a Git commit ID")
-        if not self.commit_reachable(commit_id):
-            raise ValueError("Agent Kernel commit is not reachable from local or shared Git refs")
-
-        from aka.light.workspace.sources import Artifact, from_git, install
-
-        if from_git(self.workspace, commit_id) != expected_source:
-            raise ValueError("Agent Kernel commit does not match the submitted source")
-        supervisor_workspace = supervisor_workspace.resolve(strict=True)
-        environment = {
-            **os.environ,
-            "GIT_CONFIG_NOSYSTEM": "1",
-            "GIT_CONFIG_GLOBAL": "/dev/null",
-            "GIT_TERMINAL_PROMPT": "0",
-            "GIT_ASKPASS": "/usr/bin/false",
-        }
-
-        mapping_ref = supervisor_archive_ref(commit_id)
-        existing = subprocess.run(
-            ["git", "rev-parse", "--verify", f"{mapping_ref}^{{commit}}"],
-            cwd=supervisor_workspace,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        private_commit = existing.stdout.strip() if existing.returncode == 0 else ""
-        created = not private_commit
-        if created:
-            # Archive only the exact submitted Kernel source. Agent branches,
-            # commit ancestry and non-Kernel repository metadata never enter
-            # the Supervisor repository.
-            files = Artifact(expected_source).materialized_files
-            with tempfile.TemporaryDirectory(prefix="aka-supervisor-index-") as directory:
-                index_environment = {
-                    **environment,
-                    "GIT_INDEX_FILE": str(Path(directory) / "index"),
-                }
-                subprocess.run(
-                    ["git", "read-tree", "--empty"], cwd=supervisor_workspace,
-                    env=index_environment, text=True, capture_output=True, check=True,
-                )
-                for name, data in sorted(files.items()):
-                    blob = subprocess.run(
-                        ["git", "hash-object", "-w", "--stdin"],
-                        cwd=supervisor_workspace, env=index_environment, input=data,
-                        capture_output=True, check=True,
-                    ).stdout.decode().strip()
-                    subprocess.run(
-                        ["git", "update-index", "--add", "--cacheinfo",
-                         f"100644,{blob},{name}"],
-                        cwd=supervisor_workspace, env=index_environment, text=True,
-                        capture_output=True, check=True,
-                    )
-                tree = subprocess.run(
-                    ["git", "write-tree"], cwd=supervisor_workspace,
-                    env=index_environment, text=True, capture_output=True, check=True,
-                ).stdout.strip()
-            commit_environment = {
-                **environment,
-                "GIT_AUTHOR_NAME": "Atrex Supervisor",
-                "GIT_AUTHOR_EMAIL": "supervisor@localhost",
-                "GIT_AUTHOR_DATE": "2000-01-01T00:00:00+00:00",
-                "GIT_COMMITTER_NAME": "Atrex Supervisor",
-                "GIT_COMMITTER_EMAIL": "supervisor@localhost",
-                "GIT_COMMITTER_DATE": "2000-01-01T00:00:00+00:00",
-            }
-            private_commit = subprocess.run(
-                ["git", "commit-tree", tree],
-                cwd=supervisor_workspace,
-                env=commit_environment,
-                input=(
-                    f"Archive Agent Kernel {commit_id}\n\n"
-                    f"Supervisor-Archive-Nonce: {uuid.uuid4().hex}\n"
-                ),
-                text=True,
-                capture_output=True,
-                check=True,
-            ).stdout.strip()
-            if private_commit == commit_id:
-                raise RuntimeError("Supervisor archival commit unexpectedly reused Agent identity")
-            subprocess.run(
-                ["git", "update-ref", mapping_ref, private_commit],
-                cwd=supervisor_workspace,
-                env=environment,
-                text=True,
-                capture_output=True,
-                check=True,
-            )
-
-        # The accepted ref is an internal capability marker keyed only by the
-        # private commit. Recreate it idempotently during recovery if needed.
-        subprocess.run(
-            ["git", "update-ref", f"refs/atrex/accepted/{private_commit}", private_commit],
-            cwd=supervisor_workspace,
-            env=environment,
-            text=True,
-            capture_output=True,
-            check=True,
-        )
-
-        try:
-            resolved = subprocess.run(
-                ["git", "rev-parse", "--verify", f"{mapping_ref}^{{commit}}"],
-                cwd=supervisor_workspace,
-                env=environment,
-                text=True,
-                capture_output=True,
-                check=True,
-            ).stdout.strip()
-            if resolved != private_commit:
-                raise RuntimeError("Supervisor Agent-to-private commit mapping changed identity")
-            if from_git(supervisor_workspace, private_commit) != expected_source:
-                raise RuntimeError("Supervisor archival commit does not match submitted source")
-            if install_source:
-                install(supervisor_workspace, expected_source)
-        except Exception:
-            if created:
-                subprocess.run(
-                    ["git", "update-ref", "-d", mapping_ref],
-                    cwd=supervisor_workspace,
-                    env=environment,
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            raise
-        return private_commit
-
-    def seal_into(
-        self,
-        supervisor_workspace: Path,
-        commit_id: str,
-        expected_source: bytes,
-    ) -> str:
-        """Seal the current Agent HEAD into the private Supervisor archive."""
-        if self.kernel_commit(expected_source) != commit_id:
-            raise DirtyKernelWorktree(
-                [], "Agent HEAD changed before the Kernel commit could be sealed"
-            )
-        return self.archive_into(
-            supervisor_workspace,
-            commit_id,
-            expected_source,
-            install_source=True,
-        )
 
     def checkpoint(self, message: str) -> str | None:
         from aka.light.workspace.sources import commit_paths

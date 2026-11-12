@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, Protocol
 
-UsageMeasurement = Literal["exact", "partial", "unavailable"]
+UsageMeasurement = Literal["exact", "estimated", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
 PhaseMarkerAction = Literal["start", "end"]
 
@@ -18,6 +18,10 @@ class TokenUsage:
     cache_write_tokens: int | None
     total_tokens: int | None
     measurement: UsageMeasurement
+    # Provider-reported reasoning tokens are normally a subset of output
+    # tokens. Keep them as a separate diagnostic dimension and never add them
+    # to total_tokens a second time.
+    reasoning_tokens: int | None = None
 
     @classmethod
     def unavailable(cls) -> "TokenUsage":
@@ -28,11 +32,12 @@ class TokenUsage:
             cache_write_tokens=None,
             total_tokens=None,
             measurement="unavailable",
+            reasoning_tokens=None,
         )
 
     @classmethod
     def zero(cls) -> "TokenUsage":
-        return cls(0, 0, 0, 0, 0, "exact")
+        return cls(0, 0, 0, 0, 0, "exact", 0)
 
 
 def sum_token_usages(usages: Sequence[TokenUsage]) -> TokenUsage:
@@ -53,11 +58,17 @@ def sum_token_usages(usages: Sequence[TokenUsage]) -> TokenUsage:
         cache_write_tokens=component("cache_write_tokens"),
         total_tokens=sum(usage.total_tokens or 0 for usage in observed),
         measurement=(
-            "exact"
-            if len(observed) == len(usages)
-            and all(usage.measurement == "exact" for usage in observed)
-            else "partial"
+            "partial"
+            if len(observed) != len(usages)
+            or any(
+                usage.measurement not in {"exact", "estimated"}
+                for usage in observed
+            )
+            else "estimated"
+            if any(usage.measurement == "estimated" for usage in observed)
+            else "exact"
         ),
+        reasoning_tokens=component("reasoning_tokens"),
     )
 
 
@@ -68,6 +79,7 @@ def token_usage_exceeds(observed: TokenUsage, terminal: TokenUsage) -> bool:
         "cache_read_tokens",
         "cache_write_tokens",
         "total_tokens",
+        "reasoning_tokens",
     ):
         observed_value = getattr(observed, name)
         terminal_value = getattr(terminal, name)
@@ -100,8 +112,12 @@ def subtract_token_usage(total: TokenUsage, part: TokenUsage) -> TokenUsage:
         measurement=(
             "exact"
             if total.measurement == "exact" and part.measurement == "exact"
+            else "estimated"
+            if total.measurement in {"exact", "estimated"}
+            and part.measurement in {"exact", "estimated"}
             else "partial"
         ),
+        reasoning_tokens=component("reasoning_tokens"),
     )
 
 

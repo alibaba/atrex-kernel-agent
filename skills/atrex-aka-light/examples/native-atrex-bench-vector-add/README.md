@@ -38,13 +38,14 @@ It can then be selected with:
 aka optimize --repo-root /path/to/atrex-kernel-agent -- \
   --op-dir /path/to/atrex-bench/data/native-atrex-bench-vector-add \
   --platform L20D \
-  --framework Triton \
   --agent-cli claude \
-  --optimization-mode leaderboard \
-  --workspace /path/to/vector-add-campaign \
-  --max-iters 5
+  --optimization-mode fast \
+  --workspace /path/to/vector-add-campaign
 ```
 
 Use the installed revision's `aka optimize --repo-root REPO -- --help` before launch.
-The example uses the default exposed-Shape flow. A Production run with
+The command uses the default pooled three-trajectory search and exposed-Shape flow.
+To run a bounded serial functional test, pass a launch-level composition patch with
+`workflow.config.search` set to an empty mapping, then use `--max-iters 5`; in current
+Light that value counts Episode audit segments rather than Kernel versions. A Performance/Ultra run with
 `--no-expose-evaluator-shapes` may generate `agent_problem.json` before setup.

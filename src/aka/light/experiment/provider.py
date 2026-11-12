@@ -21,7 +21,6 @@ class MeasurementEffects:
     deadline: float | None = None
     request_id: str = ""
     kernel_ids: dict[str, str] | None = None
-    archive_kernel: Callable[[str, str, bytes], str] | None = None
 
 
 class RecordedExperiments:

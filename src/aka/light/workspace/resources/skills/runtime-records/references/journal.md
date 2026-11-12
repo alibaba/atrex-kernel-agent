@@ -27,10 +27,10 @@ Experiment copies. Neither contains private requests, input hashes or executor s
 commit IDs link Records to exact Git source. Search these files with normal file tools. They are
 regenerated from private Runtime state and must not be edited.
 
-Root `PROGRESS.md` is the bounded research projection and includes a capped per-Shape Pareto
+Root `PROGRESS.md` is the bounded research projection and includes a capped accepted-submission per-Shape Pareto
 summary, an independently ordered Local work queue, paused and terminal sections, and an advisory Shared direction pool
 when Direction recording is enabled. Global aggregation orders only the shared pool and never
-overwrites local priorities. Read root `frontier.json` for the complete eligible frontier. In
+overwrites local priorities. Read root `frontier.json` for the complete eligible accepted-submission frontier. In
 Experiment-only mode, `experiments/index.json` provides a compact catalog; when Directions are
 enabled, navigate Experiments from their `direction_id` and filesystem paths instead of maintaining
 a second durable index.
@@ -44,7 +44,7 @@ Claim-bearing mutations return `review` once. Its workflow fields are deliberate
 
 - `archive_status`: whether Runtime stored the submitted claim;
 - `claim_review_quality`: `not_reviewed`, `supported`, `partially_supported`, `unsupported`, or `unreviewed`;
-- `evidence_eligible`: whether the claim may support terminal conclusions, peer publication, or handoff;
+- `evidence_eligible`: whether the claim may support Direction lifecycle conclusions or peer publication;
 - `runtime_action`: how to repair or continue the Runtime workflow;
 - `scientific_next_check`: the smallest evidence-producing test suggested by the reviewer.
 
@@ -202,7 +202,7 @@ Git to inspect source changes between the cited commits. Do not copy these facts
 
 `gateway_record_ids` and `references` are independent optional arrays. Either may be omitted or
 empty. An Experiment without Gateway Records remains a useful research note, but cannot by itself
-support a measured Direction lifecycle decision or candidate promotion.
+support a measured Direction lifecycle decision or an accepted Kernel submission.
 
 Revise a `local_writable` Experiment by resubmitting its required fields plus the `experiment_id` shown in
 `experiments/<experiment_id>/experiment.json`. Runtime keeps that identity, increments `revision`,
@@ -244,11 +244,9 @@ Direction-only mode always omits `supporting_experiment_ids`.
 Use `defer` for a deliberate strategic pause or lower-priority path that can be resumed by the Agent;
 use `block` only for a concrete technical or external dependency that currently prevents progress.
 `defer` or `block` also requires a non-empty `reopen_condition` describing what evidence or
-capability should reactivate it. `abandon` and `complete` are terminal. Active Directions may cross an Episode boundary with
-an ordinary `direction_terminal` handoff; close them only when their own objective and remaining
-variants are genuinely exhausted. In pooled search, `cross_trajectory_share` specifically publishes
-a reusable measured checkpoint to peers. For a blocked handoff, close all local active Directions
-with `block` first.
+capability should reactivate it. `abandon` and `complete` are terminal. Active Directions may cross
+an Episode boundary; close them only when their own objective and remaining variants are genuinely
+exhausted. Epoch sharing publishes eligible research and imported peer Git refs.
 
 ## Continue a measured peer Kernel
 
@@ -263,41 +261,22 @@ git switch -c explore/t2-e0001 refs/atrex/shared/T2/e0001/head
 ```
 
 The checked-out commit is the Kernel ID. Switching source does not assert correctness, performance,
-or promotion; evaluate the resulting clean HEAD normally. Legacy evidence whose original Git object
+or acceptance; evaluate the resulting clean HEAD normally. Legacy evidence whose original Git object
 is unavailable stays private to Supervisor recovery and is not projected as reusable Agent evidence.
 
-## Submit an Episode report
-
-Candidate:
+## Review an exact Kernel commit
 
 ```json
-{
-  "status": "candidate_ready",
-  "handoff_reason": "direction_terminal",
-  "summary": "A measured checkpoint is ready for independent gates",
-  "selected_experiment_id": "experiment_22222222222222222222222222222222"
-}
+{"kernel_commit_id":"0123456789abcdef0123456789abcdef01234567"}
 ```
-
-With Experiments disabled, use `gateway_record_ids` instead. The selected evidence must include a
-passing standard full Evaluate for the exact current source. Subset Evaluate, Profile, Dev, Check,
-Disassemble, and ABBA alone do not satisfy nomination.
 
 ```bash
-python3 tools/sandbox.py --kind episode-report --request-file scratch/episode-report.json
+python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-submit.json
 ```
 
-`handoff_reason` is required. With both modules enabled, `candidate_ready` plus
-`direction_terminal` is the ordinary handoff value and may preserve local `in_progress` Directions.
-For `candidate_ready`, the selected Experiment may belong to an `in_progress`, completed, or
-abandoned visible Direction. A pivot with `direction_terminal` has no selected Experiment. In pooled
-search, `cross_trajectory_share` with `status=candidate_ready` requires the selected Experiment to
-belong to an `in_progress` Direction and publishes a reusable checkpoint backed by a passing standard
-full Evaluate of the exact committed source. With Directions disabled,
-the supported visible Experiment and exact-HEAD Evaluate requirements still apply to `candidate_ready`
-without a Direction relation. A historical Experiment may be reused when its Review and measurement
-remain eligible. Use `blocked` only with `status=blocked` and a non-empty `blocker`. Close every
-local active Direction with `block` first. For example, pivot is
-`{"status":"pivot","handoff_reason":"direction_terminal","summary":"..."}`. A repairable rejection
-leaves the Episode open; follow `error.next_action` and resubmit only when the stated handoff condition
-is satisfied. Acceptance is a handoff, not a promotion. Stop after acceptance.
+The commit may be current HEAD or another commit reachable from local/imported Agent refs. Run a
+standard full Evaluate for that exact commit first. The response contains `accepted`,
+`evaluation_evidence`, per-policy status, and actionable diagnostics. Submission reuses the saved
+result and launches no new evaluation. Rejection does not alter Git or roll back source; repair and
+evaluate a new commit before resubmitting it. The Supervisor retains every submission and review
+privately for audit. A normal Session exit ends the Episode.

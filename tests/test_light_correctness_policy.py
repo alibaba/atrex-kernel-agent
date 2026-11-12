@@ -28,7 +28,6 @@ from aka.light.acceptance.numerical import NumericalCancellation
 from aka.light.acceptance.provider import (
     CandidateValidation,
     RecordedAcceptance,
-    candidate_acceptance_argv,
 )
 from aka.light.acceptance.recorded_verifier import RecordedABBAValidator
 from aka.light.acceptance.verifier import merge_abba_batch_payloads
@@ -62,7 +61,6 @@ from aka.light.evaluation.evaluation_feedback import (
 )
 from aka.light.evaluation.policy import (
     BENCH_ITERS,
-    CORRECTNESS_CASES,
     SHAPE_BATCH_SIZE,
     WARMUP_ITERS,
     measurement_defaults,
@@ -78,12 +76,10 @@ from aka.light.evaluation.operations import (
     comparison_run_timeout,
 )
 from aka.light.evaluation.public_result import (
-    bound_diagnostic_response,
     canonical_result,
     compact_receipt,
 )
 from aka.light.evaluation.projection import (
-    evaluation as project_evaluation,
     gateway_error_from_process,
     gateway_error_result,
     project_response,
@@ -123,23 +119,14 @@ from aka.light.runtime.catalog import PluginRegistry
 from aka.light.runtime.plugins import PluginError
 from aka.light.runtime.request_errors import AgentRequestError
 from aka.light.runtime.request_feedback import gateway_schema
-from aka.light.workflow.bootstrap import (
-    Campaign,
-    _FRAMEWORK_BASELINE_CORRECTNESS_CONTEXT_PATHS,
-    _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS,
-    framework_baseline_workspace_contract,
-    framework_baseline_validation_command,
-)
+from aka.light.workflow.bootstrap import Campaign
 from aka.light.workflow.context import conversion_required, session_execution_policy
 from aka.light.workflow.plugin import Defaults as WORKFLOW_PLUGIN_DEFAULTS
 from aka.light.workflow.provider import WorkflowOptions
 from aka.light.workflow.output_limit import dependency_policy_recovery_prompt
 from aka.light.workflow.episode import LongHorizonCampaign
 from aka.light.workflow.search import SearchOptions
-from aka.light.workflow.session_io import (
-    _evaluation_performance_timeout,
-    _render as render_file_prompt,
-)
+from aka.light.workflow.session_io import _evaluation_performance_timeout
 from aka.light.workspace.sources import default_tree, install, instructions, pack
 from aka.light.workspace.episode import _claude_instructions
 from aka.legacy.workflow.cli_conversion import adapt_argv
@@ -504,8 +491,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             specify_dsl=True,
             numerical_validation_enabled=False,
         )
-        self.assertIn("candidate_ready production candidate", without_numerical)
-        self.assertIn("When the optional Framework Baseline stage is enabled", without_numerical)
+        self.assertIn("submit-kernel production candidate", without_numerical)
         self.assertNotIn("Numerical review produces targeted", without_numerical)
 
         leaderboard = _claude_instructions(
@@ -566,7 +552,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 )
                 prompt = LongHorizonCampaign(base)._prompt(
                     episode=1,
-                    version=1,
                     worktree=CandidateHandle(
                         1, "a" * 40, "work", workspace
                     ),
@@ -601,30 +586,29 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertNotIn("## Terms", episode)
         self.assertLess(len(episode.split()), 400)
         self.assertIn("{{RESEARCH_MODULE_RULES}}", episode)
-        self.assertIn("{{HANDOFF_CONTRACT}}", episode)
+        self.assertIn("{{SUBMISSION_CONTRACT}}", episode)
         self.assertIn("{{RUNTIME_WAIT_POLICY}}", episode)
         self.assertIn("skills/runtime-records/SKILL.md", episode)
         self.assertIn("Agent-visible comparison base: `{{BASE_COMMIT}}`", episode)
-        self.assertIn("measurable candidate identity: clean Git HEAD", episode)
+        self.assertIn("candidate identity: clean Agent Git HEAD", episode)
         self.assertNotIn("Promoted campaign version", episode)
         self.assertIn("Hardware: `{{ARCH}}`", episode)
         self.assertIn("Gateway Records are measurement authority", episode)
-        self.assertIn("highest plausible full-workload latency impact", episode)
-        self.assertIn("A Direction is a durable optimization program", episode)
+        self.assertIn("greatest plausible full-workload impact", episode)
+        self.assertIn("A Direction is a durable program", episode)
         self.assertIn(
-            "A single implementation, parameter sweep, capability probe, or mechanism "
-            "test is an Experiment, not a new Direction",
-            episode,
+            "one candidate, sweep, probe, or mechanism test is an Experiment", episode
         )
-        self.assertIn("discarding higher-upside work", episode)
-        self.assertIn("commit the complete candidate", episode)
-        self.assertIn("smallest measurement that resolves the current question", episode)
+        self.assertIn("instead of avoiding high-upside work", episode)
+        self.assertIn("Commit the complete candidate", episode)
+        self.assertIn("smallest decisive measurement", episode)
         self.assertIn("Repeat `probe → candidate → measurement → revert/keep` cycles", episode)
         self.assertNotIn("at most one local Direction `in_progress`", episode)
-        self.assertIn("Submit `episode-report` only when", episode)
-        self.assertIn("Use `candidate_ready` only for a changed candidate", episode)
-        self.assertIn("submit `pivot`; never add a nominal edit", episode)
-        self.assertIn("`cross_trajectory_share` is available only", episode)
+        self.assertIn("Use `submit-kernel` for final-source compliance feedback", episode)
+        self.assertIn("Submission sets no performance threshold", episode)
+        self.assertIn("launches no new Evaluate or ABBA", episode)
+        self.assertIn("stop at a natural audit boundary", episode)
+        self.assertNotIn("cross_trajectory_share", episode)
         self.assertNotIn("high-upside Direction", episode)
         self.assertNotIn("selected Direction or optimization path", episode)
         self.assertNotIn("{{RESEARCH_BOARD_SECTION}}", episode)
@@ -700,33 +684,12 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             claim_review,
         )
 
-        baseline = (prompt_dir / "framework_baseline.md").read_text(
-            encoding="utf-8"
-        )
-        self.assertIn("existing SourceProvider layout", baseline)
-        self.assertIn("`WORKSPACE.md`", baseline)
-        self.assertIn("Reference version:", baseline)
-        self.assertIn("Hardware: `{{ARCH}}`", baseline)
-        self.assertIn("Wiki query is a knowledge request, not a Kernel measurement", baseline)
-        self.assertIn("Work like a normal Episode", baseline)
-        self.assertIn("Use Runtime Evaluate to establish correctness", baseline)
-        self.assertIn("commit the complete candidate and leave the worktree clean", baseline)
-        self.assertIn("does not require a speedup over V0", baseline)
-        self.assertIn("passes the standard full Evaluate", baseline)
-        self.assertNotIn("Do not invoke GPU measurement", baseline)
-        self.assertNotIn("recovery header", baseline)
-        self.assertNotIn("rerun the bounded V1 smoke", baseline)
-
         wiki_plugin = Path(__file__).resolve().parents[1] / "plugins/gpu-wiki"
-        wiki_baseline = (wiki_plugin / "framework_baseline.md").read_text(
-            encoding="utf-8"
-        )
         wiki_common = (wiki_plugin / "instructions.md").read_text(
             encoding="utf-8"
         )
-        for wiki_prompt in (wiki_baseline, wiki_common):
-            self.assertIn("publicly disclosed Shape/domain facts", wiki_prompt)
-            self.assertIn("infer or request private Shape cases", wiki_prompt)
+        self.assertIn("publicly disclosed Shape/domain facts", wiki_common)
+        self.assertIn("infer or request private Shape cases", wiki_common)
         boundary = (prompt_dir / "sandbox_safety_boundary.md").read_text(
             encoding="utf-8"
         )
@@ -735,7 +698,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         full_workflow = (prompt_dir / "sandbox_full_workflow.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("configured coverage, seeds and repetitions", full_workflow)
+        self.assertIn("Runtime handles batching, repetitions, aggregation and retries", full_workflow)
         self.assertNotIn("five-case correctness", full_workflow)
 
         claude = (
@@ -786,7 +749,8 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                     for line in body.splitlines():
                         if line.strip():
                             json.loads(line)
-        self.assertIn("Report acceptance is a handoff, not promotion", episode)
+        self.assertNotIn("Report acceptance is a handoff", episode)
+        self.assertIn("A normal stop needs no handoff report", episode)
 
         agent_docs = [
             *prompt_dir.glob("*.md"),
@@ -847,10 +811,11 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         report_skill = (resource_dir / "runtime-report" / "SKILL.md").read_text(
             encoding="utf-8"
         )
-        self.assertIn("same Git and Runtime measurement loop", report_skill)
-        self.assertIn("submit the ordinary `episode-report`", report_skill)
-        self.assertIn("does not require ABBA", report_skill)
-        self.assertIn("`pivot` and `blocked` reports omit them", report_skill)
+        self.assertIn("Direction and Experiment recording are disabled", report_skill)
+        self.assertIn("Use `submit-kernel`", report_skill)
+        self.assertIn("Submission verifies the saved evidence", report_skill)
+        self.assertIn("No Episode Report is required", report_skill)
+        self.assertNotIn("`episode-report`", report_skill)
         self.assertNotIn("smoke-and-exit procedure", report_skill)
         wiki_plugin = Path(__file__).resolve().parents[1] / "plugins/gpu-wiki"
         wiki_episode = (wiki_plugin / "episode.md").read_text(encoding="utf-8")
@@ -903,20 +868,17 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 )
                 prompt = LongHorizonCampaign(base)._prompt(
                     episode=1,
-                    version=1,
                     worktree=CandidateHandle(1, "a" * 40, "work", workspace),
                     conversion_pending=False,
                 )
                 self.assertNotIn("{{", prompt)
                 self.assertEqual(prompt.count("## Workflow"), 1)
                 self.assertEqual(prompt.count(heading), 1)
-                self.assertEqual(prompt.count("## Handoff"), 1)
+                self.assertEqual(prompt.count("## Commit review"), 1)
                 self.assertIn(heading, prompt)
                 self.assertIn("skills/runtime-records/SKILL.md", prompt)
-                if "experiments" in modules:
-                    self.assertIn("selected_experiment_id", prompt)
-                else:
-                    self.assertIn("gateway_record_ids", prompt)
+                self.assertIn("kernel_commit_id", prompt)
+                self.assertNotIn("selected_experiment_id", prompt)
                 if modules == ("directions",):
                     self.assertIn("`supporting_experiment_ids`", prompt)
                     self.assertIn("Experiment recording is disabled", prompt)
@@ -941,7 +903,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             )
             prompt = LongHorizonCampaign(base)._prompt(
                 episode=1,
-                version=1,
                 worktree=CandidateHandle(1, "a" * 40, "work", workspace),
                 conversion_pending=False,
             )
@@ -968,7 +929,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             )
             prompt = LongHorizonCampaign(base)._prompt(
                 episode=2,
-                version=3,
                 worktree=CandidateHandle(2, "a" * 40, "work", workspace),
                 conversion_pending=True,
             )
@@ -976,47 +936,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("## Required conversion", prompt)
         self.assertIn("## PPU diagnostics", prompt)
         self.assertIn("within 5%", prompt)
-
-    def test_framework_review_prompt_is_complete_and_dsl_neutral(self):
-        prompt_path = (
-            Path(__file__).resolve().parents[1]
-            / "src"
-            / "aka"
-            / "light"
-            / "workflow"
-            / "prompts"
-            / "framework_baseline_correctness_review.md"
-        )
-        rendered = render_file_prompt(
-            prompt_path,
-            REVIEWER="Codex",
-            IMPLEMENTATION_TARGET="a Kernel in an evaluator-supported GPU DSL",
-            PLATFORM="L20D",
-            ARCH="sm_103a",
-        )
-        self.assertNotIn("{{", rendered)
-        self.assertIn("TARGET_IMPLEMENTATION_RISKS:", rendered)
-        self.assertIn("PRE_VALIDATION_CHECKS:", rendered)
-        self.assertIn("context/shapes.json", rendered)
-        self.assertIn("eventual implementation path", rendered)
-        self.assertNotIn("CUDA_IMPLEMENTATION_RISKS:", rendered)
-        with self.assertRaisesRegex(ValueError, "IMPLEMENTATION_TARGET"):
-            render_file_prompt(
-                prompt_path,
-                REVIEWER="Codex",
-                PLATFORM="L20D",
-                ARCH="sm_103a",
-            )
-        self.assertIn(
-            "metadata.json", _FRAMEWORK_BASELINE_CORRECTNESS_CONTEXT_PATHS
-        )
-        self.assertNotIn(
-            "public_shapes.json", _FRAMEWORK_BASELINE_CORRECTNESS_CONTEXT_PATHS
-        )
-        self.assertIn(
-            "TARGET_IMPLEMENTATION_RISKS:",
-            _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS,
-        )
 
     def test_plugin_prompt_fragments_reject_unresolved_placeholders(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1133,15 +1052,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 agent_reference_paths=(("nvidia", "/knowledge/nvidia"),),
             )
 
-    def test_campaign_uses_framework_baseline_auto_policy_by_default(self):
-        campaign = Campaign(
-            name="operator",
-            kernel_demo="reference.py",
-            platform="cuda",
-            framework="cuda",
-        )
-        self.assertEqual(campaign.framework_baseline, "auto")
-
     def test_open_dsl_policy_is_neutral_and_disables_conversion(self):
         directive = optimization_mode_directive(
             "production", "Cuda", specify_dsl=False
@@ -1227,31 +1137,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             )
             self.assertEqual(state["evaluator_shape_visibility"], "exposed")
 
-    def test_open_dsl_framework_baseline_prompt_is_neutral(self):
-        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
-            campaign = Campaign(
-                name="op",
-                kernel_demo=str(Path(directory) / "reference.py"),
-                platform="L20D",
-                framework="Cuda",
-                specify_dsl=False,
-                work_dir=directory,
-            )
-            campaign.tool_runtime = SimpleNamespace(
-                wiki=False,
-                pause_agent_during_requests=True,
-            )
-            campaign.plugin_directive = lambda _phase: ""
-            campaign._framework_baseline_correctness_guidance_text = lambda: ""
-            campaign._mode_directive = lambda: optimization_mode_directive(
-                "production", "", specify_dsl=False
-            )
-            prompt = campaign._framework_baseline_prompt(1)
-            self.assertIn("Choose a supported DSL", prompt)
-            self.assertNotIn("- DSL: `Cuda`", prompt)
-            self.assertNotIn("yourself in `Cuda`", prompt)
-            self.assertNotIn("{{", prompt)
-
     def test_named_reference_knowledge_is_explained_without_becoming_evidence(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             campaign = Campaign(
@@ -1263,29 +1148,10 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 agent_sandbox="bwrap",
                 agent_reference_paths=(("nvidia", "/knowledge/nvidia"),),
             )
-            campaign.tool_runtime = SimpleNamespace(
-                wiki=False,
-                pause_agent_during_requests=True,
-            )
-            campaign.plugin_directive = lambda _phase: ""
-            campaign._framework_baseline_correctness_guidance_text = lambda: ""
-            prompt = campaign._framework_baseline_prompt(1)
+            prompt = campaign.reference_knowledge_prompt()
         self.assertIn("`references/nvidia/`", prompt)
         self.assertIn("read-only engineering references", prompt)
         self.assertIn("not the task contract, measurement evidence, or candidate source", prompt)
-
-    def test_disabled_framework_correctness_review_has_no_prompt_section(self):
-        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
-            campaign = Campaign(
-                name="op",
-                kernel_demo="reference.py",
-                platform="L20D",
-                framework="Cuda",
-                work_dir=directory,
-            )
-            self.assertEqual(
-                campaign._framework_baseline_correctness_guidance_text(), ""
-            )
 
     def test_hardware_prompt_contains_only_dynamic_runtime_arch(self):
         directive = hardware_directive("masked-product", "vendor_arch_987")
@@ -1294,182 +1160,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertNotIn("masked-product", directive)
         self.assertNotIn("sm_103", directive)
         self.assertNotIn("tcgen05", directive)
-
-    def _framework_baseline_campaign(self, directory):
-        return Campaign(
-            name="operator",
-            kernel_demo=str(Path(directory) / "reference.py"),
-            platform="cuda",
-            framework="cuda",
-            work_dir=directory,
-            optimization_mode="leaderboard",
-            framework_baseline="auto",
-        )
-
-    def _framework_baseline_decision_patches(
-        self,
-        directory,
-        *,
-        reference_blob,
-        implementation_blob,
-        structure_side_effect=None,
-    ):
-        def committed_blob(_workspace, _revision, path):
-            if path == "reference.py":
-                return reference_blob
-            if path == "kernel.py":
-                return implementation_blob
-            return ""
-
-        structure_patch = (
-            patch(
-                "aka.light.workflow.bootstrap.production_structure_violations",
-                side_effect=structure_side_effect,
-            )
-            if structure_side_effect is not None
-            else patch(
-                "aka.light.workflow.bootstrap.production_structure_violations",
-                return_value=[],
-            )
-        )
-        return (
-            patch("aka.light.workflow.bootstrap.latest_version", return_value=0),
-            patch("aka.light.workflow.bootstrap.git_head", return_value="head"),
-            patch(
-                "aka.light.workflow.bootstrap.resolve_framework_baseline_commit",
-                return_value=(None, None),
-            ),
-            patch(
-                "aka.light.workflow.bootstrap.head_kernel_is_initial_baseline",
-                return_value=True,
-            ),
-            patch(
-                "aka.light.workflow.bootstrap.framework_baseline_progress_path",
-                return_value=Path(directory) / "missing-progress.json",
-            ),
-            patch.object(
-                Campaign,
-                "source_checks_enabled",
-                new_callable=PropertyMock,
-                return_value=True,
-            ),
-            structure_patch,
-            patch.object(Campaign, "_v0_baseline_commit", return_value="v0"),
-            patch("aka.light.workspace.sources.revision_contains_reference",
-                  return_value=reference_blob == implementation_blob),
-            patch("aka.light.workspace.sources.layout_at",
-                  return_value=SimpleNamespace(replaceable_baseline=True)),
-            patch("aka.light.workspace.sources.read",
-                  return_value=SimpleNamespace(snapshot=b"source-tree")),
-            patch("aka.light.workspace.sources.from_revision",
-                  return_value=SimpleNamespace(snapshot=b"source-tree")),
-            patch(
-                "aka.light.workflow.bootstrap.git_path_blob",
-                side_effect=committed_blob,
-            ),
-            patch("aka.light.workflow.bootstrap.is_sol_op", return_value=False),
-        )
-
-    def test_known_v0_reference_wrapper_skips_production_review(self):
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = self._framework_baseline_campaign(directory)
-            reviewer = patch.object(
-                Campaign,
-                "_production_kernel_violations",
-                side_effect=AssertionError("known V0 wrapper must not be reviewed"),
-            )
-            patches = self._framework_baseline_decision_patches(
-                directory,
-                reference_blob="same-blob",
-                implementation_blob="same-blob",
-            )
-            with ExitStack() as stack:
-                stack.enter_context(reviewer)
-                for current in patches:
-                    stack.enter_context(current)
-                action, reason = campaign._framework_baseline_decision()
-
-        self.assertEqual(action, "run")
-        self.assertIn("PyTorch reference wrapper", reason)
-
-    def test_open_dsl_framework_baseline_runs_without_pinning_a_framework(self):
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = Campaign(
-                name="operator",
-                kernel_demo=str(Path(directory) / "reference.py"),
-                platform="cuda",
-                framework="",
-                specify_dsl=False,
-                work_dir=directory,
-                optimization_mode="leaderboard",
-                framework_baseline="always",
-            )
-
-            def check_structure(_workspace, framework, *, specify_dsl):
-                self.assertEqual(framework, "")
-                self.assertFalse(specify_dsl)
-                return []
-
-            patches = self._framework_baseline_decision_patches(
-                directory,
-                reference_blob="same-blob",
-                implementation_blob="same-blob",
-                structure_side_effect=check_structure,
-            )
-            with ExitStack() as stack:
-                for current in patches:
-                    stack.enter_context(current)
-                action, reason = campaign._framework_baseline_decision()
-
-        self.assertEqual(action, "run")
-        self.assertIn("Agent-selected supported GPU DSL", reason)
-
-    def test_open_dsl_framework_baseline_acceptance_keeps_structure_check_neutral(self):
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = Campaign(
-                name="operator",
-                kernel_demo=str(Path(directory) / "reference.py"),
-                platform="cuda",
-                framework="",
-                specify_dsl=False,
-                work_dir=directory,
-                optimization_mode="leaderboard",
-                framework_baseline="always",
-            )
-            campaign.workspace.mkdir(parents=True, exist_ok=True)
-            (campaign.workspace / "WORKSPACE.md").write_bytes(b"contract")
-
-            def check_structure(_workspace, framework, *, specify_dsl):
-                self.assertEqual(framework, "")
-                self.assertFalse(specify_dsl)
-                return []
-
-            with (
-                patch.object(
-                    Campaign,
-                    "source_checks_enabled",
-                    new_callable=PropertyMock,
-                    return_value=True,
-                ),
-                patch(
-                    "aka.light.workspace.sources.workspace_identity",
-                    return_value=b"candidate",
-                ),
-                patch(
-                    "aka.light.workflow.bootstrap.framework_baseline_workspace_contract",
-                    return_value=b"contract",
-                ),
-                patch(
-                    "aka.light.workflow.bootstrap.production_structure_violations",
-                    side_effect=check_structure,
-                ),
-                patch("aka.light.workflow.bootstrap.git_path_blob", return_value=b""),
-            ):
-                problem = campaign._framework_baseline_problem(
-                    "v0", "baseline", include_policy_review=False
-                )
-
-        self.assertEqual(problem, "")
 
     def test_open_dsl_production_check_forwards_neutral_policy(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -1497,91 +1187,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 self.assertEqual(campaign._production_kernel_violations(), [])
 
         self.assertFalse(check.call_args.kwargs["specify_dsl"])
-
-    def test_distinct_v0_implementation_still_uses_production_review(self):
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = self._framework_baseline_campaign(directory)
-            patches = self._framework_baseline_decision_patches(
-                directory,
-                reference_blob="reference-blob",
-                implementation_blob="implementation-blob",
-            )
-            reviewer_patch = patch.object(
-                    Campaign, "_production_kernel_violations", return_value=[]
-                )
-            with ExitStack() as stack:
-                reviewer = stack.enter_context(reviewer_patch)
-                for current in patches:
-                    stack.enter_context(current)
-                action, reason = campaign._framework_baseline_decision()
-
-        self.assertEqual(action, "pin")
-        self.assertIn("already a compliant framework implementation", reason)
-        reviewer.assert_called_once_with()
-
-    def test_real_git_v0_reference_wrapper_skips_production_review(self):
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = self._framework_baseline_campaign(directory)
-            workspace = campaign.workspace
-            (workspace / "implementation").mkdir(parents=True)
-            source = "import torch\n\ndef run(*args, **kwargs):\n    return torch.zeros(1)\n"
-            (workspace / "kernel.py").write_text(source, encoding="utf-8")
-            (workspace / "reference.py").write_text(source, encoding="utf-8")
-            (workspace / "implementation" / "__init__.py").write_text(
-                "", encoding="utf-8"
-            )
-            subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
-            subprocess.run(
-                ["git", "config", "user.name", "AKA Test"], cwd=workspace, check=True
-            )
-            subprocess.run(
-                ["git", "config", "user.email", "aka-test@atrex.local"],
-                cwd=workspace,
-                check=True,
-            )
-            subprocess.run(["git", "add", "."], cwd=workspace, check=True)
-            subprocess.run(
-                ["git", "-c", "commit.gpgSign=false", "commit", "-qm", "V0"],
-                cwd=workspace,
-                check=True,
-            )
-            from aka.light.workspace.sources import from_git
-
-            committed_source = from_git(workspace, "HEAD")
-
-            with (
-                patch("aka.light.workflow.bootstrap.latest_version", return_value=0),
-                patch(
-                    "aka.light.workflow.bootstrap.resolve_framework_baseline_commit",
-                    return_value=(None, None),
-                ),
-                patch.object(
-                    Campaign,
-                    "source_checks_enabled",
-                    new_callable=PropertyMock,
-                    return_value=True,
-                ),
-                patch(
-                    "aka.light.workflow.bootstrap.production_structure_violations",
-                    return_value=[],
-                ),
-                patch(
-                    "aka.light.workspace.sources.snapshot",
-                    return_value=committed_source,
-                ),
-                patch("aka.light.workflow.bootstrap.is_sol_op", return_value=False),
-                patch.object(
-                    Campaign,
-                    "_production_kernel_violations",
-                    side_effect=AssertionError(
-                        "known V0 wrapper must not be reviewed"
-                    ),
-                ),
-            ):
-                action, reason = campaign._framework_baseline_decision()
-
-        self.assertEqual(action, "run")
-        self.assertIn("PyTorch reference wrapper", reason)
 
     def test_unlimited_numerical_review_keeps_nested_request_timeout(self):
         runtime = SimpleNamespace(closed=False, _live=lambda _parent: True)
@@ -1617,8 +1222,22 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             digest = numerical_review._digest(files)
             observed: list[tuple[str, int | None]] = []
 
-            def numerical_session(review_workspace, _prompt, *, timeout, **_kwargs):
+            def numerical_session(review_workspace, _prompt, *, timeout, **kwargs):
                 observed.append(("numerical", timeout))
+                capture_root = Path(
+                    kwargs["extra_environment"]["ATREX_SESSION_CAPTURE_DIR"]
+                ) / "run-test"
+                capture_root.mkdir(parents=True, exist_ok=True)
+                (capture_root / "conversation.jsonl").write_text(
+                    '{"type":"session_end"}\n', encoding="utf-8"
+                )
+                (capture_root / "token-usage.json").write_text(
+                    json.dumps({
+                        "state": "completed",
+                        "finished_at": "2026-11-12T00:00:00+00:00",
+                    }) + "\n",
+                    encoding="utf-8",
+                )
                 (review_workspace / "numerical_review.json").write_text(
                     json.dumps({
                         "schema_version": 1,
@@ -1676,6 +1295,20 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
 
             def policy_session(*_args, **kwargs):
                 observed.append(("policy", kwargs["timeout"]))
+                capture_root = Path(
+                    kwargs["extra_environment"]["ATREX_SESSION_CAPTURE_DIR"]
+                ) / "run-test"
+                capture_root.mkdir(parents=True, exist_ok=True)
+                (capture_root / "conversation.jsonl").write_text(
+                    '{"type":"session_end"}\n', encoding="utf-8"
+                )
+                (capture_root / "token-usage.json").write_text(
+                    json.dumps({
+                        "state": "completed",
+                        "finished_at": "2026-11-12T00:00:00+00:00",
+                    }) + "\n",
+                    encoding="utf-8",
+                )
                 return result
 
             with (
@@ -1695,38 +1328,11 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                         candidate_digest="a" * 64,
                     )
 
-            context = campaign.workspace / "README.md"
-            campaign.workspace.mkdir(parents=True, exist_ok=True)
-            context.write_text("operator contract\n", encoding="utf-8")
-
-            def baseline_session(*_args, **kwargs):
-                observed.append(("baseline", kwargs["timeout"]))
-                return result
-
-            with (
-                patch.object(
-                    campaign,
-                    "_framework_baseline_correctness_context",
-                    return_value=(context,),
-                ),
-                patch.object(
-                    campaign,
-                    "_run_session",
-                    side_effect=baseline_session,
-                    create=True,
-                ),
-                patch.object(
-                    campaign, "agent_boundary_environment", return_value={}
-                ),
-            ):
-                campaign._run_framework_baseline_correctness_reviewer("codex")
-
             self.assertEqual(
                 observed,
                 [
                     ("numerical", None),
                     ("policy", None),
-                    ("baseline", None),
                 ],
             )
 
@@ -2878,14 +2484,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             "supporting_experiment_ids", closure["properties"]
         )
 
-    def test_supervisor_gates_do_not_expose_multi_seed(self):
-        framework = framework_baseline_validation_command(1, atrex_bench=True)
-        candidate = candidate_acceptance_argv(atrex_bench=True)
-        verifier = RecordedABBAValidator(execute=lambda *_: None, hardware="L20D")
-        self.assertNotIn("--multi-seed", framework)
-        self.assertNotIn("--multi-seed", candidate)
-        self.assertNotIn("--multi-seed", verifier.request_argv("a" * 40))
-
     def test_abba_prompt_separates_research_baseline_from_terminal_incumbent(self):
         verifier = RecordedABBAValidator(execute=lambda *_: None, hardware="L20D")
         prompt = verifier.agent_instructions(measurement_repetitions=1)
@@ -2906,76 +2504,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             ],
         })
         self.assertEqual(state.incumbent_kernel_commit_id, promoted)
-
-    def test_framework_baseline_uses_episode_evaluator_policy(self):
-        native = framework_baseline_validation_command(1, atrex_bench=True)
-        sol = framework_baseline_validation_command(1, atrex_bench=False)
-        self.assertEqual(
-            native[native.index("--timed-runs") + 1], str(BENCH_ITERS)
-        )
-        self.assertEqual(
-            sol[sol.index("--multi-seed") + 1], str(CORRECTNESS_CASES - 1)
-        )
-
-    def test_framework_baseline_and_episode_share_session_execution_policy(self):
-        campaign = SimpleNamespace(
-            module_options=SimpleNamespace(
-                episode_timeout_seconds=None,
-                output_limit_recovery_retries=2,
-                dependency_policy_recovery_retries=2,
-            )
-        )
-        self.assertEqual(
-            session_execution_policy(campaign),
-            {
-                "episode_timeout_seconds": None,
-                "reasoning_effort": "max",
-                "output_limit_recovery_retries": 2,
-                "dependency_policy_recovery_retries": 2,
-            },
-        )
-
-    def test_framework_baseline_prompt_delegates_runtime_contract_to_claude_and_skills(self):
-        template = (
-            Path(__file__).resolve().parents[1]
-            / "src/aka/light/workflow/prompts/framework_baseline.md"
-        ).read_text(encoding="utf-8")
-        for removed in (
-            "{{RUNTIME_WAIT_POLICY}}",
-            "{{AGENT_RUNTIME}}",
-            "{{SANDBOX}}",
-            "{{EVALUATOR}}",
-        ):
-            self.assertNotIn(removed, template)
-
-        bootstrap_source = (
-            Path(__file__).resolve().parents[1]
-            / "src/aka/light/workflow/bootstrap.py"
-        ).read_text(encoding="utf-8")
-        self.assertIn("by WORKSPACE.md and the active SourceProvider", bootstrap_source)
-        self.assertNotIn("Finish the preserved V1 implementation inside kernel.py", bootstrap_source)
-        self.assertIn("run or repeat the configured authoritative gates", bootstrap_source)
-        self.assertNotIn("already run the authoritative full-workload gates", bootstrap_source)
-
-    def test_framework_baseline_workspace_contract_uses_active_sourceprovider(self):
-        from aka.light.workspace.sources import default_tree, install, pack
-
-        with tempfile.TemporaryDirectory() as directory:
-            workspace = Path(directory)
-            policy, files = default_tree(
-                {"kernel.py": b"def run(*args):\n    return args\n"}
-            )
-            install(workspace, pack(files, policy), bind=True)
-
-            contract = framework_baseline_workspace_contract(workspace).decode()
-
-        self.assertIn("# Framework Baseline workspace contract", contract)
-        self.assertIn("Editable kernel.py and optional impl/ form one Kernel", contract)
-        self.assertIn("same Runtime measurement operations", contract)
-        self.assertIn("Use local Git for candidate checkpoints", contract)
-        self.assertIn("ordinary episode-report contract", contract)
-        self.assertIn("without ABBA", contract)
-        self.assertNotIn("trajectory-private local Git repository", contract)
 
     def test_dependency_recovery_preserves_sourceprovider_and_mode_contracts(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3503,58 +3031,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertFalse(hasattr(args, "rtol"))
         self.assertFalse(hasattr(args, "correctness_max_rel_l2"))
 
-    def test_framework_baseline_preserves_structured_failure_diagnostics(self):
-        result = {
-            "all_pass": False,
-            "failures": ["shape 6 failed correctness"],
-            "actionable_diagnostics": [
-                {
-                    "stage": "correctness",
-                    "shape_id": "6",
-                    "message": "output mismatch",
-                }
-            ],
-            "diagnostics": [
-                {
-                    "stage": "correctness",
-                    "shape_id": "7",
-                    "case_index": 4,
-                    "check": "outputs",
-                    "name": "output",
-                    "error": "elementwise tolerance failed",
-                    "max_elementwise_rel_diff": 0.125,
-                    "relative_l2": 0.01,
-                }
-            ],
-        }
-        completed = subprocess.CompletedProcess(
-            ["python", "test_kernel.py"],
-            1,
-            "[test_kernel] RESULT_JSON=" + json.dumps(result) + "\n",
-            "",
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = Campaign(
-                name="operator",
-                kernel_demo="reference.py",
-                platform="cuda",
-                framework="cuda",
-                work_dir=directory,
-            )
-            with (
-                patch("aka.light.workflow.bootstrap._sandbox_command", return_value=completed) as sandbox,
-                patch.object(Campaign, "_print_v0_evaluator_output"),
-            ):
-                parsed, problem = campaign._validate_framework_baseline(1)
-        self.assertIs(sandbox.call_args.kwargs["terminal_validation"], True)
-        self.assertEqual(parsed, result)
-        self.assertIn("shape 6 failed correctness", problem)
-        self.assertIn('\"shape_id\": \"6\"', problem)
-        self.assertIn('\"shape_id\": \"7\"', problem)
-        self.assertIn("elementwise tolerance failed", problem)
-        self.assertIn('\"max_elementwise_rel_diff\": 0.125', problem)
-        self.assertNotEqual(problem, "combined validation command failed (exit=1)")
-
     def test_orchestrator_evaluator_log_uses_compact_success_summary(self):
         result = {
             "all_pass": True,
@@ -3654,63 +3130,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("job deadline exceeded after 600 seconds", rendered)
         self.assertNotIn('"details"', rendered)
         self.assertLess(len(rendered), 2000)
-
-    def test_agent_visible_compiler_diagnostic_preserves_complete_tail(self):
-        repeated = "template instantiation note from torch headers\n" * 40_000
-        root_cause = (
-            "ATen/core/List_inl.h:201: error: dependent name is not a type; "
-            "prefix it with 'typename'"
-        )
-        compiler_error = repeated + root_cause
-        raw = {
-            "passed": {
-                "compile": {
-                    "0": {"status": "failed", "reason": compiler_error},
-                },
-                "correctness": {},
-            },
-            "correctness": {"shapes": {}},
-        }
-        result = optimizer_result_from_eval(
-            raw, ["0"], {}, require_performance=False
-        )
-        self.assertEqual(
-            result["actionable_diagnostics"][0]["message"], compiler_error
-        )
-        projected = project_evaluation(result)
-        self.assertEqual(
-            projected["actionable_diagnostics"][0]["message"], compiler_error
-        )
-
-        response = {
-            "exit_code": 1,
-            "stdout": "[test_kernel] RESULT_JSON=" + json.dumps(result) + "\n",
-            "stderr": "",
-        }
-        self.assertEqual(bound_diagnostic_response(response), response)
-
-        completed = subprocess.CompletedProcess(
-            ["python", "test_kernel.py"], 1, response["stdout"], ""
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = Campaign(
-                name="operator",
-                kernel_demo="reference.py",
-                platform="cuda",
-                framework="cuda",
-                work_dir=directory,
-            )
-            with (
-                patch(
-                    "aka.light.workflow.bootstrap._sandbox_command",
-                    return_value=completed,
-                ),
-                patch.object(Campaign, "_print_v0_evaluator_output"),
-            ):
-                parsed, problem = campaign._validate_framework_baseline(1)
-        self.assertEqual(parsed, result)
-        self.assertIn(root_cause, problem)
-        self.assertNotIn("diagnostic truncated", problem)
 
     def test_performance_objective_is_computed_after_all_shape_shards_merge(self):
         metadata = {
@@ -3887,113 +3306,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertEqual(projected["diagnostics"][0]["error"], compiler_error)
         self.assertEqual(projected["diagnostics"][0]["shape_ids"], ["0", "1"])
         self.assertNotIn("feedback_truncation", projected)
-
-    def test_framework_baseline_gates_run_concurrently_and_return_together(self):
-        barrier = threading.Barrier(3)
-
-        def policy_gate():
-            barrier.wait(timeout=2)
-            return ["review rejected final dependency"]
-
-        def validation_gate(_version):
-            barrier.wait(timeout=2)
-            return {"all_pass": False}, "shape 7 failed correctness"
-
-        def numerical_gate(_workspace, **options):
-            barrier.wait(timeout=2)
-            self.assertFalse(options["standard_correctness_passed"]())
-            return "supplemental probe found an unstable case"
-
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = Campaign(
-                name="operator",
-                kernel_demo="reference.py",
-                platform="cuda",
-                framework="cuda",
-                work_dir=directory,
-                optimization_mode="production",
-            )
-            with (
-                patch.object(
-                    Campaign,
-                    "source_checks_enabled",
-                    new_callable=PropertyMock,
-                    return_value=True,
-                ),
-                patch.object(campaign, "_production_kernel_violations", side_effect=policy_gate),
-                patch.object(campaign, "_validate_framework_baseline", side_effect=validation_gate),
-                patch.object(campaign, "supplemental_numerical_feedback", side_effect=numerical_gate),
-            ):
-                result, problem = campaign._framework_baseline_external_gates(1)
-
-        self.assertEqual(result, {"all_pass": False})
-        self.assertIn("review rejected final dependency", problem)
-        self.assertIn("shape 7 failed correctness", problem)
-        self.assertIn("supplemental probe found an unstable case", problem)
-        self.assertIn("- production_review: failed", problem)
-        self.assertIn("- correctness_performance: failed", problem)
-        self.assertIn("- numerical: failed", problem)
-
-    def test_framework_baseline_leaderboard_skips_production_review(self):
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = Campaign(
-                name="operator",
-                kernel_demo="reference.py",
-                platform="cuda",
-                framework="cuda",
-                work_dir=directory,
-                optimization_mode="leaderboard",
-            )
-            with (
-                patch.object(
-                    Campaign,
-                    "source_checks_enabled",
-                    new_callable=PropertyMock,
-                    return_value=True,
-                ),
-                patch.object(
-                    campaign,
-                    "_production_kernel_violations",
-                ) as policy_gate,
-                patch.object(
-                    campaign,
-                    "_validate_framework_baseline",
-                    return_value=({"all_pass": True}, ""),
-                ),
-                patch.object(
-                    campaign,
-                    "supplemental_numerical_feedback",
-                    return_value="",
-                ),
-            ):
-                result, problem = campaign._framework_baseline_external_gates(1)
-
-        self.assertEqual(result, {"all_pass": True})
-        self.assertEqual(problem, "")
-        policy_gate.assert_not_called()
-
-    def test_framework_baseline_keeps_bounded_transport_error_without_result(self):
-        completed = subprocess.CompletedProcess(
-            ["python", "test_kernel.py"],
-            1,
-            "",
-            "gateway rejected request: shape contract is invalid",
-        )
-        with tempfile.TemporaryDirectory() as directory:
-            campaign = Campaign(
-                name="operator",
-                kernel_demo="reference.py",
-                platform="cuda",
-                framework="cuda",
-                work_dir=directory,
-            )
-            with (
-                patch("aka.light.workflow.bootstrap._sandbox_command", return_value=completed),
-                patch.object(Campaign, "_print_v0_evaluator_output"),
-            ):
-                parsed, problem = campaign._validate_framework_baseline(1)
-        self.assertIsNone(parsed)
-        self.assertIn("shape contract is invalid", problem)
 
 
 class ProjectedProcStartupPreflightTests(unittest.TestCase):

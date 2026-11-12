@@ -104,8 +104,8 @@ def ensure_submodules(platform: str = "", arch: str = "") -> None:
     used by Campaigns are vendored under tools/ncu_helpers/. KernelWiki's
     Agent-facing skill and the GPU Wiki JSON stores are repository-native.
     PPU campaigns also require their vendor reference projects: without those
-    working trees the framework-baseline catalog silently contains no usable
-    PPU implementation sources.
+    working trees the reference catalog contains no usable PPU implementation
+    sources.
     Idempotent: already-initialized submodules are untouched.
     """
     needed = []
@@ -214,9 +214,14 @@ def run_session(
 def _production_review_candidate_paths(workspace: Path) -> list[Path]:
     """Return the complete, bounded source set shown to the production reviewer."""
     from aka.light.workspace.sources import policy_at, collect
+    from aka.light.workspace.sources.common import POLICY
     policy = policy_at(workspace)
     if policy is not None:
-        return [workspace / name for name in sorted(collect(workspace, policy))]
+        paths = [workspace / name for name in sorted(collect(workspace, policy))]
+        policy_path = workspace / POLICY
+        if policy_path.is_file():
+            paths.append(policy_path)
+        return paths
     paths = [
         workspace / "kernel.py",
         workspace / "solution.json",
@@ -229,10 +234,13 @@ def _production_review_digest(
     framework: str,
     require_gluon: bool,
     specify_dsl: bool = True,
+    review_profile: str = "",
 ) -> str:
     digest = hashlib.sha256()
     digest.update(f"production-review-v{DEPENDENCY_REVIEW_SCHEMA_VERSION}\0".encode())
     digest.update(framework.encode("utf-8", errors="replace"))
+    digest.update(b"\0")
+    digest.update(review_profile.encode("utf-8", errors="replace"))
     digest.update(
         b"\0open-dsl\0"
         if not specify_dsl

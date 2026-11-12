@@ -114,9 +114,10 @@ dictionary, canonical events, Perfetto trace, summary, and accepted receipt
 in the attempt directory. Preserve failed attempt diagnostics under a new attempt number rather than
 overwriting prior evidence.
 
-Before `episode-report`, verify that the receipt and all referenced files were synchronized into
-the local `scratch/` tree. Report `evidence.artifact` as a workspace-relative `scratch/...` path;
-leave that tree intact for the controller's terminal revalidation.
+Before recording the Experiment or ending the Session, verify that the receipt and all referenced
+files were synchronized into the local `scratch/` tree. Report `evidence.artifact` as a
+workspace-relative `scratch/...` path; leave that tree intact so an Experiment can archive and
+audit the exact evidence.
 
 Restore the probe-free source after the attempt. ACU collection remains a separate probe-free launch
 and is not part of this remote timeline command unless a later, optional joint-analysis decision

@@ -69,9 +69,8 @@ record required for final evidence.
 ## Hard boundaries
 
 - Never modify evaluators, ground truth, or other protected paths.
-- Never hand off or promote an instrumented snapshot. Only a probe-free kernel may become the
-  candidate submitted through `episode-report`; the Agent owns engineering commits and the
-  Supervisor seals/validates the exact reported HEAD source.
+- Never submit an instrumented snapshot. Only a probe-free Kernel may be accepted through
+  `submit-kernel`; the Agent owns engineering commits and Runtime reviews that exact commit.
 - Do not combine events from different launches into one apparent execution.
 - Construct exactly one recorder per selected owner per launch and reuse it for that owner's events;
   duplicate ownership is a capture failure, not a sampling policy.

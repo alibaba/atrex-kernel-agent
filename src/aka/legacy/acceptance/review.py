@@ -144,8 +144,37 @@ def _validate_production_review(
     payload: object,
     *,
     candidate_files: frozenset[str] = frozenset({"kernel.py", "solution.json"}),
+    dsl_policy: str = "pinned",
+    compute_policy: str = "self_authored_only",
 ) -> tuple[list[str], str]:
     """Validate a complete candidate verdict and translate rejections into errors."""
+    if dsl_policy not in {"open", "guided", "pinned"}:
+        raise ValueError(f"unsupported production review dsl_policy: {dsl_policy!r}")
+    if compute_policy not in {
+        "declared_external_allowed",
+        "self_authored_only",
+    }:
+        raise ValueError(
+            f"unsupported production review compute_policy: {compute_policy!r}"
+        )
+    check_categories = {
+        name: {
+            "allow": set(categories["allow"]),
+            "reject": set(categories["reject"]),
+        }
+        for name, categories in _PRODUCTION_REVIEW_CHECK_CATEGORIES.items()
+    }
+    dependency_allow = set(_DEPENDENCY_ALLOW_CATEGORIES)
+    dependency_reject = set(_DEPENDENCY_REJECT_CATEGORIES)
+    if compute_policy == "declared_external_allowed":
+        for category in {"prebuilt_compute", "torch_compute", "external_code"}:
+            check_categories["compute_provenance"]["reject"].discard(category)
+            check_categories["compute_provenance"]["allow"].add(category)
+        check_categories["external_code_loading"]["reject"].discard("external_code")
+        check_categories["external_code_loading"]["allow"].add("external_code")
+        for category in {"prebuilt_compute", "external_code"}:
+            dependency_reject.discard(category)
+            dependency_allow.add(category)
     if not isinstance(payload, dict):
         raise ValueError("production review must be a JSON object")
     if payload.get("schema_version") != DEPENDENCY_REVIEW_SCHEMA_VERSION:
@@ -160,7 +189,7 @@ def _validate_production_review(
     if not isinstance(checks, list):
         raise ValueError("production review checks must be a list")
 
-    expected = set(_PRODUCTION_REVIEW_CHECK_CATEGORIES)
+    expected = set(check_categories)
     reviewed: set[str] = set()
     rejected: list[str] = []
     for item in checks:
@@ -173,7 +202,7 @@ def _validate_production_review(
             )
         if check_id in reviewed:
             raise ValueError(f"production review duplicated check id: {check_id}")
-        categories = _PRODUCTION_REVIEW_CHECK_CATEGORIES[check_id]
+        categories = check_categories[check_id]
         decision, _category, reason = _validate_review_item(
             item,
             label=f"check {check_id}",
@@ -184,7 +213,7 @@ def _validate_production_review(
         reviewed.add(check_id)
         if decision == "reject":
             rejected.append(
-                "production candidate rejected by independent reviewer: "
+                "final-source candidate rejected by independent reviewer: "
                 f"{check_id}: {reason}"
             )
 
@@ -209,13 +238,13 @@ def _validate_production_review(
         decision, _category, reason = _validate_review_item(
             item,
             label=f"dependency {name.strip()}",
-            allow_categories=_DEPENDENCY_ALLOW_CATEGORIES,
-            reject_categories=_DEPENDENCY_REJECT_CATEGORIES,
+            allow_categories=dependency_allow,
+            reject_categories=dependency_reject,
             candidate_files=candidate_files,
         )
         if decision == "reject":
             rejected.append(
-                "third-party dependency rejected by independent reviewer: "
+                "final-source dependency rejected by independent reviewer: "
                 f"{name.strip()}: {reason}"
             )
 

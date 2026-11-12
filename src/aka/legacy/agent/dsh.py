@@ -141,7 +141,10 @@ def token_usage(raw: object) -> TokenUsage:
     if not isinstance(raw, Mapping):
         return TokenUsage.unavailable()
 
-    for field in ("inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "totalTokens"):
+    for field in (
+        "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens",
+        "totalTokens", "reasoningTokens",
+    ):
         value = raw.get(field)
         if value is not None and (type(value) is not int or value < 0):
             return TokenUsage.unavailable()
@@ -154,11 +157,16 @@ def token_usage(raw: object) -> TokenUsage:
     if incoming is None or outgoing is None:
         return TokenUsage.unavailable()
     cached, written, total = count("cacheReadTokens"), count("cacheWriteTokens"), count("totalTokens")
+    reasoning = count("reasoningTokens")
     components = incoming + outgoing + (cached or 0) + (written or 0)
     if total is not None and total < components:
         return TokenUsage.unavailable()
-    return TokenUsage(incoming, outgoing, cached, written, total if total is not None else components,
-                      "exact" if total is not None else "partial")
+    return TokenUsage(
+        incoming, outgoing, cached, written,
+        total if total is not None else components,
+        "exact" if total is not None else "partial",
+        reasoning,
+    )
 
 
 class UsageLedger:

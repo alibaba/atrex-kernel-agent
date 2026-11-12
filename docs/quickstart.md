@@ -1,7 +1,7 @@
 # Quick Start
 
 The installed `aka optimize` command starts the default **Light** workflow: managed
-source drafts, private HTTP tools, unified Episodes, and Supervisor-owned promotion.
+source drafts, private HTTP tools, one persistent optimization Session, and auditable segments.
 The primary path is native Atrex-Bench evaluation through Agate. For SOL-ExecBench,
 OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workflow.md).
 
@@ -23,6 +23,10 @@ NVIDIA profiling requires the appropriate NCU tools on the worker; AMD and PPU p
 use their respective worker toolchains. Initialize only the reference-project submodules
 you select. GPU Wiki is enabled by default, but its corpus is resolved on the first query,
 not by an unconditional startup scan. See [Wiki configuration](optional-light-modules.md#independent-wiki-execution).
+
+Multi-segment persistent Sessions require a backend with native resume support (currently Claude,
+Codex, or DSH). A backend without resume support may run one segment, but Light fails explicitly
+instead of silently starting a new conversation for the next Episode.
 
 ## Install from a matching checkout
 
@@ -102,7 +106,7 @@ aka optimize --repo-root /path/to/atrex-kernel-agent \
   --profile light-sandbox --patch /path/to/aone-projected-proc.json -- \
   --op-dir /path/to/atrex-bench/operator \
   --platform L20D --specify-dsl --framework Cuda --agent-cli claude \
-  --optimization-mode production --workspace /workspace/aka-opt
+  --optimization-mode ultra --workspace /workspace/aka-opt
 ```
 
 Light compiles and loads the packaged compatibility shim automatically. Do not manually mount
@@ -119,42 +123,40 @@ The operator directory and AKA's `--repo-root` are separate inputs.
 Exact evaluator Shapes are exposed by default through `shapes.json`. Pass
 `--no-expose-evaluator-shapes` to use a supplied or Supervisor-derived generalized
 `agent_problem.json` instead. In hidden mode, every Agent-visible Agate response is Shape-redacted;
-in exposed mode it is not. Hidden mode is supported only for Production Native Atrex-Bench tasks;
+in exposed mode it is not. Hidden mode is supported only for Performance/Ultra Native Atrex-Bench tasks;
 an unsupported request fails before the Campaign starts instead of silently running exposed.
 Evaluator generators and generated tensor values remain Supervisor-owned.
 
-The default `--optimization-mode leaderboard` exposes the benchmark contract and uses
-the permissive acceptance policy. Select `production` explicitly for production review.
-Optimization mode and DSL selection are independent: Leaderboard does not automatically
-make a launch open-DSL, and Production does not by itself pin CUDA. Use a new workspace
-when changing optimization mode, DSL policy, or Shape visibility.
+The default `--optimization-mode fast` exposes the benchmark contract, lets the Agent choose the
+DSL and permits declared reproducible compute libraries. `performance` keeps Agent-selected DSL
+but requires self-authored core compute. `ultra` additionally requires an explicit `--framework`.
+Use a new workspace when changing optimization mode, DSL policy, or Shape visibility.
 
 ## Launch Light
 
-From the AKA checkout, use an explicit fixed-DSL Production launch:
+From the AKA checkout, use an explicit fixed-DSL Ultra launch:
 
 ```bash
 aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/atrex-bench/operator \
   --platform '<gpu_arch>' --specify-dsl --framework Cuda --agent-cli claude \
-  --optimization-mode production \
+  --optimization-mode ultra \
   --workspace "$HOME/aka-opt" --max-iters 20
 ```
 
-For one permissive Leaderboard campaign in which the Agent chooses or mixes supported
-GPU DSLs from measured evidence:
+For one Fast campaign in which the Agent chooses or mixes supported GPU DSLs and may use
+declared reproducible compute libraries:
 
 ```bash
 aka optimize --repo-root "$PWD" -- \
   --op-dir /path/to/atrex-bench/operator \
-  --platform '<gpu_arch>' --no-specify-dsl --agent-cli claude \
-  --optimization-mode leaderboard \
-  --framework-baseline always \
-  --workspace "$HOME/aka-opt-leaderboard-open-dsl" --max-iters 20
+  --platform '<gpu_arch>' --agent-cli claude \
+  --optimization-mode fast \
+  --workspace "$HOME/aka-opt-fast" --max-iters 20
 ```
 
 The startup line for the second command must contain
-`optimization_mode=leaderboard ... frameworks=open_dsl`. If it reports
+`optimization_mode=fast ... frameworks=open_dsl`. If it reports
 `frameworks=Cuda`, the launch is still CUDA-pinned.
 
 Replace the operator and platform with your workload and worker. `--sandbox-hardware`
@@ -177,48 +179,40 @@ Provider settings use `ATREX_CLAUDE_SESSION_SETTINGS`, `ATREX_QODER_SESSION_SETT
 `ATREX_SESSION_SETTINGS` as the generic fallback. Keep credentials in the provider's
 supported login/configuration mechanism.
 
-The DSL switches have three distinct meanings:
+The three policies own DSL selection directly:
 
-| Intent | Required arguments | Result |
+| Policy | Required arguments | Result |
 | --- | --- | --- |
-| Pin one campaign to one DSL | `--specify-dsl --framework Cuda` | One campaign whose submitted candidates use CUDA |
-| Let one Agent choose or mix DSLs | `--no-specify-dsl` | One `open_dsl` campaign; any incidental `--framework` value is discarded |
-| Dispatch one campaign per supported DSL | Keep `--specify-dsl` enabled and omit `--framework` | Multiple independent campaigns |
+| Fast | `--optimization-mode fast` | Agent-selected DSL; declared reproducible compute libraries allowed |
+| Performance | `--optimization-mode performance` | Agent-selected DSL guided by expertise; self-authored core compute required |
+| Ultra | `--optimization-mode ultra --framework Cuda` | Configured DSL enforced; self-authored core compute required |
 
-Auto-dispatch uses the runtime-detected vendor: NVIDIA launches
-Triton/CuteDSL/Cuda/TileLang, AMD launches Triton/FlyDSL/TileLang, PPU launches
-Triton/Cuda/TileLang, and unknown hardware launches Triton/TileLang. Framework
-availability still depends on the worker. Version and token budgets apply per dispatched
-campaign.
+Fast and Performance normalize to one open-DSL campaign. Ultra rejects a missing framework,
+`--no-specify-dsl`, and automatic framework dispatch before workspace creation. Historical
+`leaderboard` and `production` names remain compatibility aliases for resuming existing runs;
+new runs should use the three explicit policies above.
 
-`--optimization-mode` controls acceptance policy; it does not override this table.
-Thus `--optimization-mode leaderboard --framework Cuda` is still CUDA-pinned.
-Conversely, `--optimization-mode production --no-specify-dsl` is an open-DSL
-Production campaign whose final candidate must satisfy the open-DSL Production policy.
-
-`--framework-baseline auto` may retain the permissive V0 in a non-CUDA Leaderboard
-campaign. Use `--framework-baseline always` when an open-DSL Leaderboard run must first
-produce a self-contained GPU implementation; its Baseline Agent chooses the DSL.
+The first optimization segment starts directly from measured V0, and the same persistent Agent
+Session may perform framework bring-up, correctness work, diagnostics and optimization before or
+between commit reviews.
 
 ## What happens after launch
 
 1. Resolve the selected providers, freeze the problem/runtime inputs, and create or resume
    a campaign below `--workspace`.
-2. Evaluate V0 from the selected initial source. By default, `--framework-baseline auto`
-   creates a pinned framework V1 when V0 is still a reference wrapper; `never` explicitly
-   starts optimization directly from the measured V0.
-3. Start an Episode in the trajectory's stable Agent Git repository. The agent researches,
-   edits, profiles, evaluates, and submits an `episode-report` citing measurement record
-   IDs. Local Git history, uncommitted work, `scratch/`, tools, and Skills continue across
-   Episodes; Runtime capabilities and shared evidence are refreshed in place.
-4. Validate the exact source and required correctness/production evidence, seal it, and
-   compare it to the incumbent through native same-allocation ABBA.
-5. Promote only a geometric-mean latency reduction strictly above
-   `--min-improvement-pct`. Preserve evidence for rejected or blocked attempts, and
-   continue until campaign limits stop admission or the campaign finishes.
+2. Evaluate V0 from the selected initial source, then start one persistent Agent Session directly
+   from that source.
+3. The Agent researches, edits, profiles and evaluates freely in its own persistent Git repository.
+   It may call `submit-kernel` with a reachable commit after that exact commit has a passing full
+   Evaluate. Submission verifies the saved evidence and applies the selected final-source policy
+   review; it launches no new Evaluate or ABBA and performs no promotion, rollback or Session transition.
+4. When the Agent voluntarily stops a segment, Light records an Episode audit boundary and resumes
+   the same provider Session, workspace and Git history for the next segment. Runtime capabilities
+   and shared evidence are refreshed in place.
+5. Continue until campaign limits stop admission or the Agent/campaign finishes. Research files,
+   Gateway Records and commit-review receipts remain auditable without selecting an incumbent.
 
-Light does not use the Legacy Fast/Full stage split. A report can be repaired and resubmitted;
-an accepted report is immutable. Subsequent draft edits cannot replace the sealed source.
+Light does not use the Legacy Fast/Full stage split or an automatic promotion state machine.
 
 ## Configure optional features
 
@@ -271,34 +265,32 @@ Native Atrex-Bench `source_tree`, CUDA manifest, Evaluate, ABBA and typed diagno
 ## Budgets and recovery
 
 - `--max-iters` bounds canonical versions/Episodes; `--max-stall` can stop stalled campaigns.
-- `--token-budget` controls Episode admission from available usage receipts. It excludes
-  baseline/auxiliary usage, can be exceeded by an in-flight invocation, and cannot account
-  for tokens a provider does not report.
+- `--token-budget` controls Episode admission from main-Agent usage receipts. Independent Review
+  calls are measured separately by kind and do not consume this budget. In-flight work may
+  overshoot, and no counter can include tokens a provider does not report.
 - Light defaults to four hours of agent active time per optimization Episode. Blocking
   Tool Runtime requests pause the agent and do not consume this allowance. The active-time
   budget is shared across Session repairs within the running controller; it is not a
   persisted allowance across controller restarts.
-- Framework baseline has its own eight-hour wall-clock default. GPU queue/execution and
-  Wiki deadlines are independent of agent active time.
+- GPU queue/execution, independent commit review and Wiki deadlines are independent of Agent active time.
 - Resume with the original workspace, composition, source layout, and frozen resources.
-  Accepted job IDs and completed ABBA batches are reconciled before further GPU execution.
+  Accepted job IDs and saved Gateway Records are reconciled before further GPU execution.
 
 Light uses three persistent search islands by default; set the Workflow plugin's `search`
 configuration to `{}` for an explicit serial run. Use a new workspace when switching
 Legacy/Light or serial/island search. Do not edit
 locks, private records, or job checkpoints to bypass an identity failure.
-See [execution recovery](measurement-records.md#failure-and-recovery-policy) and
-[promotion repair](supervisor-promotion.md#promotion-evidence-and-recovery).
+See [execution recovery](measurement-records.md#failure-and-recovery-policy).
 
 ## Inspect outputs
 
 | Output | Meaning |
 | --- | --- |
-| Candidate source files | Retained implementation in the selected layout; inspect the whole tree for multi-file candidates |
-| `.atrex_versions/vN.json` | Supervisor-owned version, correctness, measurement, and outcome facts when generated memory is disabled |
+| Agent Git repository | Complete implementation history, current HEAD, branches and imported peer refs |
+| `.atrex_versions/vN.json` | Supervisor-owned segment and outcome facts when generated memory is disabled |
 | `memory/vN.json` | Optional summaries, enabled by `workflow.generate_memory` |
 | `.atrex_long_horizon/` | Episode state, attempts, usage observations, and Session archives |
-| Private Supervisor scope | Measurement snapshots, Journals, drafts, promotion audits, and GPU checkpoints outside agent drafts |
+| Private Supervisor scope | Measurement snapshots, Journals, commit-review audits, source archives, and GPU checkpoints outside Agent Git |
 | `profiles/` and requested artifacts | Available profiler outputs and diagnostic evidence |
 
 Raw private stores and Session traces are not public submission artifacts. The optional

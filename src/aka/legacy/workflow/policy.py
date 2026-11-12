@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 
 
-OPTIMIZATION_MODE_CHOICES = ("leaderboard", "production")
+# New Light launches use the explicit three-tier final-source policies.  Keep
+# the historical names readable so existing workspaces can still resume.
+OPTIMIZATION_MODE_CHOICES = (
+    "fast",
+    "performance",
+    "ultra",
+    "leaderboard",
+    "production",
+)
 
 
 MODE_STATE_FILE = ".orchestrator_mode.json"
@@ -31,7 +39,7 @@ def requested_evaluator_shape_visibility(
     """
     return (
         "hidden"
-        if mode == "production"
+        if mode in {"production", "performance", "ultra"}
         and not expose_evaluator_shapes
         and (workspace / "agent_problem.json").is_file()
         else "exposed"
@@ -42,7 +50,8 @@ def historical_evaluator_shape_visibility(workspace: Path, mode: str) -> str:
     """Infer pre-state-file behavior without consulting a new CLI default."""
     return (
         "hidden"
-        if mode == "production" and (workspace / "agent_problem.json").is_file()
+        if mode in {"production", "performance", "ultra"}
+        and (workspace / "agent_problem.json").is_file()
         else "exposed"
     )
 
@@ -61,7 +70,7 @@ def workspace_uses_hidden_shapes(workspace: Path) -> bool:
             raise ValueError(f"{MODE_STATE_FILE} must contain a JSON object")
     visibility = state.get("evaluator_shape_visibility")
     if visibility in {"hidden", "exposed"}:
-        return state.get("mode") == "production" and visibility == "hidden"
+        return state.get("mode") in {"production", "performance", "ultra"} and visibility == "hidden"
     return historical_evaluator_shape_visibility(
         workspace, str(state.get("mode") or "")
     ) == "hidden"

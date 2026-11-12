@@ -363,7 +363,7 @@
       row.append(element('span', p.label), track, element('span', number(p.usage.total_tokens), 'number')); row.title = quality[p.usage.measurement]; $('phases').append(row);
     }
     $('token-types').replaceChildren();
-    for (const [key, label] of [['input_tokens','Input'], ['output_tokens','Output'], ['cache_read_tokens','Cache read'], ['cache_write_tokens','Cache write']]) $('token-types').append(element('dt', label), element('dd', number(t?.terminal_usage[key])));
+    for (const [key, label] of [['input_tokens','Input'], ['output_tokens','Output'], ['reasoning_tokens','Reasoning'], ['cache_read_tokens','Cache read'], ['cache_write_tokens','Cache write']]) $('token-types').append(element('dt', label), element('dd', number(t?.terminal_usage[key])));
     text('control-total', d ? `Budget control count: ${number(t.control_tokens)}; structured total: ${number(t.terminal_usage.total_tokens)}` : '');
     text('reasons', d ? (t.reason_codes.length ? t.reason_codes.join(' · ') : 'No measurement issues recorded') : '');
     text('detail-title', d ? `${ep(d.episode)} / ${ver(d.version)} · ${d.mode || '-'} · ${d.accepted ? 'Accepted' : statuses[d.status] || d.status}` : 'No episode details yet');

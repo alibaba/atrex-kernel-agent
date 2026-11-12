@@ -1,6 +1,6 @@
 ---
 name: runtime-records
-description: Record research Experiments and submit an Episode Report; Direction recording is disabled.
+description: Record research Experiments and review exact Kernel commits; Direction recording is disabled.
 allowed-tools: "Bash Read"
 ---
 
@@ -16,4 +16,4 @@ Revise only `local_writable` Experiments by resubmitting their required fields a
 Runtime increments `revision`, reruns Review, and preserves omitted optional evidence. Extend
 `peer_read_only` evidence with a new local Experiment.
 
-For `candidate_ready`, set `selected_experiment_id` to a visible Experiment with a `supported` Review under the Experiment decision standard that cites a passing standard full Evaluate of the exact clean HEAD. A historical Experiment may be reused when its evidence still matches. Follow [the exact Experiment and report schemas](references/journal.md) and [saved result/source semantics](references/records.md). Never invent IDs or measured results.
+Use `submit-kernel` when you judge an exact reachable Agent Git commit ready to serve as a final implementation for the current mode; it must already have a passing standard full Evaluate with complete per-Shape performance. Submit when ready, not mechanically after every Evaluate. Follow [the exact Experiment and submission schemas](references/journal.md) and [saved result/source semantics](references/records.md). Never invent IDs or measured results.

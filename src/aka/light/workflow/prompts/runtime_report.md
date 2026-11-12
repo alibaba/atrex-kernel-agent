@@ -1,3 +1,3 @@
-## Handoff
+## Commit review
 
-Direction and Experiment recording are disabled. Follow `skills/runtime-records/SKILL.md` for the exact report schema. `candidate_ready` must cite `gateway_record_ids` containing a passing standard full Evaluate of the exact clean HEAD; do not use `selected_experiment_id`. `pivot` uses `direction_terminal`, and `blocked` requires `handoff_reason=blocked` plus a concrete `blocker`. In pooled search only, `candidate_ready` may use `cross_trajectory_share`.
+Direction and Experiment recording are disabled. Use `submit-kernel` when you judge an exact reachable Agent Git commit ready to serve as a final implementation for the current mode; it must already have a passing full Evaluate with complete per-Shape performance. Submit when ready, not mechanically after every Evaluate.

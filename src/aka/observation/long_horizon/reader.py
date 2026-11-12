@@ -30,7 +30,10 @@ PROGRESS_STAGES = {
     "failed": ("Failed", None), "interrupted": ("Interrupted", None),
     "v1_interrupted": ("Baseline interrupted", "prepare"), "waiting": ("Waiting for records", "prepare"),
 }
-TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens")
+TOKEN_FIELDS = (
+    "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
+    "cache_write_tokens", "total_tokens",
+)
 SCOPE = "Settled Episode Agent usage. Excludes setup, V1, independent reviewers and auxiliary CLIs. Current invocation usage settles when the call returns."
 
 
@@ -87,7 +90,7 @@ def iso(value):
 def usage(value):
     value = obj(value)
     measurement = value.get("measurement", "unavailable")
-    if measurement not in {"exact", "partial", "unavailable"}:
+    if measurement not in {"exact", "estimated", "partial", "unavailable"}:
         measurement = "unavailable"
     return {**{key: integer(value.get(key)) if measurement != "unavailable" else None
                for key in TOKEN_FIELDS}, "measurement": measurement}

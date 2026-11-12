@@ -118,12 +118,12 @@ submitted as a single-GPU problem, even if other metadata mentions multiple GPUs
 
 ### Exposed and hidden evaluator Shapes
 
-Current main exposes evaluator Shapes by default in both Leaderboard and Production.
+Current main exposes evaluator Shapes by default in Fast, Performance and Ultra.
 In that mode the Agent can see `reference.py`, `input.py`, `shapes.json`, and any
 present `metadata.json`, `roofline.json`, and `valid.py`.
 
 `--no-expose-evaluator-shapes` requests the hidden-shape flow. It is supported only
-for a Native Atrex-Bench operator in Production mode. The Agent then sees
+for a Native Atrex-Bench operator in Performance or Ultra mode. The Agent then sees
 `reference.py`, `input.py`, and `agent_problem.json`, while exact evaluator Shapes and
 detailed evaluator metadata stay private. If Light cannot construct that projection, it
 rejects the launch explicitly; it never degrades the request to an exposed workspace.
@@ -201,7 +201,7 @@ Before launch, verify all of the following:
   agree on the calling and correctness contract;
 - the requested Agate hardware can run the operator, including its GPU count;
 - the selected framework and candidate file system are compatible;
-- hidden-shape Production has a valid `agent_problem.json` or permits AKA to generate
+- hidden-shape Performance/Ultra has a valid `agent_problem.json` or permits AKA to generate
   one before setup;
 - the Campaign uses a fresh workspace when the problem bytes, mode, visibility, or
   candidate layout intentionally change.

@@ -13,7 +13,7 @@ from copy import deepcopy
 
 JOURNAL_TOOLS = {
     "direction_update": "update-direction", "experiment_record": "record-experiment",
-    "episode_report": "episode-report",
+    "kernel_submit": "submit-kernel",
     "direction_prioritize": "prioritize-direction",
 }
 DIRECTION_TOOLS = {
@@ -37,7 +37,7 @@ def _object(properties, required):
 
 
 def journal_schema(operation, body, *, research_records=False, directions_enabled=None,
-                   experiments_enabled=None, supervisor_git=True):
+                   experiments_enabled=None):
     """The schema describes the JSON request file, not its HTTP envelope."""
     from aka.light.workflow.journal_service import (
         DIRECTION_PROPOSAL_FIELDS,
@@ -52,7 +52,6 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
     from aka.light.workflow.direction_lifecycle import (
         DIRECTION_ACTIONS,
         DIRECTION_REVISION_ACTION,
-        DIRECTION_STATUS,
         CLOSURES,
     )
     from aka.light.workflow.direction_genealogy import RELATIONSHIPS
@@ -63,28 +62,16 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
         return {"available": False, "reason": "directions_disabled"}
     if operation in EXPERIMENT_TOOLS and not experiments_enabled:
         return {"available": False, "reason": "experiments_disabled"}
-    if operation == "episode_report":
-        properties = {"status": {"enum": ["candidate_ready", "pivot", "blocked"]}, "summary": _text(),
-                      "handoff_reason": {"enum": ["direction_terminal", "cross_trajectory_share", "blocked"]},
-                      "accepted_ppu_diagnostics": {"type": "array", "items": {"type": "object"}}}
-        required = {"status", "summary", "handoff_reason"}
-        status = body.get("status")
-        status = status if isinstance(status, str) else None
-        if status in {None, "candidate_ready"}:
-            field = "selected_experiment_id" if experiments_enabled else "gateway_record_ids"
-            properties[field] = ({"type": "string", "pattern": "^experiment_[0-9a-f]{32}$"}
-                                 if experiments_enabled else _ids("gateway-", minimum=1))
-            if status == "candidate_ready":
-                required.add(field)
-            if not supervisor_git:
-                properties["candidate_commit"] = {"type": "string", "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$"}
-                if status == "candidate_ready":
-                    required.add("candidate_commit")
-        if status in {None, "blocked"}:
-            properties["blocker"] = _text()
-            if status == "blocked":
-                required.add("blocker")
-        return _object(properties, required)
+    if operation == "kernel_submit":
+        return _object(
+            {
+                "kernel_commit_id": {
+                    "type": "string",
+                    "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
+                }
+            },
+            {"kernel_commit_id"},
+        )
     if operation == "experiment_record":
         from aka.legacy.evaluation.evidence_fields import (
             QUERY_ID_RE, WIKI_ID_RE, WIKI_CITE_RE, WIKI_USAGE_DISPOSITIONS, WIKI_USAGE_STATUSES,
@@ -348,7 +335,7 @@ def field_issues(body, schema):
 
 
 def augment_error(response, *, route, request, research_records=False, directions_enabled=None,
-                  experiments_enabled=None, supervisor_git=True, parser=None, catalog=()):
+                  experiments_enabled=None, parser=None, catalog=()):
     """Add only public format guidance; preserve authoritative recovery/classification."""
     directions_enabled = research_records if directions_enabled is None else directions_enabled
     experiments_enabled = research_records if experiments_enabled is None else experiments_enabled
@@ -369,8 +356,7 @@ def augment_error(response, *, route, request, research_records=False, direction
         body = body if isinstance(body, dict) else {}
         schema = journal_schema(operation, body, research_records=research_records,
                                 directions_enabled=directions_enabled,
-                                experiments_enabled=experiments_enabled,
-                                supervisor_git=supervisor_git)
+                                experiments_enabled=experiments_enabled)
         if schema is not None:
             result["request_schema"] = schema
             issues = field_issues(body, schema)
@@ -387,64 +373,6 @@ def augment_error(response, *, route, request, research_records=False, direction
             ]
         if operation in JOURNAL_TOOLS:
             result["operation"] = JOURNAL_TOOLS[operation]
-        if operation == "episode_report":
-            status = body.get("status")
-            evidence_instruction = (
-                (
-                    "Select a visible Experiment with a supported measured decision that cites a passing standard "
-                    "full Evaluate of the exact committed source. Historical evidence may be "
-                    "reused when it still matches; do not add gateway_record_ids directly. "
-                    if experiments_enabled
-                    else "Cite gateway_record_ids including a passing standard full Evaluate "
-                    "of the exact committed source; do not add selected_experiment_id. "
-                )
-                if status == "candidate_ready"
-                else (
-                    "A pivot does not nominate a candidate: omit selected_experiment_id, "
-                    "gateway_record_ids and blocker, and use handoff_reason=direction_terminal. "
-                    if status == "pivot"
-                    else "A blocked report does not nominate a candidate: omit "
-                    "selected_experiment_id and gateway_record_ids, provide blocker, and use "
-                    "handoff_reason=blocked. "
-                    if status == "blocked"
-                    else "Choose a valid status first; candidate_ready carries candidate evidence, "
-                    "while pivot and blocked omit it. "
-                )
-            )
-            direction_instruction = (
-                (
-                    "direction_terminal may preserve local in-progress Directions. For "
-                    "candidate_ready, its selected Experiment may belong to an in-progress, "
-                    "completed, or abandoned visible Direction. Close every local active "
-                    "Direction with block only for a blocked report. cross_trajectory_share "
-                    "still requires an in-progress Direction and is available only to "
-                    "candidate_ready in pooled search. "
-                )
-                if directions_enabled and experiments_enabled
-                else (
-                    "direction_terminal may preserve local in-progress Directions. Close every "
-                    "local active Direction with block only for a blocked report. "
-                    "cross_trajectory_share is available only to candidate_ready in pooled search. "
-                    if directions_enabled
-                    else "No Direction mutation is required because Direction recording is disabled. "
-                )
-            )
-            instruction = (
-                "A validation rejection does not complete the Episode. Continue the current "
-                "optimization unless a valid handoff condition exists. Every report requires "
-                "handoff_reason=direction_terminal, cross_trajectory_share, or blocked; the "
-                "second is available only in pooled search with status=candidate_ready and a "
-                "passing standard full Evaluate. Correct the report fields or cited evidence and "
-                "resubmit only when that condition is satisfied. "
-                + evidence_instruction
-                + direction_instruction
-            )
-            from aka.light.runtime.request_errors import REPAIR_REQUEST
-            if error.get("next_action") == REPAIR_REQUEST:
-                error["next_action"] = instruction
-                if result.get("recovery") == [{"instruction": REPAIR_REQUEST}]:
-                    result["recovery"] = []
-            result["recovery"].append({"instruction": instruction})
     elif route == "/v1/gateway/execute" and parser is not None:
         argv = request.get("argv")
         argv = argv if isinstance(argv, list) else []

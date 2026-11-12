@@ -28,8 +28,6 @@ class ManagedCampaign(Campaign):
             gpu_clock_mhz=evaluation.gpu_clock_mhz,
             min_improvement_pct=evaluation.min_improvement_pct,
             problem_generation_timeout=settings.setup_timeout,
-            v1_ask_codex="codex" in settings.framework_baseline_reviewers,
-            v1_ask_qoder="qoder" in settings.framework_baseline_reviewers,
             agent_sandbox=workflow.agent.options.sandbox,
             bwrap_executable=workflow.agent.options.bwrap_executable,
             agent_read_only_paths=workflow.agent.options.read_only_paths)
@@ -88,6 +86,20 @@ class ManagedCampaign(Campaign):
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude",
                      reasoning_effort="max", extra_environment=None, **legacy):
         environment = dict(extra_environment or {})
+        # Every auxiliary Agent invocation gets a durable Campaign-private
+        # transcript even when its caller did not request a more specific
+        # Review archive. Explicit Review capture roots continue to win.
+        if "ATREX_SESSION_CAPTURE_DIR" not in environment:
+            import re
+            from aka.light.runtime.paths import supervisor_campaign_root
+
+            role = str(environment.get("ATREX_AGENT_WORKSPACE_ROLE") or "auxiliary")
+            role = re.sub(r"[^a-zA-Z0-9_.-]+", "-", role).strip("-.") or "auxiliary"
+            environment["ATREX_SESSION_CAPTURE_DIR"] = str(
+                supervisor_campaign_root(self.workspace)
+                / "sessions"
+                / role
+            )
         # Keep remote credentials/authority out of the selected Agent; its
         # session boundary obtains only a scoped ToolHost capability.
         result = self.agent.runtime(agent_cli).run(AgentRunRequest(
@@ -124,9 +136,8 @@ class ManagedCampaign(Campaign):
                 platform=self.platform))
 
         # Native tasks enter the unified representation before V0 is committed
-        # or measured.  Framework Baseline therefore edits the same source tree
-        # whose identity is recorded by V0 instead of migrating a measured raw
-        # kernel.py after the fact. SOL remains on its legacy wire contract.
+        # or measured, so every optimization segment sees the same source tree
+        # whose identity was recorded by V0. SOL remains on its legacy wire contract.
         if (not self.module_options.source_tree and initial.kind != "sol"
                 and self.atrex_bench_root):
             from aka.contracts.content import SourceContent, WorkspaceFile
@@ -165,7 +176,7 @@ class ManagedCampaign(Campaign):
                 problem_files=self.problem.agent.files)
             self._link_runtime()
             from aka.light.workspace.state import v0_baseline_commit
-            result = self._run_v0_evaluator_with_correctness_prefetch()
+            result = self._run_v0_evaluator()
             self._finalize_v0_measurement(result, v0_baseline_commit(self.workspace))
             return
         self.candidate_workspace.initialize_at(self.workspace, content)

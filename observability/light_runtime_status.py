@@ -37,29 +37,29 @@ AGATE_KINDS = frozenset(
     {"run", "evaluate", "same_allocation_abba", "abba", "profile", "check", "disassemble", "dev"}
 )
 def _episode_rows(attempts: list[dict], active: int | None) -> list[dict]:
+    """Render Episode boundaries as execution segments, not acceptance gates."""
     rows = []
     for attempt in attempts:
         episode = attempt.get("episode")
         if type(episode) is not int:
             continue
         status = str(attempt.get("status") or "unmeasured")
-        accepted = attempt.get("accepted") is True
-        if accepted:
-            category = "completed"
-        elif episode == active:
+        if episode == active:
             category = "running"
         elif status in TERMINAL_EPISODE_STATUSES:
-            category = "failed" if status in {"failed", "invalid_handoff", "interrupted"} else "completed"
+            category = "failed" if status in {"failed", "interrupted"} else "completed"
         else:
             category = "stalled"
         rows.append(
             {
                 "episode": episode,
-                "version": attempt.get("version", attempt.get("memory_version")),
                 "status": status,
                 "category": category,
-                "accepted": accepted,
                 "session_id": attempt.get("session_id"),
+                "agent_head_commit_id": (
+                    attempt.get("candidate_kernel_commit_id")
+                    or attempt.get("candidate_commit")
+                ),
                 "summary": attempt.get("summary"),
                 "violation": attempt.get("violation"),
             }
@@ -68,11 +68,10 @@ def _episode_rows(attempts: list[dict], active: int | None) -> list[dict]:
         rows.append(
             {
                 "episode": active,
-                "version": None,
                 "status": "running",
                 "category": "running",
-                "accepted": False,
                 "session_id": None,
+                "agent_head_commit_id": None,
                 "summary": None,
                 "violation": None,
             }
@@ -125,17 +124,11 @@ def _progress(scope) -> dict:
     paths = [root / "state.json", root / "active_episode.json", scope.workspace / "memory/live.json"]
     updated = max((value for value in (_mtime(path) for path in paths) if value), default=None)
     current_episode = active.get("episode") if type(active.get("episode")) is int else None
-    current_version = (
-        active.get("memory_version")
-        if type(active.get("memory_version")) is int
-        else None
-    )
     return {
         "campaign_id": identity.get("campaign_id"),
         "phase": phase,
         "writer_active": running,
         "episode": current_episode,
-        "version": current_version,
         "completed_episodes": state.get("episodes"),
         "updated_at": updated,
     }
@@ -375,7 +368,6 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                 "phase": progress["phase"],
                 "writer_active": progress["writer_active"],
                 "current_episode": progress["episode"],
-                "current_version": progress["version"],
                 "completed_episodes": progress["completed_episodes"],
                 "latest_activity_at": latest_activity_at,
                 "stagnation_seconds": age,
@@ -408,7 +400,7 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
             ],
         }
     return {
-        "schema_version": 2,
+        "schema_version": 3,
         "observed_at": observed_at(),
         "campaign_workspace": str(scopes[0].workspace),
         "stale_after_seconds": stale_after,
@@ -442,9 +434,9 @@ def render(value: dict) -> str:
         lines += ["", f"[{scope['scope']}] Episodes"]
         lines.append(
             table(
-                ["Episode", "Version", "Status", "Category", "Accepted", "Session"],
+                ["Episode", "Status", "Category", "Agent HEAD", "Session"],
                 [
-                    [row["episode"], row["version"], row["status"], row["category"], row["accepted"], row["session_id"]]
+                    [row["episode"], row["status"], row["category"], row["agent_head_commit_id"], row["session_id"]]
                     for row in scope["episodes"]
                 ],
             )

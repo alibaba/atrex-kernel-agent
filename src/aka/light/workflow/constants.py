@@ -8,7 +8,9 @@ from __future__ import annotations
 from pathlib import Path
 from aka.legacy.evaluation.resources import profile_driver_script
 from aka.legacy.task.problem.resources import native_harness_script
-from aka.legacy.acceptance.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
+from aka.legacy.acceptance.review import (
+    DEPENDENCY_REVIEW_SCHEMA_VERSION as DEPENDENCY_REVIEW_SCHEMA_VERSION,
+)
 from aka.contracts.evaluation import (
     DEFAULT_ABBA_REPEATS,
     DEFAULT_EVALUATION_STEP_TIMEOUT,
@@ -28,28 +30,14 @@ PROFILE_DRIVER = profile_driver_script()
 SANDBOX_TOOL = REPO_ROOT / "evaluation" / "gateway.py"
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
 SANDBOX_FULL_WORKFLOW_PROMPT = PROMPTS_DIR / "sandbox_full_workflow.md"
-CONVERT_PERF_TOL = (
-    0.05  # triton->gluon is a direct translation: gluon must be within +5% of triton
-)
-DEFAULT_CONVERT_AFTER = (
-    3  # mandatory Triton->Gluon escalation after three consecutive stalls
-)
 SUPPLEMENTAL_REPAIR_PREFIX = "Supplemental numerical probes"
 SUPPLEMENTAL_PENDING_PREFIX = "Supplemental validation is incomplete"
-DEFAULT_HANDOFF_RESUMES = 2
 DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES = 5
 DEFAULT_VERIFY_REPEATS = DEFAULT_ABBA_REPEATS
 # Upstream v0.4 still names this Campaign field ``verify_run_timeout``.
 # Keep the structural field while binding it to Light's one Runtime-owned
 # per-Shape evaluation budget.
 DEFAULT_VERIFY_RUN_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
-FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
-FRAMEWORK_BASELINE_VERSION = (
-    1  # the framework baseline always occupies v1, retries overwrite it
-)
-FRAMEWORK_BASELINE_TIMEOUT_S = 28800
-FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
-FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
 DEPENDENCY_REVIEW_PROMPT = resource("prompts/dependency_review.md")
 RESEARCH_CLAIM_REVIEW_PROMPT = resource("prompts/research_claim_review.md")
 AGENT_PROBLEM_GENERATION_PROMPT = resource("prompts/generalize_agent_problem.md")

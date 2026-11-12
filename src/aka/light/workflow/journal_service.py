@@ -12,6 +12,7 @@ import fcntl
 import hashlib
 import inspect
 import json
+import logging
 import math
 import os
 import re
@@ -194,10 +195,12 @@ def _claim_review_session_audit(value: object) -> dict[str, object] | None:
     """Validate bounded Supervisor-owned links to captured reviewer conversations."""
     if value is None:
         return None
-    if not isinstance(value, Mapping) or value.get("schema") != (
-        "atrex.research-claim-review-session.v1"
-    ):
+    if not isinstance(value, Mapping) or value.get("schema") not in {
+        "atrex.research-claim-review-session.v1",
+        "atrex.research-claim-review-session.v2",
+    }:
         raise ValueError("research review Session audit metadata is invalid")
+    schema = value["schema"]
     attempts = value.get("attempts")
     if not isinstance(attempts, list) or not 1 <= len(attempts) <= 4:
         raise ValueError("research review Session audit attempts are invalid")
@@ -210,6 +213,7 @@ def _claim_review_session_audit(value: object) -> dict[str, object] | None:
         session_id = row.get("session_id")
         status = row.get("status")
         conversation_path = row.get("conversation_path")
+        token_usage_path = row.get("token_usage_path")
         if type(attempt) is not int or attempt < 1 or attempt > 4:
             raise ValueError(f"research review Session attempt {index} number is invalid")
         if not isinstance(session_id, str) or len(session_id) > 512:
@@ -228,6 +232,25 @@ def _claim_review_session_audit(value: object) -> dict[str, object] | None:
                 raise ValueError(
                     f"research review Session attempt {index} conversation path is invalid"
                 )
+        if token_usage_path is not None:
+            if (
+                not isinstance(token_usage_path, str)
+                or not token_usage_path
+                or len(token_usage_path) > 2048
+                or token_usage_path.startswith("/")
+                or ".." in token_usage_path.split("/")
+                or not token_usage_path.endswith("/token-usage.json")
+            ):
+                raise ValueError(
+                    f"research review Session attempt {index} token usage path is invalid"
+                )
+        if (
+            schema == "atrex.research-claim-review-session.v2"
+            and (conversation_path is None) != (token_usage_path is None)
+        ):
+            raise ValueError(
+                f"research review Session attempt {index} archive is incomplete"
+            )
         error = row.get("error")
         if error is not None and (
             not isinstance(error, Mapping)
@@ -244,6 +267,7 @@ def _claim_review_session_audit(value: object) -> dict[str, object] | None:
             "exit_status": row.get("exit_status"),
             "timed_out": bool(row.get("timed_out", False)),
             "conversation_path": conversation_path,
+            "token_usage_path": token_usage_path,
             "resumed": bool(row.get("resumed", False)),
         }
         if error is not None:
@@ -253,7 +277,7 @@ def _claim_review_session_audit(value: object) -> dict[str, object] | None:
             }
         normalized.append(normalized_row)
     return {
-        "schema": "atrex.research-claim-review-session.v1",
+        "schema": schema,
         "attempts": normalized,
     }
 
@@ -393,22 +417,18 @@ def initialize_journal(
         "episode": episode,
         "memory_version": memory_version,
         "base_commit": base_commit,
-        # Public identity for the same source in Agent-owned Git. The
-        # controller commit above remains private archival state.
+        # Public identity for the same V0 source in Agent-owned Git. The
+        # controller commit above identifies only the private task baseline.
         "base_kernel_id": None,
         "episode_branch": branch,
         "state": "in_progress",
         "direction_events": [],
         "experiments": [],
-        "outcome": None,
-        "candidate_commit": None,
-        # Private recovery state only. When an evidence-complete
-        # candidate_ready report cannot be copied into the Supervisor archive,
-        # keep the Episode open and prevent a fallback blocked/pivot report from
-        # permanently discarding that candidate.
-        "pending_candidate_archive": None,
+        # Every explicit Agent commit submission and its independent source
+        # review are retained privately for audit. They are not handoffs and
+        # never mutate the incumbent or Agent Git.
+        "kernel_submissions": [],
         "created_at": _now(),
-        "finalized_at": None,
     }
     private_write(path, value)
     return value
@@ -429,6 +449,9 @@ def load_journal(path: Path) -> dict[str, Any]:
         value.get("experiments"), list
     ):
         raise RuntimeStateError("The private Runtime Episode state has invalid collections.")
+    submissions = value.setdefault("kernel_submissions", [])
+    if not isinstance(submissions, list):
+        raise RuntimeStateError("The private Runtime Episode state has invalid Kernel submissions.")
     if type(value.get("research_records", True)) is not bool:
         raise RuntimeStateError("The private Runtime Episode state has an invalid research policy.")
     base_kernel_id = value.get("base_kernel_id")
@@ -457,6 +480,41 @@ def load_journal(path: Path) -> dict[str, Any]:
             "Research-disabled Runtime Episode state contains unexpected research records."
         )
     return value
+
+
+def accepted_submission_kernel_ids(
+    campaign_root: Path,
+    *,
+    through_episode: int | None = None,
+) -> set[str]:
+    """Return exact Agent commits accepted by submit-kernel.
+
+    Journal acceptance is the only nomination source. MeasurementStore later
+    decides whether each nominated commit has a passing, complete Evaluate with
+    usable performance evidence.
+    """
+    accepted: set[str] = set()
+    for path in sorted((campaign_root / "episodes").glob("e*/journal.json")):
+        try:
+            episode = int(path.parent.name[1:])
+        except ValueError:
+            continue
+        if through_episode is not None and episode > through_episode:
+            continue
+        journal = load_journal(path)
+        if journal.get("episode") != episode:
+            raise RuntimeStateError(
+                "Private Runtime Episode state has a mismatched Journal identity."
+            )
+        for submission in journal.get("kernel_submissions", []):
+            if (
+                isinstance(submission, Mapping)
+                and submission.get("accepted") is True
+                and isinstance(commit_id := submission.get("kernel_commit_id"), str)
+                and KERNEL_RECORD_ID_RE.fullmatch(commit_id) is not None
+            ):
+                accepted.add(commit_id)
+    return accepted
 
 
 def _index_historical_journal(index: _HistoryIndex, path: Path, episode: int) -> None:
@@ -529,6 +587,9 @@ def _shared_research(campaign_root: Path) -> dict[str, Any]:
             "experiments": [],
             "experiments_by_id": {},
             "research_queue": [],
+            "accepted_submission_kernel_ids": {},
+            "lineage_winners": {},
+            "global_best": None,
         }
     except (OSError, ValueError) as error:
         raise RuntimeStateError("Shared Epoch research evidence is unreadable.") from error
@@ -542,6 +603,77 @@ def _shared_research(campaign_root: Path) -> dict[str, Any]:
         or not isinstance(value.get("research_queue", []), list)
     ):
         raise RuntimeStateError("Shared Epoch research evidence has an unsupported schema.")
+    lineage_winners = value.get("lineage_winners", {})
+    global_best = value.get("global_best")
+    if not isinstance(lineage_winners, dict) or (
+        global_best is not None and not isinstance(global_best, dict)
+    ):
+        raise RuntimeStateError("Shared submitted-winner evidence is invalid.")
+
+    def validate_winner(raw: object, lineage: str | None = None) -> dict[str, Any]:
+        if not isinstance(raw, dict):
+            raise RuntimeStateError("Shared submitted-winner evidence is invalid.")
+        commit_id = raw.get("kernel_commit_id")
+        record_id = raw.get("gateway_record_id")
+        latency = raw.get("latency_us_geomean")
+        raw_lineage = raw.get("lineage")
+        if (
+            not isinstance(commit_id, str)
+            or KERNEL_RECORD_ID_RE.fullmatch(commit_id) is None
+            or not isinstance(record_id, str)
+            or GATEWAY_RECORD_ID_RE.fullmatch(record_id) is None
+            or type(latency) not in {int, float}
+            or not math.isfinite(float(latency))
+            or float(latency) <= 0
+            or not isinstance(raw_lineage, str)
+            or re.fullmatch(r"T[1-9][0-9]*", raw_lineage) is None
+            or (lineage is not None and raw_lineage != lineage)
+        ):
+            raise RuntimeStateError("Shared submitted-winner evidence is invalid.")
+        return deepcopy(raw)
+
+    validated_winners = {
+        lineage: validate_winner(raw, lineage)
+        for lineage, raw in lineage_winners.items()
+        if isinstance(lineage, str) and re.fullmatch(r"T[1-9][0-9]*", lineage)
+    }
+    if len(validated_winners) != len(lineage_winners):
+        raise RuntimeStateError("Shared submitted-winner evidence is invalid.")
+    validated_global = validate_winner(global_best) if global_best is not None else None
+    if validated_global is not None and not any(
+        item == validated_global for item in validated_winners.values()
+    ):
+        raise RuntimeStateError("Shared global best is not a lineage winner.")
+    accepted_by_lineage = value.get("accepted_submission_kernel_ids")
+    if accepted_by_lineage is None:
+        # A v1 publication from before accepted-submission Pareto tracking can
+        # prove only its published winner. Preserve that safe subset.
+        accepted_by_lineage = {
+            lineage: [winner["kernel_commit_id"]]
+            for lineage, winner in validated_winners.items()
+        }
+    if not isinstance(accepted_by_lineage, dict):
+        raise RuntimeStateError("Shared accepted-submission evidence is invalid.")
+    validated_accepted: dict[str, list[str]] = {}
+    for lineage, commit_ids in accepted_by_lineage.items():
+        if (
+            not isinstance(lineage, str)
+            or re.fullmatch(r"T[1-9][0-9]*", lineage) is None
+            or not isinstance(commit_ids, list)
+            or len(set(commit_ids)) != len(commit_ids)
+            or any(
+                not isinstance(commit_id, str)
+                or KERNEL_RECORD_ID_RE.fullmatch(commit_id) is None
+                for commit_id in commit_ids
+            )
+        ):
+            raise RuntimeStateError("Shared accepted-submission evidence is invalid.")
+        validated_accepted[lineage] = sorted(commit_ids)
+    for lineage, winner in validated_winners.items():
+        if winner["kernel_commit_id"] not in validated_accepted.get(lineage, []):
+            raise RuntimeStateError(
+                "Shared lineage winner is not an accepted submission."
+            )
     directions: dict[str, dict[str, Any]] = {}
     statuses: dict[str, str] = {}
     for direction_id, raw in value["directions"].items():
@@ -579,6 +711,9 @@ def _shared_research(campaign_root: Path) -> dict[str, Any]:
         "statuses": statuses,
         "experiments": experiments,
         "experiments_by_id": experiments_by_id,
+        "accepted_submission_kernel_ids": validated_accepted,
+        "lineage_winners": validated_winners,
+        "global_best": validated_global,
     }
 
 
@@ -1584,10 +1719,6 @@ def _progress_markdown(
     def commit(value: object) -> str:
         return f"`{value}`" if isinstance(value, str) and value else "none"
 
-    incumbent = board.get("incumbent")
-    incumbent = incumbent if isinstance(incumbent, Mapping) else {}
-    measured_best = frontier.get("best_full_evaluation")
-    measured_best = measured_best if isinstance(measured_best, Mapping) else {}
     latest = board.get("latest_result")
     latest = latest if isinstance(latest, Mapping) else {}
     baseline = board.get("v0_baseline")
@@ -1598,6 +1729,19 @@ def _progress_markdown(
     lineages = lineages if isinstance(lineages, Mapping) else {}
     current = lineages.get(current_lineage)
     current = current if isinstance(current, Mapping) else {}
+    submitted_winners = board.get("submitted_winners")
+    submitted_winners = (
+        submitted_winners if isinstance(submitted_winners, Mapping) else {}
+    )
+    lineage_winners = submitted_winners.get("lineages")
+    lineage_winners = lineage_winners if isinstance(lineage_winners, Mapping) else {}
+    global_best = submitted_winners.get("global_best")
+    global_best = global_best if isinstance(global_best, Mapping) else {}
+    lineage_winner = lineage_winners.get(current_lineage)
+    lineage_winner = (
+        lineage_winner if isinstance(lineage_winner, Mapping) else {}
+    )
+    visible_lineage_ids = set(lineages) | set(lineage_winners)
     raw_active_ids = current.get("active_direction_ids")
     active_ids = (
         [item for item in raw_active_ids if isinstance(item, str)]
@@ -1671,14 +1815,6 @@ def _progress_markdown(
         item.get("local_rank") if type(item.get("local_rank")) is int else 1 << 30,
         str(item.get("direction_id", "")),
     ))
-    best_latency = measured_best.get("latency_us_geomean")
-    best_latency_text = (
-        f"{best_latency:g} us"
-        if type(best_latency) in {int, float} and math.isfinite(float(best_latency))
-        else "not measured"
-    )
-    best_commit = measured_best.get("kernel_commit_id")
-    incumbent_commit = incumbent.get("kernel_commit_id")
     baseline_latency = baseline.get("latency_us_geomean")
     baseline_latency_text = (
         f"{baseline_latency:g} us"
@@ -1694,25 +1830,35 @@ def _progress_markdown(
         f"{commit(baseline.get('gateway_record_id'))}."
         if baseline else "- **V0 baseline:** private evidence is unavailable."
     )
-    best_line = (
-        f"- **Best verified Kernel commit ID:** {commit(best_commit)}; "
-        f"GeoMean: **{best_latency_text}**; evidence: "
-        f"{commit(measured_best.get('gateway_record_id'))}."
-    )
-    if isinstance(best_commit, str) and best_commit == incumbent_commit:
-        best_line = best_line[:-1] + "; also the promoted incumbent."
-        incumbent_line = None
-    else:
-        incumbent_line = (
-            f"- **Promoted incumbent commit ID:** {commit(incumbent_commit)}."
-        )
-
     def finite(value: object) -> float | None:
         return (
             float(value)
             if type(value) in {int, float} and math.isfinite(float(value))
             else None
         )
+
+    submitted_best_line = (
+        (
+            f"- **Global best accepted submission commit ID:** "
+            f"{commit(global_best.get('kernel_commit_id'))}; GeoMean: "
+            f"**{finite(global_best.get('latency_us_geomean')):g} us**; lineage: "
+            f"`{text(global_best.get('lineage'))}`; evidence: "
+            f"{commit(global_best.get('gateway_record_id'))}. This is an observed winner, "
+            "not an automatic checkout or promotion."
+            if finite(global_best.get("latency_us_geomean")) is not None
+            else "- **Global best accepted submission:** none observed."
+        )
+        if len(visible_lineage_ids) > 1
+        else None
+    )
+    lineage_winner_line = (
+        f"- **Best accepted submission for `{current_lineage}`:** "
+        f"{commit(lineage_winner.get('kernel_commit_id'))}; GeoMean: "
+        f"**{finite(lineage_winner.get('latency_us_geomean')):g} us**; evidence: "
+        f"{commit(lineage_winner.get('gateway_record_id'))}."
+        if finite(lineage_winner.get("latency_us_geomean")) is not None
+        else f"- **Best accepted submission for `{current_lineage}`:** none observed."
+    )
 
     latest_scope = latest.get("scope")
     latest_scope = latest_scope if isinstance(latest_scope, Mapping) else {}
@@ -1799,12 +1945,11 @@ def _progress_markdown(
         "> Runtime-managed, read-only projection. Do not edit this file; use the documented",
         "> Runtime mutation operations and treat Gateway Records as measurement truth.",
         "",
-        best_line,
-        *([incumbent_line] if incumbent_line is not None else []),
+        *([submitted_best_line] if submitted_best_line is not None else []),
+        lineage_winner_line,
         baseline_line,
         f"- **Current lineage:** `{current_lineage}`.",
         f"- **Last measured working Kernel commit ID:** {commit(current.get('working_kernel_commit_id'))}.",
-        f"- **Best verified lineage Kernel commit ID:** {commit(current.get('lineage_best_kernel_commit_id'))}.",
         f"- **Latest visible Gateway result and scope:** {latest_result_text}",
         f"- **Suggested next work/probe:** {suggested_next_work}",
         f"- **Current real blocker:** {blocker_text}",
@@ -1828,9 +1973,9 @@ def _progress_markdown(
         "## Lineages",
         "",
         (
-            "| Lineage | Last measured Kernel commit ID | Best verified Kernel commit ID | Focus Direction | Active Directions |"
+            "| Lineage | Last measured Kernel commit ID | Best accepted submission | Focus Direction | Active Directions |"
             if "directions" in modules
-            else "| Lineage | Last measured Kernel commit ID | Best verified Kernel commit ID |"
+            else "| Lineage | Last measured Kernel commit ID | Best accepted submission |"
         ),
         "| --- | --- | --- | --- | --- |" if "directions" in modules else "| --- | --- | --- |",
     ]
@@ -1838,7 +1983,7 @@ def _progress_markdown(
         item = raw if isinstance(raw, Mapping) else {}
         row = (
             f"| `{text(lineage)}` | {commit(item.get('working_kernel_commit_id'))} | "
-            f"{commit(item.get('lineage_best_kernel_commit_id'))}"
+            f"{commit((lineage_winners.get(lineage) or {}).get('kernel_commit_id'))}"
         )
         if "directions" in modules:
             raw_ids = item.get("active_direction_ids")
@@ -1946,10 +2091,10 @@ def _progress_markdown(
             "Terminal directions", closed, total=board.get("closed_directions_total")
         )
     lines.extend([
-        "## Visible-history per-Shape Pareto frontier",
+        "## Accepted-submission per-Shape Pareto frontier",
         "",
         (
-            f"Eligible visible full evaluations across local and imported peer history: "
+            f"Eligible full evaluations for accepted local and imported peer submissions: "
             f"**{frontier.get('evaluation_count', 0)}**; "
             f"covered Shapes: **{frontier.get('shape_count', 0)}**."
         ),
@@ -1966,7 +2111,7 @@ def _progress_markdown(
     if rows:
         if len(rows) > len(visible_rows):
             lines.extend([
-                f"Showing {len(visible_rows)} of {len(rows)} Shapes; read `frontier.json` for the complete frontier.",
+                f"Showing {len(visible_rows)} of {len(rows)} Shapes; read `frontier.json` for the complete accepted-submission frontier.",
                 "",
             ])
         lines.extend([
@@ -1981,7 +2126,7 @@ def _progress_markdown(
                 f"`{row.get('gateway_record_id', '')}` |"
             )
     else:
-        lines.append("_No eligible full-Evaluate history yet._")
+        lines.append("_No accepted submission has eligible full-Evaluate evidence yet._")
     lines.extend([
         "",
         "Each row is an observed per-Shape minimum, not a measured composite Kernel.",
@@ -2038,7 +2183,7 @@ def _mutable_journal(path: Path, module: str | None = None) -> dict[str, Any]:
             code=f"{module}_disabled",
             next_action=(
                 f"Do not use {label} mutation tools in this Episode. Continue with the enabled "
-                "modules and saved Gateway Records, then follow the current episode-report schema."
+                "modules, saved Gateway Records, and exact-commit submit-kernel when appropriate."
             ),
         )
     if journal.get("state") != "in_progress":
@@ -2441,47 +2586,8 @@ def _passing_evaluate(
     )
 
 
-def selected_evaluation(path: Path, journals_root: Path, source: bytes) -> dict[str, Any]:
-    """Controller-only lookup; revalidate exact source against the sealed report.
-
-    Pass ``SupervisorRuntime.journals_root`` explicitly, rather than inferring
-    the collection root from the Episode journal file's directory depth.
-    """
-    current = load_journal(path)
-    digest = "sha256:" + hashlib.sha256(source).hexdigest()
-    if current.get("state") != "candidate_ready" or current.get("candidate_kernel_digest") != digest:
-        raise ValueError("Selected report does not match the acceptance Kernel")
-    if not _module_enabled(current, "experiments"):
-        record_ids = _validate_record_ids(journals_root, current["outcome"].get("gateway_record_ids"),
-                                          label="Episode Report")
-    else:
-        selected_id = current["outcome"]["selected_experiment_id"]
-        matches = [item for item in current["experiments"] if item["experiment_id"] == selected_id]
-        if len(matches) != 1:
-            raise ValueError("Selected report has no unique Experiment")
-        record_ids = matches[0]["gateway_record_ids"]
-    for record_id in reversed(record_ids):
-        record = _read_private_gateway_evidence(journals_root, record_id)
-        if _passing_evaluate(
-            record, digest, kernel_id=current.get("candidate_kernel_id")
-        ):
-            return dict(record["result"], gateway_record_id=record_id)
-    raise ValueError("Selected report evidence has no passing standard Evaluate for this Kernel")
 
 
-def sealed_candidate_source(journal: dict[str, Any], git_workspace: Path) -> bytes | None:
-    """Read committed source only when it matches a finalized private report."""
-    if journal.get("state") != "candidate_ready":
-        return None
-    commit = journal.get("candidate_commit")
-    if (not journal.get("finalized_at") or not isinstance(commit, str)
-            or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", commit) is None):
-        raise RuntimeError("Private candidate report has no valid sealed commit")
-    from aka.light.workspace.sources import from_git
-    source = from_git(git_workspace, commit)
-    if journal.get("candidate_kernel_digest") != "sha256:" + hashlib.sha256(source).hexdigest():
-        raise RuntimeError("Sealed candidate commit does not match the private report digest")
-    return source
 
 
 def _validate_record_ids(
@@ -2495,13 +2601,10 @@ def _validate_record_ids(
     if not records:
         if allow_empty:
             return []
-        if label == "Episode Report":
-            raise field_error("gateway_record_ids", "candidate_ready requires non-empty gateway_record_ids citing a passing full Evaluate")
         raise AgentRequestError(
             "This use of the Experiment as measured evidence requires at least one real "
             "Kernel-bound Gateway Record in gateway_record_ids. An unmeasured Experiment is "
-            "allowed as a research note, but it cannot support a Direction closure or "
-            "candidate promotion.",
+            "allowed as a research note, but it cannot support a measured Direction closure.",
             code="experiment_evidence_required",
             next_action=(
                 "Cite an actual Evaluate, ABBA, Profile, Dev, Check, or Disassemble result in "
@@ -2761,7 +2864,7 @@ def record_experiment(
             if key in existing:
                 experiment[key] = deepcopy(existing[key])
     if any(key in value for key in ("wiki_usage", "wiki_query_ids", "wiki_usage_status")):
-        from aka.light.workflow.journal_projection import normalize_wiki_attribution
+        from aka.legacy.evaluation.evidence_fields import normalize_wiki_attribution
 
         experiment.update(
             {
@@ -2876,113 +2979,6 @@ def record_experiment(
     return result
 
 
-def validate_report_evidence(
-    path: Path,
-    campaign_root: Path,
-    workspace: Path,
-    *,
-    status: str,
-    selected_id: object,
-    gateway_record_ids: object = None,
-    source_policy: dict | None = None,
-    kernel_id: str | None = None,
-) -> tuple[dict[str, Any], dict[str, dict[str, Any]], bytes | None]:
-    """Read-only preflight shared by HTTP submission and Supervisor terminal rechecks."""
-    current = load_journal(path)
-    directions_enabled = _module_enabled(current, "directions")
-    experiments_enabled = _module_enabled(current, "experiments")
-    if not experiments_enabled:
-        if selected_id is not None:
-            raise ValueError(
-                "The Experiment module is disabled; cite gateway_record_ids instead of "
-                "selected_experiment_id"
-            )
-        if status != "candidate_ready":
-            if gateway_record_ids is not None:
-                raise ValueError(f"{status} cannot include gateway_record_ids")
-            directions = (_direction_views(path, campaign_root) if directions_enabled else {})
-            return current, dict(directions), None
-        records = _validate_record_ids(campaign_root, gateway_record_ids, label="Episode Report")
-        from aka.light.workspace.sources import snapshot as source_snapshot
-        source = source_snapshot(workspace, policy=source_policy)
-        digest = "sha256:" + hashlib.sha256(source).hexdigest()
-        if not _has_passing_evaluate(campaign_root, records, digest, kernel_id):
-            raise field_error("gateway_record_ids",
-                "Episode Report must cite a passing standard full Evaluate Gateway Record for "
-                "byte-identical current candidate source; inspect records/<ID>.json, repair the Kernel or "
-                "record IDs, then resubmit episode-report", code="candidate_evidence_mismatch",
-                recovery=[{"path": f"records/{record_id}.json",
-                           "instruction": "Check the result and its Kernel binding before correcting the report."}
-                          for record_id in records[:8]],
-            )
-        directions = (_direction_views(path, campaign_root) if directions_enabled else {})
-        return current, dict(directions), source
-    if gateway_record_ids is not None:
-        raise ValueError(
-            "The Experiment module is enabled; select an Experiment with "
-            "selected_experiment_id instead of gateway_record_ids"
-        )
-    history = _visible_history(path, campaign_root)
-    current = history.current
-    directions = (_direction_views(path, campaign_root, history=history)
-                  if directions_enabled else {})
-    if status != "candidate_ready":
-        if selected_id is not None and selected_id != "":
-            raise ValueError(f"{status} cannot include selected_experiment_id")
-        return current, directions, None
-    if not isinstance(selected_id, str) or EXPERIMENT_ID_RE.fullmatch(selected_id) is None:
-        raise ValueError("candidate_ready requires a valid selected_experiment_id")
-    current_matches = [
-        item
-        for item in current["experiments"]
-        if isinstance(item, dict) and item.get("experiment_id") == selected_id
-    ]
-    if len(current_matches) > 1:
-        raise RuntimeStateError(
-            "The current Episode contains duplicate Experiment identities."
-        )
-    selected = (
-        current_matches[0]
-        if current_matches
-        else history.experiments_by_id.get(selected_id)
-    )
-    if not isinstance(selected, dict):
-        raise ValueError(
-            "selected_experiment_id must identify a visible Experiment"
-        )
-    selected_review_quality = selected.get(
-        "claim_review_quality", selected.get("review_quality")
-    )
-    if selected_review_quality != "supported":
-        raise AgentRequestError(
-            "candidate_ready requires a visible Experiment with a supported measured decision.",
-            code="candidate_experiment_review_incomplete",
-            experiment_id=selected_id,
-            claim_review_quality=selected_review_quality,
-            next_action=(
-                "Revise a local Experiment using its stable experiment_id and address its projected "
-                "scope_safe_interpretation/scientific_next_check before nominating the candidate. "
-                "A historical Experiment may be reused without revision when its measured decision is supported "
-                "and still cites a passing full Evaluate of the exact current commit."
-            ),
-        )
-    if directions_enabled:
-        direction_id = selected.get("direction_id")
-        if not isinstance(direction_id, str) or direction_id not in directions:
-            raise ValueError("selected Experiment Direction is outside visible history")
-        if directions[direction_id]["status"] == "proposed":
-            raise ValueError("selected Experiment Direction must have been started")
-    records = _validate_record_ids(campaign_root, selected.get("gateway_record_ids"))
-    from aka.light.workspace.sources import snapshot as source_snapshot
-    kernel_source = source_snapshot(workspace, policy=source_policy)
-    kernel_digest = "sha256:" + hashlib.sha256(kernel_source).hexdigest()
-    if not _has_passing_evaluate(campaign_root, records, kernel_digest, kernel_id):
-        raise ValueError(
-            "selected Experiment must cite a passing Evaluate Gateway record whose "
-            "Kernel exactly matches the current candidate source; inspect the cited records "
-            "under records/<gateway_record_id>.json"
-        )
-    return current, directions, kernel_source
 
 
 class SupervisorJournalService:
@@ -2995,8 +2991,8 @@ class SupervisorJournalService:
         campaign_root: Path,
         evidence_root: Path,
         git_workspace: Path | None = None,
-        supervisor_git: bool = False,
         research_root: Path | None = None,
+        session_capture_root: Path | None = None,
         origin: Mapping[str, object] | None = None,
         claim_reviewer: Callable[..., Mapping[str, object]] | None = None,
     ) -> None:
@@ -3004,12 +3000,78 @@ class SupervisorJournalService:
         self.git_workspace = git_workspace or workspace
         self.campaign_root = campaign_root
         self.evidence_root = evidence_root
+        self.session_capture_root = (
+            session_capture_root.resolve() if session_capture_root is not None else None
+        )
         self.path = evidence_root / "journal.json"
-        self.supervisor_git = supervisor_git
         self.origin = dict(origin or {"trajectory": 1})
         self.claim_reviewer = claim_reviewer
         self.research = ResearchStore(
             research_root or campaign_root.parent / "research"
+        )
+
+    def record_token_checkpoint(
+        self,
+        *,
+        event: str,
+        checkpoint_id: str,
+        occurred_at: str,
+        identity: Mapping[str, object],
+    ) -> dict | None:
+        """Best-effort private milestone accounting; never changes Agent results."""
+        if self.session_capture_root is None:
+            return None
+        try:
+            from aka.light.workflow.token_checkpoints import capture_token_checkpoint
+
+            reference, _stored = capture_token_checkpoint(
+                audit_root=self.campaign_root.parent,
+                session_capture_root=self.session_capture_root,
+                event=event,
+                checkpoint_id=checkpoint_id,
+                occurred_at=occurred_at,
+                identity=identity,
+            )
+            return reference
+        except (OSError, TypeError, ValueError, RecursionError):
+            logging.getLogger(__name__).exception(
+                "Could not persist %s token checkpoint %s",
+                event,
+                checkpoint_id,
+            )
+            return None
+
+    def record_passing_full_evaluate_checkpoint(
+        self, record: Mapping[str, object]
+    ) -> dict | None:
+        """Checkpoint one newly completed, passing standard full Evaluate."""
+        from aka.light.experiment.frontier import standard_full_evaluation
+
+        parsed = standard_full_evaluation(dict(record))
+        if parsed is None or not parsed["passed"]:
+            return None
+        record_id = record.get("gateway_record_id")
+        created_at = record.get("created_at")
+        kernels = record.get("kernels")
+        candidate = (
+            kernels.get("candidate", {}) if isinstance(kernels, Mapping) else {}
+        )
+        if not isinstance(record_id, str) or not isinstance(created_at, str):
+            raise ValueError("Passing full Evaluate has no durable Record identity")
+        return self.record_token_checkpoint(
+            event="passing-full-evaluate",
+            checkpoint_id=record_id,
+            occurred_at=created_at,
+            identity={
+                "gateway_record_id": record_id,
+                "kernel_commit_id": (
+                    candidate.get("kernel_id")
+                    if isinstance(candidate, Mapping)
+                    else None
+                ),
+                "latency_us_geomean": parsed.get("latency_us_geomean"),
+                "measured_shape_count": len(parsed.get("latencies", {})),
+            },
         )
 
     @property
@@ -3299,10 +3361,11 @@ class SupervisorJournalService:
         """Checkpoint a Kernel-bound operation in the current lineage.
 
         Gateway Records remain the measurement truth. This projection records
-        only which committed source was most recently measured and which passing
-        standard full Evaluate is the best one observed by this lineage. ABBA
-        has two source identities and deliberately does not move the single
-        working-HEAD pointer.
+        only which committed source was most recently measured and which source
+        most recently passed Evaluate. ABBA has two source identities and
+        deliberately does not move the single working-HEAD pointer. Passing
+        Evaluate evidence remains in MeasurementStore; it enters the Pareto
+        frontier and winner set only after an accepted submit-kernel review.
         """
         kernel_commit_id = agent_result.get("kernel_commit_id")
         if (
@@ -3320,32 +3383,6 @@ class SupervisorJournalService:
         )
         if passing_evaluate:
             payload["last_correct_kernel_id"] = kernel_commit_id
-        latency = result.get("latency_us_geomean")
-        standard_full = (
-            passing_evaluate
-            and result.get("mode") == "full"
-            and result.get("input_scope") == "contract"
-            and type(latency) in {int, float}
-            and math.isfinite(float(latency))
-            and float(latency) > 0
-        )
-        if standard_full:
-            state = self.research.read()
-            lineages = state.get("lineages")
-            lineages = lineages if isinstance(lineages, Mapping) else {}
-            current = lineages.get(self.lineage)
-            current = current if isinstance(current, Mapping) else {}
-            prior_latency = current.get("lineage_best_latency_us")
-            if (
-                type(prior_latency) not in {int, float}
-                or not math.isfinite(float(prior_latency))
-                or float(prior_latency) <= 0
-                or float(latency) < float(prior_latency)
-            ):
-                payload.update(
-                    lineage_best_kernel_id=kernel_commit_id,
-                    lineage_best_latency_us=float(latency),
-                )
         self.research.checkpoint_lineage(payload, origin=self.origin)
 
     def publish_research_files(
@@ -3390,10 +3427,24 @@ class SupervisorJournalService:
             self.workspace,
             commit_reachable=commit_reachable,
         )
+        shared = _shared_research(self.campaign_root)
+        local_accepted_kernel_ids = accepted_submission_kernel_ids(self.campaign_root)
+        peer_accepted_kernel_ids = {
+            commit_id
+            for commit_ids in shared.get(
+                "accepted_submission_kernel_ids", {}
+            ).values()
+            if isinstance(commit_ids, list)
+            for commit_id in commit_ids
+            if isinstance(commit_id, str)
+        }
+        accepted_kernel_ids = local_accepted_kernel_ids | peer_accepted_kernel_ids
         board = self.research.board(
             trajectory=trajectory if type(trajectory) is int and trajectory > 0 else 1,
             pareto_frontier=kernel_pareto_frontier(
-                store, record_ids=visible_record_ids
+                store,
+                record_ids=visible_record_ids,
+                kernel_ids=accepted_kernel_ids,
             ),
         )
         board["latest_result"] = latest_gateway_result(
@@ -3419,6 +3470,35 @@ class SupervisorJournalService:
             "measured_shape_count": performance.get("measured_shape_count"),
             "correctness_status": correctness.get("status"),
             "gateway_record_id": baseline.get("gateway_record_id"),
+        }
+        visible_lineage_winners = {
+            lineage: deepcopy(winner)
+            for lineage, winner in shared.get("lineage_winners", {}).items()
+            if isinstance(winner, Mapping)
+            and isinstance(winner.get("kernel_commit_id"), str)
+            and commit_reachable(winner["kernel_commit_id"])
+        }
+        local_winner = kernel_pareto_frontier(
+            store,
+            record_ids=visible_record_ids,
+            kernel_ids=local_accepted_kernel_ids,
+        ).get("best_full_evaluation")
+        if isinstance(local_winner, Mapping):
+            visible_lineage_winners[f"T{trajectory}"] = dict(
+                local_winner,
+                trajectory=trajectory,
+                lineage=f"T{trajectory}",
+            )
+        board["submitted_winners"] = {
+            "lineages": visible_lineage_winners,
+            "global_best": (
+                min(
+                    visible_lineage_winners.values(),
+                    key=lambda item: float(item["latency_us_geomean"]),
+                )
+                if visible_lineage_winners
+                else None
+            ),
         }
         board = _git_reachable_projection(board, commit_reachable)
         publish_if_changed(
@@ -3984,16 +4064,9 @@ class SupervisorJournalService:
             "review": _agent_claim_review(review_receipt),
         }
 
-    def sealed_source(self) -> bytes | None:
-        if not self.supervisor_git:
-            return None
-        return sealed_candidate_source(load_journal(self.path), self.git_workspace)
-
     def execute(
         self, request: Mapping[str, object], *,
-        validate_candidate: Callable[[bytes], dict[str, Any]] | None = None,
-        agent_kernel_id: str | None = None,
-        seal_candidate: Callable[[str, bytes], str] | None = None,
+        review_kernel: Callable[[str], dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         operation = request.get("operation")
         if not isinstance(operation, str):
@@ -4001,7 +4074,7 @@ class SupervisorJournalService:
         fields = {
             "direction_update": "request",
             "experiment_record": "request",
-            "episode_report": "request",
+            "kernel_submit": "request",
             "direction_prioritize": "request",
         }
         if operation not in fields:
@@ -4015,12 +4088,12 @@ class SupervisorJournalService:
             raise AgentRequestError(
                 f"{module.capitalize()} tools are disabled for this Episode",
                 code=f"{module}_disabled",
-                next_action="Use only the enabled Runtime tools and follow the current episode-report schema.",
+                next_action="Use only the enabled Runtime research and submit-kernel tools.",
             )
         required = {"operation"}
         required.add(fields[operation])
         require_fields(dict(request), required, label="Runtime research/report operation")
-        if operation in {"direction_update", "experiment_record", "episode_report"}:
+        if operation in {"direction_update", "experiment_record", "kernel_submit"}:
             self._check_legacy_journal()
         if operation == "direction_update":
             body = request.get("request")
@@ -4185,16 +4258,119 @@ class SupervisorJournalService:
                 raise
             self._finish_claim_audit(audit_id, status="archived", result=final)
             return final
-        if operation == "episode_report":
+        if operation == "kernel_submit":
             body = request.get("request")
             if not isinstance(body, Mapping):
-                raise ValueError("episode_report requires a request object")
-            return self._submit_report(
-                body,
-                validate_candidate=validate_candidate,
-                agent_kernel_id=agent_kernel_id,
-                seal_candidate=seal_candidate,
+                raise ValueError("kernel_submit requires a request object")
+            require_fields(
+                dict(body),
+                {"kernel_commit_id"},
+                label="Kernel submission",
             )
+            commit_id = body.get("kernel_commit_id")
+            if not isinstance(commit_id, str) or KERNEL_RECORD_ID_RE.fullmatch(commit_id) is None:
+                raise field_error(
+                    "kernel_commit_id",
+                    "kernel_commit_id must be one full Agent Git commit ID",
+                )
+            if review_kernel is None:
+                raise RuntimeStateError("Kernel submission review is unavailable")
+            reviewed = review_kernel(commit_id)
+            if not isinstance(reviewed, dict):
+                raise RuntimeStateError("Kernel submission review returned invalid state")
+            evaluation_evidence = deepcopy(
+                reviewed.get("evaluation_evidence", {"status": "missing"})
+            )
+            accepted = bool(reviewed.get("accepted")) and (
+                evaluation_evidence.get("status") == "passed"
+            )
+            reviewed = {**reviewed, "accepted": accepted}
+            journal = load_journal(self.path)
+            submissions = journal.setdefault("kernel_submissions", [])
+            if not isinstance(submissions, list):
+                raise RuntimeStateError("Kernel submission audit state is invalid")
+            submitted_at = _now()
+            audit = {
+                "kernel_commit_id": commit_id,
+                "submitted_at": submitted_at,
+                **deepcopy(reviewed),
+            }
+            if accepted:
+                submission_id = "submission-" + uuid.uuid4().hex
+                audit["submission_id"] = submission_id
+                checkpoint = self.record_token_checkpoint(
+                    event="accepted-submit-kernel",
+                    checkpoint_id=submission_id,
+                    occurred_at=submitted_at,
+                    identity={
+                        "kernel_commit_id": commit_id,
+                        "gateway_record_id": evaluation_evidence.get(
+                            "gateway_record_id"
+                        ),
+                    },
+                )
+                if checkpoint is not None:
+                    audit["token_checkpoint"] = checkpoint
+            submissions.append(audit)
+            private_write(self.path, journal)
+            review_status = reviewed.get("review", {})
+            source_accepted = (
+                not bool(reviewed.get("diagnostics"))
+                and isinstance(review_status, Mapping)
+                and "fail" not in review_status.values()
+            )
+            evidence_status = evaluation_evidence.get("status")
+            if accepted:
+                status = "reviewed"
+                runtime_action = (
+                    "The exact commit has a passing full Evaluate and passed final-source "
+                    "review. Continue development or end the Session."
+                )
+            elif not source_accepted:
+                status = "rejected"
+                runtime_action = (
+                    "Repair the cited final-source policy violations, commit the repair, "
+                    "run a full Evaluate for that exact commit, and submit it again."
+                )
+            elif evidence_status == "failed":
+                status = "rejected"
+                if (
+                    evaluation_evidence.get("reason_code")
+                    == "performance_result_incomplete"
+                ):
+                    runtime_action = (
+                        "The saved full Evaluate passed correctness but its performance result "
+                        "is incomplete or unparseable. Rerun a standard full Evaluate for this "
+                        "same commit, then submit it again."
+                    )
+                else:
+                    runtime_action = (
+                        "The saved full Evaluate for this exact commit did not pass correctness "
+                        "or could not be parsed. Repair and commit the candidate when needed, run "
+                        "a complete passing full Evaluate, then submit that commit."
+                    )
+            else:
+                status = "needs_evaluation"
+                runtime_action = (
+                    "Run a full Evaluate for this exact commit, then submit the same commit again."
+                )
+            result = {
+                "status": status,
+                "kernel_commit_id": commit_id,
+                "accepted": accepted,
+                "review": deepcopy(reviewed.get("review", {})),
+                "diagnostics": deepcopy(reviewed.get("diagnostics", [])),
+                "evaluation_evidence": evaluation_evidence,
+                "runtime_action": runtime_action,
+            }
+            if accepted:
+                return self._publish_after_mutation(
+                    result,
+                    direction_ids=frozenset(),
+                    experiment_ids=frozenset(),
+                    record_ids=frozenset(),
+                )
+            return result
         raise ValueError(f"unsupported Runtime research/report operation: {operation}")
 
     def _check_legacy_journal(self) -> None:
@@ -4270,532 +4446,8 @@ class SupervisorJournalService:
                 ),
             )
 
-    def _publish_report(self, current: dict[str, Any]) -> None:
-        try:
-            self._publish_legacy_report(current)
-        except OSError as error:
-            raise RuntimeStateError(
-                "Report is durably recorded but legacy handoff publication failed. "
-                "Restore storage access, then resubmit the identical episode-report; "
-                "do not rerun measurements",
-                code="report_publication_failed",
-            ) from error
-        except Exception as error:
-            raise RuntimeStateError(
-                "Report is durably recorded but its legacy handoff projection failed. "
-                "This is a Supervisor compatibility error; preserve the candidate and "
-                "evidence and ask the operator to repair the Runtime before resubmitting "
-                "the identical episode-report",
-                code="report_projection_failed",
-            ) from error
 
-    def _publish_legacy_report(self, current: dict[str, Any]) -> None:
-        """Adapt the private report to existing Long Horizon consumers, without Git writes."""
-        projection = dict(current, schema_version=1, runtime_journal_projection=True)
-        public_candidate_commit = current.get("candidate_kernel_id")
-        if not public_candidate_commit and not self.supervisor_git:
-            # Legacy Agent-owned Journals already store their public Git ID in
-            # candidate_commit and have no separate Supervisor archive.
-            public_candidate_commit = current.get("candidate_commit")
-        if "candidate_kernel_id" in projection:
-            projection["candidate_kernel_commit_id"] = projection.pop(
-                "candidate_kernel_id"
-            )
-        # ``current.candidate_commit`` is a Supervisor-private archival commit.
-        # The public projection and handoff use only the Agent's own Git ID.
-        projection["candidate_commit"] = public_candidate_commit
-        projection["base_commit"] = (
-            current.get("base_kernel_id") or current.get("base_commit")
-        )
-        projection.pop("base_kernel_id", None)
-        projection.pop("runtime_managed", None)
-        projection.pop("submitted_report", None)
-        projection.pop("pending_candidate_archive", None)
-        experiments = []
-        selected = current["outcome"].get("selected_experiment_id")
-        projection["outcome"] = dict(current["outcome"])
-        for index, item in enumerate(current["experiments"], 1):
-            row = dict(
-                {
-                    key: value
-                    for key, value in item.items()
-                    if key not in {"evidence", "action"}
-                },
-                # Compact Experiments renamed the Agent-authored conclusion to
-                # ``interpretation``.  Keep old finalized Journals readable while
-                # projecting every current Experiment to the legacy ``result`` key.
-                result=(
-                    item["interpretation"]
-                    if "interpretation" in item
-                    else item["analysis"]
-                ),
-                # Historical Experiments carried their own timestamp. Compact
-                # Experiments rely on the authoritative Journal/event audit
-                # time instead of duplicating it in every semantic record.
-                timestamp=item.get("recorded_at", current["created_at"]),
-                decision=(
-                    "keep_as_best" if item["experiment_id"] == selected else "discard"
-                ),
-            )
-            # Legacy reports retain the IDs and analysis. Measurement truth is
-            # read from the private store, never parsed from the Agent's prose.
-            for record_id in reversed(item["gateway_record_ids"]):
-                record = _read_private_gateway_evidence(self.campaign_root, record_id)
-                if item["experiment_id"] == selected and not _passing_evaluate(
-                    record,
-                    current["candidate_kernel_digest"],
-                    kernel_id=current.get("candidate_kernel_id"),
-                ):
-                    continue
-                if record["gateway_kind"] == "run" and _completed_record(record):
-                    result = record["result"]
-                    row["evaluation"] = {
-                        "correctness": "pass" if result.get("all_pass") is True else "fail",
-                        "latency_us_geomean": result.get("latency_us_geomean"),
-                        "latency_us_by_shape": result.get("latency_us_by_shape", {}),
-                    }
-                    break
-            experiments.append(row)
-            if item["experiment_id"] == selected:
-                projection["outcome"]["selected_experiment_index"] = index
-        projection["experiments"] = experiments
-        publish(
-            self.git_workspace,
-            ".atrex_long_horizon/journal.json",
-            (json.dumps(projection, ensure_ascii=False, allow_nan=False) + "\n").encode(),
-        )
-        handoff = {"status": current["state"]}
-        if public_candidate_commit:
-            handoff["candidate_commit"] = public_candidate_commit
-        # Handoff is the final publication: a failed journal write must not
-        # signal completion. Retrying the same report republishes these files.
-        publish(
-            self.git_workspace,
-            ".atrex_long_horizon/handoff.json",
-            (json.dumps(handoff) + "\n").encode(),
-        )
 
-    def _submit_report(
-        self, raw: Mapping[str, object], *,
-        validate_candidate: Callable[[bytes], dict[str, Any]] | None = None,
-        agent_kernel_id: str | None = None,
-        seal_candidate: Callable[[str, bytes], str] | None = None,
-    ) -> dict[str, object]:
-        persisted = load_journal(self.path)
-        experiments_enabled = _module_enabled(persisted, "experiments")
-        directions_enabled = _module_enabled(persisted, "directions")
-        # An accepted report is immutable and exactly replayable for publication
-        # recovery.  Check this before the current request schema so a report
-        # accepted by an older Runtime remains recoverable after an upgrade.
-        if persisted.get("state") != "in_progress":
-            if persisted.get("submitted_report") != dict(raw):
-                raise AgentRequestError(
-                    "This Episode already accepted a different report",
-                    code="journal_finalized",
-                    repairable=False,
-                )
-            self._publish_report(persisted)
-            return {"status": "accepted", "message": "Report already recorded; handoff republished"}
-        allowed = {
-            "status",
-            "summary",
-            "handoff_reason",
-            "selected_experiment_id",
-            "blocker",
-            "accepted_ppu_diagnostics",
-            "candidate_commit",
-        }
-        if self.supervisor_git:
-            allowed.remove("candidate_commit")
-        if not experiments_enabled:
-            allowed.remove("selected_experiment_id")
-            allowed.add("gateway_record_ids")
-        require_fields(
-            dict(raw),
-            {"status", "summary", "handoff_reason"},
-            optional=allowed,
-            label="Episode Report",
-        )
-        status = raw.get("status")
-        if not isinstance(status, str) or status not in {
-            "candidate_ready",
-            "pivot",
-            "blocked",
-        }:
-            raise ValueError("Episode Report status must be candidate_ready, pivot, or blocked")
-        pending_archive = persisted.get("pending_candidate_archive")
-        if status != "candidate_ready" and isinstance(pending_archive, Mapping):
-            pending_kernel_id = pending_archive.get("agent_kernel_id")
-            raise RuntimeStateError(
-                "A previously submitted candidate_ready report passed evidence validation, "
-                "but the Supervisor has not yet sealed its private Kernel archive. The "
-                "Episode remains open and cannot be finalized as blocked or pivoted while "
-                "that candidate is pending archival recovery.",
-                code="candidate_archive_pending",
-                next_action=(
-                    "Preserve the clean candidate HEAD and its Gateway Records. After the "
-                    "Supervisor archival fault is repaired, resubmit the same candidate_ready "
-                    "episode-report; do not submit blocked or pivot to work around a Runtime "
-                    "archive failure."
-                    + (
-                        f" Pending Agent Kernel commit: {pending_kernel_id}."
-                        if isinstance(pending_kernel_id, str) else ""
-                    )
-                ),
-            )
-        summary = _text(raw.get("summary"), "Episode Report summary")
-        handoff_reason = raw.get("handoff_reason")
-        if not isinstance(handoff_reason, str) or handoff_reason not in HANDOFF_REASONS:
-            raise field_error(
-                "handoff_reason",
-                "Episode Report handoff_reason must be direction_terminal, "
-                "cross_trajectory_share, or blocked",
-                code="handoff_reason_invalid",
-            )
-        if (status == "blocked") != (handoff_reason == "blocked"):
-            raise field_error(
-                "handoff_reason",
-                "blocked reports require handoff_reason=blocked; non-blocked reports "
-                "must use direction_terminal or cross_trajectory_share",
-                code="handoff_reason_mismatch",
-            )
-        blocker = raw.get("blocker")
-        if status == "blocked":
-            _text(blocker, "Episode Report blocker")
-        elif blocker is not None and blocker != "":
-            raise ValueError(f"Episode Report status {status} cannot include blocker")
-        selected_id = raw.get("selected_experiment_id")
-        if status == "candidate_ready" and (
-            not isinstance(agent_kernel_id, str)
-            or KERNEL_RECORD_ID_RE.fullmatch(agent_kernel_id) is None
-        ):
-            raise AgentRequestError(
-                "candidate_ready requires a clean committed Agent Kernel; HEAD is its Kernel commit ID.",
-                code="kernel_commit_required",
-                next_action=(
-                    "Commit the complete Kernel source tree, verify git status is clean, "
-                    "then resubmit episode-report."
-                ),
-            )
-        from aka.light.workspace.sources import policy_at
-        current, directions, kernel_source = validate_report_evidence(
-            self.path,
-            self.campaign_root,
-            self.workspace,
-            status=status,
-            selected_id=selected_id,
-            gateway_record_ids=raw.get("gateway_record_ids"),
-            source_policy=policy_at(self.git_workspace, committed=True),
-            kernel_id=agent_kernel_id,
-        )
-        if (
-            status == "candidate_ready"
-            and kernel_source is not None
-            and (self.git_workspace / ".git").exists()
-        ):
-            # A no-change outcome is scientifically valid, but it is a pivot,
-            # not a new candidate.  Reject it before correctness GPU work or
-            # commit sealing, and keep the Episode open so the Agent can submit
-            # the already-supported no-candidate terminal report.
-            from aka.light.workspace.sources import from_git
-
-            incumbent_source = from_git(
-                self.git_workspace, current["base_commit"]
-            )
-            if kernel_source == incumbent_source:
-                raise AgentRequestError(
-                    "candidate_ready source is identical to the incumbent comparison base.",
-                    code="candidate_matches_incumbent",
-                    next_action=(
-                        "Do not make a nominal source edit to manufacture a difference. If the "
-                        "incumbent remains best after the recorded work, submit "
-                        "{\"status\":\"pivot\",\"handoff_reason\":\"direction_terminal\","
-                        "\"summary\":\"<evidence-backed conclusion>\"}. A pivot nominates no "
-                        "candidate and needs no selected_experiment_id or gateway_record_ids; "
-                        "local Directions may remain in_progress for a later Episode."
-                    ),
-                )
-        if status == "candidate_ready" and experiments_enabled and not any(
-            isinstance(item, Mapping)
-            and item.get("experiment_id") == selected_id
-            for item in current["experiments"]
-        ):
-            # Evidence preflight deliberately permits a decision-supported visible
-            # Experiment from an earlier Episode when its passing full Evaluate
-            # still binds the exact candidate commit.  Finalized Journals and the
-            # compatibility handoff are Episode-local, however, so retain the
-            # selected immutable Experiment in this Episode before publication.
-            # This is a projection of already validated evidence, not a revision
-            # or a second claim-review submission.
-            reusable = [
-                item
-                for item in _visible_experiments(self.path, self.campaign_root)
-                if item.get("experiment_id") == selected_id
-            ]
-            if len(reusable) != 1:
-                raise RuntimeStateError(
-                    "Validated historical Experiment is no longer uniquely visible; "
-                    "the report was not accepted"
-                )
-            current["experiments"].append(deepcopy(reusable[0]))
-        if handoff_reason == "cross_trajectory_share":
-            if self.origin.get("cross_trajectory_sharing") is not True:
-                raise AgentRequestError(
-                    "This Episode is not running inside a cross-trajectory sharing search.",
-                    code="cross_trajectory_sharing_unavailable",
-                    handoff_reason=handoff_reason,
-                    next_action=(
-                        "Continue the current work in this Episode, use direction_terminal for an "
-                        "ordinary measured handoff, or report a real blocker."
-                    ),
-                )
-            if status != "candidate_ready":
-                raise field_error(
-                    "handoff_reason",
-                    "cross_trajectory_share requires status=candidate_ready and a reusable "
-                    "checkpoint backed by a passing standard full Evaluate of the exact "
-                    "committed source",
-                    code="handoff_reason_mismatch",
-                )
-        if directions_enabled:
-            history = _visible_history(self.path, self.campaign_root)
-            local_active = sorted(
-                direction_id
-                for direction_id, item in directions.items()
-                if direction_id not in history.shared_direction_ids
-                and item.get("status") == "in_progress"
-            )
-            selected_direction_id = None
-            if status == "candidate_ready" and experiments_enabled:
-                visible_experiments = {
-                    item.get("experiment_id"): item
-                    for item in _visible_experiments(
-                        self.path, self.campaign_root, history=history
-                    )
-                    if isinstance(item, Mapping)
-                    and isinstance(item.get("experiment_id"), str)
-                }
-                visible_experiments.update({
-                    item.get("experiment_id"): item
-                    for item in current.get("experiments", [])
-                    if isinstance(item, Mapping)
-                    and isinstance(item.get("experiment_id"), str)
-                })
-                selected_experiment = visible_experiments.get(selected_id)
-                selected_direction_id = (
-                    selected_experiment.get("direction_id")
-                    if isinstance(selected_experiment, Mapping) else None
-                )
-            if handoff_reason == "direction_terminal":
-                if (
-                    status == "candidate_ready"
-                    and experiments_enabled
-                    and (
-                        not isinstance(selected_direction_id, str)
-                        or directions.get(selected_direction_id, {}).get("status")
-                        not in {"in_progress", "completed", "abandoned"}
-                    )
-                ):
-                    raise AgentRequestError(
-                        "The nominated Experiment must belong to an in-progress, completed, "
-                        "or abandoned visible Direction for this handoff.",
-                        code="handoff_direction_mismatch",
-                        selected_experiment_id=selected_id,
-                        selected_direction_id=selected_direction_id,
-                        next_action=(
-                            "Select a supported visible Experiment attached to an in-progress, "
-                            "completed, or abandoned Direction and the exact candidate HEAD. "
-                            "Historical evidence is reusable when its full Evaluate still matches "
-                            "that commit."
-                        ),
-                    )
-            elif handoff_reason == "blocked" and local_active:
-                raise AgentRequestError(
-                    "A blocked handoff requires all local active Directions to be closed with block.",
-                    code="handoff_not_ready",
-                    handoff_reason=handoff_reason,
-                    active_direction_ids=local_active,
-                    next_action=(
-                        "Record the concrete blocker by closing every local active Direction with "
-                        "block, then resubmit the blocked episode-report."
-                    ),
-                )
-            elif (
-                handoff_reason == "cross_trajectory_share"
-                and status == "candidate_ready"
-                and experiments_enabled
-                and (
-                    not isinstance(selected_direction_id, str)
-                    or directions.get(selected_direction_id, {}).get("status")
-                    != "in_progress"
-                )
-            ):
-                raise AgentRequestError(
-                    "A cross-trajectory checkpoint must be owned by an in-progress Direction.",
-                    code="handoff_direction_mismatch",
-                    selected_experiment_id=selected_id,
-                    selected_direction_id=selected_direction_id,
-                    next_action=(
-                        "Select the measured Experiment for the active Direction being shared, "
-                        "or use direction_terminal for an ordinary handoff."
-                    ),
-                )
-        candidate_commit = raw.get("candidate_commit") or ""
-        if status == "candidate_ready" and not self.supervisor_git:
-            if (
-                not isinstance(candidate_commit, str)
-                or re.fullmatch(r"[0-9a-f]{40}(?:[0-9a-f]{24})?", candidate_commit) is None
-            ):
-                raise ValueError(
-                    "candidate_ready requires the full candidate_commit from git rev-parse HEAD; "
-                    "commit the complete Kernel source tree before reporting"
-                )
-            from aka.light.workspace.git import EpisodeWorktree
-
-            violation, _ = EpisodeWorktree(
-                current["episode"],
-                current["base_commit"],
-                current["episode_branch"],
-                self.git_workspace,
-            ).validate_candidate(candidate_commit)
-            if violation:
-                raise ValueError(violation)
-        elif candidate_commit:
-            raise ValueError(f"{status} cannot include candidate_commit")
-        next_directions = [
-            item["name"]
-            for item in directions.values()
-            if item["status"] in {"proposed", "deferred"}
-        ]
-        accepted_ppu_diagnostics: list[dict[str, Any]] = []
-        if "accepted_ppu_diagnostics" in raw:
-            from aka.light.workflow.journal_projection import (
-                normalize_accepted_ppu_diagnostics,
-                validate_accepted_ppu_evidence,
-            )
-
-            accepted_ppu_diagnostics, errors = normalize_accepted_ppu_diagnostics(
-                raw["accepted_ppu_diagnostics"]
-            )
-            if not errors:
-                errors.extend(
-                    validate_accepted_ppu_evidence(accepted_ppu_diagnostics, self.workspace)
-                )
-            if errors:
-                raise ValueError("invalid accepted_ppu_diagnostics: " + "; ".join(errors))
-        if kernel_source is not None:
-            if validate_candidate is None:
-                raise RuntimeStateError("Supervisor candidate validation is unavailable; report was not accepted")
-            # All report/evidence checks precede GPU work. The callback measures
-            # these frozen bytes; only a pass may finalize or commit the report.
-            current["acceptance_checks"] = {
-                "five_case_correctness": validate_candidate(kernel_source),
-            }
-        if kernel_source is not None and self.supervisor_git:
-            if seal_candidate is None or agent_kernel_id is None:
-                raise RuntimeStateError(
-                    "Supervisor Agent-commit sealing is unavailable; report was not accepted"
-                )
-            try:
-                candidate_commit = seal_candidate(agent_kernel_id, kernel_source)
-            except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-                current["pending_candidate_archive"] = {
-                    "agent_kernel_id": agent_kernel_id,
-                    "candidate_kernel_digest": (
-                        "sha256:" + hashlib.sha256(kernel_source).hexdigest()
-                    ),
-                    "submitted_report": dict(raw),
-                    "failed_at": _now(),
-                    "failure": f"{type(error).__name__}: {error}"[:2000],
-                }
-                _save_journal(self.path, self.campaign_root, current)
-                raise RuntimeStateError(
-                    "Supervisor could not seal the evidence-complete candidate into its "
-                    "private Kernel archive. The Episode remains open for an identical "
-                    "candidate_ready retry.",
-                    code="candidate_archive_unavailable",
-                    next_action=(
-                        "Preserve the clean candidate HEAD and Gateway Records. Retry the same "
-                        "candidate_ready episode-report after the Supervisor archive is "
-                        "available; do not submit blocked or pivot as a fallback."
-                    ),
-                ) from error
-            from aka.light.workspace.git import EpisodeWorktree
-
-            violation, _ = EpisodeWorktree(
-                current["episode"], current["base_commit"], current["episode_branch"],
-                self.git_workspace,
-            ).validate_candidate(candidate_commit)
-            if violation:
-                from aka.light.workspace.git import UNCHANGED_CANDIDATE
-
-                if violation == UNCHANGED_CANDIDATE:
-                    raise AgentRequestError(
-                        "candidate_ready source is identical to the incumbent comparison base.",
-                        code="candidate_matches_incumbent",
-                        next_action=(
-                            "Do not report an unchanged source as candidate_ready or make a "
-                            "nominal edit. Submit status=pivot with "
-                            "handoff_reason=direction_terminal; local Directions may remain "
-                            "in_progress, and candidate evidence fields must be omitted."
-                        ),
-                    )
-                current["pending_candidate_archive"] = {
-                    "agent_kernel_id": agent_kernel_id,
-                    "candidate_kernel_digest": (
-                        "sha256:" + hashlib.sha256(kernel_source).hexdigest()
-                    ),
-                    "submitted_report": dict(raw),
-                    "failed_at": _now(),
-                    "failure": violation[:2000],
-                }
-                _save_journal(self.path, self.campaign_root, current)
-                raise RuntimeStateError(
-                    "Supervisor rejected its private Kernel archive: " + violation,
-                    code="candidate_archive_unavailable",
-                    next_action=(
-                        "Preserve the clean candidate HEAD and Gateway Records. Retry the same "
-                        "candidate_ready episode-report after the Supervisor archive is "
-                        "repaired; do not submit blocked or pivot as a fallback."
-                    ),
-                )
-            current.pop("pending_candidate_archive", None)
-        current["state"] = status
-        current["outcome"] = {
-            "summary": summary,
-            "handoff_reason": handoff_reason,
-            "next_directions": next_directions,
-            "selected_experiment_id": selected_id if status == "candidate_ready" else None,
-            "blocker": str(blocker).strip() if status == "blocked" else None,
-        }
-        if not experiments_enabled:
-            current["outcome"]["gateway_record_ids"] = (
-                _text_list(raw["gateway_record_ids"], "Episode Report gateway_record_ids")
-                if status == "candidate_ready" else []
-            )
-        if accepted_ppu_diagnostics:
-            current["outcome"]["accepted_ppu_diagnostics"] = accepted_ppu_diagnostics
-        current["candidate_commit"] = candidate_commit or None
-        if kernel_source is not None:
-            current["candidate_kernel_digest"] = (
-                "sha256:" + hashlib.sha256(kernel_source).hexdigest()
-            )
-            current["candidate_kernel_id"] = agent_kernel_id
-        current["finalized_at"] = _now()
-        current["submitted_report"] = dict(raw)
-        _save_journal(self.path, self.campaign_root, current)
-        self._publish_report(current)
-        return {
-            "status": "accepted",
-            "kernel_commit_id": agent_kernel_id,
-            "message": (
-                "Report accepted; Supervisor archived the exact Agent source for verification"
-                if candidate_commit and self.supervisor_git else
-                "Report accepted; Agent commit queued for existing Supervisor verification"
-                if candidate_commit
-                else "Report accepted and recorded"
-            ),
-        }
 
 
 __all__ = [
@@ -4813,7 +4465,5 @@ __all__ = [
     "initialize_journal",
     "journal_lock",
     "load_journal",
-    "sealed_candidate_source",
-    "selected_evaluation",
     "shared_research_queue",
 ]

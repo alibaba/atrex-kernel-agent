@@ -147,7 +147,7 @@ def _readme(name: str, defn: dict, framework: str, platform: str, n_workloads: i
         "- Edit `kernel.py` only (DPS `run()`; args = definition.inputs then definition.outputs).\n"
         "- Update `solution.json` only when the current initialization session permits it.\n"
         "- Measure using `python3 tools/sandbox.py --kind run --no-sync`.\n"
-        "- Follow skills/runtime-records/SKILL.md for the configured research-recording policy and `episode-report`.\n"
+        "- Follow skills/runtime-records/SKILL.md for research records and exact-commit `submit-kernel`.\n"
     )
 
 

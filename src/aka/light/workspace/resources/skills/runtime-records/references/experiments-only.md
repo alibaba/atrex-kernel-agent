@@ -48,29 +48,10 @@ Imported peer source history is available under refs such as
 `git log`/`git diff`, and use `git switch -c <branch> <ref>` to continue a peer commit. A Git checkout
 alone is not correctness or performance evidence; evaluate the resulting clean HEAD.
 
-## Submit the Episode report
+## Review an exact Kernel commit
 
-Candidate reports select a visible Experiment whose measured decision has a `supported` Review:
-
-```json
-{
-  "status": "candidate_ready",
-  "handoff_reason": "direction_terminal",
-  "summary": "The selected optimization path is complete",
-  "selected_experiment_id": "experiment_22222222222222222222222222222222"
-}
-```
-
-The selected Experiment must cite a completed, passing standard full Evaluate for the exact
-reported HEAD with `mode=full` and `input_scope=contract`. Subset Evaluate, Profile, Dev, Check,
-Disassemble, and ABBA alone cannot qualify it. Submit through `--kind episode-report`.
-`direction_terminal` is the compatibility value for a terminal optimization path even though no
-Direction object exists. Pooled search may use `cross_trajectory_share` only with
-`status=candidate_ready` for a reusable checkpoint backed by a passing standard full Evaluate of
-the exact committed source. For a terminal pivot use
-`{"status":"pivot","handoff_reason":"direction_terminal","summary":"..."}`. A blocker uses
-`{"status":"blocked","handoff_reason":"blocked","summary":"...","blocker":"..."}`.
-
-On a repairable rejection, follow `error.next_action`, inspect the selected Experiment and its
-projected Records, correct the request or evidence, and resubmit. Never invent IDs or repeat GPU
-work whose outcome is already saved.
+Submit `{"kernel_commit_id":"<full reachable Agent Git commit>"}` through `--kind submit-kernel`.
+First run a standard full Evaluate for that exact commit. Submission verifies the saved passing
+result and checks the source contract and selected final-source policy. It neither selects an
+Experiment nor launches Evaluate/ABBA, promotion, rollback, or handoff. Keep correctness and
+performance claims in Experiment-linked Records. End the Session normally when useful work is done.

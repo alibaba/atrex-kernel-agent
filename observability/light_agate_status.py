@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-import json
 from pathlib import Path
 import sys
-from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
@@ -21,51 +19,18 @@ from observability.common import (
     emit,
     evaluation_result,
     iter_records,
+    job_attempt_rows,
+    job_error_details,
     job_identifier,
     job_state_rows,
     main_error,
+    normalized_job_status,
     observed_at,
     operation_name,
     read_json,
     search_state,
     table,
 )
-
-
-def _error(job: object, response: object) -> dict | None:
-    candidates = []
-    if isinstance(job, dict):
-        candidates.extend([job.get("error"), job.get("result", {}).get("error") if isinstance(job.get("result"), dict) else None])
-    if isinstance(response, dict):
-        for stream in (response.get("stderr"), response.get("stdout")):
-            if isinstance(stream, str):
-                try:
-                    parsed = json.loads(stream.strip())
-                except ValueError:
-                    continue
-                if isinstance(parsed, dict):
-                    candidates.append(parsed.get("error"))
-                    if parsed.get("error_class") or parsed.get("code"):
-                        candidates.append(parsed)
-    value = next((item for item in candidates if isinstance(item, dict)), None)
-    if value is None:
-        return None
-    error_class = value.get("error_class")
-    reason = value.get("reason") or value.get("code")
-    if error_class in {"candidate", "compilation", "correctness"}:
-        category = "candidate"
-    elif error_class == "infra" or reason in {"oss_unavailable", "gateway_unavailable"}:
-        category = "infrastructure"
-    elif error_class in {"validation", "policy"} or str(reason).startswith("source_"):
-        category = "policy"
-    else:
-        category = "protocol" if error_class or reason else "unknown"
-    return {
-        "category": category,
-        "error_class": error_class,
-        "reason": reason,
-        "message": value.get("message") or value.get("detail"),
-    }
 
 
 def _retry_count(value: object) -> int:
@@ -110,8 +75,9 @@ def _pending_seconds(job: object, checkpoint_updated_at: object) -> float | None
 def _physical_job(scope, state: dict, *, source: str, record_id: str | None,
                   operation: str, response: object = None) -> dict:
     job = state["job"]
-    found = _error(job, response)
-    status = job.get("status") if isinstance(job, dict) else None
+    found = job_error_details(job, response)
+    raw_status = job.get("status") if isinstance(job, dict) else None
+    status = normalized_job_status(state)
     checkpoint_phase = state["phase"]
     terminal = checkpoint_phase == "terminal" or status in {
         "succeeded", "failed", "cancelled", "canceled", "completed"
@@ -126,6 +92,7 @@ def _physical_job(scope, state: dict, *, source: str, record_id: str | None,
         "job_id": job_identifier(job),
         "checkpoint_phase": checkpoint_phase,
         "status": status,
+        "raw_status": raw_status,
         "execution_phase": job.get("execution_phase") if isinstance(job, dict) else None,
         "submission": state["submission"],
         "retry_count": _retry_count(state["retries"]),
@@ -171,6 +138,7 @@ def _batch_progress(record: dict, jobs: list[dict]) -> dict:
 def snapshot(workspace: Path) -> dict:
     calls = []
     physical_jobs = []
+    submission_attempts = []
     task_markers = []
     audit_duplicates = 0
     audit_running = 0
@@ -184,11 +152,12 @@ def snapshot(workspace: Path) -> dict:
             request = row.get("request", {})
             response = record.get("response") if isinstance(record, dict) else None
             jobs = job_state_rows(row["directory"])
+            attempts = job_attempt_rows(row["directory"])
             errors = []
             retries = 0
             for state in jobs:
                 retries += _retry_count(state["retries"])
-                found = _error(state["job"], response)
+                found = job_error_details(state["job"], response)
                 if found:
                     errors.append(found)
                 physical_jobs.append(_physical_job(
@@ -199,7 +168,17 @@ def snapshot(workspace: Path) -> dict:
                     operation=operation_name(record or request),
                     response=response,
                 ))
-            primary_error = errors[-1] if errors else _error(None, response)
+            for state in attempts:
+                submission_attempts.append(_physical_job(
+                    scope, state, source="measurement_record",
+                    record_id=row["gateway_record_id"],
+                    operation=operation_name(record or request), response=response,
+                ))
+            attempt_errors = [item["error"] for item in submission_attempts
+                              if item["scope"] == scope.label
+                              and item["gateway_record_id"] == row["gateway_record_id"]
+                              and item.get("error")]
+            primary_error = attempt_errors[-1] if attempt_errors else errors[-1] if errors else job_error_details(None, response)
             cacheable = record.get("cacheable") if isinstance(record, dict) else None
             if not row["complete"]:
                 outcome = "running_or_interrupted"
@@ -218,7 +197,9 @@ def snapshot(workspace: Path) -> dict:
                 "complete": row["complete"],
                 "cacheable": cacheable,
                 "outcome": outcome,
-                "physical_job_count": len(jobs),
+                "current_checkpoint_job_count": len(jobs),
+                "submission_attempt_count": len(attempts),
+                "historical_retry_attempt_count": max(0, len(attempts) - len(jobs)),
                 "retry_count": retries,
                 "error": primary_error,
                 "batch": _batch_progress(record, jobs) if isinstance(record, dict) else None,
@@ -234,6 +215,12 @@ def snapshot(workspace: Path) -> dict:
                 record_id=None,
                 operation=operation_name({"operation": identity.get("kind")}),
             ))
+        for state in job_attempt_rows(trusted_root):
+            identity = state.get("identity") if isinstance(state.get("identity"), dict) else {}
+            submission_attempts.append(_physical_job(
+                scope, state, source="trusted", record_id=None,
+                operation=operation_name({"operation": identity.get("kind")}),
+            ))
         for audit in sorted(scope.audit_root.glob("request-*.json")):
             value = read_json(audit, default={})
             if not isinstance(value, dict):
@@ -247,11 +234,9 @@ def snapshot(workspace: Path) -> dict:
     trusted_operation_counts = Counter(
         row["operation"] for row in physical_jobs if row["source"] == "trusted"
     )
-    error_counts = Counter(
-        call["error"]["category"] for call in calls if isinstance(call.get("error"), dict)
-    )
+    error_counts = Counter(row["error"]["category"] for row in submission_attempts if isinstance(row.get("error"), dict))
     timeout_counts = Counter()
-    for row in physical_jobs:
+    for row in submission_attempts:
         error = row.get("error") or {}
         text = " ".join(str(error.get(key) or "") for key in ("reason", "message")).casefold()
         for label, markers in {
@@ -273,17 +258,21 @@ def snapshot(workspace: Path) -> dict:
     running_markers = [row for row in task_markers if row.get("status") in {"running", "validation_pending"}]
     pending_jobs = [row for row in physical_jobs if row["pending_seconds"] is not None]
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
         "summary": {
             "operation_counts": dict(sorted(operation_counts.items())),
             "trusted_operation_counts": dict(sorted(trusted_operation_counts.items())),
-            "physical_job_status_counts": dict(sorted(job_counts.items())),
+            "current_job_status_counts": dict(sorted(job_counts.items())),
             "error_counts": dict(sorted(error_counts.items())),
             "timeout_counts": dict(sorted(timeout_counts.items())),
             "logical_call_count": len(calls),
-            "physical_job_count": len(physical_jobs),
+            "current_checkpoint_job_count": len(physical_jobs),
+            "submission_attempt_count": len(submission_attempts),
+            "historical_retry_attempt_count": sum(
+                call["historical_retry_attempt_count"] for call in calls
+            ),
             "retry_count": sum(row["retry_count"] for row in physical_jobs),
             "duplicate_cache_hits": audit_duplicates,
             "same_request_running": audit_running,
@@ -311,7 +300,8 @@ def snapshot(workspace: Path) -> dict:
             ),
         },
         "calls": calls,
-        "physical_jobs": physical_jobs,
+        "current_jobs": physical_jobs,
+        "submission_attempts": submission_attempts,
     }
 
 
@@ -322,11 +312,11 @@ def render(value: dict) -> str:
         ["Operation", "Calls"],
         [[name, count] for name, count in summary["operation_counts"].items()],
     ))
-    lines += ["", f"Physical jobs: {summary['physical_job_count']}  Retries: {summary['retry_count']}  Duplicate: {summary['duplicate_cache_hits']}  Running duplicate: {summary['same_request_running']}", ""]
+    lines += ["", f"Current checkpoints: {summary['current_checkpoint_job_count']}  Historical submissions: {summary['submission_attempt_count']}  Historical retries: {summary['historical_retry_attempt_count']}  Retry counters: {summary['retry_count']}  Duplicate: {summary['duplicate_cache_hits']}  Running duplicate: {summary['same_request_running']}", ""]
     lines.append(table(
-        ["Record", "Operation", "Complete", "Jobs", "Retries", "Error"],
-        [[row["gateway_record_id"], row["operation"], row["complete"], row["physical_job_count"],
-          row["retry_count"], (row["error"] or {}).get("category")]
+        ["Record", "Operation", "Complete", "Current", "Attempts", "Retry attempts", "Retry counters", "Error"],
+        [[row["gateway_record_id"], row["operation"], row["complete"], row["current_checkpoint_job_count"], row["submission_attempt_count"],
+          row["historical_retry_attempt_count"], row["retry_count"], (row["error"] or {}).get("category")]
          for row in value["calls"]],
     ))
     if summary["trusted_operation_counts"]:

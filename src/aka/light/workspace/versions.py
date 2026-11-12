@@ -14,7 +14,7 @@ from aka.light.workspace.baseline import read_baseline_record
 STATE_DIRECTORY = ".atrex_versions"
 FACT_FIELDS = frozenset({
     "version", "timestamp", "performance", "correctness", "quality_gate",
-    "git_commit_hash", "long_horizon", "framework_baseline",
+    "git_commit_hash", "long_horizon",
 })
 
 

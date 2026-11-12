@@ -34,7 +34,7 @@ class WorkflowSettings:
     fast_trials: int = 5
     convert_after: int = 3
     agent_cli: str = "claude"
-    optimization_mode: str = "leaderboard"
+    optimization_mode: str = "fast"
     # Translate a reference-wrapper V0 into the target framework before normal
     # optimization Episodes. ``never`` remains an explicit opt-out.
     framework_baseline: str = "auto"
@@ -52,6 +52,19 @@ class WorkflowSettings:
     def __post_init__(self):
         if type(self.specify_dsl) is not bool:
             raise TypeError("specify_dsl must be a boolean")
+        if self.optimization_mode not in {
+            "fast", "performance", "ultra", "leaderboard", "production"
+        }:
+            raise ValueError(
+                f"unsupported optimization_mode: {self.optimization_mode!r}"
+            )
+        if self.optimization_mode in {"fast", "performance"}:
+            object.__setattr__(self, "specify_dsl", False)
+        elif self.optimization_mode == "ultra":
+            if not self.specify_dsl or not self.framework.strip():
+                raise ValueError(
+                    "ultra mode requires specify_dsl=true and one explicit framework"
+                )
         references = tuple(tuple(item) for item in self.agent_reference_paths)
         names = []
         for item in references:

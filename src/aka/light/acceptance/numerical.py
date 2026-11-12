@@ -221,19 +221,43 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
             request = {"evidence_digest": digest, "previous_validation": previous,
                        "world_size": _world_size(workspace)}
             (root / "review_request.json").write_text(json.dumps(request, indent=2))
+            capture_root = state_root / "sessions" / uuid.uuid4().hex
             result = campaign._run_session(
                 root, PROMPT.read_text(), timeout=None,
                 agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
                 extra_environment={**{key: "" for key in os.environ.keys() - scrub_environment(dict(os.environ)).keys()},
                     **campaign.agent_boundary_environment("numerical-review"),
-                    "ATREX_SESSION_CAPTURE_DIR": str(state_root / "sessions" / uuid.uuid4().hex)},
+                    "ATREX_SESSION_CAPTURE_DIR": str(capture_root)},
             )
-            campaign._account(result, "numerical supplemental-test planning")
+            from aka.light.workflow.review_usage import account_review
+            account_review(
+                campaign,
+                result,
+                review_kind="supplemental_numerical_review",
+                label="numerical supplemental-test planning",
+                backend=campaign.agent_cli,
+            )
+            from aka.light.agent.session_capture import latest_complete_session_archive
+
+            session_archive = latest_complete_session_archive(capture_root)
+            if session_archive is None:
+                raise ValueError(
+                    "supplemental numerical reviewer did not persist a complete "
+                    "conversation.jsonl and token-usage.json archive"
+                )
             cancel.check()
             response = root / "numerical_review.json"
             record = {"evidence_digest": digest, "session_id": result.session_id,
                       "timeout_s": None, "exit_status": result.exit_status,
-                      "timed_out": result.timed_out, "response_written": response.is_file()}
+                      "timed_out": result.timed_out, "response_written": response.is_file(),
+                      "session_archive": {
+                          "conversation_path": session_archive.conversation.relative_to(
+                              state_root
+                          ).as_posix(),
+                          "token_usage_path": session_archive.token_usage.relative_to(
+                              state_root
+                          ).as_posix(),
+                      }}
             record_path = state_root / f"numerical_planning-{uuid.uuid4().hex}.json"
             durable_write_json(record_path, record, indent=2)
             if _digest({name: root / name for name in files}) != digest:
@@ -571,19 +595,11 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     if status in {"passed", "advisory", "skipped_planner_timeout"}:
         feedback = ""
     elif status == "needs_repair":
-        if flow == "framework_baseline":
-            next_step = (
-                "Repair the candidate sources, leave the complete worktree candidate in place, "
-                "then stop without committing. The Supervisor reruns validation and commits an "
-                "accepted V1; do not submit "
-                "episode-report. "
-            )
-        elif experiments_enabled:
-            next_step = "Repair the candidate within its editable source scope, measure it, record its Experiment and resubmit episode-report. "
+        if experiments_enabled:
+            next_step = "Repair the candidate within its editable source scope, measure it, record its Experiment, and use submit-kernel for that exact commit. "
         else:
             next_step = (
-                "Repair the candidate within its editable source scope, measure it, then resubmit episode-report "
-                "with the new measurement's gateway_record_ids. "
+                "Repair the candidate within its editable source scope, measure it, then use submit-kernel for that exact commit. "
             )
         feedback = (
             f"{SUPPLEMENTAL_REPAIR_PREFIX}: {rendered}\n"
@@ -592,8 +608,6 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
         )
     else:
         pending_step = (
-            "Preserve the V1 candidate and ask the operator to inspect the private numerical validation record."
-            if flow == "framework_baseline" else
             "Preserve the candidate; ask the operator to inspect the private numerical validation record, "
             "or submit an evidence-backed blocked report."
         )

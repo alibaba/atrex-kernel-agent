@@ -164,14 +164,14 @@ Experiment，不在 Direction 中持久化易漂移的反向索引；`supporting
    proposed by `T1`; access `local_writable`; scope `incremental`.
    - Reopen when: register pressure is reduced.
 
-## Visible-history per-Shape Pareto frontier
+## Accepted-submission per-Shape Pareto frontier
 
 | Shape ID | Latency (us) | Kernel commit ID | Gateway Record ID |
 | --- | ---: | --- | --- |
 | `shape_0001` | 12.5 | `456789ab...` | `gateway-1111...` |
 ```
 
-首页采用 Ruibo 风格的一页当前状态，但所有字段由 Runtime 机械生成而非 Agent 自由编辑：整体最佳来自正确且完整的标准 Evaluate；最新可见结果及适用范围来自本地与已导入同伴历史中时间上最新的终态 Gateway Record；建议实验优先来自 active/local Direction，本地队列为空时才提示从共享池派生；真实 blocker 只采用本地显式 blocked Direction，或最新终态记录中的基础设施/超时故障。当前工作和下一步来自本地 Direction，三线状态来自 Research Store。Research Board 不得包含隐藏输入、私有 evaluator 输出、conversation 原文或无上限的测量正文。`pareto_frontier` 直接给出所有当前可见标准完整 Evaluate 历史中每个 Shape 的观测最优 Kernel/Record；它不是当前 lineage 私有边界，也不是一个已测量的合成 Kernel。完整 Direction、Experiment 和公开 Measurement 结果从工作区研究投影按需读取；Kernel 源码通过可达 Git commit 获取。
+首页采用 Ruibo 风格的一页当前状态，但所有字段由 Runtime 机械生成而非 Agent 自由编辑：整体最佳来自 accepted `submit-kernel` 中正确且完整的标准 Evaluate；最新可见结果及适用范围来自本地与已导入同伴历史中时间上最新的终态 Gateway Record；建议实验优先来自 active/local Direction，本地队列为空时才提示从共享池派生；真实 blocker 只采用本地显式 blocked Direction，或最新终态记录中的基础设施/超时故障。当前工作和下一步来自本地 Direction，三线状态来自 Research Store。Research Board 不得包含隐藏输入、私有 evaluator 输出、conversation 原文或无上限的测量正文。`pareto_frontier` 只给出当前可见、已 accepted submission 的标准完整 Evaluate 中每个 Shape 的观测最优 Kernel/Record；它不是当前 lineage 私有边界，也不是一个已测量的合成 Kernel。未提交或未接受的 Evaluate 仍保存在 `records/`，但不进入 Pareto。完整 Direction、Experiment 和公开 Measurement 结果从工作区研究投影按需读取；Kernel 源码通过可达 Git commit 获取。
 内部 `schema_version`、`revision` 以及最近 Experiment 缓存不投影到 `PROGRESS.md`；前两项只用于 Runtime 恢复与一致性，Experiment 直接从 `experiments/` 按需读取。
 
 ### 队列排序
@@ -461,11 +461,13 @@ Research Board 和 Runtime 重建的 `atrex/*` refs 展示四种不同状态：
 | 指针 | 含义 |
 | --- | --- |
 | `official_incumbent` | 已通过完整晋升、用于正式验收的 Kernel |
-| `global_best` | 所有可见 trajectory 中最快的完整正确 Kernel |
-| `lineage_best` | 当前 trajectory 中最快的完整正确 Kernel |
+| `global_best` | 所有 lineage 的 accepted `submit-kernel` 中，具有完整正确 Evaluate 且目标指标最优的 Kernel |
+| `lineage_best` | 当前 lineage 的 accepted `submit-kernel` 中，具有完整正确 Evaluate 且目标指标最优的 Kernel |
 | `working_head` | 当前 Agent branch 与 worktree，可能尚不正确 |
 
 Runtime 只在 trajectory 准备、恢复或 Epoch 边界显式移动生成的 `atrex/*` refs，不能切换 Agent 当前 branch，也不能丢弃本地 commit。
+未经 accepted `submit-kernel` 的 Evaluate 只进入 `records/`，不进入 Pareto 数据，也不作为
+`lineage_best`/`global_best` 展示或广播。
 
 ## Episode 生命周期
 
@@ -584,7 +586,7 @@ Light 默认启动三条持久 island，每条 island 每个 Epoch 运行一个 
 - `synchronous`（默认）保留严格 Epoch barrier，所有 trajectory 的本轮 Episode 都终态后才密封共享；
 - `asynchronous` 取消全局准入 barrier。每条 trajectory 内部仍串行，某条 trajectory 终态后立即形成累计 publication，并可直接开始下一 Episode。调度使用 round-robin，避免并发槽位少于 trajectory 数量时快岛长期饿死未启动的岛。
 
-两种模式都只共享通过 Review 的 Direction/Experiment、聚合后的只读共享池顺序、完成的 Measurement Record、被引用的 Kernel Artifact、密封且经过源码范围过滤的 Git 历史，以及全局 Pareto frontier。显式标为 `partially_supported` 或 `unreviewed` 的 Direction/Experiment 保持 trajectory 私有，直到修订后通过 Review。每条 trajectory 的本地工作队列与优先级仍独立，不会被 publication 覆盖。不共享实时草稿、scratch、conversation 或未验证分析。异步 publication 按终态 Episode 边界过滤 Research event 和评测引用，不能读取仍在运行的同伴 Episode。共享历史中的未测量 commit 只作为工程过程，不作为证据。
+两种模式都只共享通过 Review 的 Direction/Experiment、聚合后的只读共享池顺序、完成的 Measurement Record、被引用的 Kernel Artifact、密封且经过源码范围过滤的 Git 历史，以及 accepted submission 的全局 Pareto frontier。显式标为 `partially_supported` 或 `unreviewed` 的 Direction/Experiment 保持 trajectory 私有，直到修订后通过 Review。每条 trajectory 的本地工作队列与优先级仍独立，不会被 publication 覆盖。不共享实时草稿、scratch、conversation 或未验证分析。异步 publication 按终态 Episode 边界过滤 Research event 和评测引用，不能读取仍在运行的同伴 Episode。共享历史中的未测量 commit 只作为工程过程，不作为证据。
 
 `search.role_specialization` 决定是否向三条 trajectory 注入不同职责，新搜索默认关闭。
 关闭时三条 trajectory 收到相同的通用 island 指令；调度、共享、lineage、Git 和 Session

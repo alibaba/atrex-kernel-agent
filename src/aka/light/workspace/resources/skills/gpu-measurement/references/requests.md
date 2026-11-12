@@ -113,13 +113,13 @@ them with repeated Agent requests or environment overrides. Other request/input 
 prevent reuse. A matching comparison is optional and does not replace the report's full Evaluate.
 
 Full Evaluate and ABBA default to 100 timing iterations and 20 warmup iterations. Runtime uses
-its configured Shape-batch upper bound (default 5, and it
+its configured Shape-batch upper bound (default 10, and it
 may reduce the effective batch size to fit a request deadline) and configured batch-worker cap
 (default 16). These are Supervisor settings, not Agent request fields.
-Promotion minimizes GeoMean latency versus the
-incumbent; `performance_score` is diagnostic. The returned `improvement_pct` is
+Winner reporting minimizes the task's declared performance objective among accepted
+`submit-kernel` commits; `performance_score` is diagnostic. The returned `improvement_pct` is
 `(speedup - 1) * 100`, matching Runtime (100 us to 80 us means 1.25x and 25%).
-This is not the latency-reduction percentage used by the Supervisor's promotion threshold.
+There is no Supervisor promotion threshold.
 Do not loop requests to reproduce the sampling policy.
 
 Atrex-Bench Evaluate uses the base case plus four additional correctness cases per Shape.
@@ -129,20 +129,11 @@ performance coverage but does not weaken Runtime-owned correctness coverage. Age
 set `--multi-seed`; Check, Profile and Dev probes do not gain this case expansion. Agent and
 Supervisor ABBA use the same five-case correctness policy.
 
-For Atrex-Bench `candidate_ready`, the Supervisor reuses a successful full or correctness-only five-case result
-when the frozen source, complete Shape contract, evaluator, tolerances, target and environment
-match. Otherwise it runs the missing five-case check without timing. You do not need a separate
-robustness request after a matching full Evaluate. Custom inputs, Shape subsets, fewer seeds and
-old records without the resolved seed policy cannot satisfy this check. A passing full Evaluate
-for the exact selected source remains required. When the Experiment module is disabled, cite its
-`gateway_record_id` directly in the report's `gateway_record_ids`; do not invent an Experiment.
-When the Experiment module is enabled, the selected Experiment must cite that evidence instead.
-Follow the installed `skills/runtime-records/references/journal.md` for the current report schema.
-Baseline sessions follow their bounded instructions.
-
-For SOL-ExecBench `candidate_ready`, the Supervisor runs or reuses the official full-workload
-evaluation of the frozen candidate and matching workload/configuration. The Atrex-Bench five-case
-policy and correctness-only mode do not apply to SOL.
+`submit-kernel` accepts an exact reachable Agent Git commit only when MeasurementStore already
+contains a passing standard full Evaluate for that same commit with complete, parseable per-Shape
+performance. It launches no extra correctness run or ABBA. Shape subsets, correctness-only runs,
+custom inputs and incomplete performance cannot satisfy submission. SOL submissions likewise need
+their official full-workload Evaluate; Atrex-Bench's five-case policy does not apply to SOL.
 
 For Atrex-Bench evaluator controls, choose one spelling:
 
@@ -236,7 +227,7 @@ Do not infer unavailable counters or missing measurements as zero.
 
 | Response | Next action |
 | --- | --- |
-| Full Evaluate completed, `result.correct: true` | Compare the measured latency and per-Shape changes with your expected effect. Keep, refine or restore based on evidence; promotion still belongs to the Supervisor. |
+| Full Evaluate completed, `result.correct: true` | Compare the measured latency and per-Shape changes with your expected effect. Keep, refine or restore based on evidence; use `submit-kernel` only when you want this exact commit included in winner selection. |
 | Evaluate completed, `result.correct: false` | Inspect correctness diagnostics and Shape/case/output identifiers. On generalized hidden-Shape tasks, treat IDs as opaque; on exposed tasks, use `shapes.json`. Repair the candidate; do not call it a Gateway outage or use its timings as a valid speedup. |
 | Dev/Check/Profile/Disassemble failure | Read `result.error` and available `stdout`/`stderr` or diagnostic fields. Compiler/import/file errors require source or declared-input repair. A successful Dev probe is not automatically a passing Evaluate. |
 | Request rejected with `issues`, `request_schema`, `recovery` or `error.next_action` | Correct the named field/path or evidence reference. Follow the supplied operation-specific guidance, not guessed flags or IDs. |

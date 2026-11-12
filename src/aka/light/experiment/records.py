@@ -6,8 +6,6 @@ import json
 import logging
 import re
 import subprocess
-from pathlib import Path
-
 from aka.light.execution.gateway_jobs import cacheable_job, job_from_process
 from aka.light.experiment.store import (
     ABBA_BATCH_ROOT_ENV,
@@ -217,16 +215,7 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                         "baseline, materialize a Kernel previously returned by this Campaign."
                     ),
                 ) from error
-        supervisor_commit_id = (
-            effects.archive_kernel(side, kernel_id, artifact.snapshot)
-            if effects.archive_kernel is not None
-            else None
-        )
-        kernels[side] = store.kernel(
-            artifact.snapshot,
-            kernel_id,
-            supervisor_commit_id=supervisor_commit_id,
-        )
+        kernels[side] = store.kernel(artifact.snapshot, kernel_id)
     request = dict(
         request,
         kernel_ids={side: identity["kernel_id"] for side, identity in sorted(kernels.items())},

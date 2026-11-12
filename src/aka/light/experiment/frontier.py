@@ -5,9 +5,198 @@ import logging
 import math
 from datetime import datetime
 
-from aka.light.evaluation.public_result import canonical_result, input_scope
 from aka.light.evaluation.provider import result_from_response
-from aka.light.experiment.store import MeasurementStore, RECORD_ID, read_record_header
+from aka.light.evaluation.public_result import canonical_result, input_scope
+from aka.light.experiment.store import RECORD_ID, MeasurementStore, read_record_header
+
+
+def standard_full_evaluation(record: dict) -> dict | None:
+    """Parse one ordinary full Evaluate, including a compact failure reason."""
+    if (
+        record.get("operation") != "evaluate"
+        or record.get("request", {}).get("operation") != "evaluate"
+        or record.get("cacheable") is not True
+    ):
+        return None
+    options = record["request"].get("options", {})
+    if not isinstance(options, dict):
+        return None
+    command = options.get("command", [])
+    policy = options.get("evaluation_policy", {})
+    if not isinstance(policy, dict) or not isinstance(command, list):
+        return None
+    if (
+        (options.get("evaluation_mode") or "full") != "full"
+        or policy.get("mode", "full") != "full"
+        or options.get("evaluation_input_path")
+        or options.get("evaluation_shapes_path")
+        or options.get("baseline_path")
+        or command[:2] != ["python3", "test_kernel.py"]
+        or any(
+            isinstance(arg, str)
+            and (arg == "--shape-id" or arg.startswith("--shape-id="))
+            for arg in command
+        )
+    ):
+        return None
+
+    response = record.get("response", {})
+    result = result_from_response(response, "evaluate")
+    result_parsed = isinstance(result, dict)
+    result = result if result_parsed else {}
+    values = result.get("latency_us_by_shape")
+    latencies = (
+        {
+            shape: float(value)
+            for shape, value in values.items()
+            if isinstance(shape, str)
+            and type(value) in {int, float}
+            and math.isfinite(float(value))
+            and float(value) > 0
+        }
+        if isinstance(values, dict)
+        else {}
+    )
+    correctness_passed = bool(
+        response.get("exit_code") == 0
+        and not response.get("truncated")
+        and result_parsed
+        and result.get("all_pass") is True
+        and not result.get("error")
+        and result.get("mode", "full") == "full"
+    )
+    performance_complete = bool(
+        isinstance(values, dict)
+        and values
+        and len(latencies) == len(values)
+    )
+    passed = correctness_passed and performance_complete
+    geomean = result.get("latency_us_geomean")
+    if latencies and (
+        type(geomean) not in {int, float}
+        or not math.isfinite(float(geomean))
+        or float(geomean) <= 0
+    ):
+        geomean = math.exp(
+            sum(math.log(value) for value in latencies.values()) / len(latencies)
+        )
+    if not result_parsed:
+        failure_kind = "result_unparseable"
+        reason = "full Evaluate did not produce a parseable result"
+    elif (
+        result.get("all_pass") is not True
+        or result.get("error")
+        or result.get("mode", "full") != "full"
+    ):
+        failure_kind = "correctness_failed"
+        reason = result.get("error") or result.get("outcome")
+    elif response.get("exit_code") != 0 or response.get("truncated"):
+        failure_kind = "evaluation_execution_failed"
+        reason = result.get("error") or result.get("outcome")
+    elif not performance_complete:
+        failure_kind = "performance_result_incomplete"
+        reason = (
+            "full Evaluate correctness passed, but latency_us_by_shape is missing, "
+            "empty, or contains non-finite/non-positive values"
+        )
+    else:
+        failure_kind = None
+        reason = result.get("error") or result.get("outcome")
+    if not isinstance(reason, str) or not reason:
+        reason = (
+            f"Evaluate exited with status {response.get('exit_code')}"
+            if response.get("exit_code") != 0
+            else "full Evaluate did not produce a complete passing result"
+        )
+    return {
+        "passed": passed,
+        "correctness_passed": correctness_passed,
+        "performance_complete": performance_complete,
+        "failure_kind": failure_kind,
+        "latencies": latencies,
+        "latency_us_geomean": (
+            float(geomean)
+            if type(geomean) in {int, float}
+            and math.isfinite(float(geomean))
+            and float(geomean) > 0
+            else None
+        ),
+        "reason": reason,
+    }
+
+
+def kernel_full_evaluation_evidence(
+    store: MeasurementStore,
+    kernel_id: str,
+) -> dict:
+    """Return saved full-Evaluate evidence for one exact Agent Git commit."""
+    passing: list[tuple[float, str, float | None, int]] = []
+    failed: list[tuple[float, str, str | None, str]] = []
+    for path in (store.root / "records").glob("gateway-*/record.json"):
+        record_id = path.parent.name
+        try:
+            if not RECORD_ID.fullmatch(record_id):
+                continue
+            header = read_record_header(path)
+            if header["operation"] != "evaluate":
+                continue
+            record = store.read(record_id)
+            if record["kernels"]["candidate"]["kernel_id"] != kernel_id:
+                continue
+            parsed = standard_full_evaluation(record)
+            if parsed is None:
+                continue
+            created_at = datetime.fromisoformat(header["created_at"]).timestamp()
+            if parsed["passed"]:
+                passing.append(
+                    (
+                        created_at,
+                        record_id,
+                        parsed["latency_us_geomean"],
+                        len(parsed["latencies"]),
+                    )
+                )
+            else:
+                failed.append(
+                    (
+                        created_at,
+                        record_id,
+                        parsed["failure_kind"],
+                        parsed["reason"],
+                    )
+                )
+        except (
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+            AttributeError,
+            RecursionError,
+            OverflowError,
+        ):
+            logging.getLogger(__name__).warning(
+                "Skipping invalid full-Evaluate evidence %s", record_id
+            )
+    if passing:
+        _created_at, record_id, latency, shape_count = max(passing)
+        evidence = {
+            "status": "passed",
+            "gateway_record_id": record_id,
+        }
+        if latency is not None:
+            evidence["latency_us_geomean"] = latency
+        if shape_count:
+            evidence["measured_shape_count"] = shape_count
+        return evidence
+    if failed:
+        _created_at, record_id, reason_code, reason = max(failed)
+        return {
+            "status": "failed",
+            "gateway_record_id": record_id,
+            "reason_code": reason_code,
+            "reason": reason,
+        }
+    return {"status": "missing"}
 
 
 def latest_gateway_result(
@@ -112,6 +301,7 @@ def kernel_pareto_frontier(
     store: MeasurementStore,
     *,
     record_ids: set[str] | None = None,
+    kernel_ids: set[str] | None = None,
 ) -> dict:
     """Read existing facts only; a per-Shape envelope is not a measured composite Kernel.
 
@@ -135,44 +325,16 @@ def kernel_pareto_frontier(
             if header["operation"] != "evaluate":
                 continue
             record = store.read(record_id)
-            if (record["operation"] != "evaluate" or record["request"]["operation"] != "evaluate"
-                    or record.get("cacheable") is not True):
+            parsed = standard_full_evaluation(record)
+            if parsed is None or not parsed["passed"] or not parsed["latencies"]:
                 continue
-            options = record["request"]["options"]
-            command = options.get("command", [])
-            if (
-                (options.get("evaluation_mode") or "full") != "full"
-                or options.get("evaluation_policy", {}).get("mode", "full") != "full"
-                or options.get("evaluation_input_path")
-                or options.get("evaluation_shapes_path")
-                or options.get("baseline_path")
-                or command[:2] != ["python3", "test_kernel.py"]
-                or any(arg == "--shape-id" or arg.startswith("--shape-id=") for arg in command)
-            ):
-                continue
-            response = record["response"]
-            if response.get("exit_code") != 0 or response.get("truncated"):
-                continue
-            result = result_from_response(response, "evaluate")
-            if (not result or result.get("all_pass") is not True or result.get("error")
-                    or result.get("mode", "full") != "full"):
-                continue
-            values = result.get("latency_us_by_shape")
-            if not isinstance(values, dict):
-                continue
-            latencies = {
-                shape: float(value) for shape, value in values.items()
-                if isinstance(shape, str) and type(value) in {int, float}
-                and math.isfinite(value) and value > 0
-            }
-            if not latencies:
-                continue
+            latencies = parsed["latencies"]
             kernel_id = record["kernels"]["candidate"]["kernel_id"]
-            geomean = result.get("latency_us_geomean")
-            if type(geomean) not in {int, float} or not math.isfinite(float(geomean)) or geomean <= 0:
-                geomean = math.exp(
-                    sum(math.log(value) for value in latencies.values()) / len(latencies)
-                )
+            if kernel_ids is not None and kernel_id not in kernel_ids:
+                continue
+            geomean = parsed["latency_us_geomean"]
+            if geomean is None:
+                continue
         except (OSError, ValueError, KeyError, TypeError, AttributeError, RecursionError, OverflowError):
             # An interrupted/corrupt historical record must not break every query;
             # details stay in the Supervisor log, not in the Agent response.

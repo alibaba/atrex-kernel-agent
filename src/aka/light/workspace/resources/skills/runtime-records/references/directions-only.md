@@ -97,31 +97,10 @@ git switch -c explore/t2-e0001 refs/atrex/shared/T2/e0001/head
 
 Switching source does not establish correctness or performance; evaluate the resulting clean HEAD.
 
-## Submit the Episode report
+## Review an exact Kernel commit
 
-Candidate reports cite measurement evidence directly because the Experiment module is disabled:
-
-```json
-{
-  "status": "candidate_ready",
-  "handoff_reason": "direction_terminal",
-  "summary": "The selected Direction is complete and the candidate is ready for independent gates",
-  "gateway_record_ids": ["gateway-0123456789abcdef0123456789abcdef"]
-}
-```
-
-The exact reported HEAD must have a completed, passing standard full Evaluate with
-`mode=full` and `input_scope=contract`. Subset Evaluate, Profile, Dev, Check, Disassemble, and ABBA
-alone cannot qualify it. Submit through `--kind episode-report`.
-
-`direction_terminal` is the ordinary handoff value and may preserve local `in_progress` Directions.
-Pooled search may use `cross_trajectory_share` only with `status=candidate_ready` for a reusable
-checkpoint backed by a passing standard full Evaluate of the exact committed source. A blocked report
-requires `status=blocked` and a nonempty `blocker`; close every local active Direction with `block`
-first.
-For a terminal pivot use
-`{"status":"pivot","handoff_reason":"direction_terminal","summary":"..."}`.
-
-On a repairable rejection, follow `error.next_action`, inspect the projected Direction and Record
-files, correct the request or state, and resubmit. Never invent IDs or repeat GPU work whose outcome
-is already saved.
+Submit `{"kernel_commit_id":"<full reachable Agent Git commit>"}` through `--kind submit-kernel`.
+First run a standard full Evaluate for that exact commit. Submission verifies the saved passing
+result and checks the source contract and selected final-source policy. It does not consume
+Direction evidence or launch Evaluate/ABBA, promotion, rollback, or handoff. Directions may remain
+active across Episode boundaries. End the Session normally when useful work is done.

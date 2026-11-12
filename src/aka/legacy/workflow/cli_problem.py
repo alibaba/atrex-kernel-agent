@@ -16,7 +16,7 @@ def problem_request(
 ):
     origin = Path(directory).resolve()
     identity = str(origin) + "\0" + optimization_mode + "\0" + suffix
-    if optimization_mode == "production" and expose_evaluator_shapes:
+    if optimization_mode in {"production", "performance", "ultra"} and expose_evaluator_shapes:
         identity += "\0expose-evaluator-shapes"
     snapshot_key = hashlib.sha256(identity.encode()).hexdigest()[:24]
     base = Path(workspace) if workspace else Path.cwd()

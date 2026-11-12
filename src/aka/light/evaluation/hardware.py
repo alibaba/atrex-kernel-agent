@@ -70,7 +70,7 @@ def _workspace_slug(value: str) -> str:
 
 
 def framework_workspace_suffix(
-    framework: str, platform: str, optimization_mode: str = "leaderboard"
+    framework: str, platform: str, optimization_mode: str = "fast"
 ) -> str:
     """Flat suffix for one framework/hardware/policy campaign.
 
@@ -79,8 +79,8 @@ def framework_workspace_suffix(
     with a prior leaderboard campaign under the same workspace root.
     """
     suffix = f"{_workspace_slug(framework)}_{_workspace_slug(platform)}"
-    if optimization_mode == "production":
-        suffix += "_production"
+    if optimization_mode != "leaderboard":
+        suffix += f"_{_workspace_slug(optimization_mode)}"
     return suffix
 
 

@@ -144,19 +144,17 @@ class RecordedAcceptance:
                 "SOL-ExecBench full-workload correctness"
             )
             raise AgentRequestError(
-                f"The candidate failed Supervisor {gate_name}. "
-                "The report was not accepted and no candidate commit was created.",
+                f"The candidate failed Supervisor {gate_name}. ",
                 code="candidate_correctness_failed", gateway_record_id=record_id,
                 next_action=(
                     f"Inspect records/{record_id}.json. "
-                    + ("Repair the Kernel implementation, record a passing full Evaluate and its Experiment, then resubmit "
-                       "episode-report with the matching selected_experiment_id. "
+                    + ("Repair the Kernel implementation, record a passing full Evaluate and its Experiment, then use "
+                       "submit-kernel for that exact commit. "
                        if context.experiments_enabled else
-                       "Repair the Kernel implementation, obtain a passing full Evaluate, then resubmit episode-report "
-                       "with its gateway_record_ids. ") +
+                       "Repair the Kernel implementation, obtain a passing full Evaluate, then use submit-kernel. ") +
                     "The Supervisor runs its "
                     "acceptance check automatically; do not repeat the failed GPU request unchanged. "
-                    "If abandoning the candidate, submit an evidence-backed pivot instead."
+                    "If abandoning the candidate, restore or continue another Git checkpoint."
                 ),
             )
         result_complete = (
@@ -204,7 +202,7 @@ class RecordedAcceptance:
                     "reported Production Review violations. Development probes may continue "
                     "to use other DSLs, PyTorch/ATen, prebuilt operators, third-party libraries "
                     "or external implementations, but remove them from the final candidate. "
-                    "Measure the repaired candidate and resubmit episode-report."
+                    "Measure the repaired candidate and use submit-kernel for that exact commit."
                 ),
             )
         return {"status": "passed"}

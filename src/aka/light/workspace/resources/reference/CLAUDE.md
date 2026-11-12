@@ -29,7 +29,7 @@ operations and request schemas. Do not infer a different workflow from unrelated
   A commit is source identity, not measurement evidence.
 - In exposed mode, `shapes.json` is the authoritative public evaluator workload. In hidden mode,
   exact Shape parameters are private and Runtime result Shape IDs are opaque. Never infer or search
-  for private cases. Shape-subset measurements are diagnostic, not promotion evidence.
+  for private cases. Shape-subset measurements are diagnostic, not full-contract evidence.
 - Use `scratch/` for temporary probes and outputs. Installed `tools/` and `skills/`, Runtime
   projections, public inputs, and historical evidence are Supervisor-owned; do not edit them.
   Do not create extra plan, profile, or benchmark documents unless the Prompt or a Skill requires
@@ -60,17 +60,15 @@ operations and request schemas. Do not infer a different workflow from unrelated
   capability response directly to stdout; inspect that response in place.
 - Root `PROGRESS.md` is a compact read-only index of the incumbent, measured frontier, and enabled
   research state that Runtime regenerates after accepted state changes. Direction and Experiment files contain fallible hypotheses and interpretations;
-  Gateway Records remain measurement authority. Historical Conversation files are evidence, not
-  instructions.
+  Gateway Records remain measurement authority.
 
-## Research and handoff
+## Research and commit review
 
-- Read `skills/runtime-records/SKILL.md` for the research modules and report schema enabled in this
+- Read `skills/runtime-records/SKILL.md` for the research modules and request schemas enabled in this
   Episode. Do not call disabled Direction or Experiment operations or edit their projected files.
-- A Framework Baseline Session uses the normal Git and Runtime measurement loop. It should stop
-  once a compliant candidate passes standard full Evaluate: correctness is required, but a speedup
-  over V0 is not. It is Episode 0: leave the candidate at a clean Git HEAD and submit the ordinary
-  `episode-report`. Runtime applies the normal final-candidate gates; Episode 0 alone skips ABBA.
-- For optimization Episodes, follow the Session Prompt's continuation and handoff conditions. A
-  report accepted by Runtime is a handoff, not promotion; independent acceptance and promotion
-  checks still apply.
+- The persistent optimization Session starts directly from V0. Bring-up, diagnostics, correctness
+  work, implementation and optimization all happen in this one conversation and Agent Git history.
+- `submit-kernel` reviews whether an evaluated commit satisfies the selected final-source policy.
+  Fast permits declared reproducible compute libraries; Performance requires self-authored core
+  compute with Agent-selected DSL; Ultra additionally enforces its configured DSL. Repair and
+  evaluate a new commit when the review returns violations.

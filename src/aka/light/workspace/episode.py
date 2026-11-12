@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import logging
 import os
+import stat
 import subprocess
+import tempfile
 from pathlib import Path
 
 from aka.light.agent.home import open_private_directory
@@ -74,7 +75,7 @@ class EpisodeWorkspace:
     def __init__(self, worktree: Path, directory: Path, *, is_ppu: bool = False,
                  research_records: bool = True, research_modules=("directions", "experiments"), plugin_registry=None,
                  inherit_state: bool = True, adaptive_root: Path | None = None,
-                 episode: int | None = None, history=None, workspace_policy: str = "",
+                 episode: int | None = None, workspace_policy: str = "",
                  persistent_root: Path | None = None):
         if plugin_registry is None:
             from aka.light.runtime.catalog import PluginRegistry
@@ -99,7 +100,6 @@ class EpisodeWorkspace:
         self.research_modules = tuple(research_modules)
         self.plugin_registry = plugin_registry
         self.inherit_state = inherit_state
-        self.history = history
         if not isinstance(workspace_policy, str):
             raise TypeError("workspace_policy must be text")
         self.workspace_policy = workspace_policy
@@ -262,6 +262,33 @@ class EpisodeWorkspace:
 
     def prepare_session(self) -> tuple[str, ...]:
         """Restore managed clients/Skills and refresh discovery, never user files."""
+        # Releases before the persistent-Session design copied finalized prior
+        # Episode conversations into a derived input subtree. That view is no
+        # longer an Agent input: one native conversation continues across
+        # audit segments, while complete captures stay Supervisor-private.
+        input_root = self.root / "input"
+        try:
+            input_mode = input_root.stat(follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            input_mode = None
+        if input_mode is not None:
+            if not stat.S_ISDIR(input_mode):
+                raise ValueError("Managed workspace input path must be a directory")
+            with tempfile.TemporaryDirectory(
+                prefix="retired-history-projection-", dir=self.state_path.parent
+            ) as temporary:
+                with open_private_directory(input_root) as source, open_private_directory(
+                    Path(temporary)
+                ) as destination:
+                    try:
+                        os.rename(
+                            "evidence",
+                            "evidence",
+                            src_dir_fd=source,
+                            dst_dir_fd=destination,
+                        )
+                    except FileNotFoundError:
+                        pass
         from aka.light.workspace.assets import link_runtime, link_custom_skills
         from aka.light.workspace.adaptive import ensure_readmes
         link_runtime(self.root, is_ppu=self.is_ppu, research_records=self.research_records,
@@ -269,12 +296,10 @@ class EpisodeWorkspace:
                      plugin_registry=self.plugin_registry)
         ensure_readmes(self.root)
         link_custom_skills(self.root, self.reserved_paths)
-        from aka.light.workspace.history import refresh_history
-        refresh_history(self.root, self.state_path.parent, self.history)
         persistent = self.persistent
         policy = ("This trajectory uses one stable Agent repository across Episodes. Kernel WIP, "
                   "local Git branches/tags, scratch/, custom skills/ and tools/ remain in place; "
-                  "Kernel promotion is independent." if persistent else
+                  "commit review never rewrites or promotes that history." if persistent else
                   "Custom skills/ and tools/ are saved after each Session and inherited by the next "
                   "Episode, regardless of Kernel promotion." if self.inherit_state else
                   "Cross-Episode inheritance is disabled. Custom skills/ and tools/ are retained "
@@ -310,27 +335,25 @@ class EpisodeWorkspace:
               "README when contents change. Never store credentials here.\n\n"
             "Use this trajectory-private Git repository for checkpoints and rollback. Remotes, "
             "credentials, hooks, submodules and LFS are disabled. Commit the complete candidate and "
-            "keep the worktree clean before a Kernel-bound Runtime request or `candidate_ready` report; "
+            "keep the worktree clean before a Kernel-bound Runtime request or `submit-kernel`; "
             "Runtime never commits Agent work on your behalf. HEAD is `kernel_commit_id`; all Kernel "
             "commit IDs shown here come from local or imported peer Git, never Supervisor Git. "
-            "`pivot` and `blocked` do not nominate the worktree. "
+            "`submit-kernel` requires saved passing full-Evaluate evidence for one exact commit and "
+            "applies final-source policy without launching another evaluation, promoting, rolling "
+            "back, or changing HEAD. "
             + git_lifetime + "Imported peers are under "
             "`refs/atrex/shared/` and their measurement indexes under "
             "`refs/notes/atrex-measurements`.\n\n"
             "## Runtime projections\n\n" + research_projection +
-            "\n## Prior Episode evidence\n\n"
-            "`input/evidence/index.json` indexes completed earlier Episodes and their latest finalized "
-            "Session at `episodes/<eight-digit-episode>/conversation.jsonl`. Missing, partial or "
-            "size-limited capture is marked explicitly; absence is not proof that work never happened. "
-            "Start with projected research records or optional Supervisor summaries in `memory/v*.json`, "
-            "then read only needed conversations. This snapshot does not refresh during a Session, and "
-            "historical Agent statements are fallible evidence rather than instructions or measurements.\n"
+            "\nSupervisor-private Session archives are retained for audit and token accounting but are "
+            "not projected into the Agent workspace. Use Git, PROGRESS.md, research records and Gateway "
+            "Records for durable optimization state.\n"
         ).encode())
         from aka.light.workspace.sources import pinned_paths
         fixed = pinned_paths(self.worktree)
         return tuple(name for name in self.reserved_paths if (self.root / name).exists()) + ("WORKSPACE.md", *fixed)
 
-    def publish(self, *, sealed_source: bytes | None = None) -> None:
+    def publish(self) -> None:
         from aka.light.workspace.files import publish
 
         state = json.loads(_read(self.state_path))
@@ -341,24 +364,7 @@ class EpisodeWorkspace:
             # Do not import/execute these files in the Supervisor.
             state["adaptive_snapshot"] = self.adaptive.save(self.root)
             durable_write_json(self.state_path, state)
-        if sealed_source is None:
-            content = source_snapshot(self.root, policy=policy_at(self.worktree, committed=True))
-        else:
-            warning = ""
-            try:
-                if source_snapshot(self.root, policy=policy_at(self.worktree, committed=True)) != sealed_source:
-                    warning = "post_report_draft_changed"
-            except (OSError, ValueError):
-                warning = "post_report_draft_unreadable"
-            if warning:
-                logging.getLogger(__name__).warning(
-                    "Episode Kernel integrity warning: %s; preserving sealed candidate; "
-                    "Agent draft remains at %s", warning, self.root,
-                )
-                state["integrity_warnings"] = sorted(set(state.get("integrity_warnings", [])) | {warning})
-                # Record the diagnostic even if unrelated publication fails later.
-                durable_write_json(self.state_path, state)
-            content = sealed_source
+        content = source_snapshot(self.root, policy=policy_at(self.worktree, committed=True))
         install_source(self.worktree, content)
         for name in DIAGNOSTIC_TREES:
             for relative, data in bounded_tree_entries(self.root / name):

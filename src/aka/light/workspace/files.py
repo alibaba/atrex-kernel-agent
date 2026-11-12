@@ -26,8 +26,6 @@ def relative_path(value: str) -> Path:
                           ".aka-agent-observations",
                           ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins", ".atrex_environment", "atrex-bench"}:
         raise ValueError("Private/control paths cannot be used as request files")
-    if path.parts[:2] == ("input", "evidence"):
-        raise ValueError("Historical evidence is read-only and cannot be used as a GPU request file")
     if path.parts[0] == "references":
         raise ValueError("Reference knowledge cannot be used as a GPU request file")
     return path
@@ -51,8 +49,6 @@ def snapshot(source: Path, destination: Path, *, custom_tools: bool = False) -> 
     skipped = SKIP - {"tools"} if custom_tools else SKIP
     for current, dirs, files in os.walk(source, followlinks=False):
         dirs[:] = [name for name in dirs if name not in skipped and not (Path(current) / name).is_symlink()]
-        if Path(current).relative_to(source) == Path("input"):
-            dirs[:] = [name for name in dirs if name != "evidence"]
         for name in files:
             path = Path(current) / name
             relative = path.relative_to(source)

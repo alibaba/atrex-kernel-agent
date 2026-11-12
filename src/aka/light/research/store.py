@@ -45,9 +45,8 @@ def _origin(value: Mapping[str, object] | None) -> dict[str, int]:
     result: dict[str, int] = {}
     for name in ("epoch", "trajectory", "episode"):
         item = value.get(name)
-        # Framework Baseline is Episode/Epoch zero; trajectory numbering still
-        # starts at one.  Preserve its origin so later Episodes can distinguish
-        # Baseline research from unscoped legacy events.
+        # Episode/Epoch numbering may start at zero; trajectory numbering starts
+        # at one. Preserve the origin for later audit segments.
         minimum = 1 if name == "trajectory" else 0
         if type(item) is int and item >= minimum:
             result[name] = item
@@ -76,20 +75,27 @@ def _lineage_key(origin: Mapping[str, object] | None) -> str:
 
 
 def _remove_retired_plan_progress(state: Mapping[str, object]) -> None:
-    """Remove Runtime-owned plan cursors from historical snapshots/events."""
+    """Remove retired Runtime-owned fields from historical snapshots/events."""
     directions = state.get("directions")
-    if not isinstance(directions, Mapping):
-        return
-    for direction in directions.values():
-        if isinstance(direction, dict):
-            direction.pop("completed_plan_steps", None)
-            direction.pop("next_step", None)
-            if "objective" not in direction and isinstance(
-                direction.get("hypothesis"), str
-            ):
-                direction["objective"] = direction["hypothesis"]
-            direction.pop("hypothesis", None)
-            direction.pop("hypothesis_status", None)
+    if isinstance(directions, Mapping):
+        for direction in directions.values():
+            if isinstance(direction, dict):
+                direction.pop("completed_plan_steps", None)
+                direction.pop("next_step", None)
+                if "objective" not in direction and isinstance(
+                    direction.get("hypothesis"), str
+                ):
+                    direction["objective"] = direction["hypothesis"]
+                direction.pop("hypothesis", None)
+                direction.pop("hypothesis_status", None)
+    lineages = state.get("lineages")
+    if isinstance(lineages, Mapping):
+        for lineage in lineages.values():
+            if isinstance(lineage, dict):
+                # A passing full Evaluate is measurement evidence, not a winner.
+                # Winners are derived separately from accepted submit-kernel commits.
+                lineage.pop("lineage_best_kernel_id", None)
+                lineage.pop("lineage_best_latency_us", None)
 
 
 def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
@@ -256,8 +262,7 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
         lineage = _lineage_key(origin)
         current = state["lineages"].setdefault(lineage, {})
         for key in (
-            "working_kernel_id", "lineage_best_kernel_id", "wip_checkpoint",
-            "lineage_best_latency_us", "last_correct_kernel_id",
+            "working_kernel_id", "wip_checkpoint", "last_correct_kernel_id",
             "active_direction_id", "active_direction_ids", "session_id",
         ):
             if key in payload:
@@ -781,9 +786,12 @@ class ResearchStore:
         public_lineages = {}
         for name, value in state["lineages"].items():
             item = deepcopy(value)
+            # Ignore retired snapshot fields even when a pre-migration state was
+            # loaded without replaying its complete event history.
+            item.pop("lineage_best_kernel_id", None)
+            item.pop("lineage_best_latency_us", None)
             for old, new in (
                 ("working_kernel_id", "working_kernel_commit_id"),
-                ("lineage_best_kernel_id", "lineage_best_kernel_commit_id"),
                 ("last_correct_kernel_id", "last_correct_kernel_commit_id"),
             ):
                 if old in item:

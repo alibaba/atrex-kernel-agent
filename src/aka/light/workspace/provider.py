@@ -1,5 +1,4 @@
-"""Task provider owns draft reset, snapshots and sealed Git promotion."""
-from pathlib import Path
+"""Task provider owns temporary controller worktrees and Agent workspace setup."""
 from dataclasses import replace
 import subprocess
 
@@ -68,8 +67,9 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
             "Use `python3 tools/sandbox.py --kind run --no-sync`. The Supervisor owns "
             "the evaluator, its configuration and solution metadata. Manage the trajectory's "
             "local Git history, and commit a clean Kernel HEAD before Runtime requests. Do not run "
-            "the evaluator locally or edit those files. Submit `episode-report` through "
-            "the Runtime; read the installed gpu-measurement and runtime-records Skills "
+            "the evaluator locally or edit those files. Submit an exact reachable commit with "
+            "`submit-kernel` after a standard full Evaluate passes for that exact commit; read the installed "
+            "gpu-measurement and runtime-records Skills "
             "for request examples. Put temporary probes and requests under `scratch/`.\n"
         )
         # The shared initializer now seals its explicit contributions itself.
@@ -123,24 +123,11 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
         from aka.light.workspace.git import EpisodeWorktree
         return EpisodeWorktree(handle.episode, handle.base_commit, handle.branch, handle.path)
 
-    def validate_candidate(self, handle, candidate_commit):
-        return self._implementation(handle).validate_candidate(candidate_commit)
-
-    def restore_sealed_candidate(self, handle, candidate_commit, source):
-        return self._implementation(handle).restore_sealed_candidate(candidate_commit, source)
-
     def reset_scratch(self, handle):
         self._implementation(handle).reset_scratch()
 
     def materialize(self, handle, workspace):
         self._implementation(handle).materialize(workspace)
 
-    def archive(self, handle, destination, candidate_commit="HEAD"):
-        return self._implementation(handle).archive(destination, candidate_commit)
-
     def remove(self, handle, workspace):
         self._implementation(handle).remove(workspace)
-
-    def promote(self, workspace, **options):
-        from aka.light.workspace.git import promote_candidate
-        return promote_candidate(workspace, **options)

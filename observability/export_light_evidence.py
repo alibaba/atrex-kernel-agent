@@ -14,7 +14,12 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from observability.common import job_identifier, job_state_rows, observed_at, resolve_workspace
+from observability.common import (
+    job_attempt_rows,
+    job_identifier,
+    observed_at,
+    resolve_workspace,
+)
 from observability.export_light_source import (
     existing_stores,
     export_source,
@@ -59,7 +64,7 @@ def export_evidence(workspace: Path, record_id: str, output: Path) -> dict:
         seen = set()
         for matched_owner, matched_store, _ in locations:
             directory = matched_store.root / "records" / record_id
-            for state in job_state_rows(directory):
+            for state in job_attempt_rows(directory):
                 job = state["job"]
                 key = json.dumps(job, sort_keys=True, ensure_ascii=False) if job is not None else state["path"]
                 if key in seen:
@@ -69,6 +74,7 @@ def export_evidence(workspace: Path, record_id: str, output: Path) -> dict:
                     {
                         "workspace": str(matched_owner),
                         "job_id": job_identifier(job),
+                        "checkpoint_path": state["checkpoint_path"],
                         "checkpoint_phase": state["phase"],
                         "submission": state["submission"],
                         "retries": state["retries"],
@@ -84,6 +90,7 @@ def export_evidence(workspace: Path, record_id: str, output: Path) -> dict:
             json.dumps(rows, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        agate_job_ids = sorted({row["job_id"] for row in rows if row["job_id"]})
         manifest = {
             "schema_version": 1,
             "exported_at": observed_at(),
@@ -93,8 +100,9 @@ def export_evidence(workspace: Path, record_id: str, output: Path) -> dict:
             "created_at": record.get("created_at"),
             "cacheable": record.get("cacheable"),
             "kernel": (record.get("kernels") or {}).get("candidate"),
-            "agate_job_ids": sorted({row["job_id"] for row in rows if row["job_id"]}),
-            "agate_job_count": len(rows),
+            "agate_job_ids": agate_job_ids,
+            "agate_job_count": len(agate_job_ids),
+            "agate_submission_attempt_count": len(rows),
             "files": {
                 "kernel": "kernel/",
                 "raw_agate_jobs": "agate-jobs.json",

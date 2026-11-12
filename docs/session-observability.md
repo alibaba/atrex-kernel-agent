@@ -104,7 +104,16 @@ Light writes into its Episode archive, so records survive removal of the Episode
       native/               # selected provider transcripts, if available
 ```
 
-Other invocations through the Agent runtime, including framework-baseline and policy-review sessions, default to `<workspace-parent>/.atrex-session-traces/<workspace-name>/run-<uuid>/`. The default is outside the candidate Git workspace and does not add trace files to candidate commits.
+Every managed Light invocation has an explicit Supervisor-private archive root. This includes the
+main optimizer and independent final-source-policy, Direction-claim, Experiment-claim and
+supplemental-numerical Review sessions. Each invocation must finalize both
+`conversation.jsonl` and `token-usage.json`; a Review capture missing either file is not accepted
+as auditable Review evidence. Auxiliary authoring sessions use the Campaign-private
+`sessions/<role>/run-<uuid>/` fallback. None of these archives are candidate source or Agent Git
+content.
+
+Standalone invocations without a managed Campaign still default to
+`<workspace-parent>/.atrex-session-traces/<workspace-name>/run-<uuid>/` when capture is enabled.
 
 Set `ATREX_SESSION_CAPTURE_DIR` to override that root for standalone invocations. Relative paths resolve against the invocation workspace. Light selects its Episode-specific archive directory. Every invocation, including same-session repair/resume, gets a new `run-<uuid>`; the provider session ID can remain the same.
 
@@ -118,8 +127,8 @@ temporary evidence bundle, so deleting that bundle never deletes the conversatio
   provider/
 ```
 
-The private `claim-reviews/review_<id>.json` receipt stores the provider Session ID and
-relative conversation path for every attempt. The corresponding
+The private `claim-reviews/review_<id>.json` receipt stores the provider Session ID and relative
+paths to both `conversation.jsonl` and `token-usage.json` for every attempt. The corresponding
 `claim-audit/claimaudit_<id>/review.json` links the Agent submission, canonical review
 receipt and captured conversations. Rejected and unavailable reviews keep the same
 Session audit under the private audit outcome. None of these paths or private identifiers
@@ -132,18 +141,19 @@ later continuation never overwrites the earlier audit. Missing or incompatible n
 state causes one fresh-Session retry; lifecycle-only Direction updates do not replace the claim's
 revision-review Session.
 
-## Disable capture and roll back
+## Standalone capture control
 
-Both `light` and `light-sandbox` enable capture. Configure it through the selected Agent
-provider, not by exporting its internal environment switch:
+Managed Campaign Sessions and Reviews always capture because complete private audit records are
+part of the Light contract. For a standalone Agent-provider invocation that has no
+Supervisor-selected archive root, capture remains configurable through the provider:
 
 ```json
 {"api_version":1,"patches":[{"id":"agent","config":{"sandbox":"none","capture":false}}]}
 ```
 
-Pass this patch before `--` when starting a native Light campaign. To keep Bubblewrap,
-use `"sandbox": "bwrap"` instead. Patches replace whole configurations, so retain any
-custom proc mode, timeout, executable, and read-only paths in the same object.
+This option applies only to standalone provider/testing calls. A managed Campaign supplies an
+archive root and therefore forces capture back on. Patches replace whole configurations, so retain
+any custom sandbox, proc mode, timeout, executable and read-only paths in the same object.
 
 The provider sets `ATREX_SESSION_CAPTURE` for each invocation from its selected option;
 an inherited `ATREX_SESSION_CAPTURE=0` is not an override of that provider policy.
@@ -184,12 +194,13 @@ The measurement states are:
 | State | Meaning |
 | --- | --- |
 | `exact` | The backend's authoritative terminal counters are available under its accounting contract, with complete capture; backends that reconcile native counters have passed that reconciliation. |
+| `estimated` | No usable Provider token counter was exported. Light estimated visible input, output and reasoning text from the finalized `conversation.jsonl`; cache behavior, hidden prompts and replayed context remain unknown. |
 | `partial` | Some counters exist, but coverage or reconciliation is incomplete. |
 | `unavailable` | No usable token total was exported; this is not zero usage. |
 
 Repeated stream/native copies of the same response are counted once. Claude cumulative task-progress notifications are not new responses. Codex cumulative rollout counters are reduced to invocation deltas; cached input is not added twice. Root terminal totals are not blindly added to child usage because the terminal may already include children.
 
-Claude uses the latest `result.usage` for the persisted total, Runtime return value and Campaign token budget, with or without Capture. `result.modelUsage` has a wider scope (including internal queries such as session titles); it is neither a fallback nor an amount added to this total. A difference between these fields does not by itself mark usage partial. Raw provider events still retain both fields. Native child transcripts, per-response counters and `by_agent` totals remain diagnostic evidence and are not added to `result.usage`; their sum can therefore differ from the chosen total. If `result.usage` is unavailable, only observed, deduplicated main-session responses provide a `partial` fallback; without those, usage is `unavailable`. Capture failures and incomplete evidence remain visible rather than being relabeled exact.
+Claude uses the latest `result.usage` for the persisted total, Runtime return value and Campaign token budget when it is available. `result.modelUsage` has a wider scope (including internal queries such as session titles); it is neither added nor silently substituted. A difference between these fields does not by itself mark usage partial. Raw provider events retain both fields. Native child transcripts, per-response counters and `by_agent` totals remain diagnostic evidence and are not added to `result.usage`; their sum can therefore differ from the chosen total. If all usable Provider counters are absent, Light estimates visible semantic input/output text from the finalized conversation and marks the result `estimated`; it never estimates cache reads/writes or claims the value is bill-exact. Capture failures and incomplete evidence remain visible rather than being relabeled exact.
 
 Pi Capture and its adapter share the final-event usage parser: `message_end` (assistant/tool result) and `compaction_end.result.usage` both contribute to the invocation total. A complete stream ending in `agent_settled` preserves exact accounting, including compaction. Pi native entry IDs are not shared response IDs, so stream and native totals are not added together. The complete stream is preferred; if native evidence supplies larger or missing counters, component maxima preserve that evidence with `partial` status and `pi_stream_native_usage_mismatch`. Native-only or unsettled observations remain partial. This is conservative reconciliation, not an exact reconstruction of unseen child calls; the report uses one source's response rows rather than presenting duplicate copies as separate bills.
 

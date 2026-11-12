@@ -162,28 +162,31 @@ def parse_arguments(argv):
     ap.add_argument(
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
-        default="leaderboard",
-        help="leaderboard preserves the permissive current CLAUDE.md flow; production keeps "
-        "deterministic structure/state gates and requires an independent fail-closed full-candidate "
-        "framework, compute-provenance, dependency, loader, and manifest review.",
+        default="fast",
+        help=(
+            "Final-source policy: fast lets the Agent choose a DSL and use declared libraries; "
+            "performance lets the Agent choose a DSL with expert guidance but requires "
+            "self-authored core compute; ultra additionally requires one explicitly configured "
+            "DSL. leaderboard/production remain compatibility aliases."
+        ),
     )
     ap.add_argument(
         "--framework",
         default="",
-        help="Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL / TileLang. When omitted, "
-        "launch all frameworks supported by the detected hardware in parallel: NVIDIA uses "
-        "Triton/CuteDSL/Cuda/TileLang, AMD uses Triton/FlyDSL/TileLang, PPU uses "
-        "Triton/Cuda/TileLang, and unknown hardware uses Triton/TileLang. "
-        "Each auto-dispatched production child is bound to its assigned framework.",
+        help=(
+            "Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL / TileLang. Required by "
+            "ultra and rejected by fast/performance, where the Agent owns DSL selection. "
+            "Historical leaderboard/production aliases retain their compatibility behavior."
+        ),
     )
     ap.add_argument(
         "--specify-dsl",
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Constrain and name the selected DSL in Agent prompts and production policy "
-            "(default: enabled). --no-specify-dsl lets one Agent choose any supported "
-            "self-authored GPU DSL; framework-specific conversion is disabled."
+            "Compatibility switch for historical modes. Fast/performance always leave DSL "
+            "selection to the Agent. Ultra always pins the explicit --framework and rejects "
+            "--no-specify-dsl."
         ),
     )
     ap.add_argument(
@@ -444,7 +447,7 @@ def parse_arguments(argv):
         args.sandbox_ssh_gpu = int(raw_ssh_gpu)
         if args.sandbox_ssh_gpu > 31:
             ap.error("--sandbox-ssh-gpu must be in the range 0..31")
-        if not args.framework:
+        if not args.framework and args.optimization_mode not in {"fast", "performance"}:
             ap.error(
                 "--sandbox-ssh requires an explicit --framework so one assigned GPU "
                 "cannot be shared by auto-dispatched campaigns"
@@ -518,6 +521,31 @@ def parse_arguments(argv):
 
 def adapt_argv(argv):
     args, raw_argv = parse_arguments(argv)
+    explicit = {value.split("=",1)[0] for value in raw_argv if value.startswith("--")}
+    if args.optimization_mode in {"fast", "performance"}:
+        if "--specify-dsl" in explicit or "--framework" in explicit:
+            raise SystemExit(
+                f"orchestrator: {args.optimization_mode} mode leaves DSL selection to the Agent; "
+                "remove --specify-dsl/--framework and provide non-binding expert guidance "
+                "through task notes or references"
+            )
+        # These policies deliberately leave the final DSL to the Agent.  A
+        # supplied framework may still appear in notes/references, but it is
+        # never an enforcement identity or an auto-dispatch request.
+        args.specify_dsl = False
+        args.framework = ""
+    elif args.optimization_mode == "ultra":
+        if "--no-specify-dsl" in explicit:
+            raise SystemExit(
+                "orchestrator: ultra mode requires a pinned DSL; remove "
+                "--no-specify-dsl and pass --framework <DSL>"
+            )
+        if not str(args.framework or "").strip():
+            raise SystemExit(
+                "orchestrator: ultra mode requires an explicit --framework <DSL>; "
+                "automatic framework dispatch is not allowed"
+            )
+        args.specify_dsl = True
     if not args.specify_dsl:
         # The switch owns the semantic choice. An incidental/default framework
         # must not leak into the frozen request, workspace identity, or policy.
@@ -526,9 +554,9 @@ def adapt_argv(argv):
     source = problem_request(args.op_dir, args.optimization_mode,
         workspace=args.workspace,
         suffix=args.workspace_suffix or (
-            f"{args.framework}_{args.platform}"
+            f"{args.framework}_{args.platform}_{args.optimization_mode}"
             if args.specify_dsl
-            else f"open_dsl_{args.platform}"
+            else f"open_dsl_{args.platform}_{args.optimization_mode}"
         ), expose_evaluator_shapes=args.expose_evaluator_shapes)
     values = vars(args).copy()
     from aka.legacy.execution.configuration import configure_legacy_arguments
@@ -538,7 +566,6 @@ def adapt_argv(argv):
     values.update(name=source.directory.name, problem=source,
                   sandbox_hardware=sandbox_hardware)
     request = campaign_request(values)
-    explicit = {value.split("=",1)[0] for value in raw_argv if value.startswith("--")}
     workflow_options = {field.name for field in __import__("dataclasses").fields(request.settings)
                         if "--" + field.name.replace("_", "-") in explicit}
     if "--no-specify-dsl" in explicit:

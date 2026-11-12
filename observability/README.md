@@ -17,9 +17,10 @@ supports `--json` or `--compact` for machine-readable output.
 | Campaign, trajectory, Episode and Session status | `light_runtime_status.py` |
 | Performance, correctness and per-Shape winners | `light_performance.py` |
 | Accepted and best passing full-Eval latency | `light_latency_status.py` |
-| Candidate gates, rejection reasons and promotions | `light_acceptance.py` |
-| Agate jobs, retries, batches, timeouts and errors | `light_agate_status.py` |
-| Session/Episode tokens, wall time and token efficiency | `light_token_time.py` |
+| `submit-kernel` decisions, rejection reasons and exact Evaluate evidence | `light_submission_status.py` (`light_acceptance.py` is a compatibility alias) |
+| Agate call overview, current checkpoints, historical retries and errors | `light_agate_status.py` |
+| All physical Agate attempts for one Gateway Record | `light_gateway_jobs.py` |
+| Main-Agent Session/Episode tokens, per-kind Review usage, and Kernel milestone checkpoints | `light_token_time.py` |
 | Runtime Tool counts, outcomes, duration and attribution | `light_tool_usage.py` |
 | Research Board, Direction/Experiment queues, sharing and Review audit | `light_research_status.py` |
 | Kernel source, raw Agate jobs and Agent-visible response | `export_light_evidence.py` |
@@ -30,20 +31,35 @@ Examples:
 ```bash
 python3 observability/light_runtime_status.py /path/to/campaign
 python3 observability/light_performance.py /path/to/campaign --json
-python3 observability/light_acceptance.py /path/to/campaign
+python3 observability/light_submission_status.py /path/to/campaign
 python3 observability/light_agate_status.py /path/to/campaign --json
+python3 observability/light_gateway_jobs.py /path/to/campaign \
+  --gateway-record-id gateway-0123456789abcdef0123456789abcdef --json
 python3 observability/light_token_time.py /path/to/campaign
 python3 observability/light_tool_usage.py /path/to/campaign
 python3 observability/light_research_status.py /path/to/campaign
 python3 observability/light_wiki_usage.py /path/to/campaign
 ```
 
-The commands automatically include pooled-search trajectory workspaces. If a
-fact is not durably persisted by current `main`, the JSON explicitly reports it
-as unavailable instead of inferring a value from unstructured logs.
+The commands automatically include pooled-search trajectory workspaces. Token usage may use the
+structured `estimated` fallback recorded from a finalized Session conversation when every Provider
+counter is absent. Other facts that are not durably persisted remain unavailable rather than being
+inferred from unstructured logs.
 
-Current `main` does not durably persist a separate reasoning-token counter,
-exact Agent active time, exact Agate-wait time, actual retry sleep intervals,
+Main-Agent and independent-Review totals are intentionally separate. Review usage is grouped by
+`final_source_policy_review`, `direction_claim_review`, `experiment_claim_review`, and
+`supplemental_numerical_review`, including invocation counts. Reasoning tokens are reported as a
+separate field when the provider exposes a native counter. If all Provider counters are absent,
+reasoning text may instead be estimated from explicitly captured reasoning blocks; it is still a
+subset of output and is not added to total tokens twice.
+`all_paths_totals` provides the combined main-Agent plus all-Review bill; provider-native
+reasoning remains a separate breakdown and is not added to `total_tokens` twice.
+Each passing standard full Evaluate and accepted `submit-kernel` also records an immutable
+Supervisor-private checkpoint of cumulative main-Agent, per-kind Review, and all-path usage.
+`light_token_time.py` exposes these as `passing_full_evaluate_token_checkpoints` and
+`accepted_submission_token_checkpoints`. A live Provider counter that has not settled is retained
+with `measurement=partial` rather than being mislabeled exact. Exact Agent active time,
+exact Agate-wait time, actual retry sleep intervals,
 Runtime slot/queue occupancy, or a lossless audit-receipt-to-Session join. The
 corresponding commands return `null` plus an availability explanation for
 those fields; all other reported values come from durable Campaign records.
@@ -67,16 +83,17 @@ The new directory contains:
 
 `light_latency_status.py` reports two distinct facts:
 
-- `accepted_best`: the lowest GeoMean latency already accepted by Light;
+- `accepted_best`: the lowest GeoMean latency among verified accepted `submit-kernel` decisions;
 - `best_passing_full_eval`: the lowest GeoMean latency observed in a passing,
-  standard full Agate Eval, whether or not that Kernel was later promoted.
+  standard full Agate Eval, whether or not that Kernel was submitted.
 
 Current Light uses the Agent's clean Git HEAD as the public Kernel identity. Both
 accepted state and Measurement Records expose it as `kernel_commit_id`; the
 Supervisor's separate archive commit remains private audit data. The script
-resolves each accepted `attempt.json`, checks that its terminal Gateway Record
-names the same Agent commit, and returns the immutable Record identity and
-verified source-artifact digest.
+resolves each accepted private-Journal `kernel_submissions[]` entry, checks that
+its full-Evaluate Gateway Record names the same Agent commit, and returns the
+immutable Record identity and verified source-artifact digest. Episode
+`attempt.json` is execution telemetry only and is never an acceptance source.
 
 The exact state and Measurement Record sources are documented in
 [`light-latency-data-sources.md`](light-latency-data-sources.md).

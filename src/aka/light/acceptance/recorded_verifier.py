@@ -44,24 +44,12 @@ reachable from local Git or `refs/atrex/shared/` by running:
 python3 tools/sandbox.py --kind run --mode full --baseline-commit <FULL_GIT_COMMIT>
 ```
 
-That is a research comparison: you choose its baseline and interpret the result. It cannot weaken
-the promotion gate. After `episode-report`, the Supervisor automatically compares the candidate
-against the already promoted incumbent Agent commit; the terminal baseline is not Agent-selectable.
-You do not need to submit a separate acceptance ABBA. An exploratory comparison may use supported
-research controls, but it does not alter terminal policy. An earlier Record is reused only when its
-candidate, incumbent, inputs, evaluator and complete task policy exactly match the terminal request.
+That is a research comparison: you choose its baseline and interpret the result. It does not alter
+the standard full Evaluate or final-source review required by `submit-kernel`. Runtime does not run
+an automatic terminal ABBA or promote a candidate when an Episode ends.
 
-For terminal acceptance, Runtime supplies the evaluator, full workload, target, Shape batching and
-candidate correctness gate; private inputs stay private. Agent-selected command, input, Shape, seed,
-benchmark or dependency overrides never enter that terminal request.
-
-Terminal Supervisor measurement repetitions: **{measurement_repetitions}** per request (one result if 1;
-per-Shape median if 3). The enclosing allocation is derived from the per-run limits above.
-These are Runtime-owned terminal settings; do not loop the research command or set environment
-variables in an attempt to reproduce or influence acceptance.
-
-ABBA does not replace the standard full Evaluate required by
-`episode-report`, and the Supervisor still applies policy and performance gates.
+Runtime measurement repetitions: **{measurement_repetitions}** per request (one result if 1;
+per-Shape median if 3).
 """
 
     def verify(self, workspace: Path, *, base_commit: str, candidate_commit: str,

@@ -216,6 +216,7 @@ def render_episode_brief(summary: Mapping[str, Any]) -> str:
                     phase,
                     cell(usage.get("input_tokens")),
                     cell(usage.get("output_tokens")),
+                    cell(usage.get("reasoning_tokens")),
                     cell(usage.get("cache_read_tokens")),
                     cell(usage.get("cache_write_tokens")),
                     cell(usage.get("total_tokens")),
@@ -235,6 +236,7 @@ def render_episode_brief(summary: Mapping[str, Any]) -> str:
                     label,
                     cell(usage.get("input_tokens")),
                     cell(usage.get("output_tokens")),
+                    cell(usage.get("reasoning_tokens")),
                     cell(usage.get("cache_read_tokens")),
                     cell(usage.get("cache_write_tokens")),
                     cell(usage.get("total_tokens")),
@@ -261,6 +263,7 @@ def render_episode_brief(summary: Mapping[str, Any]) -> str:
                         str(interval.get("index") or "—"),
                         cell(usage.get("input_tokens")),
                         cell(usage.get("output_tokens")),
+                        cell(usage.get("reasoning_tokens")),
                         cell(usage.get("cache_read_tokens")),
                         cell(usage.get("cache_write_tokens")),
                         cell(usage.get("total_tokens")),
@@ -288,8 +291,8 @@ def render_episode_brief(summary: Mapping[str, Any]) -> str:
         "",
         "## Phase token usage",
         "",
-        "| Phase | Input | Output | Cache read | Cache write | Total | Intervals | Measurement |",
-        "|---|---:|---:|---:|---:|---:|---:|---|",
+        "| Phase | Input | Output | Reasoning | Cache read | Cache write | Total | Intervals | Measurement |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---|",
         *rows,
     ]
     if interval_rows:
@@ -298,8 +301,8 @@ def render_episode_brief(summary: Mapping[str, Any]) -> str:
                 "",
                 "## Phase interval token usage",
                 "",
-                "| Phase | Invocation | Interval | Input | Output | Cache read | Cache write | Total | Measurement |",
-                "|---|---:|---:|---:|---:|---:|---:|---:|---|",
+                "| Phase | Invocation | Interval | Input | Output | Reasoning | Cache read | Cache write | Total | Measurement |",
+                "|---|---:|---:|---:|---:|---:|---:|---:|---:|---|",
                 *interval_rows,
             ]
         )

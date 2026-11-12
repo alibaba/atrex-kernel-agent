@@ -6,11 +6,9 @@ import aka.light.workflow.constants as _constants
 import aka.light.workspace.state as _workspace_state
 import aka.light.agent.runtime.process as _agent_process
 from aka.light.workflow.bootstrap import Campaign
-from aka.light.workflow.constants import DEFAULT_CONVERT_AFTER
 from aka.light.evaluation.hardware import (
     hardware_vendor,
     head_kernel_is_gluon,
-    should_convert_to_gluon,
 )
 from aka.light.acceptance.source_policy import install_workspace_policy
 from aka.light.workflow.session_io import _sandbox_command
@@ -18,9 +16,6 @@ from aka.light.workspace.state import (
     git_head,
     head_kernel_is_initial_baseline,
     latest_version,
-    read_stall,
-    reconstruct_stall,
-    write_stall,
 )
 
 
@@ -36,7 +31,9 @@ def prepare_campaign(campaign: Campaign) -> None:
             flush=True,
         )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
-    campaign.ensure_framework_baseline()
+    # Light starts the persistent optimization Session directly from measured
+    # V0. Bring-up, diagnostics, optimization and optional commit review all
+    # happen in the same Agent conversation and trajectory Git repository.
     if (
         campaign.optimization_mode == "production"
         and latest_version(campaign.workspace) > 0
@@ -77,7 +74,7 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
     )
 
 
-def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
+def episode_directives(campaign: Campaign) -> dict[str, str]:
     """Return only optional task-specific additions to the Episode prompt."""
     return {
         "plugins": campaign.plugin_directive("episode"),
@@ -85,7 +82,7 @@ def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
 
 
 def session_execution_policy(campaign: Campaign) -> dict[str, object]:
-    """Agent-session policy shared by Framework baseline and every Episode.
+    """Agent-session policy shared by every resumed Episode segment.
 
     Stage goals and terminal instructions belong in their prompts. Resource
     budgeting, reasoning effort and automatic recovery must not drift between
@@ -155,35 +152,10 @@ def candidate_policy_violations(
     )
 
 
-def conversion_required(campaign: Campaign, stall: int, workspace: Path) -> bool:
-    if not campaign.source_checks_enabled or not campaign.specify_dsl:
-        return False
-    return should_convert_to_gluon(
-        campaign.framework,
-        stall,
-        int(getattr(campaign, "convert_after", DEFAULT_CONVERT_AFTER)),
-        head_is_gluon=head_kernel_is_gluon(workspace),
-    )
-
-
-def candidate_is_gluon(workspace: Path) -> bool:
-    return head_kernel_is_gluon(workspace)
-
-
-def restored_stall(workspace: Path) -> int:
-    value = read_stall(workspace)
-    return int(value if value is not None else reconstruct_stall(workspace))
-
-
-def save_stall(workspace: Path, value: int) -> None:
-    write_stall(workspace, value)
-
-
 # Re-exported for the rest of long_horizon, which reaches orchestrator only through this adapter.
 run_bounded = _agent_process.run_bounded
 peak_util = _workspace_state.peak_util
 read_memory = _workspace_state.read_memory
 speedup_vs_reference = _workspace_state.speedup_vs_reference
-CONVERT_PERF_TOL = _constants.CONVERT_PERF_TOL
 IMMUTABLE_BASELINE_PATHS = _constants.IMMUTABLE_BASELINE_PATHS
 STALL_STATE_FILE = _constants.STALL_STATE_FILE

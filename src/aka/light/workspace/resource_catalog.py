@@ -15,7 +15,6 @@ SHARED = {
     "tools/ncu_classification.py": "execution/profiling/nvidia/ncu_classification.py",
     "tools/compute_utilization.py": "execution/profiling/common/compute_utilization.py",
     "tools/extract_asm.py": "execution/profiling/amd/extract_asm.py",
-    "prompts/dependency_review.md": "workflow/prompts/dependency_review.md",
     "reference/test_kernel.py": "task/problem/sol_harness.py",
     "reference/v_iteration.schema.json": "workflow/resources/v_iteration.schema.json",
     "prompts/generalize_agent_problem.md": "task/problem/prompts/generalize_agent_problem.md",

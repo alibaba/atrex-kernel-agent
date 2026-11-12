@@ -11,8 +11,7 @@ from typing import Callable
 from aka.light.execution.recovery import raise_if_environment_blocked
 
 from aka.contracts.agent import Agent, NativeInvocation
-from aka.light.workflow.models import EpisodeHandoff, InvocationObservation, SessionResult
-from aka.light.workflow.protocol import handoff_diagnosis, read_handoff
+from aka.light.workflow.models import InvocationObservation, SessionResult
 from aka.light.workflow.output_limit import (
     EPISODE_COMPLETION_INSTRUCTION,
     dependency_policy_recovery_prompt,
@@ -30,7 +29,6 @@ from aka.light.agent.claude_tools import (
 from aka.light.execution.retry import InfrastructureUnavailable
 from aka.light.workflow.constants import DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES
 
-CompletionCheck = Callable[[EpisodeHandoff], str]
 _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
 _CLAUDE_COMPACTION_FAILURE = "automatic compaction failed"
 _CLAUDE_COMPACTION_CONNECTION_LOSS = "connection lost mid-response"
@@ -131,9 +129,6 @@ class LongSessionRunner:
         workspace: Path,
         prompt: str,
         *,
-        handoff_path: Path | None = None,
-        handoff_resumes: int = 0,
-        completion_check: CompletionCheck | None = None,
         reasoning_effort: str = "max",
         session_id: str = "",
         resume_session: bool = False,
@@ -164,13 +159,6 @@ class LongSessionRunner:
             if resume_session
             else (session_id if assigns_session_id else "")
         )
-        if handoff_path is not None:
-            if completion_check is None:
-                raise ValueError("completion_check is required when handoff_path is configured")
-            handoff_path.parent.mkdir(parents=True, exist_ok=True)
-            handoff_path.unlink(missing_ok=True)
-        elif handoff_resumes:
-            raise ValueError("handoff_resumes requires handoff_path")
         native = self.agent.open_session(
             self.agent_cli,
             workspace,
@@ -190,7 +178,6 @@ class LongSessionRunner:
             stderr_parts: list[str] = []
             total_tokens = 0
             completion_diagnosis = ""
-            handoff: EpisodeHandoff | None = None
             exit_status = 0
             timed_out = False
             resume_count = 0
@@ -241,31 +228,7 @@ class LongSessionRunner:
                     resume = retry_resume
                     retry_resume = False
                 else:
-                    if resume_count >= max(0, handoff_resumes):
-                        break
-                    if not native.supports_resume:
-                        completion_diagnosis = (
-                            completion_diagnosis
-                            or f"{self.agent_cli} ended without a valid terminal handoff"
-                        )
-                        break
-                    if not active_session_id:
-                        completion_diagnosis = (
-                            completion_diagnosis
-                            or f"{self.agent_cli} ended without exposing a resumable session id"
-                        )
-                        break
-                    resume_count += 1
-                    resume = True
-                    purpose = "handoff_resume"
-                    assert handoff_path is not None
-                    diagnosis = completion_diagnosis or handoff_diagnosis(handoff_path)
-                    turn_prompt = (
-                        f"Continue the same long-horizon {stage_name}. The previous turn did "
-                        f"not satisfy the terminal contract: {diagnosis}. Resume concrete engineering "
-                        "work from the current draft. Do not merely explain the problem. "
-                        f"{completion_instruction.strip()}"
-                    )
+                    break
                 environment = {
                     "ATREX_AGENT_STAGE_NAME": stage_name,
                     "ATREX_OUTPUT_LIMIT_RECOVERY_RETRIES": str(
@@ -347,25 +310,7 @@ class LongSessionRunner:
                 # Account first, then stop without consuming an episode outcome.
                 raise_if_environment_blocked()
                 timed_out = turn_timed_out
-                if handoff_path is not None:
-                    observed = read_handoff(handoff_path)
-                    if (
-                        observed is not None
-                        and failure_kind != "dependency_policy_violation"
-                    ):
-                        assert completion_check is not None
-                        completion_diagnosis = completion_check(observed)
-                        if not completion_diagnosis:
-                            handoff = observed
-                            # A valid, committed terminal handoff is authoritative even
-                            # when the CLI lingered until its turn timeout afterward.
-                            exit_status = 0
-                            timed_out = False
-                            break
-                    else:
-                        completion_diagnosis = handoff_diagnosis(handoff_path)
-                else:
-                    completion_diagnosis = ""
+                completion_diagnosis = ""
                 if failure_kind == "rate_limit" and not timed_out:
                     rate_limit_retries += 1
                     purpose = "rate_limit_recovery"
@@ -409,16 +354,6 @@ class LongSessionRunner:
                             f"{stage_name} active-time budget exhausted; no continuation started"
                         )
                         break
-                    can_resume = (
-                        bool(active_session_id)
-                        and native.supports_resume
-                        and resume_count < max(0, handoff_resumes)
-                    )
-                    if can_resume:
-                        completion_diagnosis = (
-                            "coding session timed out before a valid terminal handoff"
-                        )
-                        continue
                     break
                 if exit_status != 0:
                     externally_terminated = exit_status in {
@@ -464,10 +399,8 @@ class LongSessionRunner:
                         )
                         # The guarded process group no longer exists and must
                         # never be resumed. Preserve files, but require a fresh
-                        # terminal handoff from the replacement session.
+                        # replacement provider Session over the preserved files.
                         native.close()
-                        if handoff_path is not None:
-                            handoff_path.unlink(missing_ok=True)
                         active_session_id = str(uuid.uuid4())
                         native = self.agent.open_session(
                             self.agent_cli,
@@ -542,16 +475,26 @@ class LongSessionRunner:
                     )
                     can_resume = (
                         (externally_terminated or bool(transient_api_error))
-                        and active_session_id
+                        and bool(active_session_id)
                         and native.supports_resume
-                        and resume_count < max(0, handoff_resumes)
+                        and resume_count < 1
                     )
                     if can_resume:
+                        resume_count += 1
+                        retry_resume = True
+                        purpose = "session_recovery"
+                        next_prompt = (
+                            f"Continue the SAME {stage_name} after a transient provider "
+                            "interruption. Preserve the current source tree, Git checkpoints, "
+                            "measurements, and recorded research. Inspect durable state before "
+                            "repeating work; continue with one small evidence-backed step at a "
+                            f"time. {completion_instruction.strip()}"
+                        )
                         completion_diagnosis = (
-                            f"Claude coding session hit transient {transient_api_error} before "
-                            "publishing a valid handoff"
+                            f"Provider session hit transient {transient_api_error}; "
+                            "resuming the same Session"
                             if transient_api_error
-                            else "coding session received SIGTERM before publishing a valid handoff"
+                            else "Provider session received SIGTERM; resuming the same Session"
                         )
                         continue
                     if (
@@ -563,7 +506,7 @@ class LongSessionRunner:
                         # unable to accept even a short continuation. Preserve the
                         # draft and Runtime records, but rebuild conversational
                         # context once from the ordinary Episode prompt instead of
-                        # discarding the whole Episode as an invalid handoff.
+                        # discarding the whole audit segment.
                         native.close()
                         active_session_id = str(uuid.uuid4())
                         native = self.agent.open_session(
@@ -608,7 +551,6 @@ class LongSessionRunner:
                 tokens=total_tokens,
                 session_id=active_session_id or session_id,
                 resume_count=resume_count,
-                handoff=handoff,
                 stdout_tail=stdout_all[-4000:],
                 stderr_tail=stderr_all[-4000:],
                 completion_diagnosis=completion_diagnosis,

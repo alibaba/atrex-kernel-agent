@@ -17,7 +17,6 @@ from observability.common import (
     discover_scopes,
     elapsed_seconds,
     emit,
-    finite_positive,
     main_error,
     observed_at,
     read_json,
@@ -25,17 +24,25 @@ from observability.common import (
     table,
     telemetry_documents,
 )
+from aka.light.workflow.review_usage import REVIEW_KINDS
 
 
-TOKEN_KEYS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens")
+TOKEN_KEYS = (
+    "input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "cache_read_tokens",
+    "cache_write_tokens",
+    "total_tokens",
+)
 
 
 def _usage(value: object) -> dict:
     value = value if isinstance(value, dict) else {}
-    return {key: value.get(key) if type(value.get(key)) is int else None for key in TOKEN_KEYS} | {
-        "reasoning_tokens": None,
-        "measurement": value.get("measurement", "unavailable")
-    }
+    return {
+        key: value.get(key) if type(value.get(key)) is int else None
+        for key in TOKEN_KEYS
+    } | {"measurement": value.get("measurement", "unavailable")}
 
 
 def _summed_session_usage(rows: list[dict]) -> dict:
@@ -43,27 +50,157 @@ def _summed_session_usage(rows: list[dict]) -> dict:
     for key in TOKEN_KEYS:
         values = [row["usage"].get(key) for row in rows if type(row["usage"].get(key)) is int]
         usage[key] = sum(values) if values else None
-    return usage | {"reasoning_tokens": None, "measurement": "session_capture_fallback"}
+    return usage | {"measurement": "session_capture_fallback"}
 
 
-def _attempt_latency(attempt: dict | None) -> float | None:
-    if not isinstance(attempt, dict):
-        return None
-    verification = attempt.get("verification")
-    verification = verification if isinstance(verification, dict) else {}
-    return finite_positive(verification.get("candidate_latency_us")) or finite_positive(
-        attempt.get("latency_us_geomean")
+def _review_rows(scope) -> list[dict]:
+    rows = []
+    root = scope.audit_root / "review-usage"
+    for path in sorted(root.glob("*/*.json")):
+        value = read_json(path, default={})
+        if (
+            not isinstance(value, dict)
+            or value.get("schema") != "atrex.light-review-usage.v1"
+        ):
+            continue
+        kind = value.get("review_kind")
+        if not isinstance(kind, str) or not kind:
+            continue
+        rows.append({
+            "scope": scope.label,
+            "trajectory": scope.trajectory,
+            "review_kind": kind,
+            "label": value.get("label"),
+            "backend": value.get("backend"),
+            "model": value.get("model"),
+            "recorded_at": value.get("recorded_at"),
+            "session_id": value.get("session_id"),
+            "exit_status": value.get("exit_status"),
+            "timed_out": value.get("timed_out") is True,
+            "usage": _usage(value.get("usage")),
+            "observation_errors": (
+                value.get("observation_errors")
+                if isinstance(value.get("observation_errors"), list)
+                else []
+            ),
+            "record_path": str(path),
+        })
+    return rows
+
+
+def _review_summary(rows: list[dict]) -> dict:
+    available = {
+        key: sum(type(row["usage"].get(key)) is int for row in rows)
+        for key in TOKEN_KEYS
+    }
+
+
+    usage = {
+        key: (
+            sum(row["usage"][key] for row in rows if type(row["usage"].get(key)) is int)
+            if available[key]
+            else None
+        )
+        for key in TOKEN_KEYS
+    }
+    total_available = available["total_tokens"]
+    measurements = [row["usage"].get("measurement") for row in rows]
+    usage["measurement"] = (
+        "unavailable"
+        if not total_available
+        else "exact"
+        if total_available == len(rows) and all(value == "exact" for value in measurements)
+        else "estimated"
+        if total_available == len(rows)
+        and all(value in {"exact", "estimated"} for value in measurements)
+        else "partial"
     )
+    return {
+        "invocation_count": len(rows),
+        "successful_invocation_count": sum(
+            row.get("exit_status") == 0 and not row.get("timed_out") for row in rows
+        ),
+        "failed_invocation_count": sum(
+            row.get("exit_status") not in {0, None} for row in rows
+        ),
+        "timed_out_invocation_count": sum(bool(row.get("timed_out")) for row in rows),
+        "usage_available_invocations": available,
+        "usage": usage,
+    }
 
 
-def _previous_accepted_latency(attempts: dict[int, dict], episode: int) -> float | None:
-    for number in sorted((value for value in attempts if value < episode), reverse=True):
-        attempt = attempts[number]
-        if attempt.get("accepted") is True:
-            latency = _attempt_latency(attempt)
-            if latency is not None:
-                return latency
-    return None
+def _token_checkpoint_rows(scope) -> list[dict]:
+    rows = []
+    for path in sorted((scope.audit_root / "token-checkpoints").glob("*/*.json")):
+        value = read_json(path, default={})
+        if (
+            not isinstance(value, dict)
+            or value.get("schema") != "atrex.light-token-checkpoint.v1"
+        ):
+            continue
+        all_paths = value.get("all_paths")
+        all_paths = all_paths if isinstance(all_paths, dict) else {}
+        main = value.get("main_agent")
+        main = main if isinstance(main, dict) else {}
+        reviews = value.get("reviews")
+        reviews = reviews if isinstance(reviews, dict) else {}
+        rows.append({
+            "scope": scope.label,
+            "trajectory": scope.trajectory,
+            "checkpoint_id": value.get("checkpoint_id"),
+            "event": value.get("event"),
+            "occurred_at": value.get("occurred_at"),
+            "identity": value.get("identity") if isinstance(value.get("identity"), dict) else {},
+            "usage": _usage(all_paths.get("usage")),
+            "main_agent_usage": _usage(main.get("usage")),
+            "review_usage": _usage(reviews.get("usage")),
+            "reviews_by_kind": (
+                value.get("reviews_by_kind")
+                if isinstance(value.get("reviews_by_kind"), dict)
+                else {}
+            ),
+            "warnings": value.get("warnings") if isinstance(value.get("warnings"), list) else [],
+            "record_path": str(path),
+        })
+    return rows
+
+
+def _all_paths_totals(
+    main_usage: dict,
+    review_summary: dict,
+    *,
+    main_rows: list[dict],
+    review_rows: list[dict],
+) -> dict:
+    """Combine disjoint main-Agent and reviewer bills without double-counting reasoning."""
+    review_usage = review_summary["usage"]
+    combined = {}
+    for key in TOKEN_KEYS:
+        values = [
+            value
+            for value in (main_usage.get(key), review_usage.get(key))
+            if type(value) is int
+        ]
+        combined[key] = sum(values) if values else None
+
+    rows = [*main_rows, *review_rows]
+    observed_total_rows = sum(
+        type(row.get("usage", {}).get("total_tokens")) is int for row in rows
+    )
+    measurements = [row.get("usage", {}).get("measurement") for row in rows]
+    combined["measurement"] = (
+        "unavailable"
+        if not rows or not observed_total_rows
+        else "exact"
+        if observed_total_rows == len(rows) and all(value == "exact" for value in measurements)
+        else "estimated"
+        if observed_total_rows == len(rows)
+        and all(value in {"exact", "estimated"} for value in measurements)
+        else "partial"
+    )
+    combined["main_agent_total_tokens"] = main_usage.get("total_tokens")
+    combined["review_total_tokens"] = review_usage.get("total_tokens")
+    return combined
 
 
 def _session_rows(scope) -> list[dict]:
@@ -134,6 +271,8 @@ def _session_rows(scope) -> list[dict]:
 def snapshot(workspace: Path) -> dict:
     sessions = []
     episodes = []
+    reviews = []
+    token_checkpoints = []
     incidents = Counter()
     for scope in discover_scopes(workspace):
         attempts = {
@@ -142,6 +281,8 @@ def snapshot(workspace: Path) -> dict:
             if type(attempt.get("episode")) is int
         }
         scope_sessions = _session_rows(scope)
+        reviews.extend(_review_rows(scope))
+        token_checkpoints.extend(_token_checkpoint_rows(scope))
         sessions.extend(scope_sessions)
         session_by_episode: dict[int, list[dict]] = {}
         for session in scope_sessions:
@@ -169,19 +310,12 @@ def snapshot(workspace: Path) -> dict:
                     incidents["output_truncation"] += 1
                 if "rate" in kind or "rate" in code or "throttl" in code:
                     incidents["rate_limit"] += 1
-            candidate = attempts.get(episode)
-            latency = _attempt_latency(candidate)
-            prior = _previous_accepted_latency(attempts, episode) if isinstance(episode, int) else None
-            total = terminal.get("total_tokens")
-            improvement = ((prior - latency) if prior and latency else None)
             episodes.append(
                 {
                     "scope": scope.label,
                     "trajectory": scope.trajectory,
                     "episode": episode,
-                    "version": telemetry.get("version"),
                     "status": telemetry.get("status"),
-                    "accepted": telemetry.get("accepted"),
                     "resume_count": telemetry.get("resume_count"),
                     "invocation_count": telemetry.get("invocation_count"),
                     "usage": terminal,
@@ -192,12 +326,6 @@ def snapshot(workspace: Path) -> dict:
                     "wall_seconds": sum(row["wall_seconds"] or 0.0 for row in session_by_episode.get(episode, [])) or None,
                     "active_seconds": None,
                     "agate_wait_seconds": None,
-                    "latency_improvement_us": improvement,
-                    "latency_improvement_us_per_million_tokens": (
-                        improvement * 1_000_000 / total
-                        if improvement is not None and isinstance(total, int) and total > 0
-                        else None
-                    ),
                 }
             )
         for episode, episode_sessions in sorted(session_by_episode.items()):
@@ -205,21 +333,12 @@ def snapshot(workspace: Path) -> dict:
                 continue
             terminal = _summed_session_usage(episode_sessions)
             candidate = attempts.get(episode)
-            latency = _attempt_latency(candidate)
-            prior = _previous_accepted_latency(attempts, episode)
-            improvement = (prior - latency) if prior and latency else None
-            total = terminal.get("total_tokens")
             episodes.append(
                 {
                     "scope": scope.label,
                     "trajectory": scope.trajectory,
                     "episode": episode,
-                    "version": (
-                        candidate.get("version", candidate.get("memory_version"))
-                        if candidate else None
-                    ),
                     "status": candidate.get("status") if candidate else "running_or_interrupted",
-                    "accepted": candidate.get("accepted") is True if candidate else False,
                     "resume_count": None,
                     "invocation_count": None,
                     "usage": terminal,
@@ -230,17 +349,8 @@ def snapshot(workspace: Path) -> dict:
                     "wall_seconds": sum(row["wall_seconds"] or 0.0 for row in episode_sessions) or None,
                     "active_seconds": None,
                     "agate_wait_seconds": None,
-                    "latency_improvement_us": improvement,
-                    "latency_improvement_us_per_million_tokens": (
-                        improvement * 1_000_000 / total
-                        if improvement is not None and isinstance(total, int) and total > 0
-                        else None
-                    ),
                 }
             )
-        for attempt in attempts.values():
-            if attempt.get("status") == "invalid_handoff":
-                incidents["invalid_handoff"] += 1
         counts = Counter(
             row["episode"] for row in scope_sessions
             if row["stage"] == "episode" and isinstance(row["episode"], int)
@@ -251,28 +361,71 @@ def snapshot(workspace: Path) -> dict:
     startup_sessions = [row for row in sessions if row["stage"] != "episode"]
     token_totals = {
         key: (
-            sum(row["usage"].get(key) or 0 for row in episodes)
-            + sum(row["usage"].get(key) or 0 for row in startup_sessions)
+            sum(values)
+            if (values := [
+                row["usage"][key]
+                for row in [*episodes, *startup_sessions]
+                if type(row["usage"].get(key)) is int
+            ])
+            else None
         )
         for key in TOKEN_KEYS
     }
     startup_token_totals = {
-        key: sum(row["usage"].get(key) or 0 for row in startup_sessions)
+        key: (
+            sum(values)
+            if (values := [
+                row["usage"][key]
+                for row in startup_sessions
+                if type(row["usage"].get(key)) is int
+            ])
+            else None
+        )
         for key in TOKEN_KEYS
     }
     episode_totals = [row["usage"].get("total_tokens") for row in episodes if isinstance(row["usage"].get("total_tokens"), int)]
+    reviews.sort(key=lambda row: (
+        row["scope"], row["review_kind"], str(row.get("recorded_at") or "")
+    ))
+    token_checkpoints.sort(key=lambda row: (
+        str(row.get("occurred_at") or ""),
+        row["scope"],
+        str(row.get("checkpoint_id") or ""),
+    ))
+    known_review_kinds = REVIEW_KINDS | {
+        row["review_kind"] for row in reviews
+    }
+    review_kinds = {
+        kind: _review_summary([
+            row for row in reviews if row["review_kind"] == kind
+        ])
+        for kind in sorted(known_review_kinds)
+    }
+    review_summary = _review_summary(reviews)
+    all_paths_totals = _all_paths_totals(
+        token_totals,
+        review_summary,
+        main_rows=[*episodes, *startup_sessions],
+        review_rows=reviews,
+    )
     return {
-        "schema_version": 2,
+        "schema_version": 4,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
+        # Compatibility alias retained for existing consumers. Both fields are
+        # main-Agent-only and intentionally exclude every independent reviewer.
         "totals": token_totals,
+        "main_agent_totals": token_totals,
+        "all_paths_totals": all_paths_totals,
         "startup_totals": startup_token_totals,
+        "review_totals": review_summary,
+        "review_totals_by_kind": review_kinds,
         "token_availability": {
             "input_tokens": "available when the Agent backend reports usage",
             "output_tokens": "available when the Agent backend reports usage",
             "reasoning_tokens": (
-                "not reported as a separate counter by current main; a backend may account "
-                "reasoning inside output_tokens"
+                "reported separately when the backend exposes a native reasoning counter; "
+                "otherwise null and never inferred from output_tokens"
             ),
             "cache_read_tokens": "available when the Agent backend reports usage",
             "cache_write_tokens": "available when the Agent backend reports usage",
@@ -281,8 +434,8 @@ def snapshot(workspace: Path) -> dict:
                 "captured Session usage and mark measurement=session_capture_fallback"
             ),
         },
-        "attempt_unit": "one Light Episode",
-        "average_tokens_per_attempt": sum(episode_totals) / len(episode_totals) if episode_totals else None,
+        "episode_unit": "one Agent-defined Light Episode segment",
+        "average_tokens_per_episode": sum(episode_totals) / len(episode_totals) if episode_totals else None,
         "incidents": dict(sorted(incidents.items())),
         "time_availability": {
             "wall_seconds": "available for finalized captured Sessions",
@@ -291,17 +444,45 @@ def snapshot(workspace: Path) -> dict:
         },
         "sessions": sessions,
         "episodes": episodes,
+        "reviews": reviews,
+        "token_checkpoints": token_checkpoints,
+        "passing_full_evaluate_token_checkpoints": [
+            row for row in token_checkpoints
+            if row.get("event") == "passing-full-evaluate"
+        ],
+        "accepted_submission_token_checkpoints": [
+            row for row in token_checkpoints
+            if row.get("event") == "accepted-submit-kernel"
+        ],
     }
 
 
 def render(value: dict) -> str:
-    lines = ["AKA Light Token 与时间", ""]
+    overall = value.get("all_paths_totals") or {}
+    lines = [
+        "AKA Light Token 与时间",
+        "",
+        "All paths",
+        table(
+            ["Total", "Main Agent", "Reviews", "Input", "Output", "Reasoning", "Measurement"],
+            [[
+                overall.get("total_tokens"),
+                overall.get("main_agent_total_tokens"),
+                overall.get("review_total_tokens"),
+                overall.get("input_tokens"),
+                overall.get("output_tokens"),
+                overall.get("reasoning_tokens"),
+                overall.get("measurement"),
+            ]],
+        ),
+        "",
+        "Main Agent",
+    ]
     lines.append(table(
-        ["Scope", "Episode", "Tokens", "Wall(s)", "Accepted", "Improve us/Mtok", "Sessions"],
+        ["Scope", "Episode", "Tokens", "Reasoning", "Wall(s)", "Sessions"],
         [[row["scope"], row["episode"], row["usage"].get("total_tokens"),
-          round(row["wall_seconds"], 1) if row["wall_seconds"] else None, row["accepted"],
-          round(row["latency_improvement_us_per_million_tokens"], 4)
-          if row["latency_improvement_us_per_million_tokens"] is not None else None,
+          row["usage"].get("reasoning_tokens"),
+          round(row["wall_seconds"], 1) if row["wall_seconds"] else None,
           row["session_count"]]
          for row in value["episodes"]],
     ))
@@ -309,14 +490,48 @@ def render(value: dict) -> str:
     if startup_sessions:
         lines += ["", "Pre-Episode / Legacy Baseline Sessions"]
         lines.append(table(
-            ["Scope", "Stage", "Session", "Backend", "State", "Tokens", "Wall(s)"],
+            ["Scope", "Stage", "Session", "Backend", "State", "Tokens", "Reasoning", "Wall(s)"],
             [[
                 row["scope"], row["stage"], row["session_id"], row["backend"], row["state"],
                 row["usage"].get("total_tokens"),
+                row["usage"].get("reasoning_tokens"),
                 round(row["wall_seconds"], 1) if row["wall_seconds"] else None,
             ] for row in startup_sessions],
         ))
-    lines += ["", f"Average tokens per Episode: {value['average_tokens_per_attempt'] if value['average_tokens_per_attempt'] is not None else '—'}",
+    review_rows = value.get("review_totals_by_kind") or {}
+    if review_rows:
+        lines += ["", "Independent Reviews"]
+        lines.append(table(
+            ["Review kind", "Calls", "Total", "Input", "Output", "Reasoning", "Timeout", "Failed"],
+            [[
+                kind,
+                summary["invocation_count"],
+                summary["usage"].get("total_tokens"),
+                summary["usage"].get("input_tokens"),
+                summary["usage"].get("output_tokens"),
+                summary["usage"].get("reasoning_tokens"),
+                summary["timed_out_invocation_count"],
+                summary["failed_invocation_count"],
+            ] for kind, summary in review_rows.items()],
+        ))
+    checkpoints = value.get("token_checkpoints") or []
+    if checkpoints:
+        lines += ["", "Kernel milestones"]
+        lines.append(table(
+            ["Scope", "Event", "Commit", "Gateway Record", "Total", "Main", "Reviews", "Reasoning", "Measurement"],
+            [[
+                row["scope"],
+                row["event"],
+                row.get("identity", {}).get("kernel_commit_id"),
+                row.get("identity", {}).get("gateway_record_id"),
+                row["usage"].get("total_tokens"),
+                row["main_agent_usage"].get("total_tokens"),
+                row["review_usage"].get("total_tokens"),
+                row["usage"].get("reasoning_tokens"),
+                row["usage"].get("measurement"),
+            ] for row in checkpoints],
+        ))
+    lines += ["", f"Average tokens per Episode: {value['average_tokens_per_episode'] if value['average_tokens_per_episode'] is not None else '—'}",
               f"Incidents: {value['incidents']}",
               "Active time / Agate wait time: unavailable in durable main records"]
     return "\n".join(lines)

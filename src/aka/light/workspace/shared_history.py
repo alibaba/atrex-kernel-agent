@@ -48,29 +48,79 @@ def export_epoch(
     *,
     trajectory: int,
     epoch: int,
+    lineage_winner_commit_id: str | None = None,
     audit_path: Path,
 ) -> dict:
-    """Export exact Git objects so peer kernel_commit_id values remain valid."""
+    """Export exact HEAD and submitted-winner objects for peer inspection."""
     head = _run(workspace, "rev-parse", "HEAD").stdout.decode().strip()
-    ref = f"refs/atrex/shared/T{trajectory}/e{epoch:04d}/head"
-    _run(workspace, "update-ref", ref, head)
-    commits = _validate_source_history(workspace, ref)
+    refs = {"head": f"refs/atrex/shared/T{trajectory}/e{epoch:04d}/head"}
+    commits = {"head": head}
+    if lineage_winner_commit_id:
+        if _run(
+            workspace,
+            "cat-file",
+            "-e",
+            f"{lineage_winner_commit_id}^{{commit}}",
+            check=False,
+        ).returncode != 0:
+            raise ValueError("Lineage winner is not present in Agent Git")
+        refs["lineage_winner"] = (
+            f"refs/atrex/shared/T{trajectory}/e{epoch:04d}/lineage-winner"
+        )
+        commits["lineage_winner"] = lineage_winner_commit_id
+    # The Agent owns every ref in its repository. Build the namespaced export
+    # in a private temporary repository instead of writing an export ref into
+    # Agent Git.
+    for commit_id in set(commits.values()):
+        _validate_source_history(workspace, commit_id)
+    commit_count = len(
+        set(
+            _run(workspace, "rev-list", *sorted(set(commits.values())))
+            .stdout.decode()
+            .splitlines()
+        )
+    )
     destination.parent.mkdir(parents=True, exist_ok=True)
     temporary = destination.with_suffix(".tmp")
     temporary.unlink(missing_ok=True)
-    result = _run(workspace, "bundle", "create", str(temporary), ref, check=False)
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.decode(errors="replace").strip())
+    with tempfile.TemporaryDirectory(prefix="aka-shared-export-") as private:
+        private_repo = Path(private) / "repo"
+        private_repo.mkdir()
+        _run(private_repo, "init", "--bare")
+        for label, ref in refs.items():
+            fetched = _run(
+                private_repo,
+                "-c",
+                "protocol.file.allow=always",
+                "fetch",
+                str(workspace),
+                f"+{commits[label]}:{ref}",
+                check=False,
+            )
+            if fetched.returncode != 0:
+                raise RuntimeError(fetched.stderr.decode(errors="replace").strip())
+        result = _run(
+            private_repo,
+            "bundle",
+            "create",
+            str(temporary),
+            *refs.values(),
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(result.stderr.decode(errors="replace").strip())
     size = temporary.stat().st_size
     os.replace(temporary, destination)
     receipt = {
         "schema_version": 1,
         "trajectory": trajectory,
         "epoch": epoch,
-        "source_ref": ref,
+        "source_ref": refs["head"],
+        "source_refs": refs,
         "original_agent_commit": head,
+        "original_agent_commits": commits,
         "bytes": size,
-        "commit_count": commits,
+        "commit_count": commit_count,
     }
     durable_write_json(audit_path, receipt)
     return receipt
@@ -121,36 +171,61 @@ def import_exports(
                 metadata = json.loads(audit.read_text(encoding="utf-8"))
             except (OSError, ValueError):
                 metadata = {}
-            source_ref = metadata.get("source_ref")
-            original = metadata.get("original_agent_commit")
-            if not isinstance(source_ref, str) or not source_ref.startswith("refs/atrex/shared/"):
-                raise ValueError("Shared Git bundle has no valid namespaced source ref")
+            source_refs = metadata.get("source_refs")
+            originals = metadata.get("original_agent_commits")
+            if not isinstance(source_refs, dict) or not isinstance(originals, dict):
+                source_refs = {"head": metadata.get("source_ref")}
+                originals = {"head": metadata.get("original_agent_commit")}
+            if (
+                not source_refs
+                or "head" not in source_refs
+                or set(source_refs) != set(originals)
+                or any(
+                    not isinstance(ref, str)
+                    or not ref.startswith("refs/atrex/shared/")
+                    for ref in source_refs.values()
+                )
+                or any(not isinstance(commit, str) for commit in originals.values())
+            ):
+                raise ValueError("Shared Git bundle has no valid namespaced source refs")
             result = _run(
                 workspace,
                 "-c",
                 "protocol.file.allow=always",
                 "fetch",
                 str(path),
-                f"+{source_ref}:{source_ref}",
+                *(f"+{ref}:{ref}" for ref in source_refs.values()),
                 check=False,
             )
             if result.returncode != 0:
                 raise RuntimeError(result.stderr.decode(errors="replace").strip())
             imported.append(path.name)
-            resolved = _run(workspace, "rev-parse", source_ref, check=False)
-            imported_commit = (
-                resolved.stdout.decode().strip() if resolved.returncode == 0 else None
-            )
-            if imported_commit != original:
-                raise ValueError(
-                    "Shared Git import changed the peer commit ID; Kernel identity is invalid"
+            imported_commits = {}
+            for label, source_ref in source_refs.items():
+                resolved = _run(workspace, "rev-parse", source_ref, check=False)
+                imported_commit = (
+                    resolved.stdout.decode().strip()
+                    if resolved.returncode == 0
+                    else None
                 )
-            mappings.append({
+                if imported_commit != originals[label]:
+                    raise ValueError(
+                        "Shared Git import changed the peer commit ID; Kernel identity is invalid"
+                    )
+                imported_commits[label] = imported_commit
+            mapping = {
                 "export": path.name,
-                "source_ref": source_ref,
-                "original_agent_commit": original,
-                "imported_commit": imported_commit,
-            })
+                "source_ref": source_refs["head"],
+                "original_agent_commit": originals["head"],
+                "imported_commit": imported_commits["head"],
+            }
+            if len(source_refs) > 1:
+                mapping.update(
+                    source_refs=source_refs,
+                    original_agent_commits=originals,
+                    imported_commits=imported_commits,
+                )
+            mappings.append(mapping)
         for ref, note in (notes or {}).items():
             target = _run(workspace, "rev-parse", ref, check=False)
             if target.returncode:

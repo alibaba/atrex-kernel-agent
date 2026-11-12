@@ -227,16 +227,8 @@ class MeasurementStore:
         self,
         source: bytes,
         kernel_id: str,
-        *,
-        supervisor_commit_id: str | None = None,
     ) -> dict:
         identity = source_identity(source, kernel_id)
-        if (
-            supervisor_commit_id is not None
-            and (not isinstance(supervisor_commit_id, str)
-                 or KERNEL_ID.fullmatch(supervisor_commit_id) is None)
-        ):
-            raise ValueError("supervisor_commit_id must be a complete private Git commit ID")
         directory = self.root / "kernels" / identity["kernel_id"]
         with open_private_directory(directory):
             pass
@@ -250,21 +242,6 @@ class MeasurementStore:
         else:
             if existing != source:
                 raise ValueError("Git commit ID is already bound to different Kernel source")
-        if supervisor_commit_id is not None:
-            mapping_path = directory / "supervisor-git.json"
-            mapping = {
-                "agent_kernel_commit_id": kernel_id,
-                "supervisor_kernel_commit_id": supervisor_commit_id,
-            }
-            try:
-                existing_mapping = read_json(mapping_path, limit=1024)
-            except FileNotFoundError:
-                private_write(mapping_path, mapping)
-            else:
-                if existing_mapping != mapping:
-                    raise ValueError(
-                        "Agent Kernel commit is already mapped to a different Supervisor archive"
-                    )
         digest_directory = (
             self.root
             / "source-index"
@@ -281,24 +258,6 @@ class MeasurementStore:
             if value != kernel_id:
                 raise ValueError("Kernel source index is inconsistent")
         return identity
-
-    def supervisor_kernel_commit(self, kernel_id: str) -> str | None:
-        """Read the private archival identity without changing public Kernel IDs."""
-        if KERNEL_ID.fullmatch(kernel_id) is None:
-            raise ValueError("Use a complete Agent Git commit ID")
-        try:
-            mapping = read_json(
-                self.root / "kernels" / kernel_id / "supervisor-git.json",
-                limit=1024,
-            )
-        except FileNotFoundError:
-            return None
-        if mapping.get("agent_kernel_commit_id") != kernel_id:
-            raise ValueError("Supervisor Kernel mapping has the wrong Agent identity")
-        private_commit = mapping.get("supervisor_kernel_commit_id")
-        if not isinstance(private_commit, str) or KERNEL_ID.fullmatch(private_commit) is None:
-            raise ValueError("Supervisor Kernel mapping is invalid")
-        return private_commit
 
     def find_kernel_id(self, source: bytes) -> str:
         """Resolve an already recorded source to one preserved Git commit ID."""

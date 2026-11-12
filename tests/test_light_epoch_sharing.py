@@ -16,18 +16,21 @@ from aka.light.agent.home import SESSION_HOME_ROOT_ENV, prepare_agent_environmen
 from aka.light.agent.runtime.model import AgentRunRequest as RuntimeAgentRunRequest
 from aka.light.agent.runtime.runtime import build_agent_runtime
 from aka.light.agent.sandbox import sandbox_executable
+from aka.light.experiment.frontier import (
+    kernel_full_evaluation_evidence,
+    kernel_pareto_frontier,
+)
 from aka.light.experiment.store import MeasurementStore
 from aka.light.research import ResearchStore
 from aka.light.runtime.server import _Handler, _journal_evidence_hint
 from aka.light.runtime.paths import supervisor_campaign_root
-from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError
+from aka.light.runtime.request_errors import AgentRequestError
 from aka.light.runtime.request_feedback import augment_error, journal_schema
-from aka.light.runtime.request_errors import REPAIR_REQUEST
 from aka.light.runtime.server import RuntimeConfig, SupervisorRuntime
-from aka.light.workflow.journal_projection import validate_terminal
 from aka.light.workflow.journal_service import (
     SupervisorJournalService,
-    _archive_experiment_references,
+    _progress_markdown,
+    _shared_research,
     _remove_stale_direction_projection,
     copy_experiment_reference_archive,
     initialize_journal,
@@ -36,13 +39,11 @@ from aka.light.workflow.journal_service import (
     research_projection,
     shared_research_path,
     update_direction,
-    validate_report_evidence,
 )
 from aka.light.workflow.journal import JournalFactory
-from aka.light.workflow.models import EpisodeHandoff, SupervisorState
-from aka.light.workflow.bootstrap import Campaign, _framework_baseline_failure_problem
+from aka.light.workflow.models import SupervisorState
+from aka.light.workflow.bootstrap import Campaign
 from aka.light.workflow.claim_review import validate_review
-from aka.light.workflow.constants import FRAMEWORK_BASELINE_FILE
 from aka.light.workflow.episode import LongHorizonCampaign
 from aka.light.workflow.search import PooledSearch, SearchOptions, read_state
 from aka.light.workflow.search_driver import (
@@ -51,16 +52,13 @@ from aka.light.workflow.search_driver import (
     _shareable_claim,
 )
 from aka.light.workflow.session import LongSessionRunner
-from aka.light.workflow.store import CampaignStore
 from aka.light.workspace.agent_git import (
     AgentGit,
     DirtyKernelWorktree,
-    supervisor_archive_ref,
 )
 from aka.light.workspace.auxiliary import AuxiliaryWorkspace
 from aka.light.workspace.episode import EpisodeWorkspace
 from aka.light.workspace.files import publish_if_changed
-from aka.light.workspace.git import EpisodeWorktree, promote_candidate
 from aka.light.workspace.provider import ManagedCandidateWorkspace
 from aka.light.workspace.shared_history import export_epoch, import_exports
 from aka.light.workspace.sources import default_tree, from_git, install, pack, snapshot
@@ -87,34 +85,6 @@ def _claim_finding(judgment: str, *, critical: bool) -> dict[str, object]:
         "reason": "The supplied evidence has the stated level of support.",
         "evidence": ["gateway-records/gateway-example/record.json"],
     }
-
-
-def test_framework_baseline_process_failure_precedes_missing_handoff_diagnosis():
-    result = SimpleNamespace(
-        exit_status=125,
-        timed_out=False,
-        stderr_tail="Agent projected /proc setup failed (FileNotFoundError)",
-        stdout_tail="",
-        completion_diagnosis="handoff file is missing",
-    )
-
-    problem = _framework_baseline_failure_problem(result)
-
-    assert "exit=125" in problem
-    assert "projected /proc setup failed" in problem
-    assert "handoff file is missing" not in problem
-
-
-def test_framework_baseline_clean_exit_keeps_handoff_diagnosis():
-    result = SimpleNamespace(
-        exit_status=0,
-        timed_out=False,
-        stderr_tail="",
-        stdout_tail="",
-        completion_diagnosis="handoff file is missing",
-    )
-
-    assert _framework_baseline_failure_problem(result) == "handoff file is missing"
 
 
 def test_claim_review_verdict_ignores_noncritical_limitations():
@@ -210,6 +180,113 @@ def _passing_full_measurement(
     with store.reserve(request, {"candidate": identity}) as task:
         record = task.finish(response, cacheable=True)
     return record["gateway_record_id"], identity["kernel_id"]
+
+
+def test_kernel_full_evaluation_evidence_matches_exact_commit(tmp_path):
+    store = MeasurementStore(tmp_path / "measurements")
+    source = b"def kernel():\n    return 1\n"
+    passing_record, passing_commit = _passing_full_measurement(
+        store,
+        source,
+        "passing",
+        {"shape-0": 4.0, "shape-1": 9.0},
+        kernel_commit_id="1" * 40,
+    )
+
+    assert kernel_full_evaluation_evidence(store, passing_commit) == {
+        "status": "passed",
+        "gateway_record_id": passing_record,
+        "latency_us_geomean": 6.0,
+        "measured_shape_count": 2,
+    }
+    assert kernel_full_evaluation_evidence(store, "2" * 40) == {
+        "status": "missing"
+    }
+
+
+def test_measurement_kernel_archive_has_no_supervisor_git_mapping(tmp_path):
+    store = MeasurementStore(tmp_path / "measurements")
+    kernel_commit_id = "a" * 40
+
+    identity = store.kernel(b"def kernel():\n    return 1\n", kernel_commit_id)
+
+    assert identity["kernel_id"] == kernel_commit_id
+    kernel_directory = store.root / "kernels" / kernel_commit_id
+    assert (kernel_directory / "kernel.py").is_file()
+    assert not (kernel_directory / "supervisor-git.json").exists()
+
+
+def test_kernel_full_evaluation_evidence_reports_failed_result(tmp_path):
+    store = MeasurementStore(tmp_path / "measurements")
+    source = b"def kernel():\n    return 1\n"
+    kernel_commit_id = "3" * 40
+    identity = store.kernel(source, kernel_commit_id)
+    request = {
+        "operation": "evaluate",
+        "options": {
+            "command": ["python3", "test_kernel.py"],
+            "evaluation_mode": "full",
+            "evaluation_policy": {"mode": "full"},
+        },
+        "inputs": {"kernel.py": hashlib.sha256(source).hexdigest()},
+        "kernel_ids": {"candidate": kernel_commit_id},
+    }
+    sample = {
+        "all_pass": False,
+        "correct": False,
+        "mode": "full",
+        "error": "shape-1 correctness failed",
+    }
+    response = {
+        "exit_code": 1,
+        "stdout": "[test_kernel] RESULT_JSON=" + json.dumps(sample) + "\n",
+        "stderr": "",
+    }
+    with store.reserve(request, {"candidate": identity}) as task:
+        record = task.finish(response, cacheable=True)
+
+    assert kernel_full_evaluation_evidence(store, kernel_commit_id) == {
+        "status": "failed",
+        "gateway_record_id": record["gateway_record_id"],
+        "reason_code": "correctness_failed",
+        "reason": "shape-1 correctness failed",
+    }
+
+
+def test_kernel_submission_rejects_incomplete_performance_fields(tmp_path):
+    store = MeasurementStore(tmp_path / "measurements")
+    source = b"def kernel():\n    return 1\n"
+    kernel_commit_id = "4" * 40
+    identity = store.kernel(source, kernel_commit_id)
+    request = {
+        "operation": "evaluate",
+        "options": {
+            "command": ["python3", "test_kernel.py"],
+            "evaluation_mode": "full",
+            "evaluation_policy": {"mode": "full"},
+        },
+        "inputs": {"kernel.py": hashlib.sha256(source).hexdigest()},
+        "kernel_ids": {"candidate": kernel_commit_id},
+    }
+    sample = {"all_pass": True, "correct": True, "mode": "full"}
+    response = {
+        "exit_code": 0,
+        "stdout": "[test_kernel] RESULT_JSON=" + json.dumps(sample) + "\n",
+        "stderr": "",
+    }
+    with store.reserve(request, {"candidate": identity}) as task:
+        record = task.finish(response, cacheable=True)
+
+    assert kernel_full_evaluation_evidence(store, kernel_commit_id) == {
+        "status": "failed",
+        "gateway_record_id": record["gateway_record_id"],
+        "reason_code": "performance_result_incomplete",
+        "reason": (
+            "full Evaluate correctness passed, but latency_us_by_shape is missing, "
+            "empty, or contains non-finite/non-positive values"
+        ),
+    }
+    assert kernel_pareto_frontier(store)["best_full_evaluation"] is None
 
 
 def test_unresolved_direction_closure_may_omit_supporting_experiments(tmp_path):
@@ -593,6 +670,22 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
         {"shape_a": 12.5, "shape_b": 8.25},
         kernel_commit_id=second_commit,
     )
+    journal = load_journal(evidence / "journal.json")
+    journal["kernel_submissions"].append({
+        "accepted": True,
+        "kernel_commit_id": pareto_kernel_commit_id,
+    })
+    private_write(evidence / "journal.json", journal)
+    unsubmitted_source = b"def kernel():\n    return 3\n"
+    (workspace / "kernel.py").write_bytes(unsubmitted_source)
+    unsubmitted_commit = agent_git.checkpoint("faster but unsubmitted Kernel")
+    unsubmitted_record_id, _ = _passing_full_measurement(
+        store,
+        unsubmitted_source,
+        "unsubmitted-full",
+        {"shape_a": 1.0, "shape_b": 1.0},
+        kernel_commit_id=unsubmitted_commit,
+    )
     recorded = service.execute({
         "operation": "experiment_record",
         "request": {
@@ -674,11 +767,6 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
     assert "request" not in gateway and "inputs" not in gateway
     assert not (workspace / "experiments" / experiment_id / "records").exists()
 
-    service.research.append(
-        "promotion.accepted",
-        {"kernel_id": pareto_kernel_commit_id},
-        origin={"trajectory": 1},
-    )
     service.publish_research_files()
     progress = (workspace / "PROGRESS.md").read_text()
     assert "proposed by `T1`" in progress
@@ -701,8 +789,10 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
     assert "### Closed" not in progress
     assert direction_id in progress
 
-    assert "**Best verified Kernel commit ID:**" in progress
-    assert "also the promoted incumbent" in progress
+    assert "**Best measured passing Kernel commit ID:**" not in progress
+    assert "**Global best accepted submission" not in progress
+    assert f"**Best accepted submission for `T1`:** `{pareto_kernel_commit_id}`" in progress
+    assert "promoted incumbent" not in progress
     assert "**Promoted incumbent commit ID:**" not in progress
     assert "**Last measured working Kernel commit ID:**" in progress
     assert "**Latest visible Gateway result and scope:** evaluate (completed; PASS; GeoMean" in progress
@@ -712,12 +802,16 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
     assert pareto_kernel_commit_id in progress
     assert pareto_record_id in progress
     assert (
-        "Eligible visible full evaluations across local and imported peer history: "
+        "Eligible full evaluations for accepted local and imported peer submissions: "
         "**1**; covered Shapes: **2**."
     ) in progress
     assert (workspace / "records" / f"{pareto_record_id}.json").is_file()
+    assert (workspace / "records" / f"{unsubmitted_record_id}.json").is_file()
     assert "| `shape_a` | 12.5 |" in progress
     assert "| `shape_b` | 8.25 |" in progress
+    frontier = json.loads((workspace / "frontier.json").read_text())
+    assert frontier["winner_kernel_commit_ids"] == [pareto_kernel_commit_id]
+    assert frontier["best_full_evaluation"]["kernel_commit_id"] == pareto_kernel_commit_id
 
     # Recovery rebuilds deleted convenience files from authoritative stores.
     (workspace / "directions" / "in_progress" / f"{direction_id}.json").unlink()
@@ -1323,7 +1417,14 @@ def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
         conversation = capture_root / f"run-{attempt}" / "conversation.jsonl"
         conversation.parent.mkdir(parents=True)
         conversation.write_text(
-            json.dumps({"type": "assistant", "attempt": attempt}) + "\n",
+            json.dumps({"type": "session_end", "attempt": attempt}) + "\n",
+            encoding="utf-8",
+        )
+        (conversation.parent / "token-usage.json").write_text(
+            json.dumps({
+                "state": "completed",
+                "finished_at": "2026-11-12T00:00:00+00:00",
+            }) + "\n",
             encoding="utf-8",
         )
         (workspace / "review.json").write_text(
@@ -1362,8 +1463,11 @@ def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
     ]
     for row in audit["attempts"]:
         conversation = evidence / row["conversation_path"]
+        token_usage = evidence / row["token_usage_path"]
         assert conversation.is_file()
         assert conversation.name == "conversation.jsonl"
+        assert token_usage.is_file()
+        assert token_usage.name == "token-usage.json"
 
     resumed_review = Campaign.review_research_claim(
         campaign, bundle, resume_session_id="provider-session-2"
@@ -1929,325 +2033,223 @@ def test_direction_projection_moves_between_status_directories(tmp_path):
     ) in progress
 
 
-def test_episode_handoff_allows_active_direction_or_enabled_peer_share(tmp_path):
-    def service_for(name: str, *, sharing: bool = False):
-        workspace = tmp_path / name / "workspace"
-        workspace.mkdir(parents=True)
-        journals = tmp_path / name / "scope" / "journals"
-        evidence = journals / "episodes" / "e00000001"
-        evidence.mkdir(parents=True)
-        initialize_journal(
-            evidence / "journal.json",
-            episode=1,
-            base_commit="a" * 40,
-            branch="work",
-            tool_modules=("directions",),
-        )
-        origin = {"epoch": 1, "trajectory": 1, "episode": 1}
-        if sharing:
-            origin["cross_trajectory_sharing"] = True
-        service = SupervisorJournalService(
-            workspace=workspace,
-            campaign_root=journals,
-            evidence_root=evidence,
-            research_root=tmp_path / name / "research",
-            origin=origin,
-        )
-        direction_id = service.execute({
-            "operation": "direction_update",
-            "request": {
-                "action": "propose",
-                "name": "Split KV",
-                "change_scope": "major_redesign",
-                "objective": "Improve long-context latency with KV-parallel architecture families.",
-                "applicability": "Long-context attention shapes.",
-                "expected_benefit": "Reduce latency by increasing KV parallelism.",
-                "plan": ["Compile a probe", "Measure a candidate family"],
-            },
-        })["direction_id"]
-        service.execute({
-            "operation": "direction_update",
-            "request": {
-                "action": "start",
-                "direction_id": direction_id,
-                "analysis": "Highest-value structural path.",
-            },
-        })
-        return service, direction_id, evidence / "journal.json"
-
-    standalone, direction_id, journal = service_for("standalone")
-    with pytest.raises(AgentRequestError) as unavailable:
-        standalone.execute({
-            "operation": "episode_report",
-            "request": {
-                "status": "pivot",
-                "handoff_reason": "cross_trajectory_share",
-                "summary": "Try to publish a standalone checkpoint.",
-            },
-        })
-    assert unavailable.value.response["error"]["code"] == (
-        "cross_trajectory_sharing_unavailable"
-    )
-    accepted = standalone.execute({
-        "operation": "episode_report",
-        "request": {
-            "status": "pivot",
-            "handoff_reason": "direction_terminal",
-            "summary": "The current Episode ends while the Direction retains useful work.",
-        },
-    })
-    assert accepted["status"] == "accepted"
-    assert load_journal(journal)["outcome"]["handoff_reason"] == "direction_terminal"
-    next_evidence = journal.parents[1] / "e00000002"
-    next_evidence.mkdir()
-    initialize_journal(
-        next_evidence / "journal.json",
-        episode=2,
-        base_commit="b" * 40,
-        branch="work-2",
-        tool_modules=("directions",),
-    )
-    resumed = SupervisorJournalService(
-        workspace=standalone.workspace,
-        campaign_root=standalone.campaign_root,
-        evidence_root=next_evidence,
-        research_root=tmp_path / "standalone" / "research-2",
-        origin={"epoch": 2, "trajectory": 1, "episode": 2},
-    )
-    resumed.publish_research_files()
-    assert (
-        standalone.workspace
-        / "directions"
-        / "in_progress"
-        / f"{direction_id}.json"
-    ).is_file()
-
-    pooled, pooled_direction, pooled_journal = service_for("pooled", sharing=True)
-    with pytest.raises(AgentRequestError) as missing_checkpoint:
-        pooled.execute({
-            "operation": "episode_report",
-            "request": {
-                "status": "pivot",
-                "handoff_reason": "cross_trajectory_share",
-                "summary": "Try to publish an unmeasured pivot to peer trajectories.",
-            },
-        })
-    assert missing_checkpoint.value.response["error"]["code"] == (
-        "handoff_reason_mismatch"
-    )
-    pooled_state = load_journal(pooled_journal)
-    assert pooled_state["state"] == "in_progress"
-    assert pooled_state["direction_events"][-1]["direction_id"] == pooled_direction
-    assert pooled_state["direction_events"][-1]["action"] == "start"
-
-    blocked, blocked_direction, blocked_journal = service_for("blocked")
-    with pytest.raises(AgentRequestError) as active_blocker:
-        blocked.execute({
-            "operation": "episode_report",
-            "request": {
-                "status": "blocked",
-                "handoff_reason": "blocked",
-                "summary": "The required compiler capability is unavailable.",
-                "blocker": "Compiler capability is missing.",
-            },
-        })
-    assert active_blocker.value.response["error"]["code"] == "handoff_not_ready"
-    blocked.execute({
-        "operation": "direction_update",
-        "request": {
-            "action": "block",
-            "direction_id": blocked_direction,
-            "analysis": "The required compiler capability is unavailable.",
-            "reopen_condition": "The target compiler exposes the capability.",
-        },
-    })
-    blocked_result = blocked.execute({
-        "operation": "episode_report",
-        "request": {
-            "status": "blocked",
-            "handoff_reason": "blocked",
-            "summary": "The required compiler capability is unavailable.",
-            "blocker": "Compiler capability is missing.",
-        },
-    })
-    assert blocked_result["status"] == "accepted"
-    assert load_journal(blocked_journal)["outcome"]["handoff_reason"] == "blocked"
-
-    # A later infrastructure blocker is valid after local Direction work already reached a
-    # terminal state; there is no active Direction left to close a second time.
-    terminal, terminal_direction, terminal_journal = service_for("terminal-then-blocked")
-    terminal.execute({
-        "operation": "direction_update",
-        "request": {
-            "action": "abandon",
-            "direction_id": terminal_direction,
-            "analysis": "The planned Direction has no worthwhile next step.",
-        },
-    })
-    terminal_blocker = terminal.execute({
-        "operation": "episode_report",
-        "request": {
-            "status": "blocked",
-            "handoff_reason": "blocked",
-            "summary": "A separate infrastructure failure prevents final validation.",
-            "blocker": "The evaluator service is unavailable.",
-        },
-    })
-    assert terminal_blocker["status"] == "accepted"
-    assert load_journal(terminal_journal)["outcome"]["handoff_reason"] == "blocked"
-
-
-def test_candidate_handoff_accepts_selected_in_progress_direction(monkeypatch, tmp_path):
+def test_submit_kernel_records_review_without_finalizing_episode(monkeypatch, tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    journals = tmp_path / "scope" / "journals"
-    evidence = journals / "episodes" / "e00000001"
+    campaign = tmp_path / "scope" / "journals"
+    evidence = campaign / "episodes" / "e00000001"
     evidence.mkdir(parents=True)
-    journal = evidence / "journal.json"
+    journal_path = evidence / "journal.json"
     initialize_journal(
-        journal,
+        journal_path,
         episode=1,
         base_commit="a" * 40,
         branch="work",
+        tool_modules=(),
     )
     service = SupervisorJournalService(
         workspace=workspace,
-        campaign_root=journals,
+        campaign_root=campaign,
         evidence_root=evidence,
-        supervisor_git=True,
+        research_root=tmp_path / "research",
+        session_capture_root=tmp_path / "sessions/e0001/sessions",
     )
-    direction_ids = []
-    for name in ("first", "second"):
-        direction_id = service.execute({
-            "operation": "direction_update",
-            "request": {
-                "action": "propose",
-                "name": name,
-                "change_scope": "incremental",
-                "objective": f"Explore the remaining high-value {name} optimization variants.",
-                "applicability": "The measured workload.",
-                "expected_benefit": "Reduce latency.",
-                "plan": ["Measure the next bounded variant."],
-            },
-        })["direction_id"]
-        service.execute({
-            "operation": "direction_update",
-            "request": {
-                "action": "start",
-                "direction_id": direction_id,
-                "analysis": "Keep this measured path active across Episodes.",
-            },
-        })
-        direction_ids.append(direction_id)
-    experiment_id = service.execute({
-        "operation": "experiment_record",
-        "request": {
-            "direction_id": direction_ids[0],
-            "name": "candidate evidence",
-            "intent": "Nominate the measured candidate.",
-            "interpretation": "The exact candidate passed.",
+    usage = tmp_path / "sessions/e0001/sessions/run-main/token-usage.json"
+    usage.parent.mkdir(parents=True)
+    usage.write_text(json.dumps({
+        "session_id": "main",
+        "started_at": "2026-11-12T00:00:00+00:00",
+        "state": "running",
+        "accounting_basis": "provider_result_usage",
+        "total": {
+            "input_tokens": 90,
+            "output_tokens": 10,
+            "reasoning_tokens": 5,
+            "cache_read_tokens": 0,
+            "cache_write_tokens": 0,
+            "total_tokens": 100,
+            "measurement": "exact",
         },
-    })["experiment_id"]
-    current = load_journal(journal)
-    directions = {
-        direction_id: {
-            "direction_id": direction_id,
-            "name": name,
-            "status": "in_progress",
-        }
-        for direction_id, name in zip(direction_ids, ("first", "second"), strict=True)
-    }
+    }), encoding="utf-8")
+    refreshes = []
     monkeypatch.setattr(
-        "aka.light.workflow.journal_service.validate_report_evidence",
-        lambda *args, **kwargs: (current, directions, None),
+        service,
+        "publish_research_files",
+        lambda **kwargs: refreshes.append(kwargs),
     )
-
-    result = service._submit_report(
+    commit_id = "b" * 40
+    result = service.execute(
         {
-            "status": "candidate_ready",
-            "handoff_reason": "direction_terminal",
-            "summary": "The candidate is ready while both Directions retain useful variants.",
-            "selected_experiment_id": experiment_id,
+            "operation": "kernel_submit",
+            "request": {"kernel_commit_id": commit_id},
         },
-        agent_kernel_id="b" * 40,
+        review_kernel=lambda submitted: {
+            "accepted": submitted == commit_id,
+            "review": {
+                "source_contract": "pass",
+                "dsl_policy": "not_applicable",
+                "production_policy": "not_applicable",
+            },
+            "diagnostics": [],
+            "evaluation_evidence": {
+                "status": "passed",
+                "gateway_record_id": "gateway-" + "c" * 32,
+                "latency_us_geomean": 4.25,
+                "measured_shape_count": 3,
+            },
+        },
     )
+    assert result == {
+        "status": "reviewed",
+        "kernel_commit_id": commit_id,
+        "accepted": True,
+        "review": {
+            "source_contract": "pass",
+            "dsl_policy": "not_applicable",
+            "production_policy": "not_applicable",
+        },
+        "diagnostics": [],
+        "evaluation_evidence": {
+            "status": "passed",
+            "gateway_record_id": "gateway-" + "c" * 32,
+            "latency_us_geomean": 4.25,
+            "measured_shape_count": 3,
+        },
+        "runtime_action": (
+            "The exact commit has a passing full Evaluate and passed final-source "
+            "review. Continue development or end the Session."
+        ),
+    }
+    journal = load_journal(journal_path)
+    assert journal["state"] == "in_progress"
+    assert "finalized_at" not in journal
+    assert journal["kernel_submissions"][0]["kernel_commit_id"] == commit_id
+    assert journal["kernel_submissions"][0]["accepted"] is True
+    assert journal["kernel_submissions"][0]["token_checkpoint"][
+        "total_tokens"
+    ] == 100
+    assert (tmp_path / "scope" / journal["kernel_submissions"][0][
+        "token_checkpoint"
+    ]["path"]).is_file()
+    assert refreshes == [{
+        "synchronize": False,
+        "direction_ids": frozenset(),
+        "experiment_ids": frozenset(),
+        "record_ids": frozenset(),
+    }]
 
-    assert result["status"] == "accepted"
+
+def test_submit_kernel_requires_saved_full_evaluation(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    campaign = tmp_path / "scope" / "journals"
+    evidence = campaign / "episodes" / "e00000001"
+    evidence.mkdir(parents=True)
+    initialize_journal(
+        evidence / "journal.json",
+        episode=1,
+        base_commit="a" * 40,
+        branch="work",
+        tool_modules=(),
+    )
+    service = SupervisorJournalService(
+        workspace=workspace,
+        campaign_root=campaign,
+        evidence_root=evidence,
+        research_root=tmp_path / "research",
+    )
+    result = service.execute(
+        {
+            "operation": "kernel_submit",
+            "request": {"kernel_commit_id": "b" * 40},
+        },
+        review_kernel=lambda _submitted: {
+            "accepted": False,
+            "review": {
+                "source_contract": "pass",
+                "dsl_policy": "not_applicable",
+                "production_policy": "not_applicable",
+            },
+            "diagnostics": [],
+            "evaluation_evidence": {"status": "missing"},
+        },
+    )
+    assert result["status"] == "needs_evaluation"
+    assert result["accepted"] is False
+    assert result["evaluation_evidence"] == {"status": "missing"}
+    assert "Run a full Evaluate for this exact commit" in result["runtime_action"]
+
+    incomplete = service.execute(
+        {
+            "operation": "kernel_submit",
+            "request": {"kernel_commit_id": "b" * 40},
+        },
+        review_kernel=lambda _submitted: {
+            "accepted": False,
+            "review": {
+                "source_contract": "pass",
+                "dsl_policy": "not_applicable",
+                "production_policy": "not_applicable",
+            },
+            "diagnostics": [],
+            "evaluation_evidence": {
+                "status": "failed",
+                "gateway_record_id": "gateway-" + "d" * 32,
+                "reason_code": "performance_result_incomplete",
+                "reason": "latency_us_by_shape is missing",
+            },
+        },
+    )
+    assert incomplete["status"] == "rejected"
+    assert incomplete["accepted"] is False
+    assert "performance result is incomplete or unparseable" in incomplete["runtime_action"]
+    assert "same commit" in incomplete["runtime_action"]
 
 
-def test_episode_report_schema_and_prompt_require_explicit_handoff_reason():
+
+
+
+
+def test_submit_kernel_schema_and_prompt_have_no_handoff_contract():
     schema = journal_schema(
-        "episode_report", {"status": "pivot"}, research_records=False
+        "kernel_submit", {"kernel_commit_id": "a" * 40}, research_records=False
     )
-    assert "handoff_reason" in schema["required"]
-    assert schema["properties"]["handoff_reason"]["enum"] == [
-        "direction_terminal",
-        "cross_trajectory_share",
-        "blocked",
-    ]
+    assert schema["required"] == ["kernel_commit_id"]
+    assert "handoff_reason" not in schema["properties"]
     prompt = (
         Path(__file__).resolve().parents[1]
         / "src/aka/light/workflow/prompts/episode.md"
     ).read_text(encoding="utf-8")
     assert "Repeat `probe → candidate → measurement → revert/keep` cycles" in prompt
-    assert "pooled search must publish a reusable measured checkpoint to peers" in prompt
-    assert "plausible full-workload latency impact and applicability" in prompt
-    assert "discarding higher-upside work" in prompt
-    assert "Use local Git to manage the Kernel development history" in prompt
+    assert "Use `submit-kernel` for final-source compliance feedback" in prompt
+    assert "greatest plausible full-workload impact" in prompt
+    assert "instead of avoiding high-upside work" in prompt
+    assert "Manage development with Agent Git" in prompt
 
 
-@pytest.mark.parametrize(
-    ("status", "expected"),
-    [
-        (
-            "candidate_ready",
-            "Select a visible Experiment with a supported measured decision that cites a passing standard full Evaluate",
-        ),
-        (
-            "pivot",
-            "A pivot does not nominate a candidate: omit selected_experiment_id",
-        ),
-        (
-            "blocked",
-            "A blocked report does not nominate a candidate: omit selected_experiment_id",
-        ),
-    ],
-)
-def test_episode_report_recovery_guidance_matches_status_schema(status, expected):
-    request = {
-        "operation": "episode_report",
-        "request": {
-            "status": status,
-            "handoff_reason": (
-                "blocked" if status == "blocked" else "direction_terminal"
-            ),
-            "summary": "repair this report",
-        },
-    }
-    response = {
-        "ok": False,
-        "repairable": True,
-        "issues": [],
-        "recovery": [{"instruction": REPAIR_REQUEST}],
-        "error": {
-            "code": "invalid_request",
-            "message": "invalid report",
-            "next_action": REPAIR_REQUEST,
-        },
-    }
-    projected = augment_error(
-        response,
-        route="/v1/journal/execute",
-        request=request,
-        research_records=True,
-        directions_enabled=True,
-        experiments_enabled=True,
+def test_episode_report_is_not_a_runtime_operation(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    campaign = tmp_path / "scope" / "journals"
+    evidence = campaign / "episodes" / "e00000001"
+    evidence.mkdir(parents=True)
+    initialize_journal(
+        evidence / "journal.json",
+        episode=1,
+        base_commit="a" * 40,
+        branch="work",
+        tool_modules=(),
     )
-    guidance = projected["error"]["next_action"]
-    assert expected in guidance
-    assert "direction_terminal may preserve local in-progress Directions" in guidance
-    assert "selected Experiment may belong to an in-progress" in guidance
-    assert "cross_trajectory_share still requires an in-progress Direction" in guidance
+    service = SupervisorJournalService(
+        workspace=workspace,
+        campaign_root=campaign,
+        evidence_root=evidence,
+        research_root=tmp_path / "research",
+    )
+    with pytest.raises(ValueError, match="unsupported Runtime research/report operation"):
+        service.execute({"operation": "episode_report", "request": {}})
+
+
 
 
 def test_direction_proposal_schema_requires_applicability_and_expected_benefit():
@@ -2576,214 +2578,12 @@ def test_second_local_direction_start_returns_precise_recovery(tmp_path):
     assert starts == direction_ids
 
 
-def test_completion_diagnosis_uses_public_terms_and_actionable_repair(tmp_path, monkeypatch):
-    import aka.light.workflow.episode as episode_module
-
-    monkeypatch.setattr(
-        episode_module,
-        "validate_terminal",
-        lambda *args, **kwargs: "published Episode handoff state is missing",
-    )
-    campaign = LongHorizonCampaign.__new__(LongHorizonCampaign)
-    campaign.base_campaign = SimpleNamespace(
-        read_runtime_episode_journal=lambda _episode: {},
-    )
-    diagnosis = campaign._completion_check(
-        CandidateHandle(1, "a" * 40, "work", tmp_path),
-        tmp_path / "journal.json",
-        EpisodeHandoff("pivot"),
-    )
-
-    assert "Runtime-owned" in diagnosis
-    assert "identical accepted episode-report" in diagnosis
-    assert "report the concrete blocker" in diagnosis
-    assert "private runtime journal" not in diagnosis.lower()
 
 
-def test_completion_reuses_persisted_candidate_acceptance_without_numerical_rerun(
-    tmp_path, monkeypatch
-):
-    import aka.light.workflow.episode as episode_module
-    import aka.light.workspace.sources as workspace_sources
-    from aka.light.workflow import journal_service
-
-    agent_candidate = "b" * 40
-    supervisor_candidate = "c" * 40
-    private = {
-        "candidate_commit": supervisor_candidate,
-        "candidate_kernel_id": agent_candidate,
-        "acceptance_checks": {
-            "five_case_correctness": {
-                "checks": {
-                    "correctness": {"status": "passed"},
-                    "production_review": {"status": "passed"},
-                    "numerical": {"status": "passed"},
-                }
-            }
-        },
-    }
-    selected = []
-    numerical = []
-    projection_candidates = []
-    restored = []
-    git_reads = []
-    commit_time_reads = []
-
-    def validate_projection(*_args, **kwargs):
-        projection_candidates.append(kwargs["candidate_commit"])
-        kwargs["runtime_journal_loader"]()
-        return ""
-
-    def restore_sealed_candidate(_worktree, commit, source):
-        restored.append((commit, source))
-        return "", []
-
-    def from_git(_workspace, commit):
-        git_reads.append(commit)
-        return b"sealed"
-
-    def read_commit_time(_workspace, *_args):
-        commit_time_reads.append(_args[-1])
-        return "0"
-
-    monkeypatch.setattr(episode_module, "validate_terminal", validate_projection)
-    monkeypatch.setattr(
-        journal_service, "sealed_candidate_source", lambda _journal, _workspace: b"sealed"
-    )
-    monkeypatch.setattr(workspace_sources, "from_git", from_git)
-    monkeypatch.setattr(
-        episode_module,
-        "load_journal",
-        lambda _path: {"finalized_at": "2026-11-06T00:00:01+00:00"},
-    )
-    monkeypatch.setattr(episode_module, "git_text", read_commit_time)
-
-    campaign = LongHorizonCampaign.__new__(LongHorizonCampaign)
-    campaign.base_campaign = SimpleNamespace(
-        read_runtime_episode_journal=lambda _episode: private,
-        candidate_workspace=SimpleNamespace(
-            restore_sealed_candidate=restore_sealed_candidate
-        ),
-        optimization_mode="production",
-        selected_episode_evaluation=lambda episode, source: (
-            selected.append((episode, source)) or {"all_pass": True}
-        ),
-        supplemental_numerical_feedback=lambda *_args, **kwargs: (
-            numerical.append(kwargs) or ""
-        ),
-    )
-
-    diagnosis = campaign._completion_check(
-        CandidateHandle(1, "a" * 40, "work", tmp_path),
-        tmp_path / "journal.json",
-        EpisodeHandoff("candidate_ready", agent_candidate),
-    )
-
-    assert diagnosis == ""
-    assert projection_candidates == [agent_candidate]
-    assert restored == [(supervisor_candidate, b"sealed")]
-    assert git_reads == [supervisor_candidate]
-    assert commit_time_reads == [supervisor_candidate]
-    assert selected == [(1, b"sealed")]
-    assert numerical == []
 
 
-def test_completion_rejects_missing_legacy_receipt_without_numerical_rerun(
-    tmp_path, monkeypatch
-):
-    import aka.light.workflow.episode as episode_module
-    import aka.light.workspace.sources as workspace_sources
-    from aka.light.workflow import journal_service
-
-    candidate = "b" * 40
-    private = {"candidate_commit": candidate}
-    numerical = []
-
-    def validate_projection(*_args, **kwargs):
-        kwargs["runtime_journal_loader"]()
-        return ""
-
-    monkeypatch.setattr(episode_module, "validate_terminal", validate_projection)
-    monkeypatch.setattr(
-        journal_service, "sealed_candidate_source", lambda _journal, _workspace: b"sealed"
-    )
-    monkeypatch.setattr(workspace_sources, "from_git", lambda _workspace, _commit: b"sealed")
-    monkeypatch.setattr(
-        episode_module,
-        "load_journal",
-        lambda _path: {"finalized_at": "2026-11-06T00:00:01+00:00"},
-    )
-    monkeypatch.setattr(episode_module, "git_text", lambda *_args: "0")
-
-    campaign = LongHorizonCampaign.__new__(LongHorizonCampaign)
-    campaign.base_campaign = SimpleNamespace(
-        read_runtime_episode_journal=lambda _episode: private,
-        candidate_workspace=SimpleNamespace(
-            restore_sealed_candidate=lambda *_args: ("", [])
-        ),
-        optimization_mode="production",
-        selected_episode_evaluation=lambda _episode, _source: {"all_pass": True},
-        supplemental_numerical_feedback=lambda *_args, **kwargs: (
-            numerical.append(kwargs) or ""
-        ),
-    )
-
-    diagnosis = campaign._completion_check(
-        CandidateHandle(1, "a" * 40, "work", tmp_path),
-        tmp_path / "journal.json",
-        EpisodeHandoff("candidate_ready", candidate),
-    )
-
-    assert "missing candidate acceptance checks" in diagnosis
-    assert "never reruns candidate gates" in diagnosis
-    assert numerical == []
 
 
-def test_accepted_legacy_report_remains_exactly_replayable_after_schema_upgrade(tmp_path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    journals = tmp_path / "scope" / "journals"
-    evidence = journals / "episodes" / "e00000001"
-    evidence.mkdir(parents=True)
-    journal_path = evidence / "journal.json"
-    current = initialize_journal(
-        journal_path,
-        episode=1,
-        base_commit="a" * 40,
-        branch="work",
-        tool_modules=(),
-    )
-    legacy_report = {"status": "pivot", "summary": "Legacy terminal report."}
-    current.update(
-        state="pivot",
-        outcome={
-            "summary": "Legacy terminal report.",
-            "next_directions": [],
-            "selected_experiment_id": None,
-            "blocker": None,
-            "gateway_record_ids": [],
-        },
-        candidate_commit=None,
-        finalized_at="2026-11-01T00:00:00+00:00",
-        submitted_report=legacy_report,
-    )
-    private_write(journal_path, current)
-    service = SupervisorJournalService(
-        workspace=workspace,
-        campaign_root=journals,
-        evidence_root=evidence,
-        research_root=tmp_path / "research",
-    )
-
-    replayed = service.execute({
-        "operation": "episode_report",
-        "request": legacy_report,
-    })
-
-    assert replayed["status"] == "accepted"
-    assert json.loads(
-        (workspace / ".atrex_long_horizon/handoff.json").read_text()
-    ) == {"status": "pivot"}
 
 
 def test_progress_is_projected_even_when_research_modules_are_disabled(tmp_path):
@@ -2820,7 +2620,7 @@ def test_progress_is_projected_even_when_research_modules_are_disabled(tmp_path)
 
     progress = (workspace / "PROGRESS.md").read_text()
     assert "# Current state" in progress
-    assert "No eligible full-Evaluate history yet" in progress
+    assert "No accepted submission has eligible full-Evaluate evidence yet" in progress
     assert "## Directions" not in progress
     assert "directions/<status>" not in progress
     assert "experiments/<experiment_id>" not in progress
@@ -2904,12 +2704,14 @@ def test_measurements_checkpoint_working_and_best_lineage_commits(tmp_path):
     state = service.research.read()["lineages"]["T1"]
     assert state["working_kernel_id"] == diagnostic
     assert state["last_correct_kernel_id"] == slower
-    assert state["lineage_best_kernel_id"] == first
-    assert state["lineage_best_latency_us"] == 10.0
+    assert "lineage_best_kernel_id" not in state
+    assert "lineage_best_latency_us" not in state
     service.publish_research_files(synchronize=False)
     progress = (workspace / "PROGRESS.md").read_text()
     assert f"**Last measured working Kernel commit ID:** `{diagnostic}`" in progress
-    assert f"**Best verified lineage Kernel commit ID:** `{first}`" in progress
+    assert "Best verified lineage Kernel" not in progress
+    assert "Best measured passing Kernel" not in progress
+    assert "Accepted-submission per-Shape Pareto frontier" in progress
 
 
 def test_private_historical_kernel_snapshot_is_not_projected_without_git_commit(tmp_path):
@@ -3019,7 +2821,7 @@ def test_combined_research_mode_removes_stale_experiment_only_index(tmp_path):
         ),
         (
             ("experiments",),
-            ('"interpretation"', "selected_experiment_id", "wiki_usage_status"),
+            ('"interpretation"', "experiment_id", "wiki_usage_status"),
             "update-direction",
         ),
     ],
@@ -3187,62 +2989,6 @@ def test_agent_git_reincludes_cuda_manifest_candidate_metadata(tmp_path):
     assert "!/solution.json" in exclude
 
 
-@pytest.mark.parametrize("direction_id", [None, "direction_" + "2" * 32])
-def test_compact_experiment_publishes_legacy_handoff(tmp_path, direction_id):
-    workspace = tmp_path / "workspace"
-    (workspace / ".atrex_long_horizon").mkdir(parents=True)
-    journals = tmp_path / "journals"
-    evidence = journals / "episodes" / "e00000001"
-    evidence.mkdir(parents=True)
-    current = initialize_journal(
-        evidence / "journal.json",
-        episode=1,
-        base_commit="a" * 40,
-        branch="episode",
-        tool_modules=(
-            ("experiments",)
-            if direction_id is None
-            else ("directions", "experiments")
-        ),
-    )
-    experiment_id = "experiment_" + "1" * 32
-    experiment = {
-        "experiment_id": experiment_id,
-        "sequence": 1,
-        "recorded_at": "2026-11-01T00:00:00+00:00",
-        "name": "compact experiment",
-        "intent": "Measure the proposed Kernel change.",
-        "gateway_record_ids": [],
-        "interpretation": "The measured result supports the change.",
-    }
-    if direction_id is not None:
-        experiment["direction_id"] = direction_id
-    current.update(
-        state="candidate_ready",
-        experiments=[experiment],
-        outcome={
-            "summary": "candidate ready",
-            "selected_experiment_id": experiment_id,
-        },
-        candidate_commit="b" * 40,
-    )
-    service = SupervisorJournalService(
-        workspace=workspace,
-        campaign_root=journals,
-        evidence_root=evidence,
-    )
-
-    service._publish_legacy_report(current)
-
-    projection = json.loads(
-        (workspace / ".atrex_long_horizon/journal.json").read_text()
-    )
-    assert projection["experiments"][0]["result"] == (
-        "The measured result supports the change."
-    )
-    assert json.loads(
-        (workspace / ".atrex_long_horizon/handoff.json").read_text()
-    ) == {"status": "candidate_ready", "candidate_commit": "b" * 40}
 
 
 def test_legacy_journal_conflict_returns_supported_operator_recovery(tmp_path):
@@ -3432,11 +3178,6 @@ def test_compaction_connection_loss_resumes_same_claude_session(
         ),
         _invocation(0, "session-1", 7),
     ])
-    handoffs = iter([None, EpisodeHandoff(status="pivot")])
-    monkeypatch.setattr(
-        "aka.light.workflow.session.read_handoff", lambda _path: next(handoffs)
-    )
-
     result = LongSessionRunner(
         agent=agent,
         agent_cli="claude",
@@ -3445,18 +3186,14 @@ def test_compaction_connection_loss_resumes_same_claude_session(
         tmp_path,
         "Optimize.",
         episode_timeout_seconds=60,
-        handoff_path=tmp_path / "handoff.json",
-        handoff_resumes=2,
-        completion_check=lambda _handoff: "",
     )
 
     assert result.exit_status == 0
-    assert result.handoff == EpisodeHandoff(status="pivot")
     assert result.resume_count == 1
     assert agent.resume_flags == [False, True]
-    assert "transient Prompt is too long" in agent.prompts[1]
+    assert "transient provider interruption" in agent.prompts[1]
     assert [row.purpose for row in result.invocations] == [
-        "optimization", "handoff_resume",
+        "optimization", "session_recovery",
     ]
 
 
@@ -3469,11 +3206,6 @@ def test_repeated_compaction_loss_uses_one_fresh_recovery_session(
         _invocation(1, "session-1", 13, failure),
         _invocation(0, "session-2", 7),
     ])
-    handoffs = iter([None, None, EpisodeHandoff(status="pivot")])
-    monkeypatch.setattr(
-        "aka.light.workflow.session.read_handoff", lambda _path: next(handoffs)
-    )
-
     result = LongSessionRunner(
         agent=agent,
         agent_cli="claude",
@@ -3482,20 +3214,16 @@ def test_repeated_compaction_loss_uses_one_fresh_recovery_session(
         tmp_path,
         "Optimize.",
         episode_timeout_seconds=60,
-        handoff_path=tmp_path / "handoff.json",
-        handoff_resumes=1,
-        completion_check=lambda _handoff: "",
     )
 
     assert result.exit_status == 0
-    assert result.handoff == EpisodeHandoff(status="pivot")
     assert result.resume_count == 1
     assert agent.resume_flags == [False, True, False]
     assert len(agent.opened_sessions) == 2
     assert "Recover the SAME Episode" in agent.prompts[2]
     assert "do not reset or repeat completed measurements" in agent.prompts[2]
     assert [row.purpose for row in result.invocations] == [
-        "optimization", "handoff_resume", "compaction_recovery",
+        "optimization", "session_recovery", "compaction_recovery",
     ]
 
 
@@ -3537,357 +3265,6 @@ def test_supervisor_state_persists_trajectory_session():
     restored = SupervisorState.from_dict(state.as_dict())
     assert restored.session_id == "trajectory-session"
     assert restored.session_backend == "claude"
-
-
-def test_framework_baseline_session_seeds_first_episode_resume(tmp_path):
-    campaign = Campaign(
-        name="operator",
-        kernel_demo="unused.py",
-        platform="cuda",
-        framework="cuda",
-        work_dir=str(tmp_path),
-    )
-    campaign.workspace.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=campaign.workspace, check=True)
-
-    result = SimpleNamespace(session_id="framework-session")
-    campaign._remember_framework_baseline_session(result)
-    (campaign.workspace / FRAMEWORK_BASELINE_FILE).write_text(
-        json.dumps({"version": "v1"}), encoding="utf-8"
-    )
-
-    campaign._seed_episode_session_from_framework_baseline()
-
-    state = CampaignStore(campaign.workspace).load_state()
-    # Framework Baseline is Episode 0: it seeds trajectory state without
-    # consuming an optimization Episode from the configured budget.
-    assert state.episodes == 0
-    assert state.session_id == "framework-session"
-    assert state.session_backend == "claude"
-    assert (
-        campaign.workspace
-        / ".atrex_long_horizon"
-        / "framework_baseline"
-        / "session.json"
-    ).is_file()
-
-    # A later prepare/resume must not replace an Episode-owned Session.
-    state.session_id = "episode-session"
-    CampaignStore(campaign.workspace).save_state(state)
-    campaign._seed_episode_session_from_framework_baseline()
-    restored = CampaignStore(campaign.workspace).load_state()
-    assert restored.session_id == "episode-session"
-
-
-def test_interrupted_framework_baseline_resumes_original_provider_session(
-    tmp_path, monkeypatch
-):
-    campaign = Campaign(
-        name="operator",
-        kernel_demo="unused.py",
-        platform="cuda",
-        framework="cuda",
-        work_dir=str(tmp_path),
-    )
-    campaign.workspace.mkdir(parents=True)
-    agent_workspace = tmp_path / "agent-workspace"
-    agent_workspace.mkdir()
-    campaign._framework_baseline_agent_workspace = agent_workspace
-    campaign.agent = object()
-    campaign._remember_framework_baseline_session(
-        SimpleNamespace(session_id="framework-session")
-    )
-    from aka.light.workflow.baseline_progress import progress_path
-
-    crash_record = progress_path(campaign.workspace)
-    crash_record.parent.mkdir(parents=True, exist_ok=True)
-    crash_record.write_text(
-        json.dumps({"schema_version": "atrex_framework_baseline_crash_v1"}),
-        encoding="utf-8",
-    )
-    campaign._ensure_framework_baseline_workspace_contract = lambda: None
-    campaign._framework_baseline_prompt = lambda _version: "Baseline prompt"
-    campaign.agent_environment = lambda: {}
-    campaign._assert_generalized_inputs_are_private = lambda: None
-    campaign._account = lambda *_args: None
-    observed = {}
-
-    def run(_runner, workspace, prompt, **kwargs):
-        observed.update(workspace=workspace, prompt=prompt, kwargs=kwargs)
-        return SimpleNamespace(
-            exit_status=0,
-            timed_out=False,
-            tokens=1,
-            session_id="framework-session",
-        )
-
-    monkeypatch.setattr(LongSessionRunner, "run", run)
-    monkeypatch.setattr(
-        "aka.light.workflow.context.session_execution_policy",
-        lambda _campaign: {},
-    )
-
-    campaign._run_framework_baseline_agent(n=1, label="framework baseline")
-
-    assert observed["workspace"] == agent_workspace
-    assert observed["kwargs"]["handoff_path"] == (
-        campaign.workspace / ".atrex_long_horizon" / "handoff.json"
-    )
-    assert observed["kwargs"]["session_id"] == "framework-session"
-    assert observed["kwargs"]["resume_session"] is True
-    assert "original Provider Session" in observed["prompt"]
-    assert "resume.json" not in observed["prompt"]
-
-
-def test_framework_baseline_completion_reads_controller_projection(
-    tmp_path, monkeypatch
-):
-    campaign = Campaign(
-        name="operator",
-        kernel_demo="unused.py",
-        platform="cuda",
-        framework="cuda",
-        work_dir=str(tmp_path),
-    )
-    campaign.workspace.mkdir(parents=True)
-    agent_workspace = tmp_path / "agent-workspace"
-    agent_workspace.mkdir()
-    campaign._framework_baseline_agent_workspace = agent_workspace
-    candidate = "a" * 40
-    private = {
-        "state": "candidate_ready",
-        "finalized_at": "2026-11-10T00:00:00+00:00",
-        "base_commit": "b" * 40,
-        "candidate_kernel_id": candidate,
-    }
-    campaign.read_runtime_episode_journal = lambda episode: (
-        private if episode == 0 else None
-    )
-    campaign.selected_episode_evaluation = lambda episode, source: {
-        "all_pass": True,
-        "latency_us_geomean": 1.25,
-    }
-    observed = {}
-
-    def validate(path, **kwargs):
-        observed.update(path=path, kwargs=kwargs)
-        return ""
-
-    monkeypatch.setattr(
-        "aka.light.workflow.journal_projection.validate_terminal", validate
-    )
-    monkeypatch.setattr(
-        "aka.light.workflow.journal_service.sealed_candidate_source",
-        lambda journal, workspace: b"sealed-source",
-    )
-    monkeypatch.setattr(
-        "aka.light.workspace.sources.from_git",
-        lambda workspace, commit: b"sealed-source",
-    )
-
-    diagnosis = campaign._framework_baseline_completion_check(
-        EpisodeHandoff(status="candidate_ready", candidate_commit=candidate)
-    )
-
-    assert diagnosis == ""
-    assert observed["path"] == (
-        campaign.workspace / ".atrex_long_horizon" / "journal.json"
-    )
-    assert observed["path"].parent != (
-        agent_workspace / ".atrex_long_horizon"
-    )
-
-
-def test_framework_baseline_keeps_resuming_after_multiple_gate_rejections(
-    tmp_path,
-):
-    campaign = Campaign(
-        name="operator",
-        kernel_demo="unused.py",
-        platform="cuda",
-        framework="cuda",
-        work_dir=str(tmp_path),
-    )
-    campaign.workspace.mkdir(parents=True)
-    repairs = []
-    local_checks = iter(["", ""])
-    external_checks = iter(
-        [
-            (None, "independent production policy review rejected candidate"),
-            ({"latency_us_geomean": 1.0}, ""),
-        ]
-    )
-
-    def recover(problem, *_args):
-        repairs.append(problem)
-        return SimpleNamespace(exit_status=0, tokens=1)
-
-    campaign._recover_framework_baseline = recover
-    campaign._framework_baseline_problem = lambda *_args, **_kwargs: next(
-        local_checks
-    )
-    campaign._framework_baseline_external_gates = lambda _version: next(
-        external_checks
-    )
-
-    result, problem = campaign._repair_framework_baseline_until_accepted(
-        problem="candidate source tree is incomplete",
-        v0_identity="v0",
-        baseline_commit="baseline",
-        pre_head="head",
-    )
-
-    assert problem == ""
-    assert result == {"latency_us_geomean": 1.0}
-    assert repairs == [
-        "candidate source tree is incomplete",
-        "independent production policy review rejected candidate",
-    ]
-
-
-def test_framework_baseline_registers_as_episode_zero(tmp_path):
-    campaign = Campaign(
-        name="operator",
-        kernel_demo="unused.py",
-        platform="cuda",
-        framework="cuda",
-        work_dir=str(tmp_path),
-    )
-    campaign.workspace.mkdir(parents=True)
-    agent_workspace = tmp_path / "agent-workspace"
-    calls = []
-
-    def register(workspace, **kwargs):
-        calls.append((workspace, kwargs))
-        return agent_workspace
-
-    campaign.register_runtime_episode = register
-    campaign.search_coordinate = {"epoch": 3, "trajectory": 2, "episode": 3}
-
-    assert campaign._prepare_framework_baseline_episode("a" * 40) == agent_workspace
-    assert campaign._framework_baseline_agent_workspace == agent_workspace
-    assert calls == [
-        (
-            campaign.workspace,
-            {
-                "episode": 0,
-                "base_commit": "a" * 40,
-                "branch": "framework-baseline",
-                "memory_version": 1,
-                "supervisor_git": True,
-                "origin": {"epoch": 0, "trajectory": 2, "episode": 0},
-            },
-        )
-    ]
-
-
-def test_framework_baseline_episode_zero_reads_reported_full_evaluate(
-    tmp_path, monkeypatch
-):
-    campaign = Campaign(
-        name="operator",
-        kernel_demo="unused.py",
-        platform="cuda",
-        framework="cuda",
-        work_dir=str(tmp_path),
-    )
-    campaign.workspace.mkdir(parents=True)
-    agent_workspace = tmp_path / "agent-workspace"
-    agent_workspace.mkdir()
-    campaign._framework_baseline_agent_workspace = agent_workspace
-    private = {
-        "state": "candidate_ready",
-        "finalized_at": "2026-11-10T00:00:00+00:00",
-        "candidate_kernel_id": "a" * 40,
-    }
-    campaign.read_runtime_episode_journal = lambda episode: (
-        private if episode == 0 else None
-    )
-    observed = {}
-    campaign.selected_episode_evaluation = lambda episode, source: observed.update(
-        episode=episode, source=source
-    ) or {
-        "all_pass": True,
-        "latency_us_geomean": 1.25,
-        "gateway_record_id": "gateway-" + "1" * 32,
-    }
-    monkeypatch.setattr(
-        "aka.light.workflow.journal_service.sealed_candidate_source",
-        lambda journal, workspace: b"sealed-source",
-    )
-    monkeypatch.setattr(
-        "aka.light.workspace.sources.from_git",
-        lambda workspace, commit: b"sealed-source",
-    )
-
-    result, commit = campaign._framework_baseline_report_result()
-
-    assert commit == "a" * 40
-    assert result["all_pass"] is True
-    assert observed == {"episode": 0, "source": b"sealed-source"}
-
-
-def test_framework_baseline_episode_zero_records_research_and_attempt(tmp_path):
-    campaign = Campaign(
-        name="operator",
-        kernel_demo="unused.py",
-        platform="cuda",
-        framework="cuda",
-        work_dir=str(tmp_path),
-    )
-    campaign.workspace.mkdir(parents=True)
-    subprocess.run(["git", "init", "-q"], cwd=campaign.workspace, check=True)
-    agent_workspace = tmp_path / "agent-workspace"
-    agent_workspace.mkdir()
-    campaign._framework_baseline_agent_workspace = agent_workspace
-
-    class Research:
-        def __init__(self):
-            self.checkpoints = []
-            self.events = []
-
-        def checkpoint_lineage(self, payload, *, origin):
-            self.checkpoints.append((payload, origin))
-
-        def append(self, event_type, payload, *, origin, dedupe_key):
-            self.events.append((event_type, payload, origin, dedupe_key))
-
-    research = Research()
-    published = []
-    binding = SimpleNamespace(
-        service=SimpleNamespace(
-            publish_research_files=lambda: published.append(True)
-        )
-    )
-    campaign._supervisor_runtime = SimpleNamespace(
-        research=research,
-        journals={agent_workspace.resolve(): binding},
-    )
-    session = SimpleNamespace(session_id="baseline-session", tokens=123)
-    candidate = "b" * 40
-
-    campaign._record_framework_baseline_research(
-        agent_commit=candidate,
-        result={
-            "latency_us_geomean": 1.5,
-            "gateway_record_id": "gateway-" + "2" * 32,
-        },
-        session=session,
-    )
-
-    assert research.checkpoints[0][0]["working_kernel_id"] == candidate
-    assert research.events[0][0] == "promotion.accepted"
-    assert research.events[0][1]["kernel_id"] == candidate
-    assert research.events[0][2]["episode"] == 0
-    assert published == [True]
-    store = CampaignStore(campaign.workspace)
-    attempt = json.loads((store.episode_dir(0) / "attempt.json").read_text())
-    assert attempt["episode"] == 0
-    assert attempt["accepted"] is True
-    state = store.load_state()
-    assert state.episodes == 0
-    assert state.incumbent_kernel_commit_id == candidate
-    assert state.session_id == "baseline-session"
 
 
 def _finalized_journal(path: Path, *, episode: int, suffix: str, record_id: str) -> tuple[str, str]:
@@ -3950,128 +3327,6 @@ def _finalized_journal(path: Path, *, episode: int, suffix: str, record_id: str)
     return direction_id, experiment_id
 
 
-def _runtime_projection(
-    tmp_path: Path,
-    *,
-    tool_modules: tuple[str, ...],
-) -> tuple[Path, dict[str, object], str]:
-    private_path = tmp_path / "private.json"
-    public_path = tmp_path / "journal.json"
-    supervisor_candidate = "b" * 40
-    agent_candidate = "c" * 40
-    agent_base = "d" * 40
-    private = initialize_journal(
-        private_path,
-        episode=1,
-        base_commit="a" * 40,
-        branch="episode-1",
-        tool_modules=tool_modules,
-    )
-    private.update(
-        base_kernel_id=agent_base,
-        state="candidate_ready",
-        outcome={
-            "summary": "Measured candidate is ready.",
-            "next_directions": [],
-            "gateway_record_ids": ["gateway-" + "1" * 32],
-        },
-        candidate_commit=supervisor_candidate,
-        candidate_kernel_id=agent_candidate,
-        finalized_at="2026-10-31T00:00:00+00:00",
-    )
-    private_write(private_path, private)
-    public = dict(
-        private,
-        schema_version=1,
-        runtime_journal_projection=True,
-    )
-    public["candidate_kernel_commit_id"] = public.pop("candidate_kernel_id")
-    public["candidate_commit"] = agent_candidate
-    public["base_commit"] = agent_base
-    public.pop("base_kernel_id")
-    public.pop("runtime_managed")
-    public_path.write_text(json.dumps(public), encoding="utf-8")
-    return public_path, private, agent_candidate
-
-
-def test_direction_only_runtime_projection_accepts_candidate_without_experiment(tmp_path):
-    public_path, private, candidate = _runtime_projection(
-        tmp_path,
-        tool_modules=("directions",),
-    )
-
-    assert validate_terminal(
-        public_path,
-        expected_episode=1,
-        base_commit="a" * 40,
-        branch="episode-1",
-        state="candidate_ready",
-        candidate_commit=candidate,
-        runtime_journal_loader=lambda: private,
-    ) == ""
-    public = json.loads(public_path.read_text(encoding="utf-8"))
-    assert public["candidate_commit"] == "c" * 40
-    assert public["base_commit"] == "d" * 40
-    assert private["base_commit"] not in public_path.read_text(encoding="utf-8")
-    assert private["candidate_commit"] not in public_path.read_text(encoding="utf-8")
-
-
-def test_runtime_report_projection_uses_only_agent_git_identities(tmp_path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    evidence = tmp_path / "journals" / "episodes" / "e00000001"
-    evidence.mkdir(parents=True)
-    private = initialize_journal(
-        evidence / "journal.json",
-        episode=1,
-        base_commit="a" * 40,
-        branch="episode-1",
-        tool_modules=(),
-    )
-    private.update(
-        base_kernel_id="d" * 40,
-        state="pivot",
-        outcome={
-            "summary": "Incumbent remains best.",
-            "next_directions": [],
-            "gateway_record_ids": [],
-        },
-        finalized_at="2026-11-10T00:00:00+00:00",
-    )
-    private_write(evidence / "journal.json", private)
-    service = SupervisorJournalService(
-        workspace=workspace,
-        git_workspace=workspace,
-        campaign_root=tmp_path / "journals",
-        evidence_root=evidence,
-        supervisor_git=True,
-    )
-
-    service._publish_legacy_report(private)
-    service._check_legacy_journal()
-
-    public_path = workspace / ".atrex_long_horizon" / "journal.json"
-    public = json.loads(public_path.read_text(encoding="utf-8"))
-    assert public["base_commit"] == "d" * 40
-    assert "base_kernel_id" not in public
-    assert "a" * 40 not in public_path.read_text(encoding="utf-8")
-
-
-def test_experiment_runtime_projection_still_requires_candidate_experiment(tmp_path):
-    public_path, private, candidate = _runtime_projection(
-        tmp_path,
-        tool_modules=("experiments",),
-    )
-
-    assert validate_terminal(
-        public_path,
-        expected_episode=1,
-        base_commit="a" * 40,
-        branch="episode-1",
-        state="candidate_ready",
-        candidate_commit=candidate,
-        runtime_journal_loader=lambda: private,
-    ) == "published Episode handoff has no structured Experiments"
 
 
 def test_imported_measurement_is_readable_but_not_a_local_task_cache(tmp_path):
@@ -4085,26 +3340,6 @@ def test_imported_measurement_is_readable_but_not_a_local_task_cache(tmp_path):
     assert destination.read_kernel(kernel_id) == source.read_kernel(kernel_id)
     assert destination.kernel_records(kernel_id)[0]["gateway_record_id"] == record_id
     assert not (destination.root / "tasks").exists()
-
-
-def test_measurement_store_keeps_private_git_mapping_out_of_public_identity(tmp_path):
-    store = MeasurementStore(tmp_path / "measurements")
-    source = b"def kernel():\n    return 1\n"
-    agent_commit = "1" * 40
-    supervisor_commit = "2" * 40
-
-    identity = store.kernel(
-        source,
-        agent_commit,
-        supervisor_commit_id=supervisor_commit,
-    )
-
-    assert identity == {
-        "kernel_id": agent_commit,
-        "kernel_artifact_digest": "sha256:" + hashlib.sha256(source).hexdigest(),
-    }
-    assert store.supervisor_kernel_commit(agent_commit) == supervisor_commit
-    assert "supervisor" not in json.dumps(identity)
 
 
 def test_same_source_under_distinct_git_commits_has_distinct_task_identity(tmp_path):
@@ -4127,6 +3362,117 @@ def test_same_source_under_distinct_git_commits_has_distinct_task_identity(tmp_p
                 )["gateway_record_id"]
             )
     assert records[0] != records[1]
+
+
+def test_shared_research_validates_observational_submitted_winners(tmp_path):
+    journals = tmp_path / "journals"
+    other_accepted = "5" * 40
+    winner = {
+        "kernel_commit_id": "1" * 40,
+        "gateway_record_id": "gateway-" + "2" * 32,
+        "latency_us_geomean": 4.25,
+        "trajectory": 2,
+        "lineage": "T2",
+    }
+    private_write(
+        shared_research_path(journals),
+        {
+            "schema_version": 1,
+            "revision": "revision-winner",
+            "through_epoch": 3,
+            "directions": {},
+            "experiments": [],
+            "research_queue": [],
+            "accepted_submission_kernel_ids": {
+                "T2": [winner["kernel_commit_id"], other_accepted],
+            },
+            "lineage_winners": {"T2": winner},
+            "global_best": winner,
+        },
+    )
+
+    shared = _shared_research(journals)
+    assert shared["accepted_submission_kernel_ids"] == {
+        "T2": sorted([winner["kernel_commit_id"], other_accepted]),
+    }
+    assert shared["lineage_winners"] == {"T2": winner}
+    assert shared["global_best"] == winner
+
+
+def test_progress_labels_only_accepted_submissions_as_winners():
+    accepted = "1" * 40
+    measured_only = "2" * 40
+    winner = {
+        "kernel_commit_id": accepted,
+        "gateway_record_id": "gateway-" + "3" * 32,
+        "latency_us_geomean": 4.25,
+        "lineage": "T1",
+    }
+    progress = _progress_markdown(
+        {
+            "current_lineage": "T1",
+            "lineages": {
+                "T1": {
+                    "working_kernel_commit_id": measured_only,
+                    # A migrated pre-change projection must not affect rendering.
+                    "lineage_best_kernel_commit_id": measured_only,
+                }
+            },
+            "submitted_winners": {
+                "lineages": {"T1": winner},
+                "global_best": winner,
+            },
+            "pareto_frontier": {
+                "best_by_shape": {
+                    "shape-a": {
+                        "kernel_commit_id": accepted,
+                        "gateway_record_id": "gateway-" + "4" * 32,
+                        "latency_us": 3.5,
+                    }
+                },
+                "shape_count": 1,
+                "evaluation_count": 1,
+                "winner_kernel_commit_ids": [accepted],
+                "best_full_evaluation": {
+                    "kernel_commit_id": accepted,
+                    "gateway_record_id": "gateway-" + "4" * 32,
+                    "latency_us_geomean": 3.5,
+                },
+            },
+        },
+        modules=frozenset(),
+    ).decode()
+
+    assert "**Global best accepted submission" not in progress
+    assert f"**Best accepted submission for `T1`:** `{accepted}`" in progress
+    assert f"| `T1` | `{measured_only}` | `{accepted}` |" in progress
+    assert "Best verified lineage Kernel" not in progress
+    assert "Best measured passing Kernel" not in progress
+    assert f"| `shape-a` | 3.5 | `{accepted}` |" in progress
+    assert "Accepted-submission per-Shape Pareto frontier" in progress
+
+
+def test_progress_shows_global_best_only_with_multiple_lineages():
+    winner = {
+        "kernel_commit_id": "1" * 40,
+        "gateway_record_id": "gateway-" + "2" * 32,
+        "latency_us_geomean": 4.25,
+        "lineage": "T1",
+    }
+    progress = _progress_markdown(
+        {
+            "current_lineage": "T1",
+            "lineages": {"T1": {}, "T2": {}},
+            "submitted_winners": {
+                "lineages": {"T1": winner},
+                "global_best": winner,
+            },
+        },
+        modules=frozenset(),
+    ).decode()
+
+    assert f"**Global best accepted submission commit ID:** `{'1' * 40}`" in progress
+    assert f"**Best accepted submission for `T1`:** `{'1' * 40}`" in progress
 
 
 def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path):
@@ -4490,192 +3836,11 @@ def test_multiple_active_directions_require_explicit_experiment_binding(tmp_path
     assert projected["direction_id"] == directions[0]
 
 
-def test_candidate_preflight_reuses_supported_historical_experiment(tmp_path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    source = b"def run():\n    return 1\n"
-    install(workspace, source)
-    journals = tmp_path / "scope" / "journals"
-    old = journals / "episodes" / "e00000000" / "journal.json"
-    old.parent.mkdir(parents=True)
-    initialize_journal(old, episode=0, base_commit="a" * 40, branch="old")
-    direction_id = "direction_" + "1" * 32
-    experiment_id = "experiment_" + "2" * 32
-    record_id, kernel_commit_id = _passing_full_measurement(
-        MeasurementStore(tmp_path / "scope" / "measurements"),
-        source,
-        "historical-supported",
-        {"shape_a": 1.0},
-    )
-    old_value = load_journal(old)
-    old_value["direction_events"] = [
-        {
-            "direction_id": direction_id,
-            "action": "propose",
-            "revision": 1,
-            "name": "Historical path",
-            "change_scope": "incremental",
-            "objective": "Establish and improve the viable implementation family.",
-            "applicability": "The target workload.",
-            "expected_benefit": "Provide a reusable exact candidate.",
-            "plan": ["Evaluate the exact candidate."],
-            "stop_conditions": [],
-            "recorded_at": "2026-01-01T00:00:00Z",
-            "claim_review_quality": "supported",
-        },
-        {
-            "direction_id": direction_id,
-            "action": "start",
-            "analysis": "Measure it.",
-            "recorded_at": "2026-01-01T00:00:01Z",
-            "supporting_experiment_ids": [],
-            "reopen_condition": None,
-        },
-        {
-            "direction_id": direction_id,
-            "action": "complete",
-            "analysis": "The exact candidate passed.",
-            "recorded_at": "2026-01-01T00:00:02Z",
-            "supporting_experiment_ids": [experiment_id],
-            "reopen_condition": None,
-            "claim_review_quality": "supported",
-        },
-    ]
-    old_value["experiments"] = [{
-        "experiment_id": experiment_id,
-        "revision": 1,
-        "sequence": 1,
-        "direction_id": direction_id,
-        "name": "Historical full Evaluate",
-        "intent": "Validate the exact candidate.",
-        "gateway_record_ids": [record_id],
-        "interpretation": "The candidate passed the complete workload.",
-        "claim_review_quality": "supported",
-    }]
-    old_value["finalized_at"] = "2026-01-01T00:00:03Z"
-    private_write(old, old_value)
-
-    current = journals / "episodes" / "e00000001" / "journal.json"
-    current.parent.mkdir(parents=True)
-    initialize_journal(current, episode=1, base_commit="b" * 40, branch="work")
-    value, directions, selected_source = validate_report_evidence(
-        current,
-        journals,
-        workspace,
-        status="candidate_ready",
-        selected_id=experiment_id,
-        kernel_id=kernel_commit_id,
-    )
-    assert value["episode"] == 1
-    assert directions[direction_id]["status"] == "completed"
-    assert selected_source == source
 
 
-def test_candidate_handoff_projects_reused_historical_experiment(
-    monkeypatch, tmp_path
-):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    journals = tmp_path / "scope" / "journals"
-    old = journals / "episodes" / "e00000000" / "journal.json"
-    old.parent.mkdir(parents=True)
-    initialize_journal(
-        old,
-        episode=0,
-        base_commit="a" * 40,
-        branch="old",
-        tool_modules=("experiments",),
-    )
-    experiment_id = "experiment_" + "2" * 32
-    source = b"VALUE = 2\n"
-    record_id, candidate = _passing_full_measurement(
-        MeasurementStore(tmp_path / "scope" / "measurements"),
-        source,
-        "historical-handoff",
-        {"shape_a": 5.251},
-    )
-    old_value = load_journal(old)
-    old_value.update(
-        state="pivot",
-        outcome={"summary": "Historical evidence retained."},
-        finalized_at="2026-01-01T00:00:03Z",
-    )
-    old_value["experiments"] = [{
-        "experiment_id": experiment_id,
-        "revision": 1,
-        "sequence": 1,
-        "name": "Historical full Evaluate",
-        "intent": "Validate the exact candidate.",
-        "gateway_record_ids": [record_id],
-        "interpretation": "The candidate passed the complete workload.",
-        "claim_review_quality": "supported",
-    }]
-    private_write(old, old_value)
-
-    evidence = journals / "episodes" / "e00000001"
-    evidence.mkdir(parents=True)
-    current_path = evidence / "journal.json"
-    initialize_journal(
-        current_path,
-        episode=1,
-        base_commit="b" * 40,
-        branch="work",
-        tool_modules=("experiments",),
-    )
-    current = load_journal(current_path)
-    monkeypatch.setattr(
-        "aka.light.workflow.journal_service.validate_report_evidence",
-        lambda *args, **kwargs: (current, {}, source),
-    )
-    monkeypatch.setattr(
-        "aka.light.workspace.sources.policy_at", lambda *args, **kwargs: None
-    )
-    monkeypatch.setattr(
-        EpisodeWorktree, "validate_candidate", lambda *_args: ("", [])
-    )
-    service = SupervisorJournalService(
-        workspace=workspace,
-        git_workspace=workspace,
-        campaign_root=journals,
-        evidence_root=evidence,
-        supervisor_git=True,
-    )
-
-    result = service._submit_report(
-        {
-            "status": "candidate_ready",
-            "handoff_reason": "direction_terminal",
-            "summary": "Reuse the still-valid historical measurement.",
-            "selected_experiment_id": experiment_id,
-        },
-        validate_candidate=lambda _source: {"status": "PASS"},
-        agent_kernel_id=candidate,
-        seal_candidate=lambda kernel_id, _source: kernel_id,
-    )
-
-    assert result["status"] == "accepted"
-    private = load_journal(current_path)
-    assert [item["experiment_id"] for item in private["experiments"]] == [
-        experiment_id
-    ]
-    projection = json.loads(
-        (workspace / ".atrex_long_horizon/journal.json").read_text()
-    )
-    assert [item["experiment_id"] for item in projection["experiments"]] == [
-        experiment_id
-    ]
-    assert validate_terminal(
-        workspace / ".atrex_long_horizon/journal.json",
-        expected_episode=1,
-        base_commit="b" * 40,
-        branch="work",
-        state="candidate_ready",
-        candidate_commit=candidate,
-        runtime_journal_loader=lambda: private,
-    ) == ""
 
 
-def test_pooled_search_seals_before_publishing(tmp_path):
+def test_pooled_search_seals_peer_evidence_without_promotion(tmp_path):
     calls = []
 
     class Driver:
@@ -4688,7 +3853,7 @@ def test_pooled_search_seals_before_publishing(tmp_path):
         def initialize(self, seed, trajectories):
             calls.append(("initialize", trajectories))
 
-        def prepare_epoch(self, epoch, seed):
+        def prepare_epoch(self, epoch):
             calls.append(("prepare", epoch))
 
         def run_episode(self, epoch, trajectory, episode):
@@ -4696,7 +3861,8 @@ def test_pooled_search_seals_before_publishing(tmp_path):
                 "epoch": epoch,
                 "trajectory": trajectory,
                 "episode": episode,
-                "retained_kernel": None,
+                "agent_head_commit_id": "a" * 40,
+                "best_submitted_evaluation": None,
                 "tokens": 1,
             }
 
@@ -4705,9 +3871,6 @@ def test_pooled_search_seals_before_publishing(tmp_path):
 
         def epoch_sealed(self, epoch):
             return ("seal", epoch) in calls
-
-        def publish_epoch(self, epoch, winner):
-            calls.append(("publish", epoch))
 
         def tokens(self):
             return 1
@@ -4719,7 +3882,7 @@ def test_pooled_search_seals_before_publishing(tmp_path):
     ).run()
 
     assert result == "search: completed Epoch budget"
-    assert calls.index(("seal", 1)) < calls.index(("publish", 1))
+    assert calls == [("initialize", 1), ("prepare", 1), ("seal", 1)]
 
 
 def test_search_synchronization_rejects_unknown_mode():
@@ -4758,9 +3921,7 @@ def test_episode_search_role_specialization_prompt_switch(tmp_path, enabled):
     )
     prompt = LongHorizonCampaign(base)._prompt(
         episode=1,
-        version=1,
         worktree=CandidateHandle(1, "a" * 40, "work", tmp_path),
-        conversion_pending=False,
     )
     assert "Search location: Epoch 1, Trajectory 1, Episode 1" in prompt
     assert ("T1 role: bounded exploitation" in prompt) is enabled
@@ -4770,7 +3931,7 @@ def test_episode_search_role_specialization_prompt_switch(tmp_path, enabled):
     ("synchronization", "expected"),
     [
         ("synchronous", "at synchronous Epoch barriers"),
-        ("asynchronous", "after each terminal Episode publication"),
+        ("asynchronous", "after each completed audit segment"),
     ],
 )
 def test_episode_search_prompt_describes_actual_publication_boundary(
@@ -4799,9 +3960,7 @@ def test_episode_search_prompt_describes_actual_publication_boundary(
     )
     prompt = LongHorizonCampaign(base)._prompt(
         episode=1,
-        version=1,
         worktree=CandidateHandle(1, "a" * 40, "work", tmp_path),
-        conversion_pending=False,
     )
     assert expected in prompt
 
@@ -4829,15 +3988,9 @@ def test_asynchronous_search_advances_without_waiting_for_slow_peer(tmp_path):
             epoch,
             trajectory,
             episode,
-            working_kernel,
-            official_kernel,
             shared_publication,
-            peer_kernels,
         ):
-            assert working_kernel == seed
-            assert official_kernel == seed
             assert type(shared_publication) is int
-            assert set(peer_kernels) == {"1", "2"}
             with lock:
                 calls.append(("prepare", trajectory, episode))
 
@@ -4855,7 +4008,8 @@ def test_asynchronous_search_advances_without_waiting_for_slow_peer(tmp_path):
                 "epoch": epoch,
                 "trajectory": trajectory,
                 "episode": episode,
-                "retained_kernel": None,
+                "agent_head_commit_id": (str(trajectory) * 40)[:40],
+                "best_submitted_evaluation": None,
                 "tokens": 1,
                 "session_id": f"session-t{trajectory}",
             }
@@ -4865,11 +4019,6 @@ def test_asynchronous_search_advances_without_waiting_for_slow_peer(tmp_path):
             assert all(job["status"] == "completed" for job in jobs)
             with lock:
                 calls.append(("seal", publication))
-
-        def publish_epoch(self, publication, winner):
-            assert winner == seed
-            with lock:
-                calls.append(("publish", publication))
 
         def tokens(self):
             return token_count
@@ -4993,9 +4142,7 @@ def test_episode_prompt_uses_reachable_agent_comparison_base(tmp_path):
 
     prompt = LongHorizonCampaign(base)._prompt(
         episode=1,
-        version=1,
         worktree=CandidateHandle(1, controller_base, "work", controller),
-        conversion_pending=False,
         agent_workspace=agent_workspace,
     )
 
@@ -5009,77 +4156,11 @@ def test_episode_prompt_uses_reachable_agent_comparison_base(tmp_path):
     ).returncode == 0
 
 
-def test_unchanged_candidate_ready_is_repairable_pivot_guidance(monkeypatch, tmp_path):
-    controller = _controller_repository(
-        tmp_path / "controller", "def run():\n    return 1\n"
-    )
-    base_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=controller,
-        text=True, capture_output=True, check=True,
-    ).stdout.strip()
-    source = from_git(controller, base_commit)
-    workspace = tmp_path / "agent"
-    workspace.mkdir()
-    journals = tmp_path / "journals"
-    evidence = journals / "episodes" / "e00000001"
-    evidence.mkdir(parents=True)
-    journal = evidence / "journal.json"
-    initialize_journal(
-        journal,
-        episode=1,
-        base_commit=base_commit,
-        branch="work",
-        tool_modules=(),
-    )
-    current = load_journal(journal)
-    monkeypatch.setattr(
-        "aka.light.workflow.journal_service.validate_report_evidence",
-        lambda *args, **kwargs: (current, {}, source),
-    )
-    service = SupervisorJournalService(
-        workspace=workspace,
-        git_workspace=controller,
-        campaign_root=journals,
-        evidence_root=evidence,
-        supervisor_git=True,
-    )
-
-    with pytest.raises(AgentRequestError) as raised:
-        service._submit_report(
-            {
-                "status": "candidate_ready",
-                "handoff_reason": "direction_terminal",
-                "summary": "The incumbent remains best after the tested path.",
-                "gateway_record_ids": ["gateway-" + "1" * 32],
-            },
-            validate_candidate=lambda _source: pytest.fail(
-                "unchanged source must be rejected before correctness validation"
-            ),
-            agent_kernel_id="b" * 40,
-            seal_candidate=lambda _commit, _source: pytest.fail(
-                "unchanged source must be rejected before commit sealing"
-            ),
-        )
-
-    response = raised.value.response
-    assert response["repairable"] is True
-    assert response["error"]["code"] == "candidate_matches_incumbent"
-    assert '"status":"pivot"' in response["error"]["next_action"]
-    assert load_journal(journal)["state"] == "in_progress"
 
 
-def test_pooled_trajectories_restore_one_canonical_agent_v0_and_baseline(tmp_path):
+def test_pooled_trajectories_restore_one_canonical_agent_v0(tmp_path):
     controller = _controller_repository(
         tmp_path / "controller", "def run():\n    return 0\n"
-    )
-    (controller / "kernel.py").write_text(
-        "def run():\n    return 1\n", encoding="utf-8"
-    )
-    subprocess.run(["git", "add", "kernel.py"], cwd=controller, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "framework baseline"],
-        cwd=controller,
-        check=True,
     )
     controller_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"],
@@ -5088,37 +4169,7 @@ def test_pooled_trajectories_restore_one_canonical_agent_v0_and_baseline(tmp_pat
         capture_output=True,
         check=True,
     ).stdout.strip()
-    framework_source = snapshot(controller)
-
-    runtime_root = supervisor_campaign_root(controller)
-    root_agent_workspace = runtime_root / "agent-workspace"
-    root_bundle = runtime_root / "adaptive-state" / "agent-git.bundle"
-    _install(root_agent_workspace, "def run():\n    return 0\n")
-    root_agent = AgentGit(root_agent_workspace, root_bundle)
-    root_agent.prepare()
-    v0_commit = root_agent.head()
-    assert v0_commit
-    (root_agent_workspace / "kernel.py").write_text(
-        "def run():\n    return 1\n", encoding="utf-8"
-    )
-    framework_commit = root_agent.checkpoint("accepted Framework Baseline")
-    assert framework_commit and framework_commit != v0_commit
-    subprocess.run(
-        ["git", "switch", "-q", "-c", "baseline-probe"],
-        cwd=root_agent_workspace,
-        check=True,
-    )
-    (root_agent_workspace / "kernel.py").write_text(
-        "def run():\n    return 2\n", encoding="utf-8"
-    )
-    probe_commit = root_agent.checkpoint("Framework Baseline probe")
-    assert probe_commit and probe_commit != framework_commit
-    subprocess.run(
-        ["git", "switch", "-q", "work"],
-        cwd=root_agent_workspace,
-        check=True,
-    )
-    assert root_agent.persist() == framework_commit
+    v0_source = snapshot(controller)
 
     driver = EpisodeSearchDriver.__new__(EpisodeSearchDriver)
     driver.campaign = SimpleNamespace(workspace=controller)
@@ -5133,9 +4184,8 @@ def test_pooled_trajectories_restore_one_canonical_agent_v0_and_baseline(tmp_pat
     )
     canonical = driver._canonical_agent_root(bootstrap)
 
-    assert canonical["agent_v0_commit_id"] == v0_commit
-    assert canonical["framework_baseline_commit_id"] == framework_commit
-    assert canonical["framework_baseline_controller_commit_id"] == controller_commit
+    v0_commit = canonical["agent_v0_commit_id"]
+    assert canonical["controller_v0_commit_id"] == controller_commit
     assert driver._canonical_agent_root(bootstrap) == canonical
 
     restored_heads = []
@@ -5145,7 +4195,7 @@ def test_pooled_trajectories_restore_one_canonical_agent_v0_and_baseline(tmp_pat
         driver._seed_trajectory_agent_root(child, canonical)
         child_runtime_root = supervisor_campaign_root(child.workspace)
         child_agent_workspace = child_runtime_root / "agent-workspace"
-        install(child_agent_workspace, framework_source)
+        install(child_agent_workspace, v0_source)
         child_agent = AgentGit(
             child_agent_workspace,
             child_runtime_root / "adaptive-state" / "agent-git.bundle",
@@ -5153,111 +4203,9 @@ def test_pooled_trajectories_restore_one_canonical_agent_v0_and_baseline(tmp_pat
         child_agent.prepare()
         restored_heads.append(child_agent.head())
         assert child_agent.commit_reachable(v0_commit)
-        assert child_agent.commit_reachable(probe_commit)
-        assert snapshot(child_agent_workspace) == framework_source
+        assert snapshot(child_agent_workspace) == v0_source
 
-    assert restored_heads == [framework_commit, framework_commit, framework_commit]
-
-
-def test_pooled_trajectories_inherit_framework_baseline_research(tmp_path):
-    controller = _controller_repository(
-        tmp_path / "controller", "def run():\n    return 0\n"
-    )
-    source_root = supervisor_campaign_root(controller)
-    measurements = MeasurementStore(source_root / "measurements")
-    record_id, kernel_id = _measurement(
-        measurements,
-        b"def kernel():\n    return 1\n",
-        "framework-baseline-probe",
-        kernel_id="3" * 40,
-    )
-    direction_id = "direction_" + "1" * 32
-    experiment_id = "experiment_" + "2" * 32
-    (controller / "scratch").mkdir()
-    (controller / "scratch" / "probe.txt").write_text(
-        "baseline probe evidence\n", encoding="utf-8"
-    )
-    references = _archive_experiment_references(
-        controller,
-        source_root / "journals",
-        experiment_id,
-        1,
-        ["scratch/probe.txt"],
-    )
-    research = ResearchStore(source_root / "research")
-    research.observe_direction(
-        {
-            "direction_id": direction_id,
-            "name": "Framework Baseline launch probe",
-            "change_scope": "incremental",
-            "status": "proposed",
-            "gateway_record_ids": [record_id],
-            "claim_review_quality": "supported",
-        },
-        origin={"epoch": 0, "trajectory": 1, "episode": 0},
-    )
-    research.observe_experiment(
-        {
-            "experiment_id": experiment_id,
-            "name": "Framework Baseline probe result",
-            "intent": "Establish a reusable launch fact.",
-            "interpretation": "The probe is valid for later Episodes.",
-            "gateway_record_ids": [record_id],
-            "references": references,
-            "reference_revision": 1,
-            "revision": 1,
-            "claim_review_quality": "supported",
-        },
-        origin={"epoch": 0, "trajectory": 1, "episode": 0},
-    )
-
-    driver = EpisodeSearchDriver.__new__(EpisodeSearchDriver)
-    driver.campaign = SimpleNamespace(workspace=controller)
-    driver.root = tmp_path / "search"
-    driver.children = {}
-    seed = driver._framework_baseline_research_seed()
-    driver._seed_framework_baseline_search_state(seed)
-
-    for number in (1, 2, 3):
-        child = SimpleNamespace(workspace=tmp_path / f"trajectory-{number}")
-        child.workspace.mkdir()
-        driver._seed_trajectory_framework_baseline_research(child, seed)
-        driver._seed_trajectory_framework_baseline_research(child, seed)
-        destination_root = supervisor_campaign_root(child.workspace)
-        shared = json.loads(
-            shared_research_path(destination_root / "journals").read_text()
-        )
-        assert shared["research_queue"] == [direction_id]
-        assert shared["directions"][direction_id]["access"] == "peer_read_only"
-        assert shared["directions"][direction_id]["proposed_by"] == "Framework Baseline"
-        assert shared["experiments"][0]["access"] == "peer_read_only"
-        assert shared["experiments"][0]["recorded_by"] == "Framework Baseline"
-        copied = MeasurementStore(destination_root / "measurements")
-        assert copied.read(record_id) == measurements.read(record_id)
-        assert copied.read_kernel(kernel_id) == measurements.read_kernel(kernel_id)
-        assert (
-            destination_root
-            / "journals"
-            / "experiment-archives"
-            / experiment_id
-            / "files"
-            / "scratch"
-            / "probe.txt"
-        ).read_text() == "baseline probe evidence\n"
-
-    manifest = json.loads(
-        (driver.root / "shared" / "manifest.json").read_text()
-    )
-    assert manifest["directions"][direction_id] == {
-        "source": "framework_baseline",
-        "epoch": 0,
-        "trajectory": 0,
-        "episode": 0,
-    }
-    assert manifest["experiments"][experiment_id]["source"] == "framework_baseline"
-    assert manifest["records"][record_id]["source"] == "framework_baseline"
-    assert manifest["research_queue"] == [direction_id]
-    assert MeasurementStore(driver.root / "shared" / "measurements").read(record_id)
+    assert restored_heads == [v0_commit, v0_commit, v0_commit]
 
 
 def test_research_store_rebuilds_queue_ignores_legacy_progress_and_adoption(tmp_path):
@@ -5435,7 +4383,13 @@ def test_research_store_tracks_multiple_active_directions_per_lineage(tmp_path):
 
 def test_research_store_uses_snapshot_tail_and_skips_unchanged_lineage(tmp_path, monkeypatch):
     store = ResearchStore(tmp_path / "research")
-    values = {"working_kernel_id": "a" * 40}
+    values = {
+        "working_kernel_id": "a" * 40,
+        # Historical callers may still replay these retired fields. They must
+        # not reintroduce an unsubmitted Evaluate as a lineage winner.
+        "lineage_best_kernel_id": "b" * 40,
+        "lineage_best_latency_us": 1.0,
+    }
     first = store.checkpoint_lineage(values, origin={"trajectory": 1, "episode": 1})
     second = store.checkpoint_lineage(values, origin={"trajectory": 1, "episode": 1})
     assert second["sequence"] == first["sequence"]
@@ -5445,7 +4399,10 @@ def test_research_store_uses_snapshot_tail_and_skips_unchanged_lineage(tmp_path,
     monkeypatch.setattr(store, "_events", lambda: (_ for _ in ()).throw(
         AssertionError("complete event replay should not run")
     ))
-    assert store.read()["lineages"]["T1"]["working_kernel_id"] == "a" * 40
+    lineage = store.read()["lineages"]["T1"]
+    assert lineage["working_kernel_id"] == "a" * 40
+    assert "lineage_best_kernel_id" not in lineage
+    assert "lineage_best_latency_us" not in lineage
 
 
 def test_research_store_rotates_bounded_segments_and_rebuilds(tmp_path, monkeypatch):
@@ -5617,222 +4574,6 @@ def test_agent_git_head_is_kernel_id_only_for_clean_exact_source(tmp_path):
     assert repository.kernel_commit(snapshot(workspace)) == second
 
 
-def test_supervisor_archives_agent_commit_under_distinct_private_identity(tmp_path):
-    controller = _controller_repository(
-        tmp_path / "controller", "def run():\n    return 1\n"
-    )
-    base_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=controller,
-        text=True, capture_output=True, check=True,
-    ).stdout.strip()
-    worktree = EpisodeWorktree.create(
-        controller, 1, base_commit, tmp_path / "worktrees"
-    )
-    agent_workspace = tmp_path / "agent"
-    _install(agent_workspace, "def run():\n    return 1\n")
-    agent_git = AgentGit(agent_workspace, tmp_path / "agent.bundle")
-    agent_git.prepare()
-    (agent_workspace / "kernel.py").write_text(
-        "def run():\n    return 2\n", encoding="utf-8"
-    )
-    subprocess.run(["git", "add", "kernel.py"], cwd=agent_workspace, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "agent candidate"],
-        cwd=agent_workspace,
-        check=True,
-    )
-    agent_commit = agent_git.kernel_commit()
-    candidate_source = snapshot(agent_workspace)
-
-    try:
-        sealed = agent_git.seal_into(worktree.path, agent_commit, candidate_source)
-        assert sealed != agent_commit
-        assert agent_git.archive_into(
-            worktree.path, agent_commit, candidate_source
-        ) == sealed
-        assert subprocess.run(
-            ["git", "rev-parse", supervisor_archive_ref(agent_commit)],
-            cwd=worktree.path,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip() == sealed
-        assert subprocess.run(
-            ["git", "rev-parse", f"refs/atrex/accepted/{sealed}"],
-            cwd=worktree.path,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip() == sealed
-        assert subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=worktree.path,
-            text=True, capture_output=True, check=True,
-        ).stdout.strip() == base_commit
-        violation, paths = worktree.validate_candidate(sealed)
-        assert violation == ""
-        assert paths == ["kernel.py"]
-        assert snapshot(worktree.path) == candidate_source
-
-        promotion = promote_candidate(
-            controller,
-            base_commit=base_commit,
-            candidate_commit=sealed,
-            episode=1,
-            evidence={
-                "episode": 1,
-                "version": 1,
-                "base_commit": base_commit,
-                "episode_branch": worktree.branch,
-                "accepted": True,
-            },
-            memory_version=1,
-            memory_record={"version": "v1"},
-        )
-        assert promotion != agent_commit
-        from aka.light.workspace.sources import from_git
-
-        assert from_git(controller, promotion) == candidate_source
-        assert subprocess.run(
-            ["git", "rev-parse", supervisor_archive_ref(agent_commit)],
-            cwd=controller,
-            text=True,
-            capture_output=True,
-            check=True,
-        ).stdout.strip() == sealed
-    finally:
-        worktree.remove(controller)
-
-
-def test_private_supervisor_snapshot_does_not_require_controller_episode_branch(
-    tmp_path,
-):
-    controller = _controller_repository(
-        tmp_path / "controller", "def run():\n    return 1\n"
-    )
-    base_commit = subprocess.run(
-        ["git", "rev-parse", "HEAD"], cwd=controller,
-        text=True, capture_output=True, check=True,
-    ).stdout.strip()
-    assert subprocess.run(
-        ["git", "branch", "--show-current"], cwd=controller,
-        text=True, capture_output=True, check=True,
-    ).stdout.strip() != "framework-baseline"
-
-    agent_workspace = tmp_path / "agent"
-    _install(agent_workspace, "def run():\n    return 1\n")
-    agent_git = AgentGit(agent_workspace, tmp_path / "agent.bundle")
-    agent_git.prepare()
-    (agent_workspace / "kernel.py").write_text(
-        "def run():\n    return 2\n", encoding="utf-8"
-    )
-    subprocess.run(["git", "add", "kernel.py"], cwd=agent_workspace, check=True)
-    subprocess.run(
-        ["git", "commit", "-q", "-m", "agent candidate"],
-        cwd=agent_workspace,
-        check=True,
-    )
-    agent_commit = agent_git.kernel_commit()
-    candidate_source = snapshot(agent_workspace)
-
-    sealed = agent_git.seal_into(controller, agent_commit, candidate_source)
-    violation, paths = EpisodeWorktree(
-        0, base_commit, "framework-baseline", controller
-    ).validate_candidate(sealed)
-
-    assert violation == ""
-    assert paths == ["kernel.py"]
-
-
-def test_candidate_archive_failure_keeps_journal_open_and_rejects_blocked_fallback(
-    monkeypatch, tmp_path
-):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    journals = tmp_path / "scope" / "journals"
-    evidence = journals / "episodes" / "e00000000"
-    evidence.mkdir(parents=True)
-    journal = evidence / "journal.json"
-    initialize_journal(
-        journal,
-        episode=0,
-        base_commit="a" * 40,
-        branch="framework-baseline",
-        tool_modules=(),
-    )
-    source = b"def run():\n    return 2\n"
-    agent_commit = "b" * 40
-    private_commit = "c" * 40
-    monkeypatch.setattr(
-        "aka.light.workflow.journal_service.validate_report_evidence",
-        lambda *args, **kwargs: (load_journal(journal), {}, source),
-    )
-    monkeypatch.setattr(
-        "aka.light.workspace.sources.policy_at", lambda *args, **kwargs: None
-    )
-    validations = iter([
-        ("episode worktree left its isolated branch", []),
-        ("", ["kernel.py"]),
-    ])
-    monkeypatch.setattr(
-        EpisodeWorktree,
-        "validate_candidate",
-        lambda *_args, **_kwargs: next(validations),
-    )
-    service = SupervisorJournalService(
-        workspace=workspace,
-        git_workspace=workspace,
-        campaign_root=journals,
-        evidence_root=evidence,
-        supervisor_git=True,
-    )
-    candidate_report = {
-        "status": "candidate_ready",
-        "handoff_reason": "direction_terminal",
-        "summary": "The exact committed candidate passed full Evaluate.",
-        "gateway_record_ids": ["gateway-" + "1" * 32],
-    }
-
-    with pytest.raises(RuntimeStateError) as archive_failure:
-        service._submit_report(
-            candidate_report,
-            validate_candidate=lambda _source: {"status": "PASS"},
-            agent_kernel_id=agent_commit,
-            seal_candidate=lambda _kernel_id, _source: private_commit,
-        )
-    assert archive_failure.value.response["error"]["code"] == (
-        "candidate_archive_unavailable"
-    )
-    pending = load_journal(journal)
-    assert pending["state"] == "in_progress"
-    assert pending["finalized_at"] is None
-    assert pending["pending_candidate_archive"]["agent_kernel_id"] == agent_commit
-
-    with pytest.raises(RuntimeStateError) as blocked_fallback:
-        service._submit_report({
-            "status": "blocked",
-            "handoff_reason": "blocked",
-            "summary": "Supervisor archival failed.",
-            "blocker": "The private archive is unavailable.",
-        })
-    assert blocked_fallback.value.response["error"]["code"] == (
-        "candidate_archive_pending"
-    )
-    assert load_journal(journal)["state"] == "in_progress"
-
-    accepted = service._submit_report(
-        candidate_report,
-        validate_candidate=lambda _source: {"status": "PASS"},
-        agent_kernel_id=agent_commit,
-        seal_candidate=lambda _kernel_id, _source: private_commit,
-    )
-    assert accepted["status"] == "accepted"
-    finalized = load_journal(journal)
-    assert finalized["state"] == "candidate_ready"
-    assert "pending_candidate_archive" not in finalized
-    projection = json.loads(
-        (workspace / ".atrex_long_horizon" / "journal.json").read_text()
-    )
-    assert "pending_candidate_archive" not in projection
 
 
 def test_agent_workspace_projects_memory_commits_into_agent_git(tmp_path):
@@ -5912,6 +4653,14 @@ def test_agent_workspace_is_stable_across_episode_controller_worktrees(tmp_path)
     assert "records/<gateway_record_id>.json" in (
         agent_root / "WORKSPACE.md"
     ).read_text(encoding="utf-8")
+    assert not (agent_root / "input" / "evidence").exists()
+    assert "conversation.jsonl" not in (
+        agent_root / "WORKSPACE.md"
+    ).read_text(encoding="utf-8")
+    (agent_root / "input" / "evidence").mkdir(parents=True)
+    (agent_root / "input" / "evidence" / "conversation.jsonl").write_text(
+        "legacy derived view\n", encoding="utf-8"
+    )
     subprocess.run(
         ["git", "switch", "-c", "experiment/persistent"],
         cwd=agent_root,
@@ -5935,6 +4684,7 @@ def test_agent_workspace_is_stable_across_episode_controller_worktrees(tmp_path)
         persistent_root=agent_root,
     )
     assert second.prepare() == agent_root
+    assert not (agent_root / "input" / "evidence").exists()
     assert (agent_root / "kernel.py").read_text(encoding="utf-8").endswith(
         "return 7\n"
     )
@@ -5979,7 +4729,7 @@ def test_runtime_rebinds_stable_agent_workspace_to_next_episode_journal(tmp_path
             ).stdout.strip(),
             branch="episode-1",
             memory_version=1,
-            supervisor_git=True,
+            managed_agent_workspace=True,
         )
         first_baseline = runtime.baseline_kernel_commit(first_controller)
         assert runtime.baseline_kernel_commit(first) == first_baseline
@@ -6029,7 +4779,7 @@ def test_runtime_rebinds_stable_agent_workspace_to_next_episode_journal(tmp_path
             branch="episode-2",
             memory_version=2,
             baseline_kernel_commit_id=first_baseline,
-            supervisor_git=True,
+            managed_agent_workspace=True,
         )
         assert second == first
         assert runtime.baseline_kernel_commit(second) == first_baseline
@@ -6044,104 +4794,6 @@ def test_runtime_rebinds_stable_agent_workspace_to_next_episode_journal(tmp_path
         assert runtime.journals[second].service.path == runtime.episode_journal_path(2)
         assert runtime.journals[first_controller.resolve()].service.path == (
             runtime.episode_journal_path(1)
-        )
-    finally:
-        runtime.close()
-
-
-def test_framework_baseline_episode_zero_seeds_episode_one_agent_git(tmp_path):
-    campaign = _controller_repository(
-        tmp_path / "campaign", "def run():\n    return 1\n"
-    )
-    baseline_controller = _controller_repository(
-        tmp_path / "framework-controller", "def run():\n    return 1\n"
-    )
-    runtime = SupervisorRuntime(
-        RuntimeConfig(hardware="L20D", workspace=campaign, wiki_enabled=False),
-        workspace_provider=ManagedCandidateWorkspace(),
-    )
-    try:
-        v0_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=baseline_controller,
-            text=True, capture_output=True, check=True,
-        ).stdout.strip()
-        agent_workspace = runtime.register_episode(
-            baseline_controller,
-            episode=0,
-            base_commit=v0_commit,
-            branch="framework-baseline",
-            memory_version=1,
-            supervisor_git=True,
-        )
-        (agent_workspace / "kernel.py").write_text(
-            "def run():\n    return 7\n", encoding="utf-8"
-        )
-        subprocess.run(["git", "add", "kernel.py"], cwd=agent_workspace, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "framework baseline candidate"],
-            cwd=agent_workspace,
-            check=True,
-        )
-        baseline_agent_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=agent_workspace,
-            text=True, capture_output=True, check=True,
-        ).stdout.strip()
-        baseline_view = runtime.journals[agent_workspace.resolve()].view
-        assert baseline_view.agent_git.kernel_commit(snapshot(agent_workspace)) == (
-            baseline_agent_commit
-        )
-        baseline_view.publish()
-        subprocess.run(["git", "add", "kernel.py"], cwd=baseline_controller, check=True)
-        subprocess.run(
-            ["git", "commit", "-q", "-m", "accept framework baseline"],
-            cwd=baseline_controller,
-            check=True,
-        )
-
-        episode_controller = tmp_path / "episode-controller"
-        subprocess.run(
-            ["git", "clone", "-q", str(baseline_controller), str(episode_controller)],
-            check=True,
-        )
-        v1_commit = subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=episode_controller,
-            text=True, capture_output=True, check=True,
-        ).stdout.strip()
-        episode_workspace = runtime.register_episode(
-            episode_controller,
-            episode=1,
-            base_commit=v1_commit,
-            branch="episode-1",
-            memory_version=2,
-            baseline_kernel_commit_id=baseline_agent_commit,
-            supervisor_git=True,
-        )
-
-        assert episode_workspace == agent_workspace
-        assert subprocess.run(
-            ["git", "cat-file", "-e", f"{baseline_agent_commit}^{{commit}}"],
-            cwd=episode_workspace,
-            capture_output=True,
-        ).returncode == 0
-        assert (episode_workspace / "kernel.py").read_text(encoding="utf-8") == (
-            "def run():\n    return 7\n"
-        )
-        assert runtime.baseline_kernel_commit(episode_workspace) == baseline_agent_commit
-        assert subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=episode_workspace,
-            text=True, capture_output=True, check=True,
-        ).stdout.strip() == baseline_agent_commit
-        assert subprocess.run(
-            ["git", "show-ref", "--verify", "refs/atrex/baselines/e00000001"],
-            cwd=episode_workspace,
-            text=True,
-            capture_output=True,
-        ).returncode != 0
-        assert runtime.journals[episode_workspace.resolve()].service.path == (
-            runtime.episode_journal_path(1)
-        )
-        assert runtime.journals[baseline_controller.resolve()].service.path == (
-            runtime.episode_journal_path(0)
         )
     finally:
         runtime.close()
@@ -6213,6 +4865,12 @@ def test_epoch_git_exchange_filters_paths_and_preserves_peer_ref(tmp_path):
     )
     assert receipt["commit_count"] >= 1
     assert b"scratch/secret.txt" not in export.read_bytes()
+    assert subprocess.run(
+        ["git", "show-ref", "--verify", "refs/atrex/shared/T2/e0001/head"],
+        cwd=source_workspace,
+        capture_output=True,
+        check=False,
+    ).returncode != 0
 
     destination = tmp_path / "destination"
     _install(destination, "def run():\n    return 0\n")
@@ -6282,6 +4940,65 @@ def test_epoch_git_exchange_filters_paths_and_preserves_peer_ref(tmp_path):
         check=True,
     ).stdout.splitlines()
     assert messages == original_messages
+
+
+def test_epoch_git_exchange_broadcasts_non_head_lineage_winner(tmp_path):
+    source_workspace = tmp_path / "source"
+    _install(source_workspace, "def run():\n    return 1\n")
+    source = AgentGit(source_workspace, tmp_path / "source.bundle")
+    source.prepare()
+    winner = source.head()
+    assert winner
+
+    (source_workspace / "kernel.py").write_text(
+        "def run():\n    return 2\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "kernel.py"], cwd=source_workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "Agent: continue after submitted winner"],
+        cwd=source_workspace,
+        check=True,
+    )
+    head = source.head()
+    assert head and head != winner
+
+    export = tmp_path / "peer.bundle"
+    receipt = export_epoch(
+        source_workspace,
+        export,
+        trajectory=2,
+        epoch=1,
+        lineage_winner_commit_id=winner,
+        audit_path=tmp_path / "peer.json",
+    )
+    assert receipt["original_agent_commits"] == {
+        "head": head,
+        "lineage_winner": winner,
+    }
+
+    destination = tmp_path / "destination"
+    _install(destination, "def run():\n    return 0\n")
+    local = AgentGit(destination, tmp_path / "destination.bundle")
+    local.prepare()
+    local.persist()
+    imported = import_exports(
+        tmp_path / "destination.bundle",
+        [export],
+        audit_path=tmp_path / "import.json",
+    )
+    mapping = imported["commit_mappings"][0]
+    assert mapping["imported_commits"] == {
+        "head": head,
+        "lineage_winner": winner,
+    }
+    local.prepare()
+    assert subprocess.run(
+        ["git", "cat-file", "-e", f"{winner}^{{commit}}"],
+        cwd=destination,
+        capture_output=True,
+        check=False,
+    ).returncode == 0
+    assert local.head() != winner
 
 
 def test_peer_in_progress_direction_does_not_block_local_lease(tmp_path):
@@ -6419,7 +5136,7 @@ def test_epoch_projection_replays_local_active_direction_beside_peer_active_dire
     assert projection["directions"][local]["status"] == "in_progress"
 
 
-def test_pooled_search_keeps_each_lineage_instead_of_broadcasting_winner(tmp_path):
+def test_pooled_search_derives_observational_winners_without_promoting(tmp_path):
     seed = {"latency_us_geomean": 10.0, "name": "seed"}
 
     class Driver:
@@ -6432,14 +5149,21 @@ def test_pooled_search_keeps_each_lineage_instead_of_broadcasting_winner(tmp_pat
         def initialize(self, initial, trajectories):
             assert initial == seed and trajectories == 2
 
-        def prepare_epoch(self, epoch, seeds):
-            assert seeds == {"1": seed, "2": seed}
+        def prepare_epoch(self, epoch):
+            assert epoch == 1
 
         def run_episode(self, epoch, trajectory, episode):
-            candidate = ({"latency_us_geomean": 5.0, "name": "t1"}
-                         if trajectory == 1 else None)
+            candidate = (
+                {
+                    "latency_us_geomean": 5.0,
+                    "kernel_commit_id": "1" * 40,
+                    "gateway_record_id": "gateway-" + "1" * 32,
+                }
+                if trajectory == 1 else None
+            )
             return {"epoch": epoch, "trajectory": trajectory, "episode": episode,
-                    "retained_kernel": candidate, "tokens": 1,
+                    "agent_head_commit_id": str(trajectory) * 40,
+                    "best_submitted_evaluation": candidate, "tokens": 1,
                     "session_id": f"session-t{trajectory}"}
 
         def seal_epoch(self, epoch, jobs):
@@ -6447,9 +5171,6 @@ def test_pooled_search_keeps_each_lineage_instead_of_broadcasting_winner(tmp_pat
 
         def epoch_sealed(self, epoch):
             return True
-
-        def publish_epoch(self, epoch, winner):
-            assert winner["name"] == "t1"
 
         def tokens(self):
             return 2
@@ -6463,14 +5184,20 @@ def test_pooled_search_keeps_each_lineage_instead_of_broadcasting_winner(tmp_pat
     ).run()
     assert result == "search: completed Epoch budget"
     state = read_state(root / "state.json")
-    assert state["global_best"]["name"] == "t1"
-    assert state["lineages"]["1"]["working_kernel"]["name"] == "t1"
-    assert state["lineages"]["2"]["working_kernel"]["name"] == "seed"
+    assert state["global_best"]["kernel_commit_id"] == "1" * 40
+    assert state["global_best"]["trajectory"] == 1
+    assert (
+        state["lineages"]["1"]["lineage_winner"]["kernel_commit_id"]
+        == "1" * 40
+    )
+    assert state["lineages"]["2"]["lineage_winner"] is None
+    assert state["lineages"]["1"]["agent_head_commit_id"] == "1" * 40
+    assert state["lineages"]["2"]["agent_head_commit_id"] == "2" * 40
     assert state["lineages"]["1"]["session_id"] == "session-t1"
     assert state["lineages"]["2"]["session_id"] == "session-t2"
 
 
-def test_pooled_search_migrates_the_old_shared_seed_checkpoint(tmp_path):
+def test_pooled_search_rejects_pre_submitted_winner_checkpoint(tmp_path):
     seed = {"latency_us_geomean": 10.0, "name": "legacy-seed"}
     options = SearchOptions(
         epochs=2,
@@ -6483,9 +5210,6 @@ def test_pooled_search_migrates_the_old_shared_seed_checkpoint(tmp_path):
     class Driver:
         def identity(self):
             return "binding"
-
-        def initialize(self, initial, trajectories):
-            assert initial == seed and trajectories == 2
 
     root = tmp_path / "search"
     root.mkdir()
@@ -6507,11 +5231,5 @@ def test_pooled_search_migrates_the_old_shared_seed_checkpoint(tmp_path):
         "stop_reason": "stopped",
     }), encoding="utf-8")
 
-    assert PooledSearch(root, options, Driver()).run() == "stopped"
-    migrated = read_state(root / "state.json")
-    assert migrated["schema_version"] == 2
-    assert migrated["official_incumbent"] == seed
-    assert migrated["lineages"]["1"]["working_kernel"] == seed
-    assert migrated["lineages"]["2"]["working_kernel"] == seed
-    assert migrated["options"]["synchronization"] == "synchronous"
-    assert migrated["options"]["role_specialization"] is True
+    with pytest.raises(ValueError, match="predates persistent submitted-winner sharing"):
+        PooledSearch(root, options, Driver()).run()
