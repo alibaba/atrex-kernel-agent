@@ -274,6 +274,22 @@ class EvaluationFailure:
     message: str
     candidate_repairable: bool = False
 
+    @classmethod
+    def from_payload(cls, value):
+        """Decode an explicit failure; malformed fields are protocol failures."""
+        categories = {"infrastructure", "capability", "request", "protocol", "unknown",
+                      "timeout", "incomplete", "execution", "numerical", "candidate"}
+        if (not isinstance(value, dict)
+            or any(not isinstance(value.get(name), str) or not value[name].strip()
+                   for name in ("category", "code", "message"))
+            or value["category"] not in categories
+            or type(value.get("candidate_repairable", False)) is not bool):
+            return cls("protocol", "malformed_evaluation_failure",
+                       "Malformed evaluation_failure: expected a known category and nonempty code/message strings; raw payload retained")
+        # An unavailable-evaluation object alone is not execution proof that a
+        # candidate can be repaired. Trusted source/compile classification is separate.
+        return cls(value["category"], value["code"], value["message"])
+
 
 @dataclass(frozen=True)
 class CommandEvaluation:

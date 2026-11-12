@@ -569,20 +569,15 @@ class LegacyEvaluator:
             return VerificationResult("ERROR", None, None, None, runs=[run], error=message,
                 failure=EvaluationFailure(category, code, message, candidate_repairable=False))
         evaluation_failure = result.get("evaluation_failure")
-        if isinstance(evaluation_failure, dict):
-            category = str(evaluation_failure.get("category") or "infrastructure")
-            code = str(evaluation_failure.get("code") or "evaluation-unavailable")
-            message = str(
-                evaluation_failure.get("message") or "evaluation unavailable"
-            )
-            failure = EvaluationFailure(category, code, message)
+        if "evaluation_failure" in result:
+            failure = EvaluationFailure.from_payload(evaluation_failure)
             return VerificationResult(
                 "ERROR",
                 None,
                 None,
                 None,
                 runs=[run],
-                error=message,
+                error=failure.message,
                 failure=failure,
             )
         if framework_transport_failed:

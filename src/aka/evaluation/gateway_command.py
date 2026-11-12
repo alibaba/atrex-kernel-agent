@@ -598,10 +598,9 @@ class GatewayCommandEvaluator:
                     stdout=TEST_RESULT_PREFIX + json.dumps(payload, allow_nan=False) + "\n")
         failure = None
         unavailable = payload.get("evaluation_failure")
-        if isinstance(unavailable, dict):
+        if "evaluation_failure" in payload:
             from aka.contracts.evaluation import EvaluationFailure
-            failure = EvaluationFailure(str(unavailable["category"]), str(unavailable["code"]),
-                str(unavailable["message"]))
+            failure = EvaluationFailure.from_payload(unavailable)
             error = failure.message
         verification = VerificationResult("ERROR" if error else "PASS" if payload.get("all_pass") else "FAIL",
             payload.get("latency_us_geomean"), None, None,
