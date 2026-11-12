@@ -327,8 +327,6 @@ class LongHorizonCampaign:
             flush=True,
         )
 
-    @staticmethod
-
     def _recover_session_segment(
         self,
         store: CampaignStore,
