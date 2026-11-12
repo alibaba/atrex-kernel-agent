@@ -2,6 +2,11 @@
 
 Read this file for live status, diagnosis, metrics, or reproducibility. Use the `observability/` directory from a checkout compatible with the campaign. These scripts are read-only and must not submit, cancel, or mutate Agate work.
 
+Current module campaigns use shared Experiment records and public Agent session
+facts. The readers retain read-only compatibility with upstream v1 measurement
+records. Missing raw Agate responses remain unavailable; recorded execution facts
+are identified separately and are not presented as a raw backend response.
+
 Set paths once:
 
 ```bash
