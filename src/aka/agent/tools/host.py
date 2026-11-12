@@ -274,8 +274,8 @@ class ToolHost:
             client_files = tuple(client_root / name for name in ("__init__.py", "client.py", "protocol.py"))
             yield ToolSession(MappingProxyType({ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token,
                 "AKA_AGENT_TOOL_CLIENT_PATH": str(client_root.parent)}),
-                FilesystemAccess((FilesystemMount(self.directory, self.directory, False),
-                    *(FilesystemMount(path, path, False) for path in client_files))))
+                FilesystemAccess((FilesystemMount(self.directory, self.directory, False, "Agent tool transport"),
+                    *(FilesystemMount(path, path, False, "Agent tool client") for path in client_files))))
         finally:
             pending = self.revoke(token)
             if timer is not None:

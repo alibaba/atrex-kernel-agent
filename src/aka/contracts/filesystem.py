@@ -1,5 +1,5 @@
 """Module-neutral descriptions of caller-authorized filesystem views."""
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -8,12 +8,15 @@ class FilesystemMount:
     source: Path
     target: Path
     writable: bool = False
+    origin: str = field(default="", compare=False)
 
     def __post_init__(self):
         if not isinstance(self.source, Path) or not isinstance(self.target, Path):
             raise TypeError("Filesystem mounts require Path source and target")
         if type(self.writable) is not bool:
             raise TypeError("Filesystem mount writable flag must be boolean")
+        if not isinstance(self.origin, str):
+            raise TypeError("Filesystem mount origin must be text")
 
 
 @dataclass(frozen=True)

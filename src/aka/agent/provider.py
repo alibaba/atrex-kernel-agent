@@ -255,6 +255,9 @@ class Agent:
                 access,
                 home_exists=False,
             )
+            from aka.contracts.filesystem_access import normalize_access
+            access = normalize_access(access)
+            mounts = list(access.mounts)
             if guard is not None:
                 if any(overlap(guard, Path(hidden)) for hidden in access.hidden_paths):
                     raise ValueError("Selected shell guard is hidden from the Agent")

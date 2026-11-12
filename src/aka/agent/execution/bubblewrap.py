@@ -138,8 +138,6 @@ def validate_access(workspace, home, host_home, access, *, home_exists=True):
         ):
             raise ValueError("Read-only Agent paths must be visible workspace children")
     mounts = []
-    targets = []
-    workspace_declared = False
     for mount in access.mounts:
         if type(mount.writable) is not bool:
             raise TypeError("Agent mount writable flag must be boolean")
@@ -152,11 +150,8 @@ def validate_access(workspace, home, host_home, access, *, home_exists=True):
             raise ValueError("Agent grants require regular files or directories")
         target = local_path(mount.target, must_exist=False)
         if source == target == workspace and mount.writable:
-            if workspace_declared:
-                raise ValueError("Agent workspace grant is duplicated")
             # The common scope explicitly authorizes the default workspace view.
             # Its hidden and read-only overlays still apply to the default bind.
-            workspace_declared = True
             continue
         if not mount.writable and source == target and runtime_visible(source):
             continue
@@ -171,8 +166,6 @@ def validate_access(workspace, home, host_home, access, *, home_exists=True):
             raise ValueError("Agent mount exposes private storage")
         if overlap(source, workspace) and source != target:
             raise ValueError("Workspace aliases could bypass access restrictions")
-        if any(overlap(target, previous) for previous in targets):
-            raise ValueError("Agent mount targets overlap")
         if (
             overlap(target, workspace)
             or overlap(target, home)
@@ -185,9 +178,20 @@ def validate_access(workspace, home, host_home, access, *, home_exists=True):
             or target.is_relative_to(Path("/run"))
         ):
             raise ValueError("Agent mount shadows a sandbox runtime path")
-        mounts.append(AgentMount(source, target, mount.writable))
-        targets.append(target)
-    return workspace, hidden, read_only, tuple(mounts)
+        mounts.append(AgentMount(source, target, mount.writable,
+                                 mount.origin or f"Agent access[{len(mounts)}]"))
+    # Validate every original declaration above before removing redundancy.
+    from aka.contracts.filesystem import FilesystemAccess
+    from aka.contracts.filesystem_access import normalize_access
+    mounts = normalize_access(FilesystemAccess(tuple(mounts))).mounts
+    for index, mount in enumerate(mounts):
+        for previous in mounts[:index]:
+            if overlap(mount.target, previous.target):
+                def describe(item):
+                    permission = "rw" if item.writable else "ro"
+                    return f"{item.origin}: {item.source} -> {item.target} ({permission})"
+                raise ValueError("Agent mount targets overlap: " + describe(previous) + "; " + describe(mount))
+    return workspace, hidden, read_only, mounts
 
 
 def mount_path(argv, source, target, *, writable=False):

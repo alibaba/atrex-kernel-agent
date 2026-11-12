@@ -410,6 +410,7 @@ class SupervisorRuntime:
     def session(self, workspace: Path, environment: dict[str, str], *, access, deadline=None):
         from aka.contracts.agent import AgentToolBinding
         from aka.contracts.filesystem import FilesystemAccess
+        from aka.contracts.filesystem_access import normalize_access
         workspace = workspace.resolve(strict=True)
         capability = Capability(workspace, {key: environment[key] for key in (
             "ATREX_TELEMETRY_TRACE", "ATREX_TELEMETRY_ATTEMPT_ID", "ATREX_TELEMETRY_CAMPAIGN_ID",
@@ -449,9 +450,9 @@ class SupervisorRuntime:
         try:
             with self.agent.tool_session(workspace, access=access, bindings=bindings, deadline=deadline) as grant:
                 incremental = grant.filesystem_access
-                combined = FilesystemAccess((*access.mounts, *incremental.mounts),
+                combined = normalize_access(FilesystemAccess((*access.mounts, *incremental.mounts),
                     tuple(dict.fromkeys((*access.hidden_paths, *incremental.hidden_paths))),
-                    tuple(dict.fromkeys((*access.read_only_paths, *incremental.read_only_paths))))
+                    tuple(dict.fromkeys((*access.read_only_paths, *incremental.read_only_paths)))))
                 yield _ToolGrant({**values, **grant.environment}, combined)
         finally:
             self.revoke(key)

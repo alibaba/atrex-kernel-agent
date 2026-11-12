@@ -215,6 +215,7 @@ class AgentSkillsRegistryMixin:
     def filesystem_access(self, workspace):
         """Describe and revalidate Agent-visible links from the selected installation."""
         from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
+        from aka.contracts.filesystem_access import normalize_access
         from aka.core.plugin_runtime.schema import PluginError
         from .plugin_runtime.registry import STATE_DIR
         workspace = Path(workspace).resolve(strict=True)
@@ -228,13 +229,13 @@ class AgentSkillsRegistryMixin:
             if source.is_relative_to(workspace):
                 protected.append(source)
             else:
-                mounts.append(FilesystemMount(source, source))
+                mounts.append(FilesystemMount(source, source, origin=f"Resources:{name}"))
         lock = workspace / STATE_DIR
         if lock.exists():
             protected.append(lock)
         # Several discovery links can reference one Skill source. Revalidate
         # every link above, then grant each read-only source only once.
-        return FilesystemAccess(tuple(dict.fromkeys(mounts)), self._snapshot_hidden_paths(workspace), tuple(protected))
+        return normalize_access(FilesystemAccess(tuple(mounts), self._snapshot_hidden_paths(workspace), tuple(protected)))
 
     def catalog(self):
         return self.resource_result().catalog()

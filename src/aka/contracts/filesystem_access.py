@@ -4,6 +4,28 @@ from pathlib import Path
 from .filesystem import FilesystemAccess
 
 
+def normalize_access(access: FilesystemAccess) -> FilesystemAccess:
+    """Remove grants already covered by an explicitly authorized equivalent root.
+
+    This performs no IO and adds no authority. Different mappings or permissions
+    remain explicit for the filesystem implementation to validate or reject.
+    """
+    mounts = tuple(dict.fromkeys(access.mounts))
+    retained = []
+    for child in mounts:
+        covered = any(
+            parent.target != child.target
+            and child.target.is_relative_to(parent.target)
+            and child.source == parent.source / child.target.relative_to(parent.target)
+            and child.writable == parent.writable
+            for parent in mounts
+        )
+        if not covered:
+            retained.append(child)
+    return FilesystemAccess(tuple(retained), tuple(dict.fromkeys(access.hidden_paths)),
+                            tuple(dict.fromkeys(access.read_only_paths)))
+
+
 def _absolute(path):
     path = Path(path)
     if not path.is_absolute() or ".." in path.parts:
