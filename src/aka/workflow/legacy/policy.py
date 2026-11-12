@@ -2,36 +2,19 @@
 from __future__ import annotations
 
 from aka.task.source.inspection import framework_key
-import json
 from pathlib import Path
 from aka.task.problem.visibility import (
-    requested_evaluator_shape_visibility, historical_evaluator_shape_visibility,
-    workspace_uses_hidden_shapes, visibility_mismatch_message,
+    MODE_STATE_FILE, persist_workspace_policy_identity, workspace_uses_hidden_shapes,
 )
 
 
 OPTIMIZATION_MODE_CHOICES = ("leaderboard", "production")
 
 
-MODE_STATE_FILE = ".orchestrator_mode.json"
-
-
 POLICY_BEGIN = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_BEGIN -->"
 
 
 POLICY_END = "<!-- ATREX_OPTIMIZATION_MODE_POLICY_END -->"
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def optimization_mode_directive(
@@ -151,75 +134,8 @@ def install_workspace_policy(
     explicit post-upgrade runtime is adopted before a session starts; later
     attempts to resume with another backend fail closed.
     """
-    if mode not in OPTIMIZATION_MODE_CHOICES:
-        raise ValueError(f"unsupported optimization mode: {mode!r}")
-    requested_runtime = (
-        str(agent_runtime).strip() if agent_runtime is not None else None
-    )
-    if agent_runtime is not None and not requested_runtime:
-        raise ValueError("agent_runtime must be a non-empty runtime id")
-    if type(expose_evaluator_shapes) is not bool:
-        raise TypeError("expose_evaluator_shapes must be a boolean")
-    workspace.mkdir(parents=True, exist_ok=True)
-    requested_visibility = requested_evaluator_shape_visibility(
-        workspace, mode, expose_evaluator_shapes
-    )
-    state_path = workspace / MODE_STATE_FILE
-    state_changed = False
-    if state_path.exists():
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise RuntimeError(f"invalid optimization-mode state: {state_path}") from exc
-        existing_mode = state.get("mode")
-        existing_framework = state.get("framework")
-        if existing_mode != mode or existing_framework != framework:
-            raise RuntimeError(
-                "workspace policy mismatch: "
-                f"recorded mode/framework={existing_mode}/{existing_framework}, "
-                f"requested={mode}/{framework}"
-            )
-        existing_visibility = state.get("evaluator_shape_visibility")
-        if existing_visibility is None:
-            existing_visibility = historical_evaluator_shape_visibility(workspace, mode)
-            state["evaluator_shape_visibility"] = existing_visibility
-            state_changed = True
-        if existing_visibility not in {"hidden", "exposed"}:
-            raise RuntimeError(
-                f"invalid evaluator shape visibility: {existing_visibility!r}"
-            )
-        if existing_visibility != requested_visibility:
-            raise RuntimeError(visibility_mismatch_message(
-                existing_visibility, requested_visibility
-            ))
-        existing_runtime = str(state.get("agent_runtime") or "").strip()
-        if requested_runtime and existing_runtime and existing_runtime != requested_runtime:
-            raise RuntimeError(
-                "workspace agent runtime mismatch: "
-                f"recorded={existing_runtime}, requested={requested_runtime}; "
-                "use a fresh campaign workspace to change backend"
-            )
-        if requested_runtime and not existing_runtime:
-            state["agent_runtime"] = requested_runtime
-            state_changed = True
-    else:
-        state = {
-            "mode": mode,
-            "framework": framework,
-            "evaluator_shape_visibility": requested_visibility,
-        }
-        if requested_runtime:
-            state["agent_runtime"] = requested_runtime
-        state_changed = True
-
-    if state.get("source_checks_enabled") != source_checks_enabled:
-        state["source_checks_enabled"] = source_checks_enabled
-        state_changed = True
-    if state_changed:
-        state_path.write_text(
-            json.dumps(state, indent=2) + "\n",
-            encoding="utf-8",
-        )
+    persist_workspace_policy_identity(workspace, mode, framework, agent_runtime=agent_runtime,
+        source_checks_enabled=source_checks_enabled, expose_evaluator_shapes=expose_evaluator_shapes)
 
     if not update_tracked_files:
         # Episode checkouts preserve their protected Git boundary. The current
