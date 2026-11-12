@@ -21,6 +21,7 @@ from aka.contracts.workflow import CampaignRuntimeSettings, WorkflowSettings
 from aka.contracts.workspace import CandidateHandle
 from aka.contracts.workflow_launch import decode_launch
 from aka.legacy.task.problem.layout import agent_visible_operator_files
+from aka.legacy.task.problem.legacy import LegacyProblemProvider
 from aka.legacy.task.problem.native_harness import _parser as native_harness_parser
 from aka.light.acceptance import numerical as numerical_review
 from aka.light.acceptance.numerical import NumericalCancellation
@@ -1213,15 +1214,18 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             self.assertEqual(state["framework"], "")
             self.assertFalse(state["specify_dsl"])
             self.assertEqual(state["evaluator_shape_visibility"], "exposed")
-            with self.assertRaisesRegex(RuntimeError, "shape_visibility"):
-                install_workspace_policy(
-                    workspace,
-                    "production",
-                    "Cuda",
-                    specify_dsl=False,
-                    expose_evaluator_shapes=False,
-                    update_tracked_files=False,
-                )
+            install_workspace_policy(
+                workspace,
+                "production",
+                "Cuda",
+                specify_dsl=False,
+                expose_evaluator_shapes=False,
+                update_tracked_files=False,
+            )
+            state = json.loads(
+                (workspace / ".orchestrator_mode.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(state["evaluator_shape_visibility"], "exposed")
 
     def test_open_dsl_framework_baseline_prompt_is_neutral(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
@@ -3085,6 +3089,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 kernel_demo=str(operator / "reference.py"),
                 platform="L20D",
                 framework="Cuda",
+                optimization_mode="production",
                 atrex_bench_root=str(root),
                 work_dir=str(root / "work"),
                 expose_evaluator_shapes=False,
@@ -3138,6 +3143,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 kernel_demo=str(operator / "reference.py"),
                 platform="L20D",
                 framework="Cuda",
+                optimization_mode="production",
                 atrex_bench_root=str(root),
                 work_dir=str(root / "hidden-work"),
                 expose_evaluator_shapes=False,
@@ -3163,6 +3169,22 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             self.assertFalse(complete.shape_ids_are_opaque)
             complete._assert_generalized_inputs_are_private()
             self.assertEqual(complete._shape_disclosure_prompt(), "")
+
+    def test_hidden_shape_request_fails_closed_without_generalized_projection(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            operator = Path(directory)
+            (operator / "reference.py").write_text(
+                "class Model: pass\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(
+                SystemExit,
+                "requires Native Atrex-Bench shapes.json",
+            ):
+                LegacyProblemProvider().load(
+                    operator,
+                    optimization_mode="production",
+                    expose_evaluator_shapes=False,
+                )
 
     def test_typed_eval_forwards_metadata_without_light_tolerance_defaults(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
