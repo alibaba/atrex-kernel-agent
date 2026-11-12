@@ -200,6 +200,10 @@ def prepare_request(
             "timeout_s": timeout,
         },
         "env_vars": _parse_env_items(env_items),
+        # Record the Gateway default in the frozen request so qualification and
+        # reuse use the same dependency policy as execution. Explicit controls
+        # still take precedence; historical requests without a policy stay unknown.
+        "deps_mode": _option_value(command, "--deps-mode", "freeze_installed"),
     }
     correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(
         reference.get("metadata")
