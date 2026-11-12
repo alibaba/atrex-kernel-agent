@@ -2391,9 +2391,9 @@ class Campaign:
             memory["pitfalls_and_fixes"] = pitfalls
         pitfalls.append(
             {
-                "error_type": "infrastructure" if blocked else "candidate_source" if source_rejected else "candidate_compile" if compile_failure else "production_policy"
-                if "self-contained" in problem
-                else "correctness",
+                "error_type": ("infrastructure" if blocked else "candidate_source" if source_rejected
+                               else "candidate_compile" if compile_failure else
+                               ("production_policy" if "self-contained" in problem else "correctness")),
                 "error_message": problem,
                 "lesson": ("recover the retained Experiment and original Job result before candidate acceptance; "
                            "do not infer a correctness failure or resubmit unknown execution"

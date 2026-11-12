@@ -188,10 +188,6 @@ class PluginRegistry:
             loaded = dict(tool)
             loaded["resolved_command"] = resolve_command(root, tool) if "command" in tool else ()
             for field in ("input_schema", "output_schema"):
-                if tool.get("runtime_tool") == "wiki-query":
-                    expected = f"schemas/query.{field.removesuffix('_schema')}.json"
-                    if tool[field] != expected:
-                        raise PluginError("invalid_manifest", "Wiki requires its packaged canonical schemas")
                 path = local_file(root, tool[field])
                 files.add(path)
                 loaded[field] = read_json(path)
