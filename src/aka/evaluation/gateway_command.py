@@ -32,6 +32,10 @@ class GatewayCommandEvaluator:
     def prepare(self, command):
         from .diagnostic_preparation import matches, prepare
         if matches(command):
+            if self.execution_capabilities is None:
+                raise UnsupportedExecution("diagnostic preparation requires bound execution capabilities")
+            if not self.execution_capabilities.prepared_inputs:
+                raise UnsupportedExecution("executor does not support closed prepared inputs")
             return prepare(command)
         prepared = self._prepare(command)
         context = prepared.context

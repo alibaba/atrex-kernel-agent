@@ -530,6 +530,9 @@ class SupervisorRuntime:
 
     def _retained_request(self, command):
         """Retain host-prepared inputs at a stable physical path, without Job state."""
+        if command.prepared_inputs is not None and not self.executor.capabilities.prepared_inputs:
+            from aka.contracts.execution import UnsupportedExecution
+            raise UnsupportedExecution("selected executor cannot transport closed prepared inputs")
         from dataclasses import replace
         from aka.contracts.content import WorkspaceFile
         from aka.core.filesystem import open_private_directory

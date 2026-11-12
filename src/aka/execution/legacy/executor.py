@@ -29,7 +29,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
         self.hooks = hooks
         self.configuration = dict(configuration or {})
         if request is not None and request.ssh:
-            self.capabilities = replace(type(self).capabilities, source_archives=True)
+            self.capabilities = replace(type(self).capabilities, source_archives=True, prepared_inputs=False)
         recovery_policy(self.configuration)
 
     def bind(self, context):
