@@ -233,28 +233,41 @@ class FileExperimentRecords:
         return tuple(record.ref for record in sorted(records, key=lambda item: item.created_at)
                      if record.lifecycle != "terminal")
 
-    def iter_records(self):
-        """Enumerate validated committed records in this selected namespace only."""
+    def iter_records(self, *, on_error=None):
+        """Enumerate validated records; an optional diagnostic sink skips bad records.
+
+        Execution consumers remain strict by default. Skipping never makes corrupt
+        evidence eligible for reuse or changes the stored record.
+        """
         records = []
         try:
             directories = tuple(self.root.iterdir())
         except OSError as error:
+            if on_error is not None:
+                on_error(ExperimentRecordError("storage_unavailable"))
+                return
             raise ExperimentRecordError("storage_unavailable") from error
         for directory in directories:
             if not re.fullmatch(r"[0-9a-f]{64}", directory.name):
                 continue
             ref = ExperimentRef(self.run_id, directory.name)
-            if directory.is_symlink() or not directory.is_dir():
-                raise ExperimentRecordError("record_corrupt", ref)
-            path = directory / "record.json"
-            if not path.exists() and not path.is_symlink():
-                continue  # An unpublished private staging directory is not a record.
             try:
-                record = self.get(ref)
-            except LookupError as error:
-                raise ExperimentRecordError("record_unavailable", ref) from error
-            if not isinstance(record.created_at, str):
-                raise ExperimentRecordError("record_corrupt", ref)
+                if directory.is_symlink() or not directory.is_dir():
+                    raise ExperimentRecordError("record_corrupt", ref)
+                path = directory / "record.json"
+                if not path.exists() and not path.is_symlink():
+                    continue  # An unpublished private staging directory is not a record.
+                try:
+                    record = self.get(ref)
+                except LookupError as error:
+                    raise ExperimentRecordError("record_unavailable", ref) from error
+                if not isinstance(record.created_at, str):
+                    raise ExperimentRecordError("record_corrupt", ref)
+            except ExperimentRecordError as error:
+                if on_error is None:
+                    raise
+                on_error(error)
+                continue
             records.append(record)
         yield from sorted(records, key=lambda record: (record.created_at, record.ref.experiment_id))
 

@@ -19,6 +19,8 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 from aka.workflow.legacy.export import RetainedWorkflowExport  # noqa: E402
 from aka.task.candidate_workspace.provider import GitCandidateWorkspace

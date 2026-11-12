@@ -2,8 +2,9 @@
 import hashlib
 import json
 import re
+import sys
 from pathlib import Path
-from aka.contracts.experiment import ExperimentRef
+from aka.contracts.experiment import ExperimentRef, ExperimentRecordError
 from aka.experiment.file_records import FileExperimentRecords
 from aka.task.candidate_workspace.provider import GitCandidateWorkspace
 from aka.task.source.formats import from_inputs
@@ -26,7 +27,7 @@ class MeasurementStore:
         self.legacy = None
         self._legacy = LegacyMeasurementReader(supervisor_campaign_root(self.workspace) / "measurements")
         if not self.shared_available(self.workspace):
-            self.legacy = LegacyMeasurementReader(supervisor_campaign_root(self.workspace) / "measurements")
+            self.legacy = self._legacy
             self.root = self.legacy.root
             return
         self._records = FileExperimentRecords(self.workspace.parent / ".aka-experiments", str(self.workspace), create=False)
@@ -56,7 +57,12 @@ class MeasurementStore:
     def record_ids(self):
         if self.legacy is not None:
             return self.legacy.record_ids()
-        return tuple("gateway-" + record.ref.experiment_id for record in self._records.iter_records()) + self._legacy.record_ids()
+        return tuple("gateway-" + record.ref.experiment_id for record in self._records.iter_records(on_error=self._record_error)) + self._legacy.record_ids()
+
+    @staticmethod
+    def _record_error(error):
+        record_id = "gateway-" + error.ref.experiment_id if error.ref is not None else "namespace"
+        print(f"measurement-reader: {record_id}: {error.code}; evidence unavailable", file=sys.stderr)
 
     def read(self, record_id):
         if self.legacy is not None or isinstance(record_id, str) and len(record_id) == 40:
@@ -91,8 +97,12 @@ class MeasurementStore:
             return self._legacy.read_kernel(kernel_id)
         if not KERNEL_ID.fullmatch(kernel_id):
             raise ValueError("invalid kernel identity")
-        for record in self._records.iter_records():
-            source = self._view.candidate_source(self._records, record)
+        for record in self._records.iter_records(on_error=self._record_error):
+            try:
+                source = self._view.candidate_source(self._records, record)
+            except (LookupError, ExperimentRecordError) as error:
+                self._record_error(ExperimentRecordError(getattr(error, "code", "artifact_unavailable"), record.ref))
+                continue
             if source is not None and self._view.kernel(source)["kernel_id"] == kernel_id:
                 return from_inputs({name: value for name, value in source.files.items() if value is not None})
         raise FileNotFoundError("kernel is unavailable in this Campaign")
