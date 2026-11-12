@@ -49,7 +49,8 @@ transport because gateways do not currently advertise OSS capability.
 ``~/.ssh/config``). ``ATREX_SANDBOX_SSH_INIT`` optionally activates the remote
 runtime before each command and health probe. SSH jobs are always executed in a
 Bubblewrap namespace with no network, no host home, and only explicitly bound
-runtime paths and one explicitly assigned physical NVIDIA GPU. SSH, gateway
+runtime paths and one explicitly assigned physical GPU. Device isolation exposes
+only the selected nodes; explicit runtime mode uses visibility selectors. SSH, gateway
 profile, and gateway URL transports are mutually exclusive.
 """
 
@@ -181,6 +182,8 @@ ENVIRONMENT_TEMPFAIL = 75
 INFRASTRUCTURE_MARKER = "__ATREX_INFRASTRUCTURE_UNAVAILABLE__"
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
+SSH_GPU_LOCK_ACQUIRED_MARKER = "__ATREX_SSH_GPU_LOCK_ACQUIRED__"
+ACTIVE_SSH_JOBS: dict[str, tuple[str, str]] = {}
 SSH_WATCHDOG_SOURCE = r"""
 import os
 import signal
@@ -853,10 +856,19 @@ def _extract_output_tar(tf: tarfile.TarFile, workspace: Path) -> list:
 
     return files
 
-def _extract_output_archive(archive: Path, workspace: Path) -> None:
+def _extract_output_archive(archive: Path, workspace: Path, sync_paths=None,
+                            max_output_file_bytes=512 * 1024 * 1024, *, capture=False):
     with tarfile.open(archive, mode="r:gz") as tf:
+        if any(member.size > max_output_file_bytes for member in tf.getmembers() if member.isfile()):
+            raise RuntimeError("SSH output file exceeds the selected size limit")
+        files = _extract_output_tar(tf, workspace)
+        if sync_paths is not None:
+            files = [item for item in files if any(item[0] == path or item[0].startswith(path.rstrip('/') + '/')
+                     for path in sync_paths)]
         from .returned_files import emit
-        emit(_extract_output_tar(tf, workspace))
+        if not capture:
+            emit(files)
+        return files
 
 
 def _extract_outputs(stdout: str, workspace: Path) -> str:
@@ -1081,7 +1093,6 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
         "/dev",
         "/etc",
         "/proc",
-        "/root",
         "/sys",
         "/var/lib",
         "/var/log",
@@ -1092,6 +1103,7 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
         "/atrex",
         "/bin",
         "/home",
+        "/root",
         "/lib",
         "/lib64",
         "/opt",
@@ -1113,8 +1125,8 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
     # arbitrary project/home subtrees are not runtime allowlists.
     if (
         len(source_parts) > 1
-        and source_parts[1] == "home"
-        and source_path.name not in {".venv", "venv"}
+        and source_parts[1] in {"home", "root"}
+        and source_path.name not in {".venv", "venv", "env"}
         and source_path.parent.name != "envs"
     ):
         raise ValueError(
@@ -1128,6 +1140,7 @@ def _ssh_runtime_bind(value: str) -> tuple[str, str]:
     ):
         raise ValueError(f"SSH runtime bind destination is reserved: {paths[1]!r}")
     return paths[0], paths[1]
+
 
 
 SSH_RUNTIME_RESOLVER_SOURCE = r"""
@@ -1200,42 +1213,10 @@ def _resolve_ssh_runtime_binds(
     return validated
 
 
-SSH_GPU_RESOLVER_SOURCE = r"""
-import subprocess
-import sys
-
-index = int(sys.argv[1])
-result = subprocess.run(
-    [
-        "nvidia-smi",
-        "--query-gpu=index,uuid,mig.mode.current",
-        "--format=csv,noheader,nounits",
-    ],
-    capture_output=True,
-    text=True,
-)
-if result.returncode:
-    sys.stderr.write(result.stderr or result.stdout)
-    raise SystemExit(result.returncode)
-for line in result.stdout.splitlines():
-    fields = [field.strip() for field in line.split(",", 2)]
-    if len(fields) != 3 or fields[0] != str(index):
-        continue
-    if fields[2].lower() == "enabled":
-        print("MIG-enabled GPUs are unsupported without capability-node assignment", file=sys.stderr)
-        raise SystemExit(2)
-    if fields[1].startswith("GPU-"):
-        print(fields[1])
-        raise SystemExit(0)
-print(f"physical NVIDIA GPU index {index} was not found", file=sys.stderr)
-raise SystemExit(2)
-""".strip()
-
-
 def _ssh_gpu_index(value: str) -> int:
     if not re.fullmatch(r"[0-9]+", value.strip()):
         raise ValueError(
-            "SSH GPU must be a physical NVIDIA index; MIG/UUID selectors are not yet supported"
+            "SSH GPU must be a physical GPU index"
         )
     index = int(value)
     if index > 31:
@@ -1243,14 +1224,18 @@ def _ssh_gpu_index(value: str) -> int:
     return index
 
 
-def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> str:
-    """Resolve an assigned physical index to a stable CUDA visibility UUID."""
+
+def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> dict:
+    """Resolve the allocated device nodes and runtime visibility together."""
+    from aka.execution.ssh import devices as ssh_devices
     try:
         result = subprocess.run(
             [
                 *_ssh_base(ssh, target),
                 shlex.join(
-                    ["python3", "-c", SSH_GPU_RESOLVER_SOURCE, str(gpu_index)]
+                    ["python3", "-c", Path(ssh_devices.__file__).read_text(), str(gpu_index),
+                     os.environ.get('ATREX_SANDBOX_SSH_GPU_ISOLATION', 'device'),
+                     os.environ.get('ATREX_SANDBOX_SSH_DEVICE_MAP', 'null')]
                 ),
             ],
             capture_output=True,
@@ -1259,11 +1244,25 @@ def _resolve_ssh_gpu(ssh: str, target: str, gpu_index: int) -> str:
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SSHTransportError(f"cannot resolve assigned SSH GPU: {exc}") from exc
-    uuid = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else ""
-    if result.returncode != 0 or not re.fullmatch(r"GPU-[0-9A-Fa-f-]+", uuid):
+    if result.returncode != 0:
         detail = (result.stderr or result.stdout).strip()[-1000:]
         raise SSHTransportError(f"cannot resolve assigned SSH GPU: {detail}")
-    return uuid
+    try:
+        assignment = json.loads(result.stdout.strip().splitlines()[-1])
+        if not assignment['devices'] or not assignment['environment']:
+            raise ValueError('empty GPU assignment')
+        if not isinstance(assignment['uuid'], str) or not assignment['uuid']:
+            raise ValueError('missing stable GPU identity')
+        for key, value in assignment['environment'].items():
+            if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', key) or not isinstance(value, str):
+                raise ValueError('invalid GPU visibility environment')
+        for device in assignment['devices']:
+            if not device.startswith('/dev/') or '..' in PurePosixPath(device).parts:
+                raise ValueError('invalid GPU device path')
+        return assignment
+    except (ValueError, KeyError, IndexError, TypeError) as exc:
+        raise SSHTransportError('invalid remote GPU assignment') from exc
+
 
 
 def _ssh_bwrap_command(
@@ -1271,13 +1270,17 @@ def _ssh_bwrap_command(
     command: list[str],
     *,
     gpu_index: int,
-    gpu_uuid: str,
+    gpu_uuid: dict,
     remote_dir: str | None = None,
+    lock_timeout: int = 60,
 ) -> str:
     """Build the only remote execution path: a restricted Bubblewrap namespace."""
     binds = [_ssh_runtime_bind(value) for value in runtime_binds]
+    launcher = os.environ.get('ATREX_SANDBOX_SSH_BWRAP')
+    if launcher is not None and not PurePosixPath(launcher).is_absolute():
+        raise ValueError('ATREX_SANDBOX_SSH_BWRAP must be an absolute remote executable path')
     args = [
-        "bwrap",
+        launcher or 'bwrap',
         "--die-with-parent",
         "--new-session",
         "--unshare-net",
@@ -1316,15 +1319,8 @@ def _ssh_bwrap_command(
         "--dir",
         "/tmp/atrex-home",
     ]
-    for device in (
-        "/dev/nvidiactl",
-        "/dev/nvidia-uvm",
-        "/dev/nvidia-uvm-tools",
-        "/dev/nvidia-modeset",
-    ):
-        args.extend(("--dev-bind-try", device, device))
-    assigned_device = f"/dev/nvidia{gpu_index}"
-    args.extend(("--dev-bind", assigned_device, assigned_device))
+    for device in gpu_uuid['devices']:
+        args.extend(("--dev-bind", device, device))
 
     created: set[str] = set()
     for source, destination in binds:
@@ -1350,11 +1346,22 @@ def _ssh_bwrap_command(
             "HOME=/tmp/atrex-home",
             "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
             "LANG=C.UTF-8",
-            f"CUDA_VISIBLE_DEVICES={gpu_uuid}",
+            *(f'{key}={value}' for key, value in gpu_uuid['environment'].items()),
             *command,
         )
     )
-    return shlex.join(args)
+    # Pooled Episodes and separate shape requests share the assigned physical
+    # GPU. Keep the lock outside the job namespace for the entire allocation.
+    key = hashlib.sha256(gpu_uuid['uuid'].encode()).hexdigest()[:24]
+    # Emit a host-side acquisition marker so candidate exit 75 is not confused
+    # with flock expiry. Keep bwrap args in flock's argv so cancellation also
+    # finds the waiting process, and flock retains its FD through execution.
+    acquired = f'echo {SSH_GPU_LOCK_ACQUIRED_MARKER} >&2\nexec "$@"'
+    return shlex.join(['flock', '--exclusive', '--wait', str(lock_timeout),
+                       '--conflict-exit-code', str(ENVIRONMENT_TEMPFAIL),
+                       f'/tmp/aka-ssh-gpu-{key}.lock',
+                       'bash', '-c', acquired, 'aka-ssh', *args])
+
 
 
 def _ssh_base(executable: str, target: str) -> list[str]:
@@ -1389,7 +1396,7 @@ def _run_ssh_health(
     try:
         resolved_binds = _resolve_ssh_runtime_binds(ssh, target, runtime_binds)
         gpu_uuid = _resolve_ssh_gpu(ssh, target, gpu_index)
-        script = _ssh_shell_script(init_command, health_command)
+        script = _ssh_shell_script(init_command, _ssh_visibility(gpu_uuid) + '\n' + health_command)
         remote_command = _ssh_bwrap_command(
             resolved_binds,
             [
@@ -1403,11 +1410,12 @@ def _run_ssh_health(
             ],
             gpu_index=gpu_index,
             gpu_uuid=gpu_uuid,
+            lock_timeout=0,
         )
     except ValueError as exc:
         raise SSHTransportError(str(exc)) from exc
     try:
-        return subprocess.run(
+        result = subprocess.run(
             [*_ssh_base(ssh, target), remote_command],
             capture_output=True,
             text=True,
@@ -1415,6 +1423,9 @@ def _run_ssh_health(
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         raise SSHTransportError(f"SSH health probe failed: {exc}") from exc
+    _check_ssh_lock_result(result)
+    return result
+
 
 
 def _remote_temp_dir(stdout: str) -> str:
@@ -1427,6 +1438,7 @@ def _remote_temp_dir(stdout: str) -> str:
 def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     if not re.fullmatch(r"/tmp/atrex-sandbox\.[A-Za-z0-9._-]+", remote_dir):
         return False
+    _cancel_ssh_job(ssh, target, remote_dir)
     try:
         result = subprocess.run(
             [
@@ -1442,6 +1454,7 @@ def _best_effort_ssh_cleanup(ssh: str, target: str, remote_dir: str) -> bool:
     return result.returncode == 0
 
 
+
 def _run_ssh_job(
     *,
     target: str,
@@ -1454,6 +1467,10 @@ def _run_ssh_job(
     temp: Path,
     workspace: Path,
     sync_outputs: bool,
+    sync_paths: list[str] | None = None,
+    max_output_file_bytes: int = 512 * 1024 * 1024,
+    capture_outputs: bool = False,
+    operation: str = "dev",
 ) -> subprocess.CompletedProcess[str]:
     """Upload one stateless sandbox allocation, execute it, and retrieve outputs."""
     ssh = shutil.which("ssh")
@@ -1475,6 +1492,7 @@ def _run_ssh_job(
     entry_lines.append('cd "$1"')
     for key, value in environment.items():
         entry_lines.append(f"export {key}={shlex.quote(value)}")
+    entry_lines.append(_ssh_visibility(gpu_uuid))
     entry_lines.append(
         "exec "
         + shlex.join(
@@ -1493,6 +1511,7 @@ def _run_ssh_job(
 
     result: subprocess.CompletedProcess[str] | None = None
     cleanup_succeeded = False
+    lock_busy = False
     try:
         create = subprocess.run(
             [
@@ -1509,6 +1528,7 @@ def _run_ssh_job(
         detail = (create.stderr or create.stdout).strip()[-1000:]
         raise SSHTransportError(f"cannot create remote workspace: {detail}")
     remote_dir = _remote_temp_dir(create.stdout)
+    ACTIVE_SSH_JOBS[remote_dir] = (ssh, target)
     try:
         transfer = subprocess.run(
             [
@@ -1533,23 +1553,25 @@ def _run_ssh_job(
                 gpu_index=gpu_index,
                 gpu_uuid=gpu_uuid,
                 remote_dir=remote_dir,
+                lock_timeout=timeout,
             )
         except ValueError as exc:
             raise SSHTransportError(str(exc)) from exc
         try:
-            emit_fact({"event": "submitted", "identifier": remote_dir, "backend": "ssh", "operation": "dev"})
+            emit_fact({"event": "submitted", "identifier": remote_dir, "backend": "ssh", "operation": operation})
             result = subprocess.run(
                 [*_ssh_base(ssh, target), remote_command],
                 capture_output=True,
                 text=True,
-                timeout=timeout + SSH_CONNECT_TIMEOUT + 15,
+                timeout=2 * timeout + SSH_CONNECT_TIMEOUT + 15,
             )
         except subprocess.TimeoutExpired as exc:
             raise SSHTransportError(f"SSH command wait timed out: {exc}") from exc
-        # An SSH client exit is a command observation, not proof of remote process-tree termination.
-        emit_fact({"event": "attempt", "identifier": remote_dir, "backend": "ssh", "operation": "dev",
-                   "disposition": "unknown", "termination": None,
-                   "exit_code": result.returncode if result.returncode != 255 else None, "diagnostics": []})
+        try:
+            _check_ssh_lock_result(result)
+        except SSHGPUBusy:
+            lock_busy = True
+            raise
 
         if sync_outputs:
             local_archive = temp / "ssh_outputs.tar.gz"
@@ -1587,7 +1609,9 @@ def _run_ssh_job(
                 )
             else:
                 try:
-                    _extract_output_archive(local_archive, workspace)
+                    result.output_files = _extract_output_archive(
+                        local_archive, workspace, sync_paths, max_output_file_bytes,
+                        capture=capture_outputs)
                 except (OSError, RuntimeError, tarfile.TarError) as exc:
                     raise SSHTransportError(
                         f"cannot extract sandbox outputs: {exc}"
@@ -1598,17 +1622,32 @@ def _run_ssh_job(
         raise SSHTransportError(f"SSH transfer failed: {exc}") from exc
     finally:
         cleanup_succeeded = _best_effort_ssh_cleanup(ssh, target, remote_dir)
+        ACTIVE_SSH_JOBS.pop(remote_dir, None)
         emit_fact({"event": "cleanup", "status": "completed" if cleanup_succeeded else "failed",
                    "code": "ssh-workspace-cleanup"})
+        if lock_busy:
+            emit_fact({"event": "attempt", "identifier": remote_dir, "backend": "ssh", "operation": operation,
+                       "disposition": "not_submitted", "termination": None, "exit_code": None, "diagnostics": []})
+        elif cleanup_succeeded and result is not None and result.returncode != 255:
+            emit_fact({"event": "attempt", "identifier": remote_dir, "backend": "ssh", "operation": operation,
+                       "disposition": "terminal", "termination": "exited", "exit_code": result.returncode,
+                       "diagnostics": []})
+        else:
+            emit_fact({"event": "attempt", "identifier": remote_dir, "backend": "ssh", "operation": operation,
+                       "disposition": "unknown", "termination": None, "exit_code": None, "diagnostics": []})
         if not cleanup_succeeded:
             _record_pending_ssh_cleanup(target=target, remote_dir=remote_dir)
-    if not cleanup_succeeded:
-        raise SSHTransportError(
-            f"remote workspace cleanup failed and was queued for recovery: {remote_dir}"
-        )
     if result is None:
         raise SSHTransportError("SSH job produced no result")
+    if not cleanup_succeeded:
+        warning = "[sandbox] remote workspace cleanup failed; cleanup queued for recovery"
+        result = subprocess.CompletedProcess(
+            args=result.args, returncode=result.returncode, stdout=result.stdout,
+            stderr="\n".join(part for part in (result.stderr, warning) if part),
+        )
+    result.remote_id = remote_dir
     return result
+
 
 
 def _environment_failure_path() -> Path | None:
@@ -1999,8 +2038,10 @@ def _cancel_active_agate_jobs() -> None:
 
 
 def _interrupt_active_agate_jobs(_signum: int, _frame: object) -> None:
+    _cancel_active_ssh_jobs()
     _cancel_active_agate_jobs()
     raise KeyboardInterrupt
+
 
 
 def _gateway_job_timeout(command_timeout: int, queue_wait_grace: int | None = None) -> int:
@@ -2336,10 +2377,10 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                 "ATREX_SANDBOX_PROFILE are mutually exclusive"
             )
     if args.kind == "same_allocation_abba" and (
-            args.prepared_request_fd is None or args.ssh or args.preflight or args.check_health):
+            args.prepared_request_fd is None or args.preflight or args.check_health):
         raise SystemExit("sandbox: same-allocation ABBA requires a prepared typed gateway request")
     if args.prepared_inputs_fd is not None and (
-            args.ssh or args.prepared_request_fd is not None or args.kind in {"check", "disassemble"}
+            args.prepared_request_fd is not None or args.kind in {"check", "disassemble"}
             or args.preflight or args.check_health):
         raise SystemExit("sandbox: selected transport or operation cannot accept closed prepared inputs")
     if args.ssh:
@@ -2729,6 +2770,8 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                     temp=temp,
                     workspace=workspace,
                     sync_outputs=bool(sync_paths),
+                    sync_paths=sync_paths,
+                    max_output_file_bytes=args.max_output_file_bytes or args.max_output_file_mb * 1024 * 1024,
                 )
             except SSHTransportError as exc:
                 _record_environment_failure(
@@ -2754,7 +2797,10 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                         stdout="",
                         stderr=str(exc),
                     )
-                if health.returncode != 0:
+                except SSHGPUBusy:
+                    health = None
+                    print('sandbox: post-command health probe skipped; SSH GPU is busy', file=sys.stderr)
+                if health is not None and health.returncode != 0:
                     detail = (health.stderr or health.stdout or "health probe failed")[-2000:]
                     _record_environment_failure(
                         target=args.ssh,
@@ -2952,7 +2998,13 @@ def main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
     try:
         returncode = (_main(argv) if parsed_arguments is None
                       else _main(argv, parsed_arguments=parsed_arguments))
+    except SSHGPUBusy as exc:
+        emit_diagnostic({"failure_class": "infrastructure", "reason": "ssh_gpu_busy"})
+        print(json.dumps({'status': 'failed', 'error': {'reason': 'ssh_gpu_busy',
+            'message': str(exc), 'retry_advice': 'retry_when_gpu_free'}}))
+        returncode = ENVIRONMENT_TEMPFAIL
     except BaseException as exc:
+        _cancel_active_ssh_jobs()
         _cancel_active_agate_jobs()
         _append_sandbox_telemetry(
             "sandbox_operation_completed",
@@ -2990,6 +3042,56 @@ def _run_agate_once(*args, **kwargs):
             emit_diagnostic(diagnostic)
             print("[sandbox] gateway_protocol_failure=" + json.dumps(diagnostic, sort_keys=True), file=sys.stderr, flush=True)
         return process
+
+
+
+
+class SSHGPUBusy(RuntimeError):
+    """The allocation lock is occupied; this is not a broken GPU environment."""
+
+
+def _check_ssh_lock_result(result: subprocess.CompletedProcess[str]) -> None:
+    lines = result.stderr.splitlines(keepends=True)
+    acquired = any(line.rstrip('\r\n') == SSH_GPU_LOCK_ACQUIRED_MARKER for line in lines)
+    result.stderr = ''.join(line for line in lines if line.rstrip('\r\n') != SSH_GPU_LOCK_ACQUIRED_MARKER)
+    if result.returncode == ENVIRONMENT_TEMPFAIL and not acquired:
+        raise SSHGPUBusy('SSH GPU busy: allocation lock wait expired; retry when the GPU is free')
+
+
+def _ssh_visibility(assignment: dict) -> str:
+    environment = dict(assignment['environment'], ATREX_SSH_GPU_VENDOR=assignment.get('vendor', ''),
+                       ATREX_SSH_GPU_INDEX=str(assignment['index']), ATREX_SSH_GPU_UUID=assignment['uuid'])
+    return ('unset CUDA_VISIBLE_DEVICES HIP_VISIBLE_DEVICES ROCR_VISIBLE_DEVICES '
+            'NVIDIA_VISIBLE_DEVICES GPU_DEVICE_ORDINAL ATREX_BENCH_CLOCK_DEVICE '
+            'ATREX_BENCH_CLOCKS_LOCKED SOL_EXECBENCH_CLOCKS_LOCKED ATREX_BENCH_CLOCK_LOCK_SOURCE\n' +
+            '\n'.join(f'export {key}={shlex.quote(value)}'
+                      for key, value in environment.items()))
+
+
+def _cancel_ssh_job(ssh: str, target: str, remote_dir: str) -> None:
+    # Find only this allocation's host-side namespace launchers. Do not trust a
+    # PID file in /atrex: candidate code can write that mounted directory.
+    script = '''import os, signal, sys
+from pathlib import Path
+binding = [b"--bind", os.fsencode(sys.argv[1]), b"/atrex"]
+for path in Path("/proc").glob("[0-9]*/cmdline"):
+    try:
+        args = path.read_bytes().split(b"\\0")
+        if b"--unshare-pid" in args and any(args[i:i+3] == binding for i in range(len(args)-2)):
+            os.kill(int(path.parent.name), signal.SIGKILL)
+    except (ProcessLookupError, FileNotFoundError, PermissionError):
+        pass
+'''
+    try:
+        subprocess.run([*_ssh_base(ssh, target), shlex.join(['python3', '-c', script, remote_dir])],
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        pass  # The existing remote watchdog remains the execution ceiling.
+
+
+def _cancel_active_ssh_jobs() -> None:
+    for remote_dir, (ssh, target) in list(ACTIVE_SSH_JOBS.items()):
+        _cancel_ssh_job(ssh, target, remote_dir)
 
 
 if __name__ == "__main__":

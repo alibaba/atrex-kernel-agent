@@ -22,7 +22,32 @@ def run_prepared(args, workspace, sync_paths, grace):
 
 def submit_prepared(args, workspace, grace, prepared):
     kind = prepared_operation(prepared, args.kind)
-    request = operation_request(prepared["request"], kind)
+    request = operation_request(prepared["request"], kind, ssh=bool(args.ssh))
+    if args.ssh:
+        if args.input:
+            raise ValueError("prepared SSH inputs must be frozen by Evaluation")
+        from .source_archives import read_archives, validate_archives
+        archives = read_archives(prepared)
+        validate_archives(prepared, archives, args.kind, ssh=True)
+        if archives:
+            from aka.evaluation.source_archives import archive_source
+            request['__atrex_eval_archives'] = {archive.path: {name: content.decode('utf-8')
+                for name, content in archive_source(archive).files.items() if content is not None}
+                for archive in archives}
+        from aka.execution.ssh.transport import run
+        from aka.contracts.execution import ExecutionUnavailable
+        try:
+            process = run(transport, args, workspace, request, kind)
+        except (transport.SSHTransportError, ExecutionUnavailable) as error:
+            emit_diagnostic({"failure_class": "infrastructure", "reason": "ssh_evidence_unavailable"})
+            print(str(error), file=sys.stderr)
+            return transport.ENVIRONMENT_TEMPFAIL
+        emit(getattr(process, 'output_files', ()))
+        if process.stdout:
+            print(process.stdout.rstrip())
+        if process.stderr:
+            print(process.stderr.rstrip(), file=sys.stderr)
+        return process.returncode
     wait_budget_records(client_wait_timeout(args.timeout, grace))
     if kind in {"run", "profile"}:
         limit = hard_limit(os.environ, kind)
@@ -31,8 +56,8 @@ def submit_prepared(args, workspace, grace, prepared):
         request.setdefault("options", {})["timeout_s"] = budget.effective
     else:
         emit_diagnostic({"failure_class":"protocol", "reason":"job-runtime-budget-unconfirmed"})
-    if args.ssh or args.input:
-        raise ValueError("prepared typed requests do not support SSH or custom input")
+    if args.input:
+        raise ValueError("prepared typed requests do not support custom input")
     from .source_archives import read_archives, validate_archives, run_archived, SourceArchiveError
     archives = read_archives(prepared)
     validate_archives(prepared, archives, args.kind)

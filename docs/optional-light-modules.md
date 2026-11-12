@@ -18,7 +18,8 @@ aka optimize --repo-root "$PWD" --profile light \
 
 Configure endpoint/authentication first as described in Quick Start. The example's
 workspace path is a campaign parent, not a pre-existing candidate directory. Choose
-Legacy for SOL/SSH campaigns requiring its verification path.
+Legacy for SOL campaigns requiring its verification path. Native Atrex-Bench
+Evaluate and ABBA can use Agate or the [SSH backend](ssh-backend.md).
 
 ## Ownership and behavior
 
@@ -164,13 +165,16 @@ Set `workflow.search` to an object with `epochs`, `trajectories`,
 `episodes_per_trajectory`, and `max_parallel_episodes`. An empty object uses serial
 Episodes. Use a fresh workspace when changing search strategy. The accepted bounds
 are in the Workflow schema; controller search does not create another Evaluation module.
+Pooled search requires native Atrex-Bench Eval/ABBA through Agate or SSH.
+Allocations on the same SSH GPU run serially; SOL search is rejected before startup.
 
 ### Single-file and contracted source-tree Kernels
 
 Set `workflow.file_system` to `single_file`, `source_tree`, or `cuda_manifest`.
 The default is `source_tree`. The Candidate plugin no longer accepts a `file_system`
 patch, and old `candidate.source_tree`/`workflow.source_tree` import patches are not
-accepted. See [native CUDA and source layouts](native-cuda.md).
+accepted. Native tree tasks support Agate and SSH; SOL requires `single_file`.
+See [native CUDA and source layouts](native-cuda.md).
 
 ### Reusable workspace
 

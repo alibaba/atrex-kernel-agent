@@ -73,8 +73,8 @@ class ManagedCampaign(Campaign):
             from aka.workflow.light.support.paths import supervisor_campaign_root
             search_root = supervisor_campaign_root(self.workspace) / "search"
             if self.module_options.search is not None:
-                if not self.atrex_bench_root or self.sandbox_ssh:
-                    raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA; SOL/SSH search is not supported")
+                if not self.atrex_bench_root:
+                    raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA")
                 from .search import PooledSearch
                 from .search_driver import EpisodeSearchDriver
                 driver = EpisodeSearchDriver(self, search_root)
@@ -188,14 +188,14 @@ class ManagedCampaign(Campaign):
         imported_tree = any(item.path == POLICY for item in content.files)
         system = task_selection(self.module_options.file_system, framework=self.framework,
                                 source_tree=imported_tree)
-        if system.name != "single_file" and (initial.kind == "sol" or self.sandbox_ssh):
+        if system.name != "single_file" and initial.kind == "sol":
             raise ValueError("Compiled/source-tree candidates require native Eval")
         if system.name == "source_tree" and not imported_tree:
             from aka.workflow.light.support.paths import supervisor_campaign_root
             content = system.prepare_source(SourceRequest(initial=initial, name=self.campaign_name,
                 framework=self.framework, platform=self.platform), self.source_provider,
                 options=None, state_root=supervisor_campaign_root(self.workspace) / "initial-source",
-                native_eval=bool(self.atrex_bench_root) and not self.sandbox_ssh)
+                native_eval=bool(self.atrex_bench_root))
         self._selected_initial_kernel = next(
             (entry.source.read_bytes() if entry.source is not None else entry.text.encode()
              for entry in content.files if entry.path == "kernel.py"), None)

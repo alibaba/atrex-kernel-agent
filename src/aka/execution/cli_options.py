@@ -66,7 +66,7 @@ def register_transport_options(parser):
         default=None,
         metavar="INDEX",
         help=(
-            "Physical NVIDIA GPU index exposed to an SSH job (required with --ssh; "
+            "Physical GPU index assigned to an SSH job (required with --ssh; "
             f"default: {SSH_GPU_ENV}). MIG selectors are rejected until capability-node "
             "assignment is implemented."
         ),

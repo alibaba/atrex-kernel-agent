@@ -81,6 +81,10 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     from aka.execution.gateway.native_options import values as native_values, apply_request
     selected_kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
     native = native_values(args, selected_kind)
+    from aka.execution.configuration import selected_ssh
+    if selected_ssh():
+        from aka.execution.ssh.transport import validate_native
+        validate_native(native, selected_kind)
     if selected_kind != "env" and any((args.env_force, args.frameworks, args.counters, args.limits)):
         raise ValueError("environment capability options require --kind env")
     if selected_kind == "env" and any((args.env_capabilities, args.frameworks, args.counters, args.limits)) and not args.env_gpu:
@@ -209,7 +213,8 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
                 'PROFILE_SHAPE_ID': args.profile_shape_id})
         return ToolRequest(kind, replace(provisional, requirements=tuple(requirements),
                                         profile_options=profile_options), args)
-    if native_manifest and kind in {'check', 'disassemble'}:
+    ssh = selected_ssh()
+    if native_manifest and kind in {'check', 'disassemble'} and not ssh:
         raise ValueError('Compiled manifests support Evaluate and Profile; use Evaluate correctness_only for a build/correctness check')
     if (candidate_archive is not None or private_profile) and not native_manifest and kind in {"profile", "check", "disassemble"}:
         if native:
@@ -268,8 +273,11 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         if args.profile_shape_id:
             request["reference"]["shapes"] = {args.profile_shape_id: request["reference"]["shapes"][args.profile_shape_id]}
         if kind in {"check", "disassemble"}:
+            diagnostic_reference = request["reference"]
             first = next(iter(request["reference"]["shapes"].values()))
             request = {key: request[key] for key in ("spec", "candidate", "env_vars")}
+            if ssh:
+                request['diagnostic_reference'] = diagnostic_reference
             request.update(init_kwargs=first.get("init_kwargs", {}), timeout_s=configuration.timeout)
             if requirements:
                 request["requirements"] = requirements

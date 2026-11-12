@@ -109,9 +109,13 @@ class BackendEnvironment:
                 pass
         self.endpoint = url or ("ssh:" + ssh if ssh else "profile:" + profile if profile else
                                 self.environment.get("AGATE_URL") or configured_url or "default-gateway")
+        self.cache_endpoint = self.endpoint
+        if ssh:
+            from .ssh.discovery import route_identity
+            self.cache_endpoint += ":" + route_identity(self.environment, ssh)
 
     def cached(self, query):
-        key = _cache_key(self.backend, self.endpoint, query.hardware)
+        key = _cache_key(self.backend, self.cache_endpoint, query.hardware)
         with _LOCK:
             value = _CACHE.get(key)
             if value is None:
@@ -130,9 +134,16 @@ class BackendEnvironment:
         if not query.fresh and not query.parameters and "environment-not-queried" not in cached.diagnostics:
             return replace(cached, source="cache")
         if self.ssh:
-            # The SSH sandbox has no stable query/worker identity contract. Do not
-            # substitute a host probe for facts about its constrained namespace.
-            return replace(cached, diagnostics=("ssh-environment-discovery-not-supported",))
+            from .ssh.discovery import discover
+            detail, errors = discover(self.environment, self.ssh, query)
+            snapshot = _snapshot(self.backend, self.endpoint, query, detail, detail,
+                                 list(errors), self.operations)
+            if not query.parameters:
+                with _LOCK:
+                    if len(_CACHE) >= 64:
+                        _CACHE.pop(next(iter(_CACHE)))
+                    _CACHE[_cache_key(self.backend, self.cache_endpoint, query.hardware)] = snapshot
+            return snapshot
         from .gateway import sandbox
         errors, detail, capabilities = [], {}, {}
         from .gateway.native_options import request_arguments
@@ -196,11 +207,13 @@ class BackendEnvironment:
             with _LOCK:
                 if len(_CACHE) >= 64:
                     _CACHE.pop(next(iter(_CACHE)))
-                _CACHE[_cache_key(self.backend, self.endpoint, query.hardware)] = snapshot
+                _CACHE[_cache_key(self.backend, self.cache_endpoint, query.hardware)] = snapshot
         return snapshot
 
     def check(self, query, *, discover=True):
         snapshot = self.query(query) if discover else self.cached(query)
+        if self.ssh and "environment-not-queried" in snapshot.diagnostics:
+            snapshot = self.query(query)
         return match_environment(query, snapshot)
 
 

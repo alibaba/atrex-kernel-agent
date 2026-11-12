@@ -702,6 +702,9 @@ class SupervisorRuntime:
                     from aka.execution.gateway.native_options import apply_request
                     query = EnvironmentQuery(hardware=args.env_gpu or configuration.hardware,
                         fresh=args.env_force, parameters=apply_request({}, args, "env"))
+                    if args.dry_run:
+                        return {"exit_code": 0, "stdout": json.dumps({"operation": "env", "hardware": query.hardware,
+                            "prepared": True}) + "\n", "stderr": ""}
                     facts = self.executor.query_environment(query)
                     environment_facts = facts.as_dict()
                     requirements = getattr(evaluation_input, "worker_requirements", None)

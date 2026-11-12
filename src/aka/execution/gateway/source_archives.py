@@ -50,14 +50,19 @@ def archive_matches(value, archive):
             and value['source'].get('sha256') == hashlib.sha256(archive.content).hexdigest())
 
 
-def validate_archives(prepared, archives, operation):
+def validate_archives(prepared, archives, operation, *, ssh=False):
     if not archives:
         for value in (prepared.get("request", {}).get("candidate"),
                       prepared.get("request", {}).get("abba", {}).get("baseline")):
             if isinstance(value, dict):
                 raise UnsupportedExecution("source archive descriptors require retained archive bytes")
         return
-    if operation not in {"run", "same_allocation_abba", "profile"} or prepared.get("kind") not in {"run", "profile"}:
+    supported = {"run", "same_allocation_abba", "profile"}
+    kinds = {"run", "profile"}
+    if ssh:
+        supported.update(("check", "disassemble"))
+        kinds.update(("check", "disassemble"))
+    if operation not in supported or prepared.get("kind") not in kinds:
         raise UnsupportedExecution("source archives require a typed Eval or Profile operation")
     request = prepared.get("request", {})
     roles = {item.role for item in archives}
@@ -73,13 +78,13 @@ def validate_archives(prepared, archives, operation):
         raise UnsupportedExecution("source archives cannot mix caller-owned upload references")
 
 
-def prepared_payload(command):
+def prepared_payload(command, *, ssh=False):
     if command.submission is None:
         if command.source_archives:
             raise UnsupportedExecution("source archives require an immutable typed submission")
         return None
     prepared = json.loads(command.submission)
-    validate_archives(prepared, command.source_archives, command.operation)
+    validate_archives(prepared, command.source_archives, command.operation, ssh=ssh)
     key = command.idempotency_key
     old_key = prepared.get("request", {}).get("idempotency_key")
     if key is not None:

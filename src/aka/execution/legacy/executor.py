@@ -29,8 +29,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
         self.hooks = hooks
         self.configuration = dict(configuration or {})
         if request is not None and request.ssh:
-            self.capabilities = replace(type(self).capabilities, prepared_requests=False, prepared_inputs=False,
-                operations=type(self).capabilities.operations - {"same_allocation_abba"})
+            self.capabilities = replace(type(self).capabilities, source_archives=True)
         recovery_policy(self.configuration)
 
     def bind(self, context):
@@ -97,6 +96,9 @@ class LegacyExecutor(GatewayRecoveryMixin):
             on_observation=observed if command.on_observation is not None else None,
             input_files=command.input_files, output_options=command.output_options, profile_options=command.profile_options)
         request = replace(request, prepared_inputs=command.prepared_inputs)
+        if request.ssh and command.submission is not None:
+            from aka.execution.gateway.source_archives import prepared_payload
+            request = replace(request, submission=prepared_payload(command, ssh=True))
         if command.requirements:
             import json
             request = replace(request, environment={**request.environment,
@@ -187,7 +189,7 @@ class LegacyExecutor(GatewayRecoveryMixin):
             uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
             grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
             from aka.execution.configuration import client_wait_timeout
-            effective_timeout = timeout if uses_ssh else client_wait_timeout(timeout, grace)
+            effective_timeout = 2 * timeout if uses_ssh else client_wait_timeout(timeout, grace)
             if effective_timeout is not None:
                 effective_timeout += 240  # Launcher reports client expiry before watchdog cleanup.
         from aka.execution.outcomes import run_owned

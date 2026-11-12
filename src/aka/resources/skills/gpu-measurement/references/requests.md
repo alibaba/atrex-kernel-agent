@@ -77,7 +77,7 @@ python3 tools/sandbox.py --kind profile --profile-shape-id 0 --no-sync
 python3 tools/sandbox.py --kind profile --profile-level deep --kernel-name my_kernel --profile-source --launch-count 1 --no-sync
 # Custom remote probe: explicitly declare files opened dynamically.
 python3 tools/sandbox.py --kind dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py
-# Diagnostics and available environments (typed Gateway, not SSH).
+# Diagnostics and available environments (Gateway or SSH).
 python3 tools/sandbox.py --kind check --sanitize memcheck --no-sync
 python3 tools/sandbox.py --kind disassemble --format ptx --no-sync
 python3 tools/sandbox.py --kind env
@@ -143,7 +143,7 @@ cannot silently fall back to Dev. Once a Typed Evaluate starts, admission,
 transport or evaluator failure also cannot change it into a Dev job. ABBA still accepts `--version` and
 `--timed-runs` and `--multi-seed` without a command; Shape/input overrides remain unsupported.
 ABBA uses native Eval only; it never runs a Dev driver. Native ABBA requires an Atrex-Bench
-input/Shape contract and an Agate endpoint; SOL/SSH comparison is unsupported. Repeats must
+input/Shape contract and an Agate or SSH endpoint; SOL comparison is unsupported. Repeats must
 be even, 2–16 measurements per side; 2 means one A/B/B/A block.
 
 ## Profile and diagnostics
@@ -166,7 +166,7 @@ Atrex-Bench Profile uses the Typed route by default, including hidden Shapes. Th
 exactly one private case; only its opaque ID and projected metrics are returned to the Agent.
 Without a selector it uses the first sorted Shape. `--profile-shape-id` takes precedence over
 legacy `--env PROFILE_SHAPE_ID=...`; no environment override is needed.
-SSH, custom commands/wrappers, `--input`, and driver-specific `PROFILE_*` controls use Dev
+Custom commands/wrappers, `--input`, and driver-specific `PROFILE_*` controls use Dev
 when required. SOL-ExecBench Profile also uses the compatibility route; Atrex-Bench Typed Shape
 selectors do not apply. A recognized hidden-Shape driver receives only the selected private case;
 Typed-only options fail if the fallback cannot honor them.

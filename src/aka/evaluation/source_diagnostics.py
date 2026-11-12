@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Self-contained NVIDIA source-tree diagnostics uploaded to an Agate Dev allocation.
+"""Self-contained source-tree diagnostics uploaded to a GPU allocation.
 
 No Runtime installation or ncu_report Python package is required on the worker.
 Diagnostics are not correctness or performance Gate evidence.
@@ -8,8 +8,11 @@ Diagnostics are not correctness or performance Gate evidence.
 from __future__ import annotations
 
 import copy
+import csv
+import ctypes
 import hashlib
 import importlib.util
+import io
 import json
 import os
 import re
@@ -63,13 +66,20 @@ def _target(request_path: Path) -> int:
                 raise RuntimeError("diagnostic dependency is not provisioned in the GPU image")
     import torch  # type: ignore[import-not-found]
 
-    if not torch.cuda.is_available() or getattr(torch.version, "hip", None):
-        raise RuntimeError("source-tree diagnostics require a CUDA GPU")
+    if not torch.cuda.is_available():
+        raise RuntimeError("source-tree diagnostics require an accessible GPU")
+    hip = getattr(torch.version, "hip", None)
+    roctx = None
+    if hip and request['operation'] == 'profile':
+        roctx = ctypes.CDLL('librocprofiler-sdk-roctx.so')
+        roctx.roctxProfilerPause(0)
     arch = request["parameters"].get("arch")
     if arch:
-        actual = "".join(map(str, torch.cuda.get_device_capability()))
-        requested = re.fullmatch(r"(?:sm_|compute_)?(\d+)([af]?)", arch.replace(".", ""))
-        if requested is None or requested.group(1) != actual or requested.group(2):
+        actual = (torch.cuda.get_device_properties(0).gcnArchName.split(':')[0] if hip
+                  else ''.join(map(str, torch.cuda.get_device_capability())))
+        requested = re.fullmatch(r'(?:sm_|compute_)?(\d+)([af]?)', arch.replace('.', '')) if not hip else None
+        matches = arch == actual if hip else requested is not None and requested.group(1) == actual and not requested.group(2)
+        if not matches:
             raise ValueError("arch must match the allocated GPU; cross-compilation is unsupported")
     torch.manual_seed(0)
     model_module = _load(root / request["entrypoint"], "kernel")
@@ -89,12 +99,18 @@ def _target(request_path: Path) -> int:
             torch.cuda.synchronize()
         values = inputs()  # Fresh buffers, including mutable output/state buffers.
         torch.cuda.synchronize()
-        torch.cuda.nvtx.range_push("ATREX_CANDIDATE")
+        if not hip:
+            torch.cuda.nvtx.range_push("ATREX_CANDIDATE")
+        elif roctx is not None:
+            roctx.roctxProfilerResume(0)
         try:
             model(**values)
             torch.cuda.synchronize()
         finally:
-            torch.cuda.nvtx.range_pop()
+            if not hip:
+                torch.cuda.nvtx.range_pop()
+            elif roctx is not None:
+                roctx.roctxProfilerPause(0)
     return 0
 
 
@@ -305,6 +321,131 @@ def _ncu_command(
     return argv + target
 
 
+def _collect_ppu(request, root, deadline, log, target):
+    parameters = request['parameters']
+    if parameters.get('profiler') not in (None, 'acu', 'ncu'):
+        raise DiagnosticError('capability', 'PPU profiling requires ACU')
+    if parameters.get('source'):
+        raise DiagnosticError('capability', 'PPU source correlation is unavailable')
+    if request['operation'] == 'disassemble':
+        _execute(target, root, deadline, log)
+        fmt = parameters.get('fmt', 'auto')
+        if fmt not in ('auto', 'ptx', 'sass'):
+            raise DiagnosticError('capability', 'PPU CUDA toolchains expose PTX or SASS')
+        fmt = 'ptx' if fmt == 'auto' else fmt
+        libraries = sorted((root / 'candidate/.build').glob('*.so'))
+        if fmt == 'ptx':
+            text = '\n'.join([
+                *(path.read_text() for path in sorted((root / '.caches').rglob('*.ptx'))),
+                *(_execute([_tool('cuobjdump'), '--dump-ptx', str(path)], root, deadline, log)
+                  for path in libraries)])
+        else:
+            text = '\n'.join(_execute([_tool('cuobjdump'), '--dump-sass', str(path)], root, deadline, log)
+                             for path in [*sorted((root / '.caches').rglob('*.cubin')), *libraries])
+        if not text:
+            raise DiagnosticError('collection', f'The PPU compiler produced no {fmt} artifacts')
+        return {'format': fmt, 'exports': {fmt + '.txt': _export(text)}}
+    report = root / 'metrics.csv'
+    command = [sys.executable, str(root / 'profile_ppu.py'), '--csv', '--log-file', str(report),
+               '--nvtx', '--nvtx-include', 'ATREX_CANDIDATE/',
+               '--launch-skip', str(parameters.get('launch_skip') or 0),
+               '--launch-count', str(parameters.get('launch_count') or 10),
+               '--metrics', ','.join(['gpu__time_duration.sum', *(parameters.get('counters') or [])])]
+    level = parameters.get('level', 'sol')
+    command += ['--set', 'full'] if level == 'deep' else [
+        '--section', 'LaunchStats' if level == 'survey' else 'SpeedOfLight']
+    if parameters.get('kernel_name'):
+        command += ['--kernel-name', parameters['kernel_name']]
+    elif parameters.get('kernel_regex'):
+        command += ['--kernel-name', 'regex:' + parameters['kernel_regex']]
+    _execute([*command, *target], root, deadline, log)
+    kernels = _kernels(report.read_text())
+    if not kernels:
+        raise DiagnosticError('collection', 'PPU profiler produced no kernel measurements')
+    result = {'profiler': 'acu', 'level': level, 'kernels': kernels,
+              'exports': {'metrics.csv': _export(report.read_text())}}
+    if parameters.get('top_kernels'):
+        result['collected_kernel_count'] = len(kernels)
+        result['kernels'] = sorted(kernels, key=lambda item: item.get('duration_us', 0),
+                                   reverse=True)[:parameters['top_kernels']]
+    return result
+
+
+def _collect_amd(request, root, deadline, log, target):
+    parameters = request['parameters']
+    if parameters.get('profiler') not in (None, 'rocprofv3'):
+        raise DiagnosticError('capability', 'AMD profiling requires rocprofv3')
+    if parameters.get('fmt', 'auto') not in ('auto', 'isa'):
+        raise DiagnosticError('capability', 'AMD disassembly supports auto or isa')
+    if request['operation'] == 'disassemble':
+        _execute(target, root, deadline, log)
+        binaries = sorted((root / '.caches').rglob('*.hsaco'))
+        if not binaries:
+            raise DiagnosticError('collection', 'No candidate AMD code objects were produced')
+        objdump = shutil.which('llvm-objdump') or '/opt/rocm/llvm/bin/llvm-objdump'
+        assembly = '\n'.join(f'; {path.relative_to(root)}\n' + _execute(
+            [objdump, '--disassemble', '--demangle', str(path)], root, deadline, log)
+            for path in binaries)
+        return {'format': 'isa', 'exports': {'isa.txt': _export(assembly)}}
+    directory = root / 'rocprof'
+    command = [_tool('rocprofv3'), '--kernel-trace', '--marker-trace', '--output-format', 'csv',
+               '--output-directory', str(directory)]
+    counters = parameters.get('counters') or []
+    if parameters.get('level') == 'deep' and not counters:
+        raise DiagnosticError('capability', 'AMD deep profiling requires explicit rocprofv3 counters')
+    if counters:
+        command += ['--pmc', *counters]
+    if parameters.get('source'):
+        raise DiagnosticError('capability', 'rocprofv3 does not provide NCU source correlation')
+    _execute([*command, '--', *target], root, deadline, log)
+    dispatches = {}
+    pattern = parameters.get('kernel_regex')
+    if parameters.get('kernel_name'):
+        pattern = '^' + re.escape(parameters['kernel_name']) + '$'
+    def dispatch_key(path, row):
+        return (path.parent, path.name.split('_')[0], row.get('Agent_Id'), row.get('Dispatch_Id'))
+
+    # roctx pause/resume scopes kernel_trace, but counter_collection also
+    # contains input generation and warmup. Join counters onto scoped dispatches;
+    # never turn counter rows into extra measured kernels.
+    for path in sorted(directory.rglob('*_kernel_trace.csv')):
+        with path.open() as stream:
+            for row in csv.DictReader(stream):
+                name = row.get('Kernel_Name') or row.get('KernelName')
+                if not name or pattern and not re.search(pattern, name):
+                    continue
+                start, end = row.get('Start_Timestamp'), row.get('End_Timestamp')
+                if start is not None and end is not None:
+                    dispatches[dispatch_key(path, row)] = {
+                        'name': name, 'duration_us': (float(end) - float(start)) / 1000, 'metrics': {}}
+    for path in sorted(directory.rglob('*_counter_collection.csv')):
+        with path.open() as stream:
+            for row in csv.DictReader(stream):
+                kernel = dispatches.get(dispatch_key(path, row))
+                counter = row.get('Counter_Name')
+                if kernel is not None and counter in counters:
+                    kernel['metrics'][counter] = {'value': float(row['Counter_Value']), 'unit': ''}
+    kernels = list(dispatches.values())
+    skip = parameters.get('launch_skip') or 0
+    count = parameters.get('launch_count') or 10
+    kernels = kernels[skip:skip + count]
+    if not kernels:
+        raise DiagnosticError('collection', 'rocprofv3 produced no matching kernel measurements')
+    if any(set(counters) - kernel['metrics'].keys() for kernel in kernels):
+        raise DiagnosticError('collection', 'rocprofv3 did not report every requested counter for candidate dispatches')
+    csv_text = io.StringIO()
+    writer = csv.writer(csv_text)
+    writer.writerow(['Kernel_Name', 'Duration_us', *counters])
+    for kernel in kernels:
+        writer.writerow([kernel['name'], kernel['duration_us'],
+                         *(kernel['metrics'][name]['value'] for name in counters)])
+    top = parameters.get('top_kernels')
+    if top:
+        kernels = sorted(kernels, key=lambda item: item['duration_us'], reverse=True)[:top]
+    return {'profiler': 'rocprofv3', 'level': parameters.get('level', 'sol'),
+            'kernels': kernels, 'exports': {'metrics.csv': _export(csv_text.getvalue())}}
+
+
 def _collect(
     request: dict[str, Any],
     root: Path,
@@ -321,6 +462,9 @@ def _collect(
     if operation == "check":
         sanitizer = parameters.get("sanitize")
         if sanitizer:
+            import torch
+            if getattr(torch.version, 'hip', None):
+                raise DiagnosticError('capability', 'compute-sanitizer is unavailable on AMD')
             target = [
                 _tool("compute-sanitizer"),
                 "--tool",
@@ -341,6 +485,15 @@ def _collect(
             "correctness_checked": False,
         }
 
+    import torch
+    if getattr(torch.version, 'hip', None):
+        return _collect_amd(request, root, deadline, log, target)
+    if request.get('vendor') == 'ppu':
+        return _collect_ppu(request, root, deadline, log, target)
+    if parameters.get('profiler') not in (None, 'ncu'):
+        raise DiagnosticError('capability', 'NVIDIA profiling requires NCU')
+    if parameters.get('fmt', 'auto') not in ('auto', 'sass', 'ptx'):
+        raise DiagnosticError('capability', 'NVIDIA disassembly supports auto, sass or ptx')
     ncu = _tool("ncu")
     report = root / "diagnostic.ncu-rep"
     _execute(_ncu_command(ncu, request, report, target), root, deadline, log)
@@ -444,13 +597,17 @@ def _driver(request_path: Path) -> int:
             path = root / ".caches" / folder
             path.mkdir(parents=True, exist_ok=True)
             os.environ[name] = str(path)
-        if parameters.get("fmt") == "ptx":
+        if parameters.get("fmt") == "ptx" or (
+                request.get('vendor') == 'ppu' and request['operation'] == 'disassemble'
+                and parameters.get('fmt', 'auto') == 'auto'):
             os.environ["CUTE_DSL_KEEP"] = "ptx,cubin"
             os.environ["CUTE_DSL_KEEP_PTX"] = "1"
         clocks = _load(root / "__atrex_abba.py", "_atrex_clock_support")
-        with clocks._clock_lock(bool(request["lock_clocks"])) as report:
+        import torch
+        clock_supported = not getattr(torch.version, 'hip', None) and request.get('vendor') != 'ppu'
+        with clocks._clock_lock(bool(request["lock_clocks"]) and clock_supported) as report:
             result.update(_collect(request, root, deadline, log))
-            result["clock_lock"] = report
+            result["clock_lock"] = dict(report, requested=bool(request['lock_clocks']))
         result.update(passed=True, status="passed")
     except DiagnosticError as error:
         result.update(error=str(error), failure_stage=error.stage)

@@ -122,6 +122,11 @@ def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
     if value.get("outcome") == "unknown":
         from aka.workflow.light.host.errors import UNKNOWN_OUTCOME
         result["next_action"] = UNKNOWN_OUTCOME
+    elif isinstance(error, dict) and error.get("reason") == "ssh_gpu_busy":
+        result["next_action"] = (
+            "The assigned SSH GPU is busy. Retry after the current allocation releases it; "
+            "this is not a Kernel correctness verdict or an environment failure."
+        )
     elif isinstance(error, dict) and error.get("error_class") == "infra":
         result["next_action"] = (
             "Infrastructure failure, not a Kernel correctness verdict. Supervisor recovery owns retries. "
@@ -526,7 +531,7 @@ def profile_result(result: dict[str, Any], *, generalized: bool = False) -> dict
         projected["source_view"] = result["source_view"]
     if not generalized and isinstance(exports, dict):
         projected_exports = {}
-        for name in ("metrics.csv", "source.txt", "sass.txt", "ptx.txt"):
+        for name in ("metrics.csv", "source.txt", "sass.txt", "ptx.txt", "isa.txt"):
             item = exports.get(name)
             if not isinstance(item, dict):
                 continue

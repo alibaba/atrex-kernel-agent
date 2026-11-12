@@ -53,7 +53,8 @@ publishing its dimensions. Native Eval does not silently fall back to Dev after 
 
 Source-tree Evaluate/ABBA use native source archives; tree diagnostics use the supported
 trusted diagnostic route. Native CUDA manifests support Evaluate, Profile, and ABBA, but
-not Check/Disassemble or SOL/SSH. Light ABBA requires Agate Atrex-Bench.
+not Agate Check/Disassemble or SOL. The [SSH backend](ssh-backend.md) supports
+native Evaluate/ABBA and worker-supported diagnostics, including native manifests.
 See [source-layout compatibility](native-cuda.md) before selecting an operation.
 
 The Episode prompt contains the exact acceptance ABBA command and the matching

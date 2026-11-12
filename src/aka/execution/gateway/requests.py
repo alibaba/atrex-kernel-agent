@@ -66,7 +66,7 @@ def prepared_operation(prepared, selected):
     return kind
 
 
-def operation_request(request, kind):
+def operation_request(request, kind, *, ssh=False):
     """Return an independent wire request; Eval-only controls stay on Eval."""
     value = json.loads(json.dumps(request))
     if kind == NATIVE_ABBA:
@@ -90,6 +90,8 @@ def operation_request(request, kind):
     if value.get("spec", {}).get("num_gpus", 1) != 1:
         raise UnsupportedExecution("selected compile/disassemble adapter supports one GPU")
     allowed = common | {"init_kwargs", "timeout_s"} | ({"arch", "sanitize"} if kind == "check" else {"fmt"})
+    if ssh:
+        allowed.add('diagnostic_reference')
     return {key: item for key, item in value.items() if key in allowed}
 
 

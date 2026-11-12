@@ -21,8 +21,6 @@ def command(provisional, request, source, kind, args, requirements):
     from . import source_diagnostics, diagnostic_clocks
     from .resources import ncu_profile_script
     from aka.execution.resources import profiling_resource
-    if args.profiler not in {None, "ncu"} or args.disassembly_format == "isa":
-        raise ValueError("whole-tree diagnostics currently require NVIDIA NCU and auto/sass/ptx")
     if kind == "profile" and args.profile_level == "deep" and not args.kernel_regex:
         raise ValueError("deep Profile requires an explicit kernel regex")
     shapes = request["reference"]["shapes"]
@@ -36,7 +34,8 @@ def command(provisional, request, source, kind, args, requirements):
         if value is not None}
     diagnostic = {"aka_evaluation_method": METHOD, "operation": kind, "entrypoint": "kernel.py", "package_root": ".",
         "runtime_requirements": [], "requirements": list(requirements), "shapes": {shape: shapes[shape]},
-        "parameters": parameters, "lock_clocks": True, "timeout_s": provisional.timeout}
+        "parameters": parameters, "lock_clocks": True, "timeout_s": provisional.timeout,
+        "vendor": "ppu" if provisional.hardware.upper().startswith(('PPU', 'ZW')) else None}
     files = tuple(ExecutionFile("candidate/" + name, data) for name, data in source.files.items() if data is not None)
     files += (ExecutionFile("input.py", request["reference"]["input_py"].encode()),
         ExecutionFile("request.json", json.dumps(diagnostic, allow_nan=False).encode()),
@@ -45,6 +44,7 @@ def command(provisional, request, source, kind, args, requirements):
         ExecutionFile("ncu_profile.py", ncu_profile_script().read_bytes()),
         ExecutionFile("classify_ncu.py", profiling_resource("nvidia/classify_ncu.py").read_bytes()),
         ExecutionFile("ncu_classification.py", profiling_resource("nvidia/ncu_classification.py").read_bytes()))
+    files += (ExecutionFile("profile_ppu.py", profiling_resource("ppu/profile_ppu.py").read_bytes()),)
     return replace(provisional, command=COMMAND, operation="dev", timeout=provisional.timeout + 30, requirements=tuple(requirements),
         prepared_inputs=PreparedExecutionInputs(files, private_paths=tuple(item.path for item in files)),
         input_files=(), source_archives=(), submission=None, profile_options=None)

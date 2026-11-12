@@ -190,7 +190,7 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
                     "measurement_repetition": outer})
             steps.append(step)
             identities.append(identity)
-    return PreparedEvaluation(tuple(steps), max(1, min(configuration.max_parallelism, len(steps))),
+    return PreparedEvaluation(tuple(steps), 1 if environment.get('ATREX_SANDBOX_SSH') else max(1, min(configuration.max_parallelism, len(steps))),
         replace(context, schedule=tuple(verification_schedule(configuration.repeats)), shape_ids=tuple(shapes), native=True,
             candidate_source=candidate[5]),
         measurement_identities=tuple(identities))

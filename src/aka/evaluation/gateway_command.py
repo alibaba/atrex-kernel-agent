@@ -352,7 +352,7 @@ class GatewayCommandEvaluator:
                 "request": measurement.request_for(index), "reference_files": reference_files},
                 ensure_ascii=False, allow_nan=False).encode("utf-8")
             steps.append(replace(command, operation=kind, submission=submission, artifacts=(), profile_options=None))
-        return PreparedEvaluation(tuple(steps), min(4, len(steps)), context,
+        return PreparedEvaluation(tuple(steps), 1 if environment.get('ATREX_SANDBOX_SSH') else min(4, len(steps)), context,
             fallback_steps=() if nondefault_profile(command.profile_options) or (self.evaluation_input is not None and (capabilities is None or not capabilities.prepared_inputs)) else
                 (portable_inputs(replace(command, operation="dev", submission=None, profile_options=None), self.evaluation_input, content, evaluator=evaluator, kind=kind, capabilities=capabilities),),
             measurement_identities=tuple(identities))
