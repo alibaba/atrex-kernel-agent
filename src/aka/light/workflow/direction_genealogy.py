@@ -69,7 +69,7 @@ def validate_relationship(
         if parent not in directions:
             raise ValueError(
                 f"Parent Direction {parent} is not visible; read the current "
-                "directions/<status>/<direction_id>.json projections and use a visible ID"
+                "research-library/directions/<direction_id>/vN/direction.json projections and use a visible ID"
             )
     effective_parents = set(parents)
     for experiment_id in evidence:
@@ -77,7 +77,7 @@ def validate_relationship(
         if experiment is None:
             raise ValueError(
                 f"Parent Experiment {experiment_id} is not visible; "
-                "read experiments/<experiment_id>/experiment.json and use a visible ID"
+                "read research-library/experiments/<experiment_id>/vN/experiment.json and use a visible ID"
             )
         parent = str(experiment.get("direction_id"))
         if parent not in directions:

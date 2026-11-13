@@ -320,6 +320,22 @@ def wrap_agent_command(
         else:
             argv.extend(("--proc", "/proc"))
         _mount(argv, view.root if view else workspace, workspace, writable=True)
+        if managed:
+            research_library = workspace / "research-library"
+            if research_library.exists():
+                if (
+                    research_library.is_symlink()
+                    or not research_library.is_dir()
+                    or research_library.resolve(strict=True) != research_library
+                ):
+                    raise ValueError(
+                        "Managed research-library mountpoint must be a real directory"
+                    )
+                # Overlay only the Runtime projection read-only.  The source
+                # remains writable to the trusted Supervisor outside this
+                # namespace, so synchronous/asynchronous refreshes appear in a
+                # long-lived Agent Session without rebuilding Bubblewrap.
+                _mount(argv, research_library, research_library)
         _mount(argv, home, home, writable=True)
         if control_root is not None:
             # Hooks receive only their narrow rendezvous directory, never the
@@ -362,14 +378,14 @@ def wrap_agent_command(
                     _mount(argv, common, common, writable=True)
             if managed:
                 # This is already a separate persistent draft, not the Git
-                # worktree. Public inputs and canonical memory stay read-only.
-                for name in (*PUBLIC_FILES, "memory", "input"):
+                # worktree. Public inputs stay read-only.
+                for name in (*PUBLIC_FILES, "input"):
                     source = workspace / name
                     if source.exists():
                         if source.is_symlink() or source.resolve(strict=True) != source:
                             raise ValueError("Managed public inputs must not traverse symlinks")
                         _mount(argv, source, source)
-            from aka.light.workspace.adaptive import PROTECTED_PATHS_ENV
+            from aka.light.workspace.managed_assets import PROTECTED_PATHS_ENV
             protected = ("tools", "skills")
             if managed and PROTECTED_PATHS_ENV in environment:
                 protected = json.loads(environment[PROTECTED_PATHS_ENV])

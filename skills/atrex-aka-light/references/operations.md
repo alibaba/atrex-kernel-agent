@@ -30,6 +30,13 @@ aka optimize --repo-root /path/to/atrex-kernel-agent \
   --workspace /path/to/campaign-root
 ```
 
+`--workspace` is a dedicated non-Git Campaign directory and must be empty on a
+new launch (the composition bootstrap may already have created `.atrex_plugins/`).
+Light writes Campaign evidence directly below this root and creates Agent Git
+repositories only at `lineages/tNNNN/agent-workspace`. It does not create a
+parent `.atrex-supervisor-runtime/<hash>` namespace, a nested
+`.atrex-supervisor-runtime/` wrapper, or Controller Git clones.
+
 Launch options precede `--`; campaign options follow it. Omit `--profile` for native Light. `light-sandbox` is the Bubblewrap boundary on the coordinator, not an Aone Sandbox request.
 
 Run checkout-specific help first:
@@ -128,9 +135,13 @@ Set `workflow.config.search` to `{}` for serial mode. Then `--max-iters N` count
 
 Episode active time is unlimited by default. Set `workflow.config.episode_timeout_seconds` only when needed. `--token-budget 0` means no token admission cap. Runtime waits pause Agent active time, but Agate queue/request/per-Shape timeouts remain independent.
 
-At synchronous Epoch barriers, or after completed segments in asynchronous mode, Light publishes:
+Every archived Direction and Experiment revision is written immediately to the central Campaign
+Research Library. Each workspace receives an ordinary `research-library/` copy following the configured visibility mode; Bubblewrap overlays that copy read-only:
+synchronous trajectories freeze peer revisions at the last Epoch watermark, while asynchronous
+trajectories see the catalog head immediately. Only `owner_lineage` may revise an identity; peers
+derive a new local record. At synchronization/publication points Light also publishes:
 
-- eligible Direction and Experiment records;
+- the corresponding visible Direction and Experiment records with their actual review quality;
 - relevant immutable Gateway Records;
 - peer Agent Git refs;
 - accepted-submission lineage/global winner facts;

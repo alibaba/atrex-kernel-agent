@@ -205,13 +205,12 @@ INPUT_SKIP_DIRS = {
     ".humanize",
 }
 INPUT_SKIP_PATHS = {
-    # A pod must not recursively submit another sandbox job, and memory updates
-    # are deliberately local-only.  Omitting these also leaves useful headroom
+    # A pod must not recursively submit another sandbox job. Omitting these
+    # controller tools also leaves useful headroom
     # below the gateway worker's per-argument limit.
     "tools/sandbox.py",
     "tools/plugin.py",
     "tools/local_gateway.py",
-    "tools/memory_manager.py",
     # The durable host-side monitor is never invoked inside a GPU worker.  It
     # can grow the materialized tools bundle enough to exceed agate's
     # per-argument limit despite being unrelated to validation.
@@ -3036,12 +3035,12 @@ def _record_episode_evaluation(
     gateway_kind: str,
     job_id: object = None,
 ) -> None:
-    """Persist exact optimizer-facing results for terminal memory construction.
+    """Persist exact optimizer-facing results for private Runtime recovery.
 
-    Long-horizon workers use ``--no-memory`` because canonical memory belongs to the
-    supervisor.  Keep their complete evaluator results in excluded episode runtime
-    state so a pivot or interruption can still record this round's real per-shape
-    performance without parsing model-authored journal prose.
+    Long-horizon workers use ``--no-memory`` because Light does not create Agent-facing
+    memory summaries. Keep their complete evaluator results in excluded episode Runtime
+    state so a pivot or interruption retains this round's real per-shape performance
+    without parsing model-authored journal prose.
     """
     runtime = workspace / ".atrex_long_horizon"
     if not (runtime / "journal.json").is_file():
@@ -4329,8 +4328,9 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
                        args.input,
                        full_workspace=args.kind == "command",
                    ))
-    from aka.light.workspace.sources import measurement_paths
+    from aka.light.workspace.sources import measurement_contracts, measurement_paths
     candidate_paths, source_snapshots = measurement_paths(workspace, baseline_path)
+    source_contracts = measurement_contracts(workspace, baseline_path)
     selected.update(candidate_paths)
     for value in args.input or []:
         selected.update(_expand_workspace_input(workspace, value))
@@ -4437,6 +4437,7 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
     options["baseline_path"] = baseline_path
     if source_snapshots:
         options["source_snapshots"] = source_snapshots
+        options["source_contracts"] = source_contracts
         if kind in {"profile", "check", "disassemble"}:
             from aka.light.evaluation import source_transport
             options["source_diagnostic_driver"] = {

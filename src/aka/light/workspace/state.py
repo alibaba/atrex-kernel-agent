@@ -1,4 +1,4 @@
-"""Workspace state readers: version facts, optional legacy memory and Git state.
+"""Workspace state readers: private version facts and Git state.
 
 Git is the single source of truth for a committed win; everything here reads mechanical
 facts rather than model-reported ones.
@@ -27,7 +27,7 @@ from aka.light.workspace.versions import STATE_DIRECTORY, version_record_path
 
 
 def latest_version(workspace: Path) -> int:
-    """Largest STRICT integer version in controller facts or legacy memory.
+    """Largest STRICT integer version in controller facts.
 
     Note: int('71_512') == 71512 in Python (PEP 515 underscores-in-numeric-literals).
     Experimental files named like v71_512.json (an experiment branch for the v71 round) must
@@ -36,18 +36,17 @@ def latest_version(workspace: Path) -> int:
     """
     _STRICT = re.compile(r"^v(\d+)\.json$")
     vs = []
-    for directory in (STATE_DIRECTORY, "memory"):
-        for p in (workspace / directory).glob("v*.json"):
-            m = _STRICT.match(p.name)
-            if m is not None:
-                vs.append(int(m.group(1)))
+    for p in (workspace / STATE_DIRECTORY).glob("v*.json"):
+        m = _STRICT.match(p.name)
+        if m is not None:
+            vs.append(int(m.group(1)))
     if read_baseline_record(workspace) is not None:
         vs.append(0)
     return max(vs) if vs else -1
 
 
 def read_memory(workspace: Path, n: int) -> Optional[dict]:
-    """Read controller facts, falling back to pre-switch memory-only histories."""
+    """Read Supervisor-owned controller facts."""
     if n == 0:
         return read_baseline_record(workspace)
     path = version_record_path(workspace, n)
@@ -115,10 +114,9 @@ def head_kernel_is_initial_baseline(workspace: Path) -> bool:
     """Whether committed HEAD still uses the repository's original V0 kernel.
 
     Production V0 is intentionally allowed to be a PyTorch reference wrapper.
-    Later failed-policy/dead-end records may advance ``memory/vN.json`` and Git
-    metadata without changing ``kernel.py``.  Resume must recognize that state
-    by kernel provenance, not by assuming ``latest_version > 0`` means an
-    optimized kernel was accepted.
+    Controller facts can advance without changing ``kernel.py``. Resume must
+    recognize that state by Kernel provenance, not by assuming
+    ``latest_version > 0`` means an optimized Kernel was accepted.
 
     It becomes false as soon as the Agent commits a different candidate source.
     """

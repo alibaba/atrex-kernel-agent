@@ -8,43 +8,57 @@ Requests must fit the documented 2 MiB envelope.
 Runtime automatically maintains:
 
 ```text
-directions/<status>/<direction_id>.json
-experiments/<experiment_id>/experiment.json
+research-library/directions/<direction_id>/vN/direction.json
+research-library/experiments/<experiment_id>/vN/experiment.json
 records/<gateway_record_id>.json
 PROGRESS.md
 ```
 
-Direction files contain their full decision-useful state, immutable `proposed_by` lineage, `access`,
-the Agent-maintained plan, and either `local_rank` or `shared_rank`. Runtime does not track completed
-plan steps or select the next action. Experiments identify their
+Direction `v0` is the current unreviewed draft; `v1+` and every Experiment `vN` are immutable,
+per-identity catalog versions containing the claim plus the compact Review result that applied to
+that version. The greatest visible `vN` is current for this lineage. Direction files contain their full decision-useful state, immutable `owner_lineage`,
+`access`, and the Agent-maintained plan. Runtime does not track completed plan steps or select the
+next action. Experiments identify their
 Direction through `direction_id`; Runtime derives the reverse association when needed instead of
 persisting a second index. `supporting_experiment_ids` is the reviewed evidence subset selected when
 closing the Direction. `owner` identifies the trajectory
-currently executing an in-progress Direction. `experiment.json` contains research semantics,
-Gateway Record references, immutable `recorded_by` lineage, and `access`. Root
+currently executing an in-progress Direction. Each version's `experiment.json` contains research semantics,
+Gateway Record references, immutable `owner_lineage`, and `access`. Root
 `records/` contains every currently visible standardized public result, flat and without per-
 Experiment copies. Neither contains private requests, input hashes or executor streams. Kernel
 commit IDs link Records to exact Git source. Search these files with normal file tools. They are
-regenerated from private Runtime state and must not be edited.
+visibility-filtered copies of the Campaign Library and must not be edited. Bubblewrap mounts the
+tree read-only; native-mode edits are discarded on the next Runtime refresh.
 
 Root `PROGRESS.md` is the bounded research projection and includes a capped accepted-submission per-Shape Pareto
 summary, an independently ordered Local work queue, paused and terminal sections, and an advisory Shared direction pool
 when Direction recording is enabled. Global aggregation orders only the shared pool and never
-overwrites local priorities. Read root `frontier.json` for the complete eligible accepted-submission frontier. In
-Experiment-only mode, `experiments/index.json` provides a compact catalog; when Directions are
-enabled, navigate Experiments from their `direction_id` and filesystem paths instead of maintaining
-a second durable index.
+overwrites local priorities. Read root `frontier.json` for the complete eligible accepted-submission frontier.
 Peer Directions may appear as `in_progress(Tn)` in `PROGRESS.md`. Choose executable work from the
 Local work queue. Use the Shared pool to absorb compatible mechanisms, evidence, and applicability
-into one local Direction; cite every source ID in `derived_from_direction_ids`. Explicitly
-`not_reviewed`, `partially_supported`, or `unreviewed` Directions and Experiments remain
-trajectory-local until a reviewed mutation replaces them.
+into one local Direction; cite every source ID in `derived_from_direction_ids`. Every archived
+Archived Direction and Experiment versions enter the central Campaign Research Library. Direction drafts
+update Agent-visible `v0`; the first Review writes immutable `v1`, and later reviewed states write
+successive immutable versions. Experiments are reviewed from `v1`. `research-library/` is the
+read-only, visibility-filtered workspace copy. Synchronous search exposes peer revisions only through the
+watermark sealed at the last Epoch boundary; later revisions wait for the next Epoch. Asynchronous
+search exposes the current catalog head immediately. Quality fields distinguish context from
+established evidence and never change ownership or visibility.
+
+## Cross-trajectory measurement visibility
+
+Each lineage sees Records cited by the Direction/Experiment revisions currently visible in that
+lineage's projection, plus passing standard full Evaluates. Accepted submissions and winners therefore
+publish their complete Evaluate evidence automatically. Review quality controls whether a claim is
+trusted, not whether its cited Record can be inspected. There is no Agent operation for publishing
+arbitrary local evidence. Synchronous search uses the lineage's current Epoch watermark; asynchronous
+search uses its live visible revision set. Every immutable Record remains stored once in the Campaign Store.
 
 Claim-bearing mutations return `review` once. Its workflow fields are deliberately distinct:
 
 - `archive_status`: whether Runtime stored the submitted claim;
-- `claim_review_quality`: `not_reviewed`, `supported`, `partially_supported`, `unsupported`, or `unreviewed`;
-- `evidence_eligible`: whether the claim may support Direction lifecycle conclusions or peer publication;
+- `claim_review_quality`: `review_not_requested`, `supported`, `partially_supported`, `unsupported`, or `review_unavailable`;
+- `evidence_eligible`: whether the claim may support Direction lifecycle conclusions; it does not control visibility;
 - `runtime_action`: how to repair or continue the Runtime workflow;
 - `scientific_next_check`: the smallest evidence-producing test suggested by the reviewer.
 
@@ -122,7 +136,7 @@ Correct an existing open local Direction without inventing a replacement identit
 ```
 
 `revise` keeps `direction_id`, lifecycle status and genealogy and increments `revision`. Revising a
-proposed draft remains unreviewed; revising an active Direction reruns Review. It replaces the objective,
+proposed draft remains `review_not_requested`; revising an active Direction reruns Review. It replaces the objective,
 scope and plan in the latest projection. Only `proposed` or
 `in_progress` local Directions can be revised; restart a deferred or blocked Direction first.
 Completed and abandoned Directions are terminal, so continued work uses a new derived Direction.
@@ -143,7 +157,7 @@ Start selected work:
 
 `start` runs the first independent Review of the effective proposal before changing its lifecycle.
 Supported and partially supported starts may proceed locally; unsupported starts are rejected, while
-partial or reviewer-unavailable state remains ineligible for terminal evidence and peer publication.
+partial or reviewer-unavailable state is shared as context but remains ineligible as supporting evidence.
 The lifecycle is `proposed --start--> in_progress`. Only `in_progress` may `complete`, `abandon`,
 `defer`, or `block`; restart `deferred` or `blocked` work with `start`. `completed` and `abandoned`
 are terminal and continued work requires a derived Direction.
@@ -205,8 +219,9 @@ empty. An Experiment without Gateway Records remains a useful research note, but
 support a measured Direction lifecycle decision or an accepted Kernel submission.
 
 Revise a `local_writable` Experiment by resubmitting its required fields plus the `experiment_id` shown in
-`experiments/<experiment_id>/experiment.json`. Runtime keeps that identity, increments `revision`,
-reruns independent Review, and updates the projected latest version. Omitted optional evidence is
+the greatest visible `research-library/experiments/<experiment_id>/vN/experiment.json`. Runtime
+keeps that identity, increments `revision`, reruns independent Review, and writes a new immutable
+version. Omitted optional evidence is
 preserved; explicit empty arrays clear it. `direction_id` is immutable. Extend a `peer_read_only`
 Experiment with a new local record rather than revising it. Prior submissions, Review receipts, conversations, and referenced bytes
 remain available to the Supervisor's private audit even though the Agent sees only the latest revision.
@@ -216,10 +231,11 @@ Runtime falls back to one fresh Review Session without discarding the earlier au
 Every non-empty `references` entry must already exist and name a regular file or directory inside the Agent
 workspace. Paths may not overlap or traverse links. Runtime snapshots at most 32 roots, 256 files,
 16 MiB per file and 64 MiB total. It rejects the Experiment without mutation when a path is missing
-or unsafe. On success, `experiment.json` contains rewritten paths such as
-`experiments/<experiment_id>/references/scratch/ksplit-analysis.md`; these archived bytes are
-independent of later edits to the originals and are shared with the Experiment at the configured
-peer-publication boundary (a synchronous Epoch barrier or an asynchronous terminal-Episode publication).
+or unsafe. On success, that version's `experiment.json` contains rewritten paths such as
+`research-library/experiments/<experiment_id>/vN/references/scratch/ksplit-analysis.md`; these archived bytes are
+independent of later edits to the originals and are versioned once in the Campaign Library. Every
+lineage receives a visibility-filtered copy; synchronous peers see the revision at the next Epoch watermark and asynchronous peers
+see it with the live revision.
 
 Optional Wiki attribution retains `wiki_usage_status`, `wiki_query_ids`, and `wiki_usage`. Each usage
 row has `query_id`, `disposition`, and the returned `wiki_id` or `cite`. Do not invent identifiers.
@@ -246,18 +262,19 @@ use `block` only for a concrete technical or external dependency that currently 
 `defer` or `block` also requires a non-empty `reopen_condition` describing what evidence or
 capability should reactivate it. `abandon` and `complete` are terminal. Active Directions may cross
 an Episode boundary; close them only when their own objective and remaining variants are genuinely
-exhausted. Epoch sharing publishes eligible research and imported peer Git refs.
+exhausted. The Research Catalog publishes every archived revision according to the configured
+visibility mode; Epoch sharing still imports peer Git refs and seals synchronous watermarks.
 
 ## Continue a measured peer Kernel
 
-Epoch sharing imports exact peer Git history under refs such as
-`refs/atrex/shared/T2/e0001/head`. Keep or commit local work before switching. Inspect or continue the
+Epoch sharing imports exact peer Git history through remote-tracking refs such as
+`atrex/T2`. Keep or commit local work before switching. Inspect or continue the
 peer source with normal Git:
 
 ```bash
-git log --oneline --decorate refs/atrex/shared/T2/e0001/head
-git diff HEAD refs/atrex/shared/T2/e0001/head
-git switch -c explore/t2-e0001 refs/atrex/shared/T2/e0001/head
+git log --oneline --decorate atrex/T2
+git diff HEAD atrex/T2
+git switch -c explore/t2 atrex/T2
 ```
 
 The checked-out commit is the Kernel ID. Switching source does not assert correctness, performance,

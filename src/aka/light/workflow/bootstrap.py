@@ -42,12 +42,9 @@ from aka.light.evaluation.hardware import hardware_vendor, kernel_is_gluon
 from aka.light.evaluation.policy import SHAPE_BATCH_SIZE
 from aka.light.agent.dependency_policy import DEPENDENCY_GUARD_ENV
 from aka.contracts.evaluation import DEFAULT_EVALUATION_STEP_TIMEOUT
-from aka.light.workspace.versions import objective_score_report
 from aka.light.workspace.baseline import (
-    baseline_failure_path,
+    baseline_measurement_spec,
     read_baseline_record,
-    write_baseline_failure,
-    write_baseline_record,
 )
 from aka.legacy.task.problem.layout import (
     AGENT_PROBLEM_FILENAME,
@@ -92,6 +89,7 @@ from aka.light.workspace.state import (
 
 _WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
 _WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
+_CLAIM_REVIEW_MAX_ATTEMPTS = 2
 
 
 
@@ -165,6 +163,9 @@ class Campaign:
     )
     _generated_agent_problem_digest: str = field(
         default="", init=False, repr=False, compare=False
+    )
+    _measurement_store_root: Path | None = field(
+        default=None, init=False, repr=False, compare=False
     )
 
     def __post_init__(self) -> None:
@@ -458,6 +459,13 @@ class Campaign:
                 numerical_validation_enabled=self.module_options.numerical_validation,
             ),
             workspace=self.workspace,
+            measurement_root=self._measurement_store_root,
+            research_synchronization=(
+                str(self.search_coordinate.get("synchronization"))
+                if isinstance(getattr(self, "search_coordinate", None), dict)
+                and self.search_coordinate.get("cross_trajectory_sharing") is True
+                else "independent"
+            ),
             request_timeout=request_timeout,
             queue_timeout=queue_timeout,
         ), workspace_provider=self.candidate_workspace)
@@ -474,6 +482,7 @@ class Campaign:
         evidence_root: Path,
         *,
         resume_session_id: str | None = None,
+        archive_root: Path | None = None,
     ) -> dict[str, object]:
         """Run the strict three-tier reviewer with the Qwen-only provider policy."""
         from aka.light.agent.session_tail import read_regular_bytes
@@ -510,8 +519,8 @@ class Campaign:
         # Independent claim review is a security boundary, not an optimizer
         # convenience setting.  Always use Bubblewrap even when the selected
         # optimizer profile deliberately runs without a sandbox.  If bwrap is
-        # unavailable, launch fails closed and the caller archives an
-        # unreviewed receipt instead of executing the reviewer natively.
+        # unavailable, launch fails closed and the caller archives a
+        # review_unavailable receipt instead of executing the reviewer natively.
         boundary_environment["ATREX_AGENT_SANDBOX"] = "bwrap"
         base_environment = {
             **boundary_environment,
@@ -528,9 +537,17 @@ class Campaign:
             supervisor_campaign_root(campaign_workspace)
             / "research-review-session-homes"
         )
+        runtime = getattr(self, "_supervisor_runtime", None)
+        runtime_root = getattr(runtime, "root", None)
         capture_base = (
-            evidence_root.parent / "claim-review-sessions" / evidence_root.name
+            Path(runtime_root) / "review-capture" / "claims" / evidence_root.name
+            if runtime_root is not None
+            else Path(tempfile.gettempdir())
+            / "atrex-light-review-capture"
+            / "claims"
+            / f"{evidence_root.name}-{uuid.uuid4().hex}"
         )
+        archive_root = Path(archive_root).resolve() if archive_root is not None else None
         session_attempts: list[dict[str, object]] = []
 
         def session_audit() -> dict[str, object]:
@@ -540,7 +557,9 @@ class Campaign:
             }
 
         last_error: Exception | None = None
-        for attempt in range(1, 3):
+        # One initial attempt plus one automatic retry.  Only after both fail
+        # does Journal projection expose ``review_unavailable``.
+        for attempt in range(1, _CLAIM_REVIEW_MAX_ATTEMPTS + 1):
             response = evidence_root / "review.json"
             response.unlink(missing_ok=True)
             attempt_capture = capture_base / f"attempt-{attempt}"
@@ -598,18 +617,45 @@ class Campaign:
                 ),
                 backend="claude",
                 model=model,
+                persist_separate_receipt=False,
             )
             from aka.light.agent.session_capture import latest_complete_session_archive
 
             archive = latest_complete_session_archive(attempt_capture)
-            conversation_path = (
-                archive.conversation.relative_to(evidence_root.parent).as_posix()
-                if archive is not None else None
-            )
-            token_usage_path = (
-                archive.token_usage.relative_to(evidence_root.parent).as_posix()
-                if archive is not None else None
-            )
+            if archive is not None and archive_root is not None:
+                from aka.light.agent.session_tail import read_regular_bytes
+                from aka.light.experiment.store import private_write_bytes
+
+                attempt_root = archive_root / "attempts" / f"a{attempt}"
+                conversation_data = read_regular_bytes(
+                    archive.conversation.resolve(strict=True),
+                    limit=64 * 1024 * 1024 + 1,
+                )
+                token_data = read_regular_bytes(
+                    archive.token_usage.resolve(strict=True),
+                    limit=64 * 1024 * 1024 + 1,
+                )
+                if len(conversation_data) > 64 * 1024 * 1024 or len(token_data) > 64 * 1024 * 1024:
+                    raise ValueError("research claim Review archive exceeds 64 MiB")
+                private_write_bytes(
+                    attempt_root / "conversation.jsonl",
+                    conversation_data,
+                )
+                private_write_bytes(
+                    attempt_root / "token-usage.json",
+                    token_data,
+                )
+                conversation_path = f"attempts/a{attempt}/conversation.jsonl"
+                token_usage_path = f"attempts/a{attempt}/token-usage.json"
+            else:
+                conversation_path = (
+                    archive.conversation.relative_to(evidence_root.parent).as_posix()
+                    if archive is not None else None
+                )
+                token_usage_path = (
+                    archive.token_usage.relative_to(evidence_root.parent).as_posix()
+                    if archive is not None else None
+                )
             attempt_audit: dict[str, object] = {
                 "attempt": attempt,
                 "session_id": result.session_id,
@@ -638,6 +684,28 @@ class Campaign:
                 if response.stat().st_size > 128 * 1024:
                     raise ValueError("research claim review exceeds 128 KiB")
                 review = validate_review(value)
+                if archive is not None and archive_root is not None:
+                    from aka.light.agent.session_tail import read_regular_bytes
+                    from aka.light.experiment.store import private_write_bytes
+
+                    conversation_data = read_regular_bytes(
+                        archive.conversation.resolve(strict=True),
+                        limit=64 * 1024 * 1024 + 1,
+                    )
+                    token_data = read_regular_bytes(
+                        archive.token_usage.resolve(strict=True),
+                        limit=64 * 1024 * 1024 + 1,
+                    )
+                    if len(conversation_data) > 64 * 1024 * 1024 or len(token_data) > 64 * 1024 * 1024:
+                        raise ValueError("research claim Review archive exceeds 64 MiB")
+                    private_write_bytes(
+                        archive_root / "conversation.jsonl",
+                        conversation_data,
+                    )
+                    private_write_bytes(
+                        archive_root / "token-usage.json",
+                        token_data,
+                    )
                 if result.timed_out:
                     print(
                         "[research-review] recovered a valid review from a timed-out reviewer",
@@ -679,19 +747,56 @@ class Campaign:
         *,
         parent=None,
         require_gluon: bool = False,
-    ) -> list[str]:
-        """Review exact frozen candidate bytes for final-source policy feedback."""
+        submission_id: str | None = None,
+    ) -> dict[str, object] | list[str]:
+        """Review exact frozen candidate bytes and preserve observed implementation facts."""
         if not self.source_checks_enabled:
             return []
         from aka.light.workspace.sources import install
 
+        review_records: list[dict[str, object]] = []
         with tempfile.TemporaryDirectory(prefix="atrex-production-candidate-") as directory:
             frozen = Path(directory)
             install(frozen, source)
-            return self._production_kernel_violations(
-                frozen,
-                require_gluon=require_gluon,
+            review_kwargs = {
+                "require_gluon": require_gluon,
+                "review_record_sink": review_records.append,
+            }
+            if submission_id is not None:
+                review_kwargs["submission_id"] = submission_id
+            violations = self._production_kernel_violations(
+                frozen, **review_kwargs
             )
+        implementation_review: dict[str, object] = {
+            "availability": "unavailable",
+        }
+        if review_records:
+            record = review_records[-1]
+            payload = record.get("review")
+            payload = payload if isinstance(payload, dict) else {}
+            framework = payload.get("framework")
+            framework = framework if isinstance(framework, dict) else {}
+            technologies = framework.get("technologies")
+            unexpected = framework.get("unexpected_core_technologies")
+            implementation_review = {
+                "availability": "available",
+                "technologies": (
+                    list(technologies) if isinstance(technologies, list) else []
+                ),
+                "dsl_policy": record.get("dsl_policy"),
+                "configured_dsl": record.get("framework"),
+                "required_phase": record.get("required_phase"),
+                "evaluator_supported": framework.get("evaluator_supported"),
+                "configured_dsl_used": framework.get("configured_framework_used"),
+                "required_phase_used": framework.get("required_phase_used"),
+                "unexpected_core_technologies": (
+                    list(unexpected) if isinstance(unexpected, list) else []
+                ),
+            }
+        return {
+            "violations": violations,
+            "implementation_review": implementation_review,
+        }
 
     def supplemental_numerical_feedback(
         self,
@@ -756,9 +861,8 @@ class Campaign:
         self.start_runtime()
         runtime = self._supervisor_runtime
         baseline_kernel_id = runtime.baseline_kernel_commit(agent_workspace)
-        # Bind the source under the Agent-visible commit. The controller commit
-        # may identify identical bytes in a different, private Git history and
-        # must never leak into an Agent ABBA request.
+        # Bind source under the Agent-visible commit. Runtime-private source
+        # archives never replace or leak a second Git identity into requests.
         runtime.measurements.kernel(incumbent_source, baseline_kernel_id)
         return {
             "baseline_kernel_id": baseline_kernel_id,
@@ -779,7 +883,7 @@ class Campaign:
         origin: dict[str, int] | None = None,
         session_capture_root: Path | None = None,
     ) -> Path:
-        """Start Runtime if needed and bind an Episode from trusted controller state."""
+        """Start Runtime if needed and bind an audit segment to Agent Git."""
         self.start_runtime()
         return self._supervisor_runtime.register_episode(
             workspace,
@@ -845,7 +949,7 @@ class Campaign:
 
 
     def _generalized_memory_coverage_problem(self, memory: dict | None) -> str:
-        """Require successful canonical memory to cover every private shape by opaque id."""
+        """Require the private evaluation result to cover every shape by opaque id."""
         private_dir = self.private_reference_dir
         if private_dir is None or memory is None:
             return ""
@@ -861,7 +965,7 @@ class Campaign:
         measured_ids = {str(value) for value in measured}
         if measured_ids != expected_ids:
             return (
-                "canonical memory lacks complete real-shape performance coverage "
+                "evaluation result lacks complete real-shape performance coverage "
                 f"({len(measured_ids)}/{len(expected_ids)})"
             )
         return ""
@@ -951,24 +1055,28 @@ class Campaign:
     @staticmethod
     def _persist_production_review_record(
         workspace: Path,
-        candidate_digest: str,
+        submission_id: str,
         review_record: dict[str, object],
+        *,
+        conversation: Path | None = None,
+        token_usage: Path | None = None,
     ) -> list[str]:
+        from aka.light.runtime.paths import supervisor_submission_root
+        from aka.light.workflow.review_archive import archive_review
+
         record_path = (
-            workspace
-            / ".atrex_long_horizon"
-            / "production_reviews"
-            / f"{candidate_digest}.json"
+            supervisor_submission_root(workspace)
+            / submission_id
+            / "review"
         )
         try:
-            record_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = record_path.with_suffix(".json.tmp")
-            temporary_path.write_text(
-                json.dumps(review_record, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
+            archive_review(
+                record_path,
+                result=review_record,
+                conversation=conversation,
+                token_usage=token_usage,
             )
-            temporary_path.replace(record_path)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return [
                 "could not persist final-source policy verdict: "
                 f"{type(exc).__name__}: {exc}"
@@ -982,19 +1090,49 @@ class Campaign:
         require_gluon: bool,
         *,
         candidate_digest: str,
+        submission_id: str | None = None,
         record_workspace: Path | None = None,
+        review_record_sink=None,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
         from aka.light.execution.retry import check_review_service
+        from aka.light.runtime.paths import supervisor_submission_root
 
         cache_key = candidate_digest + ":" + self.agent_cli
         cached = self._production_review_cache.get(cache_key)
+        if (
+            cached is not None
+            and submission_id is not None
+            and not isinstance(cached[1].get("submission_id"), str)
+        ):
+            # An advisory caller may have populated the in-memory verdict
+            # without a durable Review archive. A formal submission needs its
+            # own co-located conversation and token receipt, so rerun it.
+            cached = None
         if cached is not None:
             cached_errors, review_record = cached
+            if review_record_sink is not None:
+                review_record_sink(dict(review_record))
+            if submission_id is None:
+                return list(cached_errors)
+            previous_submission_id = review_record.get("submission_id")
+            previous_root = (
+                supervisor_submission_root(self.workspace)
+                / str(previous_submission_id)
+                / "review"
+            )
+            reused_record = {
+                **review_record,
+                "submission_id": submission_id,
+                "review_execution": "reused",
+                "reused_from_submission_id": previous_submission_id,
+            }
             persistence_errors = self._persist_production_review_record(
-                record_workspace or workspace,
-                candidate_digest,
-                review_record,
+                self.workspace,
+                submission_id,
+                reused_record,
+                conversation=previous_root / "conversation.jsonl",
+                token_usage=previous_root / "token-usage.json",
             )
             return list(dict.fromkeys([*cached_errors, *persistence_errors]))
 
@@ -1015,12 +1153,17 @@ class Campaign:
         from aka.light.runtime.paths import supervisor_campaign_root
 
         supervisor_root = supervisor_campaign_root(self.workspace)
+        runtime = getattr(self, "_supervisor_runtime", None)
+        runtime_root = getattr(runtime, "root", None)
         capture_root = (
-            supervisor_root
-            / "review-sessions"
-            / "final_source_policy_review"
-            / candidate_digest
-            / uuid.uuid4().hex
+            (
+                Path(runtime_root)
+                if runtime_root is not None
+                else supervisor_root
+            )
+            / "review-capture"
+            / "final-source"
+            / (submission_id or uuid.uuid4().hex)
         )
         with tempfile.TemporaryDirectory(
             prefix="atrex-production-review-"
@@ -1091,6 +1234,7 @@ class Campaign:
                     review_kind="final_source_policy_review",
                     label="independent final-source policy review",
                     backend=self.agent_cli,
+                    persist_separate_receipt=False,
                 )
                 from aka.light.agent.session_capture import latest_complete_session_archive
                 from aka.light.execution.retry import ReviewerOutputUnavailable
@@ -1189,22 +1333,23 @@ class Campaign:
             "summary": review_summary,
             "review": review_payload,
             "derived_review": derived_review,
-            "session_archive": {
-                "session_id": result.session_id,
-                "conversation_path": session_archive.conversation.relative_to(
-                    supervisor_root
-                ).as_posix(),
-                "token_usage_path": session_archive.token_usage.relative_to(
-                    supervisor_root
-                ).as_posix(),
-            },
+            "review_execution": "executed",
+            "session_id": result.session_id,
         }
-        persistence_errors = self._persist_production_review_record(
-            record_workspace or workspace,
-            candidate_digest,
-            review_record,
-        )
+        if submission_id is not None:
+            review_record["submission_id"] = submission_id
+            persistence_errors = self._persist_production_review_record(
+                self.workspace,
+                submission_id,
+                review_record,
+                conversation=session_archive.conversation,
+                token_usage=session_archive.token_usage,
+            )
+        else:
+            persistence_errors = []
         self._production_review_cache[cache_key] = (tuple(errors), review_record)
+        if review_record_sink is not None:
+            review_record_sink(dict(review_record))
         return list(dict.fromkeys([*errors, *persistence_errors]))
 
     def _review_production_candidate(
@@ -1212,6 +1357,9 @@ class Campaign:
         workspace: Path,
         framework: str,
         require_gluon: bool,
+        *,
+        review_record_sink=None,
+        submission_id: str | None = None,
     ) -> list[str]:
         """Bound timeout retries across sessions and supervisor restarts."""
         from aka.light.execution.retry import retry_review
@@ -1246,7 +1394,12 @@ class Campaign:
             return retry_review(
                 self.workspace, stage,
                 lambda: self._review_production_candidate_once(
-                    workspace, framework, require_gluon, candidate_digest=digest,
+                    workspace,
+                    framework,
+                    require_gluon,
+                    candidate_digest=digest,
+                    submission_id=submission_id,
+                    review_record_sink=review_record_sink,
                 ),
                 cancel=getattr(self, "search_cancel", None),
             )
@@ -1258,9 +1411,31 @@ class Campaign:
         workspace: Path | None = None,
         *,
         require_gluon: bool = False,
+        review_record_sink=None,
+        submission_id: str | None = None,
     ) -> list[str]:
         if not self.source_checks_enabled:
             return []
+        production_reviewer = self._review_production_candidate
+        if review_record_sink is not None:
+            production_reviewer = lambda candidate, framework, gluon: (
+                self._review_production_candidate(
+                    candidate,
+                    framework,
+                    gluon,
+                    review_record_sink=review_record_sink,
+                    submission_id=submission_id,
+                )
+            )
+        elif submission_id is not None:
+            production_reviewer = lambda candidate, framework, gluon: (
+                self._review_production_candidate(
+                    candidate,
+                    framework,
+                    gluon,
+                    submission_id=submission_id,
+                )
+            )
         return production_kernel_violations(
             workspace or self.workspace,
             self.framework,
@@ -1271,7 +1446,7 @@ class Campaign:
                     specify_dsl=self.specify_dsl,
                 ) == "pinned"
             ),
-            production_reviewer=self._review_production_candidate,
+            production_reviewer=production_reviewer,
         )
 
     @cached_property
@@ -1491,7 +1666,7 @@ class Campaign:
             "supplies the official evaluator and private inputs.\n"
             "- V0 uses exactly one full-workload base-seed evaluator run. It does not profile, "
             "run multi-seed correctness, or perform ABBA.\n"
-            "- Ground-truth operator files and canonical memory are immutable to the Agent.\n\n"
+            "- Ground-truth operator files and Supervisor evaluation evidence are immutable to the Agent.\n\n"
             "## Hardware evidence policy\n\n"
             "V0 records identity only and does not speculate about peak specifications. "
             f"{hardware_evidence}The runtime architecture API is authoritative when a device "
@@ -1616,33 +1791,53 @@ class Campaign:
             flush=True,
         )
 
-    @property
-    def generate_memory(self) -> bool:
-        return bool(getattr(getattr(self, "module_options", None), "generate_memory", False))
+    def _run_v0_evaluator(self, source_commit: str) -> dict:
+        """Run and immediately seal V0 as a standard Campaign measurement."""
+        from aka.light.experiment.store import DuplicateTask
 
-    def _run_v0_evaluator(self) -> dict:
-        """Run the sole V0 evaluator and persist Supervisor-private facts."""
-        baseline_failure_path(self.workspace).unlink(missing_ok=True)
-        test = _sandbox_command(
-            self.workspace,
-            self.sandbox_hardware,
-            self.sandbox_profile,
-            self.sandbox_url,
-            self.sandbox_timeout,
-            ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
-            ssh=self.sandbox_ssh,
-            ssh_init=self.sandbox_ssh_init,
-            health_command=self.sandbox_health_command,
-            gateway_kind="run",
-            private_reference_dir=self.private_reference_dir,
-            evaluation_step_timeout=self.evaluation_step_timeout,
-            gpu_clock_mhz=self.gpu_clock_mhz,
-            # V0 is mandatory campaign evidence.  Keep polling/retrying through
-            # infrastructure failures exactly like the later terminal candidate
-            # gates; a completed incorrect V0 still returns normally and is
-            # rejected by the correctness check below.
-            terminal_validation=True,
+        store, request, kernels = baseline_measurement_spec(
+            self.workspace, source_commit
         )
+        try:
+            with store.reserve(request, kernels) as task:
+                test = _sandbox_command(
+                    self.workspace,
+                    self.sandbox_hardware,
+                    self.sandbox_profile,
+                    self.sandbox_url,
+                    self.sandbox_timeout,
+                    ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+                    ssh=self.sandbox_ssh,
+                    ssh_init=self.sandbox_ssh_init,
+                    health_command=self.sandbox_health_command,
+                    gateway_kind="run",
+                    private_reference_dir=self.private_reference_dir,
+                    evaluation_step_timeout=self.evaluation_step_timeout,
+                    gpu_clock_mhz=self.gpu_clock_mhz,
+                    job_root=task.directory / "repetition-1",
+                    # V0 is mandatory campaign evidence. Keep polling/retrying through
+                    # infrastructure failures exactly like later terminal validation.
+                    terminal_validation=True,
+                )
+                response = {
+                    "exit_code": test.returncode,
+                    "stdout": test.stdout,
+                    "stderr": test.stderr,
+                }
+                # Seal every terminal V0 result, including a correctness rejection.
+                # Infrastructure interruptions that throw before a terminal result
+                # leave this exact reservation and its physical Job checkpoints
+                # available for recovery on the next launch.
+                task.finish(response, cacheable=True)
+        except DuplicateTask as duplicate:
+            saved = store.read(duplicate.record_id)
+            receipt = saved.get("response", {}).get("agent_result", {})
+            saved_result = receipt.get("result", {}) if isinstance(receipt, dict) else {}
+            result = dict(saved_result) if isinstance(saved_result, dict) else {}
+            result["all_pass"] = result.get("correct") is True
+            if result["all_pass"] is not True:
+                raise RuntimeError("saved V0 measurement did not pass correctness")
+            return result
         self._print_v0_evaluator_output(test)
         if test.returncode == ENVIRONMENT_TEMPFAIL:
             raise EnvironmentUnavailable("V0 evaluation infrastructure is unavailable; retain its job evidence for recovery")
@@ -1650,32 +1845,12 @@ class Campaign:
             result = _test_result_from_stdout(test.stdout)
         except (RuntimeError, json.JSONDecodeError) as exc:
             raise RuntimeError(
-                f"sandbox V0 baseline produced no usable result: {exc}"
+                f"sandbox V0 Evaluate produced no usable result: {exc}"
             ) from exc
-        record = _local_test_record(
-            self.workspace,
-            "v0",
-            result,
-            existing=read_baseline_record(self.workspace) or {},
-        )
-        # A sharded Evaluate can submit several backend ev_* jobs.  They are
-        # implementation details of one logical Gateway Record: retain them for
-        # Supervisor audit/recovery, but never project them into PROGRESS.md.
-        backend_job_ids = list(
-            dict.fromkeys(
-                re.findall(r"\bev_[A-Za-z0-9_.-]+\b", test.stdout + "\n" + test.stderr)
-            )
-        )
-        if backend_job_ids:
-            record["backend_job_ids"] = backend_job_ids
         if test.returncode != 0 or not result.get("all_pass"):
-            # Keep diagnostics without making latest_version() treat a failed or
-            # interrupted baseline as canonical. A rerun will retry V0 directly.
-            write_baseline_failure(self.workspace, record)
             raise RuntimeError(
-                "sandbox V0 baseline failed correctness/performance validation"
+                "sandbox V0 Evaluate failed correctness/performance validation"
             )
-        write_baseline_record(self.workspace, record)
         return result
 
 
@@ -1684,21 +1859,12 @@ class Campaign:
         result: dict,
         source_commit: str,
     ) -> None:
-        """Seal V0 facts privately while keeping HEAD at the real source commit."""
+        """Validate the V0 Measurement while keeping HEAD at its source commit."""
         memory = read_baseline_record(self.workspace)
         if not isinstance(memory, dict):
-            raise RuntimeError("V0 evaluator produced no private measurement record")
-        memory = dict(memory)
-        memory["git_commit_hash"] = source_commit
-        optimization = memory.setdefault("optimization", {})
-        optimization["action_category"] = "baseline"
-        optimization["action_description"] = (
-            "selected initial implementation measured by the official full-workload evaluator"
-        )
-        optimization["expected_impact"] = "correctness and latency reference for later versions"
-        optimization["risks_and_rollback"] = "none; immutable V0 reference baseline"
-        memory = objective_score_report(self.workspace, 0, memory)
-        write_baseline_record(self.workspace, memory)
+            raise RuntimeError("V0 evaluator produced no MeasurementStore record")
+        if memory.get("git_commit_hash") != source_commit:
+            raise RuntimeError("V0 measurement does not point to its source commit")
         coverage_problem = self._generalized_memory_coverage_problem(memory)
         if coverage_problem:
             raise RuntimeError(f"invalid native V0 measurement: {coverage_problem}")
@@ -1706,10 +1872,34 @@ class Campaign:
         if recorded.get("git_commit_hash") != source_commit:
             raise RuntimeError("V0 measurement record does not point to the V0 source commit")
         from aka.light.workspace.sources import from_git, snapshot as source_snapshot
-        if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
+        archived_source = from_git(self.workspace, source_commit)
+        if archived_source != source_snapshot(self.workspace):
             raise RuntimeError("V0 candidate source differs from its recorded source commit")
         if git_head(self.workspace) != source_commit:
             raise RuntimeError("V0 measurement must not advance Git beyond its source commit")
+
+        # Current managed Campaigns keep exactly one canonical V0 source
+        # archive in MeasurementStore.  campaign.json records only its public
+        # Agent Git identity and content digest; source preparation snapshots
+        # are temporary and never become persistent Campaign state.
+        from aka.light.runtime.paths import (
+            CAMPAIGN_MANIFEST,
+            record_campaign_v0,
+            supervisor_campaign_base_root,
+            supervisor_measurement_root,
+        )
+        campaign_root = supervisor_campaign_base_root(self.workspace)
+        if (campaign_root / CAMPAIGN_MANIFEST).is_file():
+            from aka.light.experiment.store import MeasurementStore
+
+            identity = MeasurementStore(
+                supervisor_measurement_root(self.workspace)
+            ).kernel(archived_source, source_commit)
+            record_campaign_v0(
+                self.workspace,
+                kernel_commit_id=identity["kernel_id"],
+                kernel_artifact_digest=identity["kernel_artifact_digest"],
+            )
 
     def _setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
         """Seed native Atrex-Bench V0 without launching a coding Agent."""
@@ -1766,7 +1956,7 @@ class Campaign:
         if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
             raise RuntimeError("native V0 source history does not match the selected source")
 
-        result = self._run_v0_evaluator()
+        result = self._run_v0_evaluator(source_commit)
         self._finalize_v0_measurement(result, source_commit)
         self._assert_generalized_inputs_are_private()
         contract_problem = self._generalized_contract_commit_problem()
@@ -1812,7 +2002,7 @@ class Campaign:
         source_commit = v0_baseline_commit(self.workspace)
         if not source_commit:
             raise RuntimeError("SOL V0 has no committed kernel.py")
-        result = self._run_v0_evaluator()
+        result = self._run_v0_evaluator(source_commit)
         self._finalize_v0_measurement(
             result,
             source_commit,
@@ -1838,15 +2028,6 @@ class Campaign:
 
     def _finish(self, reason: str) -> str:
         print(f"\n[orchestrator] STOP — {reason}", flush=True)
-        if self.generate_memory:
-            try:
-                subprocess.run(
-                    [sys.executable, str(resource("tools/memory_manager.py")),
-                     "summary", "--workspace", str(self.workspace)],
-                    check=False,
-                )
-            except OSError:
-                pass
         # Production output is fail-closed: do not package a PyTorch baseline,
         # alternate DSL, or independently rejected dependency as a production candidate.
         if self.optimization_mode == "production":

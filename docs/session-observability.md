@@ -117,25 +117,28 @@ Standalone invocations without a managed Campaign still default to
 
 Set `ATREX_SESSION_CAPTURE_DIR` to override that root for standalone invocations. Relative paths resolve against the invocation workspace. Light selects its Episode-specific archive directory. Every invocation, including same-session repair/resume, gets a new `run-<uuid>`; the provider session ID can remain the same.
 
-Research-claim reviewers use an explicit Episode-private capture root instead of the
-temporary evidence bundle, so deleting that bundle never deletes the conversation:
+Review evidence is stored with the exact object that was reviewed, rather than in a
+separate Review index:
 
 ```text
-<episode>/claim-review-sessions/claim-review-<id>/attempt-<n>/run-<uuid>/
+research-library/directions/<direction-id>/vN/review/
+research-library/experiments/<experiment-id>/vN/review/
+submissions/<submission-id>/review/
+  result.json
   conversation.jsonl
   token-usage.json
-  provider/
+  attempts/aN/             # claim-review retries, when present
 ```
 
-The private `claim-reviews/review_<id>.json` receipt stores the provider Session ID and relative
-paths to both `conversation.jsonl` and `token-usage.json` for every attempt. The corresponding
-`claim-audit/claimaudit_<id>/review.json` links the Agent submission, canonical review
-receipt and captured conversations. Rejected and unavailable reviews keep the same
-Session audit under the private audit outcome. None of these paths or private identifiers
-are projected into the Agent-facing Runtime response.
+Unsupported claim attempts are retained privately under the matching claim identity at
+`attempts/<attempt-id>/review/`; they are not canonical `vN` revisions and are not projected
+to the Agent. The Runtime request audit preserves malformed requests that never acquired a
+valid claim identity. Legacy `claim-reviews`, `claim-audit`, `claim-review-index`,
+`review-records` and `review-sessions` directories are read-only migration inputs; current
+Light never writes them.
 
-When a local Direction or Experiment is revised, Runtime indexes the latest valid reviewer
-Session by stable claim ID and resumes it for the next Review. The resumed invocation uses a
+When a local Direction or Experiment is revised, Runtime reads the latest attached Review by
+stable claim ID and resumes its accepted reviewer Session. The resumed invocation uses a
 campaign-stable, reviewer-only provider Home while writing a new invocation-scoped capture, so
 later continuation never overwrites the earlier audit. Missing or incompatible native Session
 state causes one fresh-Session retry; lifecycle-only Direction updates do not replace the claim's

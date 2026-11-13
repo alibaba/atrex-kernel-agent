@@ -15,7 +15,6 @@ Config = {"type": "object", "properties": {
     "startup": {"type": "boolean"},
     "numerical_validation": {"type": "boolean"},
     "goal_episodes": {"type": "boolean"},
-    "generate_memory": {"type": "boolean"},
     "output_limit_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
     "dependency_policy_recovery_retries": {
         "type": "integer", "minimum": 0, "maximum": 10,
@@ -38,7 +37,7 @@ Config = {"type": "object", "properties": {
         "role_specialization": {"type": "boolean"},
     }, "additionalProperties": False},
 }, "additionalProperties": False}
-Defaults = {"startup": False, "numerical_validation": False, "goal_episodes": False, "generate_memory": False,
+Defaults = {"startup": False, "numerical_validation": False, "goal_episodes": False,
             "output_limit_recovery_retries": DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES,
             "dependency_policy_recovery_retries": 2,
             "search": asdict(SearchOptions())}

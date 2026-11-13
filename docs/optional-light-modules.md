@@ -276,7 +276,7 @@ Provider configuration uses the existing Core composition patch format. For exam
   "patches": [
     {"id": "agent", "config": {"sandbox": "bwrap", "capture": false, "bwrap_executable": "bwrap", "read_only_paths": []}},
     {"id": "tool_runtime", "config": {"measurement_repetitions": 3, "wiki": false, "queue_timeout": 60, "request_timeout": 1800}},
-    {"id": "workflow", "config": {"startup": true, "numerical_validation": false, "goal_episodes": false, "generate_memory": false}}
+    {"id": "workflow", "config": {"startup": true, "numerical_validation": false, "goal_episodes": false}}
   ]
 }
 ```
@@ -292,8 +292,8 @@ the required `startup` service and prevents the CLI from launching the campaign.
 | `aka.light.agent.plugin` | `sandbox: none`, `capture: false`, `bwrap_executable: bwrap`, `read_only_paths: []`, `proc_mode: private`, `timeout_seconds: 28800` |
 | `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `pause_agent_during_requests: true`, `wiki: true`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
 | `aka.light.wiki.plugin` | `root: ""` (the selected checkout's `gpu-wiki`); see [Wiki providers](#wiki-providers) |
-| `aka.light.workflow.plugin` | `startup: false` in the standalone provider, set to `true` by CLI profiles; `numerical_validation: false`, `goal_episodes: false`, `generate_memory: false`, `output_limit_recovery_retries: 5`, no Episode active-time limit by default; pooled three-trajectory synchronous `search` is enabled by default and an explicit empty mapping selects serial execution; optional `source_tree` import compatibility |
-| `aka.light.workspace.plugin` | `inherit_state: true`; carry custom Skills/tools across Episode audit segments independently of accepted submissions |
+| `aka.light.workflow.plugin` | `startup: false` in the standalone provider, set to `true` by CLI profiles; `numerical_validation: false`, `goal_episodes: false`, `output_limit_recovery_retries: 5`, no Episode active-time limit by default; pooled three-trajectory synchronous `search` is enabled by default and an explicit empty mapping selects serial execution; optional `source_tree` import compatibility |
+| `aka.light.workspace.plugin` | No functional options; every trajectory uses one persistent Agent repository and keeps source, Git, scratch, custom Skills and tools across Episode audit segments. The retired stored value `inherit_state: true` remains readable; `false` is rejected. |
 | `aka.light.execution.plugin` | No options; endpoint/timeouts remain prepared Execution request values |
 | `aka.light.evaluation.plugin` | No options; constructs measurement plans and projects/aggregates results |
 | `aka.light.experiment.plugin` | No options; injects the selected Evaluation and opens Campaign-scoped stores |
@@ -464,9 +464,16 @@ There is no performance-based stall or target-utilization stop because observed 
 not control admission. Other Workflow switches keep their defaults; include them in the same
 whole-config patch when overriding them.
 
-The controller keeps `search/state.json`, per-Epoch summaries under `search/epochs/`,
-and private repositories under `search/trajectories/` beneath its existing private Campaign
-root. State writes precede dispatch. On restart, completed Episodes are read and unfinished
+The Campaign root keeps `coordinator.json`, serialized by `coordinator.lock`, and one directory per
+synchronous or asynchronous publication under `publications/pNNNNNNNN/`. Its
+`publication.json` stores the global synchronization record, `sources/tNNNN/` stores each
+producer's immutable Git history and receipt, and `imports/tNNNN.json` records each consumer's
+eventual import. The coordinator
+checkpoint contains only Campaign-wide scheduling facts such as the Epoch, active jobs and global
+best; each trajectory's HEAD, Session, completed Episode and lineage winner remain in
+`lineages/tNNNN/state.json`. Each publication records its synchronization mode, lineage Episode
+watermarks, source Git refs, sealed evidence and scheduler summary. State writes precede dispatch.
+On restart, completed Episodes are read and unfinished
 ones resume through normal Session recovery. Peer publication replays only immutable evidence
 and Git-bundle export. A coordinator lock prevents two controllers from scheduling the
 same search. Corrupt state, changed configuration or unrelated controller edits fail closed.
@@ -540,13 +547,14 @@ rejected.
 
 In **repository mode**, add `"revision": "<full Git commit hash>"` under `source`.
 The Supervisor uses `git archive` at that revision, excluding uncommitted changes.
-Both modes save the complete initial snapshot atomically in the Supervisor-private
-`<scope>/initial-source/snapshot.json` **before** initializing/measuring V0. Failed
-Bootstrap retries reuse this snapshot even if the original directory, adapter or
-manifest has since changed or disappeared. A corrupt saved snapshot fails closed;
-it never silently recaptures a different seed. Use a new Campaign to select a new
-seed. The controller may still use its own Git repository for candidate sealing;
-the supplied source directory does not need to be one.
+Both modes normalize the initial source in temporary staging before atomically creating the
+schema-v3 `campaign.json`. The manifest owns the shared file-system selection and source contract;
+there is no trajectory-level `source/` copy and no persistent `initial-source/` directory. Once V0
+passes its full Evaluate, the complete canonical source tree is archived exactly once at
+`measurements/kernels/<V0-agent-commit>/kernel.py`, and `campaign.json` records that Agent commit
+and its SHA-256 digest. A pre-V0 retry must recapture the same seed contract; a post-V0 Campaign
+uses the Measurement Store archive as durable source evidence. Use a new Campaign to select a new
+seed. The supplied source directory does not need to be a Git repository.
 
 The controller pins the normalized seed and source contract. The Agent-visible Kernel
 boundary is always the editable `kernel.py + impl/` tree; the compatibility manifest,
@@ -613,60 +621,39 @@ on macOS. The Light sdist and wheel build successfully with the source/worker as
 ### Reusable workspace
 
 Managed native Episodes expose one editable `kernel.py + impl/` candidate source tree,
-writable `skills/` and `tools/`, temporary `scratch/`,
-optional Supervisor-owned `memory/v*.json`, and public contracts/instructions. `WORKSPACE.md` states
-the selected inheritance policy. Each reusable directory has a writable README index; Agents
+writable `skills/`, `tools/` and trajectory-persistent `scratch/`,
+Runtime-managed research/measurement projections, and public contracts/instructions. Each
+trajectory owns one stable workspace and real Git repository. Each reusable directory has a writable README index; Agents
 must update it when adding, modifying or deleting custom contents. Store reusable methods in
 `skills/<name>/SKILL.md` and scripts in `tools/`; scratch is for one-off requests/probes/outputs.
 
 Installed Skills (including enabled plugin Skills), `tools/sandbox.py`, and `tools/plugin.py`
 remain reserved. Bubblewrap mounts only those entries read-only, not their whole parent trees.
 Native mode remains cooperative same-UID execution, not a write-proof security boundary;
-reserved assets are refreshed from trusted sources and excluded from adaptive snapshots.
+reserved assets are refreshed from trusted sources and excluded from Agent Git.
 Custom Skill discovery links are refreshed before each Session. Custom scripts can be submitted
 through Dev (`-- python3 tools/probe.py`, plus `--input` for dependencies); the HTTP clients
 and knowledge Skills are not shipped to GPU workers.
 
-After each Session, the Supervisor retains the trajectory's stable Agent repository in place and
-also atomically checkpoints custom files under the Campaign's private `adaptive-state/` directory
-for disaster recovery. New Episodes rebind Runtime capability, Journal and trusted public assets
-without reconstructing the repository, even if the previous Kernel was rejected, pivoted or
-blocked. This is reusable, untrusted Agent content, not measurement evidence or executable
-Supervisor code. Deletions and executable permissions survive; built-in assets always come
-from the selected package/plugin catalog. Limits are 16 MiB/file, 64 MiB total, 4096 entries
-and 32 directory levels; symlinks/special files are rejected and generated Python caches ignored.
-An incomplete save cannot replace the last good snapshot. Old draft upgrades preserve custom
-files already present instead of replacing them with another Episode's seed.
+New Episodes rebind Runtime capability, Journal and trusted public assets without reconstructing
+the workspace, even if the previous Kernel was rejected, pivoted or blocked. Source, uncommitted
+work, local branches/tags, `scratch/`, custom Skills and tools therefore remain exactly in place.
+There is no `adaptive-state/` snapshot layer and no cross-Episode inheritance switch. Peer Git is
+fetched directly into the persistent repository under remote-tracking refs such as `atrex/T2`;
+the common Agent V0 root is archived once as `bootstrap/agent-v0.bundle`. Git exchange is a
+component of the corresponding global Publication, not a separate lineage tree: producer bundles
+live under `publications/pNNNNNNNN/sources/tNNNN/` and consumer receipts under
+`publications/pNNNNNNNN/imports/`. There is no `peer-git/` or `git-sharing/` wrapper. Built-in assets always
+come from the selected package/plugin catalog. The bounded no-symlink validation used for custom
+Skill discovery remains a Session-start safety check, not a persistence mechanism.
 
-To disable cross-Episode inheritance without disabling writable directories or same-Episode
-recovery, use `{"api_version":1,"patches":[{"id":"candidate","config":{"inherit_state":false}}]}`.
-The default is true only for Light's Workspace provider; upstream providers are unchanged.
-Change this option at an Episode boundary, not during a resumed Episode. Disabled Episodes retain
-the legacy per-Episode projected workspace behavior and start with packaged defaults; snapshots
-still serve as private history. With the default persistent workspace, scratch remains trajectory-local;
-with inheritance disabled it starts empty in every new Episode. Neither inheritance nor saving depends on
-Kernel acceptance, and neither grants the Agent Git access. Journal options are unchanged.
+### Durable optimization state
 
-### Optional memory summaries
-
-Light does **not** generate `memory/vN.json` by default, including V0, the framework
-baseline and terminal Episodes. To enable summaries, pass a composition patch:
-
-```json
-{"api_version":1,"patches":[{"id":"workflow","config":{"startup":true,"generate_memory":true}}]}
-```
-
-Enabled summaries retain performance, experience, Profile evidence and open directions.
-Disabled runs do not compile the experience/Profile summaries. Measurements and exact-source
-identities remain in the private MeasurementStore, while accepted submissions and winner facts
-remain in the Journal/Research Store. No controller-owned candidate commit or promotion record is
-created. Native mode remains cooperative, not an OS security boundary.
-
-Change the option at an Episode boundary. Existing memory-only histories remain readable;
-disabling generation does not delete old summaries, and enabling it does not backfill old
-versions. Existing summaries remain read-only Agent history. This switch is independent of
-research records, `submit-kernel`, private Session capture and Skills/tools
-inheritance. Upstream `workflow` behavior is unchanged.
+Light does not generate or project `memory/vN.json`. Agent Git is the exact source history;
+`PROGRESS.md`, Direction/Experiment projections and immutable Gateway Records are the durable
+Agent-facing optimization state. Supervisor-private stores retain measurements, requests,
+reviews, token usage and audit facts without copying a second summary history into the Agent
+workspace.
 
 ### Selectable research recording
 
@@ -684,9 +671,10 @@ Direction and Experiment recording are independent modules. Both are enabled by 
 
 Pass it with `aka optimize --repo-root /path/to/aka --profile light --patch /path/to/patch.json -- ...`
 (also supported by `light-sandbox`). Use `["directions"]`, `["experiments"]`, or `[]` for the other
-three modes. The selected value is persisted in the private Episode Journal; do not change it while
-resuming an existing Episode. Older Journals without the field retain both modules. Existing records
-are not deleted or reinterpreted when a later Campaign selects different modules.
+three modes. The selected value is part of the Campaign configuration and is supplied explicitly
+when each trajectory Runtime service is opened. Light does not infer it from, or migrate it through,
+an Episode Journal. Existing central Research records are not deleted or reinterpreted by the
+selection.
 
 With both modules disabled, `update-direction` and `record-experiment` reject writes; no synthetic
 rows are created. `evaluate` continues to write immutable Gateway Records, and `submit-kernel`
@@ -740,8 +728,8 @@ performance data, unreachable Agent commits, or source-policy failures; correct 
 resubmit the same or a newer commit. Missing/malformed IDs are repairable; corrupt or inaccessible
 private evidence is an operator/storage failure, not a reason to remeasure.
 
-Completed duplicate tasks return `previous_gateway_record_id` and the corresponding `records/<ID>.json` path;
-in-progress duplicates tell the Agent to wait for the original call. A confirmed pre-dispatch queue
+Completed exact duplicates reuse the existing validated Record and return the same normal completed
+receipt; in-progress duplicates tell the Agent to wait for the original call. A confirmed pre-dispatch queue
 timeout remains HTTP 429 with backoff and unchanged-request retry guidance. Post-dispatch unknown
 outcomes remain non-repairable HTTP 503 and must be reconciled before any resubmission. CLI-local
 format and transport failures use the same compact issues/recovery format without importing private
@@ -756,7 +744,7 @@ The providers reuse the current public `Agent`, `Workflow`, `Problem`, `SourcePr
 | Service key | Implementation | Owns |
 | --- | --- | --- |
 | `agent` | `aka.light.agent.plugin` | Local model processes, sandbox, native sessions and diagnostic capture |
-| `candidate` | `aka.light.workspace.plugin` | Public drafts, reusable-state snapshots, scratch lifecycle and sealed Git operations |
+| `candidate` | `aka.light.workspace.plugin` | Persistent Agent workspace, source contract, scratch lifecycle and Agent-owned Git operations |
 | `executor` | `aka.light.execution.plugin` | Bounded Gateway processes, cancellation, physical submission and checkpoint recovery |
 | `light_evaluation` | `aka.light.evaluation.plugin` | Exact measurement plans, result interpretation, public projection and per-Shape median |
 | `light_experiments` | `aka.light.experiment.plugin` | Campaign stores, Kernel/Record identity, deduplication and evidence publication |
@@ -952,7 +940,7 @@ Light's shared defaults are defined in `aka.light.evaluation.policy`. Performanc
 
 ABBA submits native `Eval` requests with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Agent exploration and Supervisor retention use the same Runtime-owned five-case correctness policy. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume; the former Dev-driver fallback is removed. Explicit SSH uses the same native request and evidence contract. SOL comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
 
-The resolved measurement defaults and native transport participate in the task identity. Old Dev ABBA/old-policy Evaluate records remain readable but cannot satisfy the new measurement contract. Acceptance retry keys also identify the GeoMean policy. Journal options, adaptive-state inheritance, Workflow organization and supplemental numerical-validation configuration are unchanged.
+The resolved measurement defaults and native transport participate in the task identity. Old Dev ABBA/old-policy Evaluate records remain readable but cannot satisfy the new measurement contract. Acceptance retry keys also identify the GeoMean policy. Journal options, persistent-workspace organization and supplemental numerical-validation configuration are unchanged.
 
 ## Security, migration and rollback
 

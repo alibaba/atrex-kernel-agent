@@ -1,5 +1,9 @@
 """Application adapter: public module inputs, private light Campaign mechanics."""
-from dataclasses import fields
+from dataclasses import fields, replace
+import json
+import os
+from pathlib import Path
+import tempfile
 
 from aka.contracts.agent import AgentRunRequest
 from aka.contracts.workspace import SourceRequest
@@ -11,8 +15,128 @@ class ManagedCampaign(Campaign):
     __hash__ = object.__hash__
     __eq__ = object.__eq__
 
+    @staticmethod
+    def _source_request(request, problem):
+        return SourceRequest(
+            initial=problem.initial_source,
+            name=request.name,
+            framework=(
+                request.settings.framework
+                if request.settings.specify_dsl
+                else "Agent-selected supported GPU DSL"
+            ),
+            platform=request.settings.platform,
+        )
+
+    @staticmethod
+    def _content_files(content) -> dict[str, bytes]:
+        files = {}
+        for entry in content.files:
+            if entry.path in files:
+                raise ValueError(f"Initial source contains duplicate path: {entry.path}")
+            files[entry.path] = (
+                entry.source.read_bytes()
+                if entry.source is not None
+                else entry.text.encode("utf-8")
+            )
+        return files
+
+    @classmethod
+    def _prepare_campaign_source(
+        cls, request, problem, workflow, *, state_root: Path
+    ):
+        initial = problem.initial_source
+        native_eval = initial.kind != "sol" and problem.evaluation.runtime_root is not None
+        options = workflow.candidate.source_options(workflow.options.source_tree)
+        if initial.kind == "sol":
+            if options is not None:
+                raise ValueError(
+                    "Source trees require native Atrex-Bench Eval, not SOL"
+                )
+            if workflow.candidate.file_system not in (None, "single_file"):
+                raise ValueError("SOL requires the single_file candidate file system")
+            from aka.light.workspace.sources import select
+
+            system = select("single_file")
+        else:
+            system = workflow.candidate.select_file_system(
+                framework=request.settings.framework,
+                source_tree=options is not None,
+            )
+        content = workflow.candidate.prepare_source(
+            system,
+            cls._source_request(request, problem),
+            workflow.source,
+            options=options,
+            state_root=state_root,
+            native_eval=native_eval,
+        )
+        files = cls._content_files(content)
+        if system.name == "source_tree":
+            try:
+                snapshot = json.loads(
+                    (state_root / "snapshot.json").read_text(encoding="utf-8")
+                )
+                contract = snapshot["contract"]
+            except (OSError, UnicodeError, json.JSONDecodeError, KeyError) as error:
+                raise ValueError(
+                    "Initial source-tree snapshot did not produce a valid contract"
+                ) from error
+        else:
+            contract = system.default_policy
+        system.validate_policy(contract)
+        system.validate(files, contract)
+        from aka.light.workspace.sources import pack
+
+        packed = pack(files, contract)
+        return content, packed, {
+            "file_system": system.name,
+            "contract": contract,
+        }
+
     @classmethod
     def create(cls, request, problem, workflow, evaluation):
+        from aka.light.runtime.paths import initialize_campaign_root
+        from aka.bootstrap.continuation import launch_composition, read
+
+        payload = read(os.environ)
+        if payload is None:
+            raise RuntimeError(
+                "AKA Light Campaign creation requires the frozen launch composition"
+            )
+
+        campaign_root = Path(request.workspace).expanduser().resolve()
+        campaign_root.parent.mkdir(parents=True, exist_ok=True)
+        # SourceProvider codecs may need a bounded staging directory while they
+        # normalize the initial tree and derive its immutable contract.  This
+        # is preparation state, not Campaign evidence: the authoritative V0
+        # source is archived under measurements/kernels/<Agent-commit>/ after
+        # its full Evaluate succeeds.
+        with tempfile.TemporaryDirectory(
+            prefix=f".{campaign_root.name}-source-",
+            dir=campaign_root.parent,
+        ) as staged_directory:
+            source_state_root = Path(staged_directory) / "initial-source"
+            initial_content, initial_source, source_binding = (
+                cls._prepare_campaign_source(
+                    request,
+                    problem,
+                    workflow,
+                    state_root=source_state_root,
+                )
+            )
+            campaign_root = initialize_campaign_root(
+                campaign_root,
+                name=request.name,
+                launch_composition=launch_composition(payload),
+                source=source_binding,
+            )
+        # The user-selected workspace is the Campaign container.  Candidate
+        # Git exists only in lineage Agent workspaces.
+        agent_workspace = (
+            campaign_root / "lineages" / "t0001" / "agent-workspace"
+        )
+        request = replace(request, workspace=agent_workspace)
         settings = request.settings
         common = {f.name: getattr(settings, f.name) for f in fields(Campaign)
                   if f.init and hasattr(settings, f.name)}
@@ -32,6 +156,7 @@ class ManagedCampaign(Campaign):
             bwrap_executable=workflow.agent.options.bwrap_executable,
             agent_read_only_paths=workflow.agent.options.read_only_paths)
         campaign.request = request
+        campaign.campaign_root = campaign_root
         campaign.problem = problem
         campaign.problem_provider = workflow.problem
         campaign.agent = workflow.agent
@@ -39,6 +164,8 @@ class ManagedCampaign(Campaign):
         campaign.candidate_workspace = workflow.candidate
         campaign.module_options = workflow.options
         campaign.tool_runtime = workflow.tool_runtime
+        campaign._prepared_initial_content = initial_content
+        campaign._selected_initial_source = initial_source
         return campaign
 
     @property
@@ -65,21 +192,23 @@ class ManagedCampaign(Campaign):
     def run(self):
         # EnvironmentUnavailable is shared with WorkflowStartup; preserve the
         # original exception and traceback through both serial and pooled runs.
-        from aka.light.runtime.paths import supervisor_campaign_root
-        search_root = supervisor_campaign_root(self.workspace) / "search"
+        from aka.light.runtime.paths import supervisor_campaign_base_root
+        from aka.light.workflow.search import COORDINATOR_STATE
+
+        campaign_root = supervisor_campaign_base_root(self.workspace)
         if self.module_options.search is not None:
             if not self.atrex_bench_root:
                 raise ValueError("Pooled search requires native Atrex-Bench Eval/ABBA")
             from .search import PooledSearch
             from .search_driver import EpisodeSearchDriver
-            driver = EpisodeSearchDriver(self, search_root)
+            driver = EpisodeSearchDriver(self, campaign_root)
             try:
-                reason = PooledSearch(search_root, self.module_options.search, driver,
+                reason = PooledSearch(campaign_root, self.module_options.search, driver,
                                       token_budget=self.token_budget).run()
                 return self._finish(reason)
             finally:
                 driver.close()
-        if (search_root / "state.json").exists():
+        if (campaign_root / COORDINATOR_STATE).exists():
             raise ValueError("This workspace uses pooled search; restore its search configuration to resume")
         return super().run()
 
@@ -114,72 +243,27 @@ class ManagedCampaign(Campaign):
 
     def setup_baseline(self):
         initial = self.problem.initial_source
-        if self.module_options.source_tree:
-            if initial.kind == "sol" or not self.atrex_bench_root:
-                raise ValueError("Source trees require native Atrex-Bench Eval, not SOL")
-            from aka.contracts.content import SourceContent, WorkspaceFile
-            from aka.light.workspace.sources import initial_snapshot, unpack
-            source = initial_snapshot(self.workspace, self.module_options.source_tree)
-            policy, files = unpack(source)
-            content = SourceContent(tuple(
-                WorkspaceFile(name, text=data.decode()) for name, data in files.items()
-            ))
-        else:
-            content = self.source_provider.prepare(SourceRequest(
-                initial=initial,
-                name=self.campaign_name,
-                framework=(
-                    self.framework
-                    if self.specify_dsl
-                    else "Agent-selected supported GPU DSL"
-                ),
-                platform=self.platform))
-
-        # Native tasks enter the unified representation before V0 is committed
-        # or measured, so every optimization segment sees the same source tree
-        # whose identity was recorded by V0. SOL remains on its legacy wire contract.
-        if (not self.module_options.source_tree and initial.kind != "sol"
-                and self.atrex_bench_root):
-            from aka.contracts.content import SourceContent, WorkspaceFile
-            from aka.light.workspace.sources import default_tree, pack
-
-            entries = tuple(entry for entry in content.files if entry.path == "kernel.py")
-            if len(content.files) != 1 or len(entries) != 1:
-                raise ValueError(
-                    "Native initial source must contain exactly kernel.py; use source_tree "
-                    "for an explicitly imported multi-file Kernel"
-                )
-            entry = entries[0]
-            raw = entry.source.read_bytes() if entry.source is not None else entry.text.encode()
-            policy, files = default_tree({"kernel.py": raw})
-            source = pack(files, policy)
-            content = SourceContent(
-                tuple(
-                    WorkspaceFile(name, text=data.decode("utf-8"))
-                    for name, data in sorted(files.items())
-                ),
-                readme=content.readme,
-            )
-
-        if self.module_options.source_tree or (
-            initial.kind != "sol" and self.atrex_bench_root
-        ):
-            self._selected_initial_source = source
-        else:
-            self._selected_initial_source = next(
-                (entry.source.read_bytes() if entry.source is not None else entry.text.encode()
-                 for entry in content.files if entry.path == "kernel.py"), None)
-        if self._selected_initial_source is None:
-            raise ValueError("Selected SourceProvider must supply a Kernel source")
+        content = self._prepared_initial_content
         if initial.kind == "sol":
             self.candidate_workspace.prepare_sol(self.workspace, content,
                 problem_files=self.problem.agent.files)
+            from aka.light.workspace.sources import Artifact
+            Artifact(self._selected_initial_source).install(
+                self.workspace, replace=False, bind=True
+            )
             self._link_runtime()
             from aka.light.workspace.state import v0_baseline_commit
-            result = self._run_v0_evaluator()
-            self._finalize_v0_measurement(result, v0_baseline_commit(self.workspace))
+            source_commit = v0_baseline_commit(self.workspace)
+            if not source_commit:
+                raise RuntimeError("SOL V0 has no committed Kernel source")
+            result = self._run_v0_evaluator(source_commit)
+            self._finalize_v0_measurement(result, source_commit)
             return
         self.candidate_workspace.initialize_at(self.workspace, content)
+        from aka.light.workspace.sources import Artifact
+        Artifact(self._selected_initial_source).install(
+            self.workspace, replace=False, bind=True
+        )
         self.candidate_workspace.install_files(self.workspace, self.problem.agent.files)
         self._ensure_agent_problem()
         self._link_runtime()

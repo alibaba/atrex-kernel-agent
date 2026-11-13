@@ -23,6 +23,7 @@ from typing import Any
 from aka.legacy.task.persistence import durable_write_json
 from aka.light.agent.home import open_private_directory
 from aka.light.agent.session_tail import read_regular_bytes
+from aka.light.workflow.claim_review import canonical_review_quality
 
 SCHEMA_VERSION = 1
 MAX_EVENTS_BYTES = 64 * 1024 * 1024
@@ -80,6 +81,11 @@ def _remove_retired_plan_progress(state: Mapping[str, object]) -> None:
     if isinstance(directions, Mapping):
         for direction in directions.values():
             if isinstance(direction, dict):
+                if "owner_lineage" not in direction and isinstance(
+                    direction.get("proposed_by"), str
+                ):
+                    direction["owner_lineage"] = direction["proposed_by"]
+                direction.pop("proposed_by", None)
                 direction.pop("completed_plan_steps", None)
                 direction.pop("next_step", None)
                 if "objective" not in direction and isinstance(
@@ -88,6 +94,27 @@ def _remove_retired_plan_progress(state: Mapping[str, object]) -> None:
                     direction["objective"] = direction["hypothesis"]
                 direction.pop("hypothesis", None)
                 direction.pop("hypothesis_status", None)
+                quality = canonical_review_quality(
+                    direction.get("claim_review_quality", direction.get("review_quality"))
+                )
+                if quality is not None:
+                    direction["claim_review_quality"] = quality
+    experiments = state.get("experiments")
+    if isinstance(experiments, Mapping):
+        for experiment in experiments.values():
+            if isinstance(experiment, dict):
+                if "owner_lineage" not in experiment and isinstance(
+                    experiment.get("recorded_by"), str
+                ):
+                    experiment["owner_lineage"] = experiment["recorded_by"]
+                experiment.pop("recorded_by", None)
+                quality = canonical_review_quality(
+                    experiment.get(
+                        "claim_review_quality", experiment.get("review_quality")
+                    )
+                )
+                if quality is not None:
+                    experiment["claim_review_quality"] = quality
     lineages = state.get("lineages")
     if isinstance(lineages, Mapping):
         for lineage in lineages.values():
@@ -119,22 +146,28 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
         if not isinstance(direction_id, str) or not direction_id:
             raise ValueError("observed Direction has no ID")
         previous = state["directions"].get(direction_id, {})
-        previous_revision = previous.get("revision", 1)
-        item_revision = item.get("revision", 1)
+        previous_revision = previous.get("revision", 0)
+        item_revision = item.get("revision", 0)
         if (
             type(previous_revision) is not int
-            or previous_revision < 1
+            or previous_revision < 0
             or type(item_revision) is not int
-            or item_revision < 1
+            or item_revision < 0
         ):
             raise ValueError("Direction revision is invalid")
         if item_revision < previous_revision:
             raise ValueError("Direction revision regressed")
         item.setdefault("access", previous.get("access", "local_writable"))
-        proposed_by = item.get("proposed_by") or previous.get("proposed_by")
-        if not isinstance(proposed_by, str) or not proposed_by:
-            proposed_by = _lineage_key(origin)
-        item["proposed_by"] = proposed_by
+        owner_lineage = (
+            item.get("owner_lineage")
+            or item.get("proposed_by")
+            or previous.get("owner_lineage")
+            or previous.get("proposed_by")
+        )
+        if not isinstance(owner_lineage, str) or not owner_lineage:
+            owner_lineage = _lineage_key(origin)
+        item["owner_lineage"] = owner_lineage
+        item.pop("proposed_by", None)
         previous_owner = previous.get("owner")
         if item.get("status") == "in_progress" and not item.get("owner") and previous_owner:
             item["owner"] = previous_owner
@@ -230,7 +263,7 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
         item["origin"] = _origin(item.get("origin") if isinstance(item.get("origin"), Mapping) else origin)
         previous = state["experiments"].get(experiment_id)
         if previous is not None:
-            derived = {"origin", "recorded_by", "access"}
+            derived = {"origin", "owner_lineage", "recorded_by", "access"}
             previous_value = {
                 key: value for key, value in previous.items() if key not in derived
             }
@@ -254,9 +287,18 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
                 # Source lineage and local access are derived independently in
                 # each trajectory and may be added to an existing revision by
                 # a newer Runtime projection.
-                for field in ("recorded_by", "access"):
+                for field in ("owner_lineage", "recorded_by", "access"):
                     if field not in item and field in previous:
                         item[field] = previous[field]
+        owner_lineage = (
+            item.get("owner_lineage")
+            or item.get("recorded_by")
+            or (previous or {}).get("owner_lineage")
+            or (previous or {}).get("recorded_by")
+            or _lineage_key(origin)
+        )
+        item["owner_lineage"] = owner_lineage
+        item.pop("recorded_by", None)
         state["experiments"][experiment_id] = item
     elif kind == "lineage.checkpointed":
         lineage = _lineage_key(origin)
@@ -264,6 +306,7 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
         for key in (
             "working_kernel_id", "wip_checkpoint", "last_correct_kernel_id",
             "active_direction_id", "active_direction_ids", "session_id",
+            "gateway_record_ids",
         ):
             if key in payload:
                 current[key] = deepcopy(payload[key])
@@ -522,6 +565,27 @@ class ResearchStore:
                 _apply(state, event)
             return deepcopy(state)
 
+    def read_through_sequence(self, sequence: int) -> dict[str, Any]:
+        """Rebuild the exact catalog projection visible at one watermark."""
+        if type(sequence) is not int or sequence < 0:
+            raise ValueError("Research sequence watermark must be non-negative")
+        with self._locked():
+            state = _empty()
+            for event in self._events():
+                if event["sequence"] > sequence:
+                    break
+                _apply(state, event)
+            return deepcopy(state)
+
+    def events_through_sequence(self, sequence: int) -> list[dict[str, Any]]:
+        """Return immutable events through an inclusive catalog watermark."""
+        if type(sequence) is not int or sequence < 0:
+            raise ValueError("Research sequence watermark must be non-negative")
+        with self._locked():
+            return deepcopy([
+                event for event in self._events() if event["sequence"] <= sequence
+            ])
+
     def events_through_episode(self, episode: int) -> list[dict[str, Any]]:
         """Return only events eligible for a terminal Episode publication."""
         with self._locked():
@@ -703,7 +767,7 @@ class ResearchStore:
                     "direction_id": direction_id,
                     "name": item.get("name"),
                     "change_scope": item.get("change_scope", "incremental"),
-                    "proposed_by": item.get("proposed_by"),
+                    "owner_lineage": item.get("owner_lineage"),
                     "access": item.get("access"),
                     "status": (
                         f"in_progress({owner})"
@@ -714,8 +778,8 @@ class ResearchStore:
                     "expected_benefit": item.get("expected_benefit"),
                     "analysis": item.get("analysis"),
                     "reopen_condition": item.get("reopen_condition"),
-                    "claim_review_quality": item.get(
-                        "claim_review_quality", item.get("review_quality")
+                    "claim_review_quality": canonical_review_quality(
+                        item.get("claim_review_quality", item.get("review_quality"))
                     ),
                 })
             rows = candidates[:MAX_BOARD_DIRECTIONS]
@@ -754,7 +818,7 @@ class ResearchStore:
             {
                 key: item.get(key)
                 for key in (
-                    "experiment_id", "direction_id", "name", "recorded_by", "access",
+                    "experiment_id", "direction_id", "name", "owner_lineage", "access",
                     "interpretation",
                 )
                 if item.get(key) is not None
@@ -765,7 +829,7 @@ class ResearchStore:
             {
                 key: item.get(key)
                 for key in (
-                    "direction_id", "name", "proposed_by", "access", "status", "objective",
+                    "direction_id", "name", "owner_lineage", "access", "status", "objective",
                     "applicability", "expected_benefit", "analysis", "reopen_condition",
                 )
                 if item.get(key) is not None

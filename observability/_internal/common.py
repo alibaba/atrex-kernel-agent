@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Shared, read-only helpers for AKA Light observability commands."""
+"""Shared, read-only helpers for the public AKA Light observability commands."""
 from __future__ import annotations
 
 import argparse
@@ -13,7 +13,7 @@ import sys
 from typing import Any, Iterable
 
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
@@ -25,8 +25,17 @@ from aka.light.experiment.store import (  # noqa: E402
     MeasurementStore,
     RECORD_ID,
 )
-from aka.light.runtime.paths import supervisor_campaign_root  # noqa: E402
-from aka.light.workflow.search import read_state as read_search_state  # noqa: E402
+from aka.light.runtime.paths import (  # noqa: E402
+    campaign_runtime_configuration,
+    legacy_supervisor_campaign_root,
+    supervisor_campaign_base_root,
+    supervisor_campaign_root,
+    supervisor_measurement_root,
+)
+from aka.light.workflow.search import (  # noqa: E402
+    COORDINATOR_STATE,
+    read_state as read_search_state,
+)
 
 
 TERMINAL_EPISODE_STATUSES = frozenset(
@@ -57,11 +66,36 @@ class Scope:
 
     @property
     def measurement_root(self) -> Path:
-        return supervisor_campaign_root(self.workspace) / "measurements"
+        canonical = supervisor_measurement_root(self.workspace)
+        if canonical.exists() or canonical.is_symlink():
+            return canonical
+        legacy = self.campaign_root / "measurements"
+        if (legacy / "identity.key").is_file():
+            return legacy
+        return canonical
 
     @property
     def audit_root(self) -> Path:
-        return supervisor_campaign_root(self.workspace)
+        return self.campaign_root
+
+    @property
+    def agent_workspace(self) -> Path:
+        """Return the persistent workspace actually exposed to the Agent.
+
+        The controller repository and Agent repository are the same directory
+        only in compatibility layouts.  Current Light keeps the Agent checkout
+        below private Supervisor state, including for pooled trajectories.
+        Observability projections such as ``PROGRESS.md`` must follow that
+        boundary instead of assuming they live in the controller repository.
+        """
+        candidate = self.audit_root / "agent-workspace"
+        return candidate if candidate.is_dir() else self.workspace
+
+    @property
+    def segment_root(self) -> Path:
+        current = self.audit_root / "segments"
+        legacy = self.workspace / ".atrex_long_horizon"
+        return legacy if not current.exists() and legacy.exists() else current
 
 
 def resolve_workspace(value: Path) -> Path:
@@ -84,14 +118,38 @@ def read_json(path: Path, *, default: Any = None, limit: int = 64 * 1024 * 1024)
 
 def discover_scopes(workspace: Path) -> list[Scope]:
     workspace = resolve_workspace(workspace)
-    campaign_root = supervisor_campaign_root(workspace)
+    campaign_root = supervisor_campaign_base_root(workspace)
     scopes = [Scope(workspace, campaign_root, "campaign", None)]
+    lineages = campaign_root / "lineages"
+    if lineages.is_dir():
+        for lineage in sorted(p for p in lineages.glob("t*") if p.is_dir()):
+            match = re.fullmatch(r"t0*([1-9][0-9]*)", lineage.name)
+            number = int(match.group(1)) if match else None
+            agent_workspace = lineage / "agent-workspace"
+            if number is None or not agent_workspace.is_dir():
+                continue
+            scopes.append(
+                Scope(
+                    agent_workspace.resolve(),
+                    lineage.resolve(),
+                    lineage.name,
+                    number,
+                )
+            )
+        return scopes
     trajectories = campaign_root / "search" / "trajectories"
     if trajectories.is_dir():
         for path in sorted(p for p in trajectories.glob("t*") if p.is_dir()):
             match = re.fullmatch(r"t0*([1-9][0-9]*)", path.name)
             number = int(match.group(1)) if match else None
-            scopes.append(Scope(path.resolve(), supervisor_campaign_root(path), path.name, number))
+            lineage_root = supervisor_campaign_root(path)
+            legacy_root = legacy_supervisor_campaign_root(path)
+            audit_root = (
+                legacy_root
+                if not lineage_root.exists() and legacy_root.exists()
+                else lineage_root
+            )
+            scopes.append(Scope(path.resolve(), audit_root, path.name, number))
     return scopes
 
 
@@ -113,9 +171,47 @@ def iter_record_directories(scope: Scope) -> Iterable[Path]:
         )
 
 
+def scope_record_ids(scope: Scope) -> set[str] | None:
+    """Return Records created by one lineage; ``None`` means all Records.
+
+    The canonical bytes are Campaign-wide. Runtime request audits retain the
+    lineage that issued each call, so lineage views do not duplicate every
+    central Record. A serial Campaign has no lineage partition and owns the
+    complete Store.
+    """
+    if scope.trajectory is None:
+        if (scope.campaign_root / "lineages").is_dir() or (
+            scope.campaign_root / "search" / "trajectories"
+        ).is_dir():
+            return set()
+        return None
+    record_ids: set[str] = set()
+    for path in runtime_audit_paths(scope):
+        value = read_json(path, default={})
+        if not isinstance(value, dict):
+            continue
+        record_id = value.get("gateway_record_id")
+        if isinstance(record_id, str) and RECORD_ID.fullmatch(record_id):
+            record_ids.add(record_id)
+    return record_ids
+
+
+def runtime_audit_paths(scope: Scope) -> list[Path]:
+    """Return current request/plugin audits plus legacy flat receipts once."""
+    paths = [
+        *scope.audit_root.glob("runtime-audit/requests/request-*.json"),
+        *scope.audit_root.glob("runtime-audit/plugin-calls/request-*.json"),
+        *scope.audit_root.glob("request-*.json"),
+    ]
+    return sorted({path.resolve(): path for path in paths}.values())
+
+
 def iter_records(scope: Scope, *, include_incomplete: bool = False) -> Iterable[dict[str, Any]]:
     store = existing_store(scope)
+    selected = scope_record_ids(scope)
     for directory in iter_record_directories(scope):
+        if selected is not None and directory.name not in selected:
+            continue
         request = read_json(directory / "request.json", default={})
         if not isinstance(request, dict):
             request = {}
@@ -221,11 +317,25 @@ def observed_at() -> str:
 
 
 def search_state(workspace: Path) -> dict[str, Any] | None:
-    path = supervisor_campaign_root(workspace) / "search" / "state.json"
+    campaign_root = supervisor_campaign_base_root(workspace)
+    path = campaign_root / COORDINATOR_STATE
     if not path.is_file():
         return None
     value = read_search_state(path)
-    return value if isinstance(value, dict) else None
+    if not isinstance(value, dict):
+        return None
+    # Coordinator state intentionally contains no per-lineage mutable facts.
+    # Compose those facts only in this read-only operator view.
+    lineages = {}
+    for lineage in sorted((campaign_root / "lineages").glob("t*")):
+        match = re.fullmatch(r"t0*([1-9][0-9]*)", lineage.name)
+        state_path = lineage / "state.json"
+        if match is None or not state_path.is_file():
+            continue
+        state = read_json(state_path, default=None)
+        if isinstance(state, dict):
+            lineages[str(int(match.group(1)))] = state
+    return {**value, "lineages": lineages}
 
 
 def startup_stage(workspace: Path) -> str:
@@ -246,7 +356,7 @@ def startup_stage(workspace: Path) -> str:
 
 
 def attempt_documents(scope: Scope) -> list[dict[str, Any]]:
-    runtime = scope.workspace / ".atrex_long_horizon"
+    runtime = scope.segment_root
     by_episode: dict[int, dict[str, Any]] = {}
     state = read_json(runtime / "state.json", default={})
     if isinstance(state, dict):
@@ -263,7 +373,7 @@ def attempt_documents(scope: Scope) -> list[dict[str, Any]]:
 
 
 def telemetry_documents(scope: Scope) -> list[dict[str, Any]]:
-    runtime = scope.workspace / ".atrex_long_horizon" / "episodes"
+    runtime = scope.segment_root / "episodes"
     rows = []
     for path in sorted(runtime.glob("e*/telemetry.summary.json")):
         value = read_json(path, default={})
@@ -299,6 +409,11 @@ def job_state_rows(record_directory: Path) -> list[dict[str, Any]]:
                 "submission": state.get("submission"),
                 "retries": state.get("retries") if isinstance(state.get("retries"), dict) else {},
                 "identity": state.get("identity"),
+                "runtime_request_ids": [
+                    value
+                    for value in state.get("runtime_request_ids", [])
+                    if isinstance(value, str) and value
+                ],
                 "process": process,
                 "job": job,
             }
@@ -387,6 +502,11 @@ def job_attempt_rows(record_directory: Path) -> list[dict[str, Any]]:
                     else {}
                 ),
                 "identity": state.get("identity"),
+                "runtime_request_ids": [
+                    value
+                    for value in state.get("runtime_request_ids", [])
+                    if isinstance(value, str) and value
+                ],
                 "process": process,
                 "job": job,
             }

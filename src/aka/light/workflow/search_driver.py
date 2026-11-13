@@ -8,7 +8,7 @@ the next checkout: every trajectory keeps its own HEAD and provider Session.
 from __future__ import annotations
 
 import copy
-from dataclasses import asdict, replace
+from dataclasses import replace
 import hashlib
 import json
 import math
@@ -23,34 +23,59 @@ import aka.light.workflow.context as main_adapter
 from aka.light.workflow.episode import LongHorizonCampaign
 from aka.light.workspace.git import git_head
 from aka.legacy.task.persistence import durable_write_json, durable_replace
-from aka.light.workspace.baseline import read_baseline_record, write_baseline_record
-from .search import read_state
+from aka.light.workspace.baseline import read_baseline_record
+from .search import (
+    COORDINATOR_STATE,
+    lineage_state_path,
+    merge_lineage_state,
+    publication_import_path,
+    publication_path,
+    publication_source_root,
+    read_state,
+    update_publication,
+)
 from .search_git import git
 from aka.light.workspace.sources import from_git
 from aka.light.experiment.store import MeasurementStore, digest as evidence_digest, private_write
-from aka.light.experiment.frontier import kernel_pareto_frontier
-from aka.light.runtime.paths import supervisor_campaign_root
+from aka.light.experiment.frontier import (
+    kernel_full_evaluation_evidence,
+    kernel_pareto_frontier,
+    standard_full_evaluation,
+)
+from aka.light.runtime.paths import (
+    legacy_supervisor_campaign_root,
+    supervisor_campaign_base_root,
+    supervisor_campaign_root,
+    supervisor_measurement_root,
+    supervisor_research_catalog_root,
+    supervisor_submission_root,
+    runtime_audit_files,
+)
 from aka.light.workflow.journal_service import (
-    accepted_submission_kernel_ids,
-    copy_experiment_reference_archive,
-    load_journal,
-    research_projection,
+    _public_direction,
+    _public_experiment,
+    project_campaign_research_library,
     shared_research_path,
 )
-from aka.light.workspace.shared_history import export_epoch, import_exports
-from aka.light.workspace.agent_git import AgentGit
+from aka.light.workflow.submissions import accepted_submission_kernel_ids
+from aka.light.workspace.shared_history import (
+    export_publication,
+    import_exports_into_repository,
+)
 from aka.light.research import ResearchStore
 
 
 _OPEN_DIRECTION_STATUSES = {"proposed", "in_progress", "deferred", "blocked"}
 
 
-def _shareable_claim(item):
-    """Keep explicit low-quality reviews trajectory-local; preserve legacy claims."""
-    quality = item.get("claim_review_quality", item.get("review_quality"))
-    return quality not in {
-        "partially_supported", "unreviewed", "not_reviewed"
-    }
+def _visible_claim_record_ids(value: object) -> set[str]:
+    """Return Record IDs referenced by one claim visible to a lineage."""
+    if not isinstance(value, dict):
+        return set()
+    record_ids = value.get("gateway_record_ids", [])
+    if not isinstance(record_ids, list):
+        return set()
+    return {record_id for record_id in record_ids if isinstance(record_id, str)}
 
 
 def _aggregate_direction_queue(research_states, directions, inherited_queue=()):
@@ -119,33 +144,60 @@ class EpisodeSearchDriver:
         self.children = {}
         self.cancel_event = Event()
 
-    def identity(self):
-        # Store only a digest of settings (endpoint addresses remain private).
-        values = {"request": asdict(self.campaign.request),
-                  "workflow": asdict(self.campaign.module_options),
-                  "agent": asdict(self.campaign.agent.options),
-                  "inherit_state": self.campaign.candidate_workspace.inherit_state,
-                  "research_records": self.campaign.research_records,
-                  "research_modules": list(self.campaign.research_modules),
-                  "wiki": self.campaign.tool_runtime.wiki,
-                  "pause_agent_during_requests": (
-                      self.campaign.tool_runtime.pause_agent_during_requests
-                  ),
-                  "repetitions": self.campaign.tool_runtime.measurement_repetitions,
-                  "evaluation": {name: getattr(self.campaign, name) for name in (
-                      "sandbox_hardware", "sandbox_profile", "sandbox_url", "sandbox_ssh",
-                      "sandbox_timeout", "verify_repeats", "evaluation_step_timeout",
-                      "gpu_clock_mhz", "min_improvement_pct")}}
-        return hashlib.sha256(json.dumps(values, sort_keys=True, default=str).encode()).hexdigest()
+    @property
+    def measurement_root(self) -> Path:
+        """One canonical Measurement Store for every trajectory in this Campaign."""
+        return supervisor_measurement_root(self.campaign.workspace)
+
+    def _migrate_trajectory_private_root(self, workspace: Path) -> None:
+        """Move a pre-centralization trajectory root into its Campaign lineage."""
+        legacy = legacy_supervisor_campaign_root(workspace)
+        destination = supervisor_campaign_root(workspace)
+        if legacy.resolve() == destination.resolve() or not legacy.exists():
+            return
+        destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if destination.exists():
+            raise RuntimeError(
+                "Both legacy trajectory-private state and the Campaign lineage "
+                f"namespace exist; reconcile them before recovery: {legacy} and "
+                f"{destination}"
+            )
+        os.replace(legacy, destination)
+
+    def _migrate_campaign_measurements(self) -> None:
+        """Import pre-centralization immutable Records into the Campaign Store."""
+        destination = MeasurementStore(self.measurement_root)
+        legacy_roots = [self.root / "shared" / "measurements"]
+        for child in self.children.values():
+            legacy_roots.append(supervisor_campaign_root(child.workspace) / "measurements")
+        seen: set[Path] = set()
+        for root in legacy_roots:
+            resolved = root.resolve()
+            if resolved in seen or resolved == self.measurement_root.resolve():
+                continue
+            seen.add(resolved)
+            if not (root / "identity.key").is_file():
+                continue
+            source = MeasurementStore(root)
+            for record_id in source.record_ids():
+                destination.import_record(source, record_id)
 
     def bootstrap(self):
         main_adapter.prepare_campaign(self.campaign)
         # Do not reinterpret a previously serial campaign as pooled search.
-        state_file = self.campaign.workspace / ".atrex_long_horizon/state.json"
-        if state_file.exists() and read_state(state_file).get("episodes", 0):
+        from aka.light.workflow.store import CampaignStore
+
+        segment_store = CampaignStore(self.campaign.workspace)
+        state_file = segment_store.state_path
+        recovering_pooled = (self.root / COORDINATOR_STATE).is_file()
+        if (
+            state_file.exists()
+            and read_state(state_file).get("episodes", 0)
+            and not recovering_pooled
+        ):
             raise ValueError("Start pooled search in a new Campaign; serial Episode checkpoints are not migrated")
-        active = self.campaign.workspace / ".atrex_long_horizon/active_episode.json"
-        if active.exists():
+        active = segment_store.active_path
+        if active.exists() and not recovering_pooled:
             raise ValueError("Cannot enable pooled search with an active serial Episode")
         version = main_adapter.latest_version(self.campaign.workspace)
         record = main_adapter.read_memory(self.campaign.workspace, version)
@@ -164,11 +216,31 @@ class EpisodeSearchDriver:
 
     @property
     def _canonical_agent_bundle(self) -> Path:
-        return self.root / "shared" / "git" / "canonical-agent-root.bundle"
+        return (
+            supervisor_campaign_base_root(self.campaign.workspace)
+            / "bootstrap"
+            / "agent-v0.bundle"
+        )
 
     @property
     def _canonical_agent_receipt(self) -> Path:
-        return self.root / "shared" / "git" / "canonical-agent-root.json"
+        return (
+            supervisor_campaign_base_root(self.campaign.workspace)
+            / "bootstrap"
+            / "agent-v0.json"
+        )
+
+    def _publication_source_root(self, trajectory: int, publication: int) -> Path:
+        campaign_root = supervisor_campaign_base_root(self.campaign.workspace)
+        return publication_source_root(campaign_root, publication, trajectory)
+
+    def _publication_import_receipt(
+        self,
+        trajectory: int,
+        publication: int,
+    ) -> Path:
+        campaign_root = supervisor_campaign_base_root(self.campaign.workspace)
+        return publication_import_path(campaign_root, publication, trajectory)
 
     @staticmethod
     def _bundle_contains_commit(bundle: Path, commit_id: str) -> bool:
@@ -206,7 +278,7 @@ class EpisodeSearchDriver:
             return present.returncode == 0
 
     def _canonical_agent_root(self, bootstrap: dict) -> dict:
-        """Create the one Runtime-authored V0 commit shared by all trajectories."""
+        """Archive the T1 V0 repository used to initialize every trajectory."""
         source = self.source(bootstrap)
         source_sha256 = hashlib.sha256(source).hexdigest()
         bundle = self._canonical_agent_bundle
@@ -228,63 +300,35 @@ class EpisodeSearchDriver:
         if bundle.exists() != receipt_path.exists():
             raise RuntimeError("Canonical Agent V0 bundle and receipt are incomplete")
 
-        from aka.light.workspace.sources import install
-
-        with tempfile.TemporaryDirectory(prefix="aka-canonical-agent-v0-") as temporary:
-            workspace = Path(temporary) / "repo"
-            install(workspace, source)
-            repository = AgentGit(workspace, bundle)
-            repository.prepare()
-            v0_commit = repository.persist()
-            if not isinstance(v0_commit, str):
-                raise RuntimeError("Supervisor could not create the canonical Agent V0")
+        v0_commit = git_head(self.campaign.workspace)
+        if not isinstance(v0_commit, str) or not v0_commit:
+            raise RuntimeError("T1 Agent workspace has no canonical V0 commit")
+        if bootstrap.get("commit") != v0_commit:
+            raise RuntimeError("Measured V0 and T1 Agent HEAD differ")
+        bundle.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        temporary = bundle.with_name(f".{bundle.name}.{os.getpid()}.tmp")
+        temporary.unlink(missing_ok=True)
+        result = subprocess.run(
+            ["git", "bundle", "create", str(temporary), "--all"],
+            cwd=self.campaign.workspace,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0:
+            raise RuntimeError(
+                "Canonical Agent V0 bundle failed: " + result.stderr.strip()
+            )
+        durable_replace(temporary, bundle)
         if not self._bundle_contains_commit(bundle, v0_commit):
             raise RuntimeError("Canonical Agent bundle does not contain its V0 root")
         receipt = {
             "schema_version": 2,
             "source_sha256": source_sha256,
             "agent_v0_commit_id": v0_commit,
-            "controller_v0_commit_id": bootstrap["commit"],
         }
         durable_write_json(receipt_path, receipt)
         return receipt
-
-    def _seed_trajectory_agent_root(self, child, canonical: dict) -> None:
-        """Install the immutable canonical bundle before a child Runtime starts."""
-        target_root = supervisor_campaign_root(child.workspace)
-        target = target_root / "adaptive-state" / "agent-git.bundle"
-        baseline_commit = canonical["agent_v0_commit_id"]
-        if target.is_file():
-            if not self._bundle_contains_commit(target, baseline_commit):
-                raise RuntimeError(
-                    "Existing trajectory Agent Git predates the canonical shared V0; "
-                    "resume it with its original code or start a new pooled Campaign"
-                )
-            return
-        agent_workspace = target_root / "agent-workspace"
-        if (agent_workspace / ".git").is_dir():
-            present = subprocess.run(
-                ["git", "cat-file", "-e", f"{baseline_commit}^{{commit}}"],
-                cwd=agent_workspace,
-                capture_output=True,
-                check=False,
-            )
-            if present.returncode != 0:
-                raise RuntimeError(
-                    "Existing trajectory Agent repository has a different V0 root"
-                )
-            return
-        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        temporary = target.with_name(f".{target.name}.{os.getpid()}.tmp")
-        temporary.unlink(missing_ok=True)
-        try:
-            shutil.copyfile(self._canonical_agent_bundle, temporary)
-            temporary.chmod(0o600)
-            with temporary.open("rb") as stream:
-                os.fsync(stream.fileno())
-            durable_replace(temporary, target)
-        finally:
-            temporary.unlink(missing_ok=True)
 
     def _kernel(
         self, workspace, commit, record, trajectory, episode, kernel_id=None
@@ -316,27 +360,46 @@ class EpisodeSearchDriver:
 
     def _research(self, child, episode):
         root = supervisor_campaign_root(child.workspace)
-        journal = root / "journals" / "episodes" / f"e{episode:08d}" / "journal.json"
-        return research_projection(journal, root / "journals")
+        state = ResearchStore(root / "research").read_through_episode(episode)
+        return {
+            "directions": {
+                key: _public_direction(value)
+                for key, value in state.get("directions", {}).items()
+                if isinstance(key, str) and isinstance(value, dict)
+            },
+            "experiments": [
+                _public_experiment(value)
+                for value in state.get("experiments", {}).values()
+                if isinstance(value, dict)
+            ],
+        }
 
     @staticmethod
-    def _local_research_origins(child, terminal_episode):
-        root = supervisor_campaign_root(child.workspace) / "journals" / "episodes"
+    def _local_research_origins(child, terminal_episode, trajectory):
+        root = supervisor_campaign_root(child.workspace) / "research"
+        state = ResearchStore(root).read_through_episode(terminal_episode)
         result = {"directions": {}, "experiments": {}}
-        for path in sorted(root.glob("e*/journal.json")):
-            try:
-                episode = int(path.parent.name[1:])
-            except ValueError:
+        for collection in ("directions", "experiments"):
+            values = state.get(collection, {})
+            if not isinstance(values, dict):
                 continue
-            if episode > terminal_episode:
-                continue
-            journal = load_journal(path)
-            for event in journal["direction_events"]:
-                if isinstance(event, dict) and event.get("action") == "propose":
-                    result["directions"].setdefault(event.get("direction_id"), episode)
-            for experiment in journal["experiments"]:
-                if isinstance(experiment, dict):
-                    result["experiments"].setdefault(experiment.get("experiment_id"), episode)
+            for identifier, value in values.items():
+                if not isinstance(identifier, str) or not isinstance(value, dict):
+                    continue
+                origin = value.get("origin")
+                owner = value.get("owner_lineage")
+                origin_trajectory = (
+                    origin.get("trajectory") if isinstance(origin, dict) else None
+                )
+                episode = origin.get("episode") if isinstance(origin, dict) else None
+                if (
+                    owner not in {None, f"T{trajectory}"}
+                    or origin_trajectory not in {None, trajectory}
+                    or value.get("access") == "peer_read_only"
+                    or type(episode) is not int
+                ):
+                    continue
+                result[collection][identifier] = episode
         return result
 
     @staticmethod
@@ -365,7 +428,14 @@ class EpisodeSearchDriver:
         return merged, origins
 
     def epoch_sealed(self, epoch):
-        return (self.root / "epochs" / f"e{epoch:08d}-shared.json").is_file()
+        try:
+            publication = read_state(publication_path(self.root, epoch))
+        except FileNotFoundError:
+            return False
+        return (
+            publication.get("synchronization") == "synchronous"
+            and isinstance(publication.get("evidence"), dict)
+        )
 
     def seal_epoch(self, epoch, jobs):
         return self._seal_epoch(epoch, jobs, terminal_only=False)
@@ -374,31 +444,64 @@ class EpisodeSearchDriver:
         """Seal an asynchronous snapshot without reading newer live Episodes."""
         return self._seal_epoch(publication, jobs, terminal_only=True)
 
-    @staticmethod
-    def _terminal_record_ids(child, terminal_episode, projection):
+    def _local_record_ids(self, child, trajectory: int) -> list[str]:
+        """Return Records observed by one lineage without owning a private store."""
+        runtime_root = supervisor_campaign_root(child.workspace)
+        record_ids: set[str] = set()
+
+        state = ResearchStore(runtime_root / "research").read()
+        lineage = state.get("lineages", {}).get(f"T{trajectory}", {})
+        values = lineage.get("gateway_record_ids", []) if isinstance(lineage, dict) else []
+        if isinstance(values, list):
+            record_ids.update(value for value in values if isinstance(value, str))
+
+        # Runtime request receipts are the durable ownership fallback for
+        # campaigns created before lineage checkpoints recorded Record IDs.
+        for path in runtime_audit_files(runtime_root):
+            try:
+                audit = read_state(path)
+            except (FileNotFoundError, OSError, ValueError, TypeError):
+                continue
+            record_id = audit.get("gateway_record_id")
+            if isinstance(record_id, str):
+                record_ids.add(record_id)
+
+        # Resume compatibility: import old trajectory-local immutable facts
+        # once into the Campaign store. New pooled Runtime instances never
+        # create or write this legacy directory.
+        legacy_root = runtime_root / "measurements"
+        if (
+            legacy_root.resolve() != self.measurement_root.resolve()
+            and (legacy_root / "identity.key").is_file()
+        ):
+            legacy = MeasurementStore(legacy_root)
+            central = MeasurementStore(self.measurement_root)
+            for record_id in legacy.record_ids():
+                central.import_record(legacy, record_id)
+                record_ids.add(record_id)
+        return sorted(record_ids)
+
+    def _terminal_record_ids(self, child, terminal_episode, projection):
         record_ids = set()
         for experiment in projection["experiments"]:
             values = experiment.get("gateway_record_ids")
             if isinstance(values, list):
                 record_ids.update(item for item in values if isinstance(item, str))
-        journal = load_journal(
-            supervisor_campaign_root(child.workspace)
-            / "journals"
-            / "episodes"
-            / f"e{terminal_episode:08d}"
-            / "journal.json"
+        trajectory = next(
+            (
+                number
+                for number, candidate in self.children.items()
+                if candidate is child
+            ),
+            1,
         )
-        submitted_commits = {
-            submission.get("kernel_commit_id")
-            for submission in journal.get("kernel_submissions", [])
-            if isinstance(submission, dict)
-            and submission.get("accepted") is True
-            and isinstance(submission.get("kernel_commit_id"), str)
-        }
+        submitted_commits = accepted_submission_kernel_ids(
+            supervisor_submission_root(child.workspace),
+            lineage=f"T{trajectory}",
+            through_episode=terminal_episode,
+        )
         if submitted_commits:
-            measurements = MeasurementStore(
-                supervisor_campaign_root(child.workspace) / "measurements"
-            )
+            measurements = MeasurementStore(self.measurement_root)
             for candidate_record_id in measurements.record_ids():
                 try:
                     record = measurements.read(candidate_record_id)
@@ -409,15 +512,10 @@ class EpisodeSearchDriver:
                     continue
                 if kernel_id in submitted_commits:
                     record_ids.add(candidate_record_id)
-        outcome = journal.get("outcome")
-        values = outcome.get("gateway_record_ids") if isinstance(outcome, dict) else None
-        if isinstance(values, list):
-            record_ids.update(item for item in values if isinstance(item, str))
+        from aka.light.workflow.store import CampaignStore
+
         attempt_path = (
-            child.workspace
-            / ".atrex_long_horizon"
-            / "episodes"
-            / f"e{terminal_episode:04d}"
+            CampaignStore(child.workspace).episode_dir(terminal_episode)
             / "attempt.json"
         )
         try:
@@ -434,18 +532,17 @@ class EpisodeSearchDriver:
             record_ids.add(record_id)
         return sorted(record_ids)
 
-    @staticmethod
-    def _submitted_winner(child, terminal_episode, trajectory):
+    def _submitted_winner(self, child, terminal_episode, trajectory):
         """Derive one lineage winner only from accepted submit-kernel commits."""
-        runtime_root = supervisor_campaign_root(child.workspace)
         submitted = accepted_submission_kernel_ids(
-            runtime_root / "journals",
+            supervisor_submission_root(child.workspace),
+            lineage=f"T{trajectory}",
             through_episode=terminal_episode,
         )
         if not submitted:
             return None
         frontier = kernel_pareto_frontier(
-            MeasurementStore(runtime_root / "measurements"),
+            MeasurementStore(self.measurement_root),
             kernel_ids=submitted,
         )
         winner = frontier.get("best_full_evaluation")
@@ -471,13 +568,16 @@ class EpisodeSearchDriver:
             for number in sorted(terminal)
         }
         local_origins = {
-            number: self._local_research_origins(self.children[number], terminal[number])
+            number: self._local_research_origins(
+                self.children[number], terminal[number], number
+            )
             for number in sorted(terminal)
         }
         accepted_submissions_by_lineage = {}
         for number in sorted(terminal):
             commit_ids = accepted_submission_kernel_ids(
-                supervisor_campaign_root(self.children[number].workspace) / "journals",
+                supervisor_submission_root(self.children[number].workspace),
+                lineage=f"T{number}",
                 through_episode=terminal[number],
             )
             if commit_ids:
@@ -500,24 +600,33 @@ class EpisodeSearchDriver:
             if lineage_winners
             else None
         )
-        manifest_path = self.root / "shared" / "manifest.json"
+        research_catalog_root = supervisor_research_catalog_root(
+            self.campaign.workspace
+        )
+        research_catalog_through_sequence = ResearchStore(
+            research_catalog_root / "events"
+        ).read()["sequence"]
+        synchronization = getattr(
+            getattr(getattr(self.campaign, "module_options", None), "search", None),
+            "synchronization",
+            "synchronous",
+        )
+        manifest_path = (
+            supervisor_research_catalog_root(self.campaign.workspace)
+            / "publication.json"
+        )
         try:
             previous = read_state(manifest_path)
         except FileNotFoundError:
             previous = {"directions": {}, "experiments": {}, "records": {}}
         direction_rows = {
-            number: {
-                key: item
-                for key, item in projection["directions"].items()
-                if _shareable_claim(item)
-            }
+            number: dict(projection["directions"])
             for number, projection in projections.items()
         }
         experiment_rows = {
             number: {
                 item["experiment_id"]: item
                 for item in projection["experiments"]
-                if _shareable_claim(item)
             }
             for number, projection in projections.items()
         }
@@ -531,7 +640,8 @@ class EpisodeSearchDriver:
         for direction_id, direction in directions.items():
             trajectory = direction_origins.get(direction_id, {}).get("trajectory")
             if type(trajectory) is int and trajectory > 0:
-                direction["proposed_by"] = f"T{trajectory}"
+                direction["owner_lineage"] = f"T{trajectory}"
+                direction.pop("proposed_by", None)
         experiments, experiment_origins = self._merge_named(
             experiment_rows,
             previous.get("experiments", {}),
@@ -542,30 +652,8 @@ class EpisodeSearchDriver:
         for experiment_id, experiment in experiments.items():
             trajectory = experiment_origins.get(experiment_id, {}).get("trajectory")
             if type(trajectory) is int and trajectory > 0:
-                experiment["recorded_by"] = f"T{trajectory}"
-        for experiment_id, experiment in experiments.items():
-            if not experiment.get("references"):
-                continue
-            experiment_origin = experiment_origins.get(experiment_id, {})
-            owner = experiment_origin.get("trajectory")
-            if owner not in self.children:
-                raise RuntimeError(
-                    f"Shared Experiment {experiment_id} has no archive owner"
-                )
-            source_root = (
-                supervisor_campaign_root(self.children[owner].workspace) / "journals"
-            )
-            for child in self.children.values():
-                destination_root = supervisor_campaign_root(child.workspace) / "journals"
-                if destination_root.resolve() == source_root.resolve():
-                    continue
-                copy_experiment_reference_archive(
-                    source_root,
-                    destination_root,
-                    experiment_id,
-                    int(experiment.get("reference_revision", 1)),
-                )
-
+                experiment["owner_lineage"] = f"T{trajectory}"
+                experiment.pop("recorded_by", None)
         research_stores = {
             number: ResearchStore(
                 supervisor_campaign_root(self.children[number].workspace) / "research"
@@ -586,28 +674,107 @@ class EpisodeSearchDriver:
             inherited_queue=previous.get("research_queue", []),
         )
 
-        central = MeasurementStore(self.root / "shared" / "measurements")
-        record_origins = copy.deepcopy(previous.get("records", {}))
-        new_record_ids = []
-        for number in sorted(terminal):
-            child = self.children[number]
-            source = MeasurementStore(supervisor_campaign_root(child.workspace) / "measurements")
-            record_ids = (
-                self._terminal_record_ids(child, terminal[number], projections[number])
-                if terminal_only
-                else source.record_ids()
+        central = MeasurementStore(self.measurement_root)
+        persistent_record_reasons = {
+            "passing_full_evaluate",
+            "accepted_submission_full_evaluate",
+            "lineage_winner_full_evaluate",
+            "global_winner_full_evaluate",
+        }
+        # Pre-policy manifests did not record why a Record was shared and may
+        # contain every local Runtime result. Do not perpetuate that visibility:
+        # recompute legacy entries from the whitelist below. New manifests keep
+        # a reason so later publications retain immutable qualifying evidence.
+        record_origins = {
+            record_id: copy.deepcopy(origin)
+            for record_id, origin in previous.get("records", {}).items()
+            if isinstance(origin, dict)
+            and origin.get("reason") in persistent_record_reasons
+        }
+
+        def publish_record(record_id: object, number: int, reason: str) -> None:
+            if not isinstance(record_id, str) or record_id in record_origins:
+                return
+            # The Runtime wrote this Record into the canonical Campaign store.
+            # Sharing publishes only the immutable identity; each Agent receives
+            # a normal-file projection from that one authoritative copy.
+            central.read(record_id)
+            record_origins[record_id] = {
+                "epoch": epoch,
+                "trajectory": number,
+                "reason": reason,
+            }
+
+        # The manifest audits the union of current claim-linked evidence. Each
+        # receiving lineage is filtered again below using its own visible claim
+        # projection, so this union never becomes an Agent visibility grant.
+        for direction_id, direction in directions.items():
+            owner = direction_origins.get(direction_id, {}).get("trajectory")
+            if type(owner) is not int or owner <= 0:
+                continue
+            for record_id in _visible_claim_record_ids(direction):
+                publish_record(record_id, owner, "visible_direction_reference")
+        for experiment_id, experiment in experiments.items():
+            owner = experiment_origins.get(experiment_id, {}).get("trajectory")
+            if type(owner) is not int or owner <= 0:
+                continue
+            for record_id in _visible_claim_record_ids(experiment):
+                publish_record(record_id, owner, "visible_experiment_reference")
+
+        # Also share standard full Evaluates that passed correctness and carry
+        # complete per-Shape performance. Direction/Experiment references do
+        # not widen visibility, and diagnostic/partial results remain local.
+        for number, state in research_states.items():
+            lineage = state.get("lineages", {}).get(f"T{number}", {})
+            local_record_ids = (
+                lineage.get("gateway_record_ids", [])
+                if isinstance(lineage, dict)
+                and isinstance(lineage.get("gateway_record_ids", []), list)
+                else []
             )
-            winner = lineage_winners.get(f"T{number}")
-            if isinstance(winner, dict):
-                record_ids = sorted(
-                    set(record_ids) | {winner["gateway_record_id"]}
-                )
-            for record_id in record_ids:
-                if record_id in record_origins:
+            for record_id in local_record_ids:
+                try:
+                    parsed = standard_full_evaluation(central.read(record_id))
+                except (OSError, ValueError, KeyError, TypeError):
                     continue
-                central.import_record(source, record_id)
-                record_origins[record_id] = {"epoch": epoch, "trajectory": number}
-                new_record_ids.append(record_id)
+                if isinstance(parsed, dict) and parsed.get("passed") is True:
+                    publish_record(record_id, number, "passing_full_evaluate")
+
+        # Every accepted submission publishes complete passing full-Evaluate
+        # evidence. The selected lineage/global winner Record is included too,
+        # because a commit may have several passing Evaluates and the winner can
+        # be backed by a faster Record than the newest one.
+        for lineage, commit_ids in accepted_submissions_by_lineage.items():
+            try:
+                owner = int(lineage.removeprefix("T"))
+            except ValueError:
+                continue
+            for commit_id in commit_ids:
+                evidence = kernel_full_evaluation_evidence(central, commit_id)
+                if evidence.get("status") == "passed":
+                    publish_record(
+                        evidence.get("gateway_record_id"),
+                        owner,
+                        "accepted_submission_full_evaluate",
+                    )
+        for lineage, winner in lineage_winners.items():
+            try:
+                owner = int(lineage.removeprefix("T"))
+            except ValueError:
+                continue
+            publish_record(
+                winner.get("gateway_record_id"),
+                owner,
+                "lineage_winner_full_evaluate",
+            )
+        if isinstance(global_best, dict):
+            owner = global_best.get("trajectory")
+            if type(owner) is int and owner > 0:
+                publish_record(
+                    global_best.get("gateway_record_id"),
+                    owner,
+                    "global_winner_full_evaluate",
+                )
 
         for experiment_id, experiment in experiments.items():
             record_ids = experiment.get("gateway_record_ids")
@@ -626,17 +793,25 @@ class EpisodeSearchDriver:
         research_value = {
             "directions": directions,
             "experiments": [experiments[key] for key in sorted(experiments)],
+            "gateway_record_ids": sorted(record_origins),
+            "gateway_record_reasons": {
+                record_id: record_origins[record_id]["reason"]
+                for record_id in sorted(record_origins)
+            },
             "research_queue": research_queue,
             "accepted_submission_kernel_ids": accepted_submissions_by_lineage,
             "lineage_winners": lineage_winners,
             "global_best": global_best,
+            "research_catalog_through_sequence": research_catalog_through_sequence,
         }
         revision = evidence_digest(research_value)
+        globally_visible_record_ids = {
+            record_id
+            for record_id, origin in record_origins.items()
+            if origin.get("reason") in persistent_record_reasons
+        }
         for number, child in sorted(self.children.items()):
             destination_root = supervisor_campaign_root(child.workspace)
-            destination = MeasurementStore(destination_root / "measurements")
-            for record_id in new_record_ids:
-                destination.import_record(central, record_id)
             visible_directions = {
                 key: dict(
                     value,
@@ -653,18 +828,45 @@ class EpisodeSearchDriver:
                 experiments[key] for key in sorted(experiments)
                 if experiment_origins[key]["trajectory"] != number
             ]
+            visible_claim_record_ids = set()
+            for direction in visible_directions.values():
+                visible_claim_record_ids.update(
+                    _visible_claim_record_ids(direction)
+                )
+            for experiment in visible_experiments:
+                visible_claim_record_ids.update(
+                    _visible_claim_record_ids(experiment)
+                )
+            visible_record_ids = (
+                globally_visible_record_ids | visible_claim_record_ids
+            )
             shared = {
                 "schema_version": 1,
                 "revision": revision,
                 "through_epoch": epoch,
+                "research_catalog_through_sequence": research_catalog_through_sequence,
                 "directions": visible_directions,
                 "experiments": visible_experiments,
+                "gateway_record_ids": sorted(visible_record_ids),
+                "gateway_record_reasons": {
+                    record_id: record_origins[record_id]["reason"]
+                    for record_id in sorted(visible_record_ids)
+                },
                 "research_queue": research_queue,
                 "accepted_submission_kernel_ids": accepted_submissions_by_lineage,
                 "lineage_winners": lineage_winners,
                 "global_best": global_best,
             }
-            private_write(shared_research_path(destination_root / "journals"), shared)
+            private_write(shared_research_path(destination_root / "research"), shared)
+            agent_workspace = destination_root / "agent-workspace"
+            if agent_workspace.is_dir():
+                project_campaign_research_library(
+                    catalog_root=research_catalog_root,
+                    workspace=agent_workspace,
+                    trajectory=number,
+                    synchronization=synchronization,
+                    peer_through_sequence=research_catalog_through_sequence,
+                )
 
         manifest = {
             "schema_version": 1,
@@ -677,58 +879,62 @@ class EpisodeSearchDriver:
             "accepted_submission_kernel_ids": accepted_submissions_by_lineage,
             "lineage_winners": lineage_winners,
             "global_best": global_best,
+            "research_catalog_through_sequence": research_catalog_through_sequence,
         }
         private_write(manifest_path, manifest)
         receipt = {
-            "schema_version": 1,
-            "epoch": epoch,
             "revision": revision,
             "direction_ids": sorted(directions),
             "experiment_ids": sorted(experiments),
-            "gateway_record_ids": central.record_ids(),
+            "gateway_record_ids": sorted(record_origins),
             "accepted_submission_kernel_ids": accepted_submissions_by_lineage,
             "lineage_winners": lineage_winners,
             "global_best": global_best,
         }
-        receipt_path = self.root / "epochs" / f"e{epoch:08d}-shared.json"
-        try:
-            existing = read_state(receipt_path)
-        except FileNotFoundError:
-            private_write(receipt_path, receipt)
-        else:
-            if existing != receipt:
-                raise RuntimeError("Epoch shared-evidence receipt changed during recovery")
-
+        sources = []
         for number, episode in sorted(terminal.items()):
+            source_root = self._publication_source_root(number, epoch)
             agent_workspace = (
                 supervisor_campaign_root(self.children[number].workspace)
                 / "agent-workspace"
             )
             if not (agent_workspace / ".git").is_dir():
-                # Pre-v2/migrated Episodes have no Agent-private repository.
-                # Their immutable Kernel/Measurement closure remains shared;
-                # start filtered history with the next v2 Episode.
-                private_write(
-                    self.root / "shared" / "git" / f"T{number}" / f"e{epoch:08d}.json",
-                    {
-                        "schema_version": 1,
-                        "trajectory": number,
-                        "epoch": epoch,
-                        "status": "unavailable",
-                        "reason": "legacy_episode_without_agent_git",
-                    },
+                raise RuntimeError(
+                    f"T{number} cannot publish Git history without its persistent "
+                    "Agent repository"
                 )
-                continue
-            export_epoch(
+            exported = export_publication(
                 agent_workspace,
-                self.root / "shared" / "git" / f"T{number}" / f"e{epoch:08d}.bundle",
+                source_root / "history.bundle",
                 trajectory=number,
-                epoch=epoch,
+                publication=epoch,
                 lineage_winner_commit_id=(
                     lineage_winners.get(f"T{number}", {}).get("kernel_commit_id")
                 ),
-                audit_path=self.root / "shared" / "git" / f"T{number}" / f"e{epoch:08d}.json",
+                audit_path=source_root / "receipt.json",
             )
+            sources.append({
+                "trajectory": f"T{number}",
+                "through_episode": episode,
+                "git_status": "available",
+                "git_ref": f"atrex/T{number}",
+                "agent_head_commit_id": exported["original_agent_commit"],
+            })
+
+        update_publication(
+            self.root,
+            epoch,
+            synchronization,
+            watermark={
+                "trajectory_episodes": {
+                    f"T{number}": episode
+                    for number, episode in sorted(terminal.items())
+                },
+                "research_catalog_sequence": research_catalog_through_sequence,
+            },
+            sources=sources,
+            evidence=receipt,
+        )
 
     def initialize(self, bootstrap, trajectories):
         baseline = read_baseline_record(self.campaign.workspace)
@@ -741,26 +947,69 @@ class EpisodeSearchDriver:
                 "start a new Campaign rather than rewriting Agent Git history"
             )
         for number in range(1, trajectories + 1):
-            workspace = self.root / "trajectories" / f"t{number:04d}"
-            marker = workspace / ".git/atrex-search-origin.json"
-            expected = {"bootstrap": bootstrap["commit"], "trajectory": number,
-                        "campaign": str(self.campaign.workspace)}
-            if not workspace.exists():
-                workspace.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-                with tempfile.TemporaryDirectory(prefix=".preparing-", dir=workspace.parent) as temporary:
-                    staged = Path(temporary) / "repository"
-                    git(workspace.parent, "clone", "--quiet", "--no-hardlinks", "--no-checkout",
-                        str(self.campaign.workspace), str(staged))
-                    git(staged, "checkout", "--quiet", "--detach", bootstrap["commit"])
+            campaign_root = supervisor_campaign_base_root(self.campaign.workspace)
+            lineage_root = campaign_root / "lineages" / f"t{number:04d}"
+            workspace = lineage_root / "agent-workspace"
+            expected = {
+                "schema_version": 1,
+                "trajectory": number,
+                "agent_v0_commit_id": canonical["agent_v0_commit_id"],
+            }
+            state_path = lineage_state_path(campaign_root, number)
+            if number == 1:
+                if workspace.resolve() != self.campaign.workspace.resolve():
+                    raise RuntimeError("T1 Agent workspace does not match the Campaign seed")
+            elif not (workspace / ".git").is_dir():
+                lineage_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+                with tempfile.TemporaryDirectory(
+                    prefix=".preparing-", dir=lineage_root
+                ) as temporary:
+                    staged = Path(temporary) / "agent-workspace"
+                    result = subprocess.run(
+                        [
+                            "git", "clone", "--quiet", "--no-hardlinks",
+                            str(self._canonical_agent_bundle), str(staged),
+                        ],
+                        capture_output=True, text=True, check=False,
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(
+                            "Trajectory Agent Git initialization failed: "
+                            + result.stderr.strip()
+                        )
+                    git(staged, "checkout", "--quiet", "-B", "work", bootstrap["commit"])
                     git(staged, "remote", "remove", "origin")
-                    git(staged, "config", "user.name", "GPU Kernel Optimizer")
-                    git(staged, "config", "user.email", "gpu-kernel-optimizer@local")
-                    durable_write_json(staged / ".git/atrex-search-origin.json", expected)
                     durable_replace(staged, workspace)
-            if read_state(marker) != expected:
-                raise RuntimeError("Trajectory workspace does not match its frozen Bootstrap identity")
+            present = subprocess.run(
+                ["git", "cat-file", "-e", f"{bootstrap['commit']}^{{commit}}"],
+                cwd=workspace,
+                capture_output=True,
+                check=False,
+            )
+            if present.returncode != 0:
+                raise RuntimeError("Trajectory Agent Git has a different V0 root")
+            try:
+                existing_state = read_state(state_path)
+            except FileNotFoundError:
+                existing_state = {}
+            if existing_state.get("agent_v0_commit_id") not in {
+                None,
+                expected["agent_v0_commit_id"],
+            }:
+                raise RuntimeError("Trajectory identity differs from this Campaign")
+            merge_lineage_state(
+                state_path,
+                number,
+                agent_v0_commit_id=expected["agent_v0_commit_id"],
+            )
             child = copy.copy(self.campaign)
             child.request = replace(self.campaign.request, workspace=workspace)
+            # Every trajectory resolves the one immutable source binding from
+            # campaign.json. No lineage owns or copies a detached source/ tree.
+            from aka.light.workspace.sources.private_state import read as read_source_state
+
+            if read_source_state(workspace) is None:
+                raise RuntimeError("Pooled search has no Campaign source contract")
             child._supervisor_runtime = None
             child._production_review_cache = {}
             child._account_lock = Lock()
@@ -769,14 +1018,17 @@ class EpisodeSearchDriver:
             child.tokens_spent = 0
             child.search_coordinate = None
             child.search_cancel = self.cancel_event
-            # Trajectory repositories contain source/version Git history only.
-            # Copy V0 evaluator facts into each trajectory's private Supervisor
-            # scope so scoring and validation never depend on a tracked V0 file.
-            write_baseline_record(workspace, baseline)
-            self._seed_trajectory_agent_root(child, canonical)
+            child._measurement_store_root = self.measurement_root
+            # V0 evidence is Campaign-scoped; every lineage starts from the
+            # same Agent commit without a Controller repository or clone.
             self.children[number] = child
+        # Import immutable evidence from pre-central-store Campaigns only after
+        # every legacy trajectory root has moved below the Campaign namespace.
+        self._migrate_campaign_measurements()
+        for number, child in self.children.items():
+            self._local_record_ids(child, number)
 
-    def _import_peer_history(self, child, *, publication, episode, trajectory):
+    def _import_peer_history(self, child, *, publication, trajectory):
         """Import peer bundles into Runtime-owned refs without touching Agent HEAD."""
         if publication <= 0:
             return
@@ -784,30 +1036,23 @@ class EpisodeSearchDriver:
         for peer in sorted(self.children):
             if peer == trajectory:
                 continue
-            root = self.root / "shared" / "git" / f"T{peer}"
-            export = root / f"e{publication:08d}.bundle"
+            root = self._publication_source_root(peer, publication)
+            export = root / "history.bundle"
             if export.is_file():
                 exports.append(export)
                 continue
-            receipt_path = root / f"e{publication:08d}.json"
+            receipt_path = root / "receipt.json"
             try:
-                receipt = read_state(receipt_path)
+                read_state(receipt_path)
             except FileNotFoundError:
                 # An asynchronous cumulative publication may predate this
                 # peer's first completed segment.
                 continue
-            if receipt.get("status") != "unavailable":
-                raise RuntimeError(f"Peer Git export is missing: {export}")
-        runtime_root = supervisor_campaign_root(child.workspace)
-        audit_path = (
-            runtime_root
-            / "adaptive-state"
-            / "git-imports"
-            / f"episode-{episode:08d}-publication-{publication:08d}.json"
-        )
+            raise RuntimeError(f"Peer Git export is missing: {export}")
+        audit_path = self._publication_import_receipt(trajectory, publication)
         if exports:
-            import_exports(
-                runtime_root / "adaptive-state" / "agent-git.bundle",
+            import_exports_into_repository(
+                child.workspace,
                 exports,
                 audit_path=audit_path,
             )
@@ -815,18 +1060,24 @@ class EpisodeSearchDriver:
             private_write(
                 audit_path,
                 {
-                    "schema_version": 1,
+                    "schema_version": 3,
                     "imports": [],
+                    "commit_mappings": [],
+                    "shared_refs": [],
                     "status": "unavailable",
                     "reason": "no_peer_history_in_selected_publication",
                 },
             )
 
     def prepare_epoch(self, epoch):
+        from aka.light.workflow.store import CampaignStore
+
         for number, child in self.children.items():
             store = self._state(child)
             expected = (epoch - 1) * self.campaign.module_options.search.episodes_per_trajectory
-            if store["episodes"] != expected or (child.workspace / ".atrex_long_horizon/active_episode.json").exists():
+            if store["episodes"] != expected or CampaignStore(
+                child.workspace
+            ).active_path.exists():
                 raise RuntimeError(
                     "Cannot publish peers while a trajectory has an unfinished or "
                     "unexpected Episode"
@@ -834,7 +1085,6 @@ class EpisodeSearchDriver:
             self._import_peer_history(
                 child,
                 publication=epoch - 1,
-                episode=expected + 1,
                 trajectory=number,
             )
             child.start_runtime()
@@ -847,9 +1097,11 @@ class EpisodeSearchDriver:
         shared_publication,
     ):
         """Prepare one asynchronous island without waiting for its peers."""
+        from aka.light.workflow.store import CampaignStore
+
         child = self.children[trajectory]
         store = self._state(child)
-        active = child.workspace / ".atrex_long_horizon/active_episode.json"
+        active = CampaignStore(child.workspace).active_path
         if store["episodes"] == episode:
             # The Episode reached its durable outcome before the coordinator
             # recorded the result. run_episode() will read the archive only.
@@ -868,20 +1120,22 @@ class EpisodeSearchDriver:
         self._import_peer_history(
             child,
             publication=shared_publication,
-            episode=episode,
             trajectory=trajectory,
         )
         child.start_runtime()
 
     def _state(self, child):
-        path = child.workspace / ".atrex_long_horizon/state.json"
+        from aka.light.workflow.store import CampaignStore
+
+        campaign_store = CampaignStore(child.workspace)
+        path = campaign_store.state_path
         try:
             state = read_state(path)
         except FileNotFoundError:
             # The very first Episode writes its active marker/brief before its
             # first usage checkpoint. That interrupted preparation is resumable;
             # lost accounting for terminal/later Episodes is not a fresh start.
-            control = child.workspace / ".atrex_long_horizon"
+            control = campaign_store.root
             archives = control / "episodes"
             if archives.exists() and any(archives.iterdir()):
                 active = read_state(control / "active_episode.json")
@@ -895,6 +1149,8 @@ class EpisodeSearchDriver:
         return state
 
     def run_episode(self, epoch, trajectory, episode):
+        from aka.light.workflow.store import CampaignStore
+
         child = self.children[trajectory]
         current = self._state(child)["episodes"]
         if current not in {episode - 1, episode}:
@@ -910,7 +1166,8 @@ class EpisodeSearchDriver:
             ),
         }
         # An archived terminal Episode is not run again after coordinator restart.
-        if current < episode or (child.workspace / ".atrex_long_horizon/active_episode.json").exists():
+        campaign_store = CampaignStore(child.workspace)
+        if current < episode or campaign_store.active_path.exists():
             child.start_runtime()
             from aka.light.workflow.session import LongSessionRunner
             runner = LongSessionRunner(agent=child.agent, agent_cli=child.agent_cli,
@@ -920,16 +1177,19 @@ class EpisodeSearchDriver:
                                 session_runner=runner).run()
         if self._state(child)["episodes"] != episode:
             raise RuntimeError("Episode did not reach a durable terminal outcome")
-        attempt = read_state(child.workspace / f".atrex_long_horizon/episodes/e{episode:04d}/attempt.json")
+        attempt_path = campaign_store.episode_dir(episode) / "attempt.json"
+        attempt = read_state(attempt_path)
         if attempt.get("episode") != episode:
             raise RuntimeError("Episode archive identity mismatch")
         agent_head = attempt.get("agent_head")
         if not isinstance(agent_head, str) or not agent_head:
             raise RuntimeError("Completed audit segment has no Agent-owned HEAD commit identity")
-        runtime_root = supervisor_campaign_root(child.workspace)
-        submitted = accepted_submission_kernel_ids(runtime_root / "journals")
+        submitted = accepted_submission_kernel_ids(
+            supervisor_submission_root(child.workspace),
+            lineage=f"T{trajectory}",
+        )
         frontier = kernel_pareto_frontier(
-            MeasurementStore(runtime_root / "measurements"),
+            MeasurementStore(self.measurement_root),
             kernel_ids=submitted,
         )
         best_submitted = frontier.get("best_full_evaluation")
@@ -937,7 +1197,7 @@ class EpisodeSearchDriver:
                 "status": attempt["status"],
                 "agent_head_commit_id": agent_head,
                 "best_submitted_evaluation": best_submitted,
-                "archive": str(child.workspace / f".atrex_long_horizon/episodes/e{episode:04d}"),
+                "archive": str(campaign_store.episode_dir(episode)),
                 "tokens": attempt.get("tokens", 0),
                 "session_id": attempt.get("session_id")}
 

@@ -184,7 +184,7 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                     "pattern": "^direction_[0-9a-f]{32}$",
                     "description": (
                         "Editable local Direction identity. Proposed-state revisions remain "
-                        "unreviewed drafts; active revisions receive independent Review."
+                        "review_not_requested drafts; active revisions receive independent Review."
                     ),
                 }
                 if not experiments_enabled:

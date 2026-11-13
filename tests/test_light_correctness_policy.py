@@ -120,7 +120,7 @@ from aka.light.runtime.plugins import PluginError
 from aka.light.runtime.request_errors import AgentRequestError
 from aka.light.runtime.request_feedback import gateway_schema
 from aka.light.workflow.bootstrap import Campaign
-from aka.light.workflow.context import conversion_required, session_execution_policy
+from aka.light.workflow.context import session_execution_policy
 from aka.light.workflow.plugin import Defaults as WORKFLOW_PLUGIN_DEFAULTS
 from aka.light.workflow.provider import WorkflowOptions
 from aka.light.workflow.output_limit import dependency_policy_recovery_prompt
@@ -558,7 +558,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                     conversion_pending=False,
                 )
             self.assertIn(
-                "Search location: Epoch 1, Trajectory 1, Episode 1", prompt
+                "Your trajectory: T1. Search location: Epoch 1, Episode 1", prompt
             )
             self.assertEqual(
                 "T1 role: bounded exploitation" in prompt,
@@ -907,7 +907,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 worktree=CandidateHandle(1, "a" * 40, "work", workspace),
                 conversion_pending=False,
             )
-        self.assertIn("Search location: Epoch 1, Trajectory 2, Episode 1", prompt)
+        self.assertIn("Your trajectory: T2. Search location: Epoch 1, Episode 1", prompt)
         self.assertNotIn("T2 role:", prompt)
 
     def test_optional_conversion_and_ppu_prompt_fragments_render_completely(self):
@@ -1059,13 +1059,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         )
         self.assertIn("No DSL is prescribed", directive)
         self.assertNotIn("`Cuda`", directive)
-        campaign = SimpleNamespace(
-            source_checks_enabled=True,
-            specify_dsl=False,
-            framework="Triton",
-            convert_after=0,
-        )
-        self.assertFalse(conversion_required(campaign, 99, Path(".")))
 
     def test_leaderboard_open_dsl_policy_does_not_request_framework_benchmarking(self):
         directive = optimization_mode_directive(
@@ -2490,8 +2483,9 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         prompt = verifier.agent_instructions(measurement_repetitions=1)
         self.assertIn("--baseline-commit <FULL_GIT_COMMIT>", prompt)
         self.assertIn("you choose its baseline", prompt)
-        self.assertIn("terminal baseline is not Agent-selectable", prompt)
-        self.assertIn("Supervisor automatically compares", prompt)
+        self.assertIn("Runtime does not run", prompt)
+        self.assertIn("an automatic terminal ABBA", prompt)
+        self.assertIn("final-source review required by `submit-kernel`", prompt)
         self.assertNotIn("run this exact command", prompt)
 
     def test_supervisor_state_migrates_promoted_agent_kernel_identity(self):
@@ -2565,7 +2559,8 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
 
         triton = optimization_mode_directive("production", "Triton")
         self.assertIn("submitted candidate's implementation framework is exactly **Triton**", triton)
-        self.assertIn("Do not submit a candidate that switches early", triton)
+        self.assertNotIn("mandatory Triton-to-Gluon", triton)
+        self.assertNotIn("switches early", triton)
 
     def test_dsl_context_distinguishes_final_gate_from_development_tools(self):
         production = object.__new__(Campaign)
@@ -2808,6 +2803,17 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 work_dir=directory,
                 evaluation_step_timeout=317,
             )
+            campaign.workspace.mkdir(parents=True)
+            (campaign.workspace / "kernel.py").write_text("class Model:\n    pass\n")
+            subprocess.run(["git", "init", "-q"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "add", "kernel.py"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "commit", "-qm", "V0"], cwd=campaign.workspace, check=True)
+            source_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=campaign.workspace,
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
             with (
                 patch(
                     "aka.light.workflow.bootstrap._sandbox_command",
@@ -2815,13 +2821,15 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 ) as sandbox,
                 patch.object(Campaign, "_print_v0_evaluator_output"),
             ):
-                measured = campaign._run_v0_evaluator()
+                measured = campaign._run_v0_evaluator(source_commit)
 
-            from aka.light.workspace.baseline import baseline_record_path
-            private_record = json.loads(
-                baseline_record_path(campaign.workspace).read_text(encoding="utf-8")
-            )
+            from aka.light.workspace.baseline import baseline_root, read_baseline_record
+            private_record = read_baseline_record(campaign.workspace)
             self.assertEqual(private_record["version"], "v0")
+            self.assertEqual(private_record["git_commit_hash"], source_commit)
+            self.assertFalse(
+                baseline_root(campaign.workspace).exists()
+            )
             self.assertFalse((campaign.workspace / "memory/v0.json").exists())
             self.assertFalse((campaign.workspace / ".atrex_versions/v0.json").exists())
 
@@ -2848,6 +2856,17 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 framework="cuda",
                 work_dir=directory,
             )
+            campaign.workspace.mkdir(parents=True)
+            (campaign.workspace / "kernel.py").write_text("class Model:\n    pass\n")
+            subprocess.run(["git", "init", "-q"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "config", "user.name", "test"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "add", "kernel.py"], cwd=campaign.workspace, check=True)
+            subprocess.run(["git", "commit", "-qm", "V0"], cwd=campaign.workspace, check=True)
+            source_commit = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=campaign.workspace,
+                check=True, capture_output=True, text=True,
+            ).stdout.strip()
             with (
                 patch(
                     "aka.light.workflow.bootstrap._sandbox_command",
@@ -2855,20 +2874,27 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 ) as sandbox,
                 patch.object(Campaign, "_print_v0_evaluator_output"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "V0 baseline failed"):
-                    campaign._run_v0_evaluator()
+                with self.assertRaisesRegex(RuntimeError, "V0 Evaluate failed"):
+                    campaign._run_v0_evaluator(source_commit)
 
-            from aka.light.workspace.baseline import baseline_failure_path
-            failure = json.loads(
-                baseline_failure_path(campaign.workspace).read_text(encoding="utf-8")
+            from aka.light.experiment.store import MeasurementStore
+            from aka.light.runtime.paths import supervisor_measurement_root
+            from aka.light.workspace.baseline import baseline_root
+            store = MeasurementStore(supervisor_measurement_root(campaign.workspace))
+            records = [store.read(record_id) for record_id in store.record_ids()]
+            self.assertEqual(len(records), 1)
+            self.assertFalse(
+                records[0]["response"]["agent_result"]["result"]["correct"]
             )
-            self.assertEqual(failure["quality_gate"]["result"], "FAIL")
+            self.assertFalse(
+                baseline_root(campaign.workspace).exists()
+            )
             self.assertFalse((campaign.workspace / ".atrex_versions/v0.failed.json").exists())
 
         sandbox.assert_called_once()
         self.assertIs(sandbox.call_args.kwargs["terminal_validation"], True)
 
-    def test_legacy_v0_record_migrates_to_private_supervisor_state(self):
+    def test_legacy_v0_record_remains_readable_without_new_baseline_store(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory) / "workspace"
             legacy = workspace / ".atrex_versions" / "v0.json"
@@ -2885,10 +2911,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
 
             self.assertEqual(read_memory(workspace, 0), record)
             self.assertEqual(latest_version(workspace), 0)
-            self.assertEqual(
-                json.loads(baseline_record_path(workspace).read_text(encoding="utf-8")),
-                record,
-            )
+            self.assertFalse(baseline_record_path(workspace).exists())
 
     def test_v0_progress_exposes_gateway_record_but_keeps_backend_jobs_private(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -2919,20 +2942,18 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             ).stdout.strip()
 
             from aka.light.experiment.store import MeasurementStore
-            from aka.light.runtime.paths import supervisor_campaign_root
+            from aka.light.runtime.paths import supervisor_measurement_root
             from aka.light.workflow.journal_service import (
                 _git_visible_record_ids,
                 _progress_markdown,
             )
             from aka.light.workspace.baseline import (
+                baseline_record_path,
                 ensure_baseline_gateway_record,
                 read_baseline_record,
-                write_baseline_record,
             )
 
-            write_baseline_record(
-                workspace,
-                {
+            legacy_record = {
                     "version": "v0",
                     "git_commit_hash": commit,
                     "backend_job_ids": ["ev_part_a", "ev_part_b"],
@@ -2949,8 +2970,10 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                         "max_rel_err": 0.0,
                     },
                     "quality_gate": {"result": "PASS"},
-                },
-            )
+                }
+            legacy_path = baseline_record_path(workspace)
+            legacy_path.parent.mkdir(parents=True)
+            legacy_path.write_text(json.dumps(legacy_record), encoding="utf-8")
             gateway_record_id = ensure_baseline_gateway_record(workspace)
 
             self.assertIsNotNone(gateway_record_id)
@@ -2959,7 +2982,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             self.assertEqual(private["gateway_record_id"], gateway_record_id)
             self.assertEqual(private["backend_job_ids"], ["ev_part_a", "ev_part_b"])
             store = MeasurementStore(
-                supervisor_campaign_root(workspace) / "measurements"
+                supervisor_measurement_root(workspace)
             )
             saved = store.read(gateway_record_id)
             self.assertEqual(
@@ -2997,11 +3020,10 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 framework="cuda",
                 work_dir=directory,
             )
-            from aka.light.workspace.baseline import read_baseline_record, write_baseline_record
-            write_baseline_record(
-                campaign.workspace,
-                {
+            from aka.light.workspace.baseline import baseline_record_path, read_baseline_record
+            legacy_record = {
                     "version": "v0",
+                    "git_commit_hash": source_commit,
                     "performance": {
                         "latency_us_geomean": 1.0,
                         "latency_us_by_shape": {"0": 1.0},
@@ -3010,8 +3032,10 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                     },
                     "correctness": {"status": "PASS"},
                     "quality_gate": {"result": "PASS"},
-                },
-            )
+                }
+            legacy_path = baseline_record_path(campaign.workspace)
+            legacy_path.parent.mkdir(parents=True)
+            legacy_path.write_text(json.dumps(legacy_record), encoding="utf-8")
             with (
                 patch("aka.light.workflow.bootstrap.git_head", return_value=source_commit),
                 patch("aka.light.workspace.sources.from_git", return_value=b"source"),

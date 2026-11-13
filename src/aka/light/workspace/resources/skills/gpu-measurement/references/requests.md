@@ -213,11 +213,13 @@ ABBA keeps the per-side aggregate metrics, not raw schedules or repetition array
 
 A completed evaluator can have `result.correct: false`; completion does not mean the Kernel passed.
 Search `records/*.json` by commit ID to find its measurements. Use `git show`, `git diff`, `git log`
-or a local branch to inspect source; imported peer history is under `refs/atrex/shared/`.
+or a local branch to inspect source; imported peer history uses refs such as `atrex/T2`.
 Dev and Command receipts show bounded stdout/stderr previews and byte counts. Their complete redacted
 streams remain in the saved Record and can be read directly in bounded ranges.
 Dev probes also produce Record IDs even when their output is not an evaluation.
-A duplicate-task error means the result already exists, not that the Kernel failed.
+When an identical completed task already has a valid cached Record, Runtime returns that Record
+through the same normal completed receipt and does not submit another Agate task. Cache reuse is a
+Supervisor implementation detail; do not expect or handle a separate completed-duplicate error.
 
 ## Interpret completion and failures
 
@@ -231,7 +233,6 @@ Do not infer unavailable counters or missing measurements as zero.
 | Evaluate completed, `result.correct: false` | Inspect correctness diagnostics and Shape/case/output identifiers. On generalized hidden-Shape tasks, treat IDs as opaque; on exposed tasks, use `shapes.json`. Repair the candidate; do not call it a Gateway outage or use its timings as a valid speedup. |
 | Dev/Check/Profile/Disassemble failure | Read `result.error` and available `stdout`/`stderr` or diagnostic fields. Compiler/import/file errors require source or declared-input repair. A successful Dev probe is not automatically a passing Evaluate. |
 | Request rejected with `issues`, `request_schema`, `recovery` or `error.next_action` | Correct the named field/path or evidence reference. Follow the supplied operation-specific guidance, not guessed flags or IDs. |
-| `duplicate_gateway_task` | Read the previous Record ID supplied by the error. Do not relabel the version or change source merely to bypass deduplication. |
 | `gateway_task_running` | The same call is still executing; this request did not submit another Agate task. Wait for the original response. `remaining_seconds` is its remaining Runtime request budget, not a guaranteed successful completion ETA; null means unknown, and zero means the deadline has elapsed and cleanup is still in progress. No complete Record is available to read yet. |
 | `request_not_started`, explicitly `repairable: true` | No executor started. Wait at least `retry_after_seconds` and retry unchanged with backoff; this exception does not authorize retries for other failures. |
 | Infrastructure recovery exhausted | Runtime already applied the configured terminal/non-terminal retry policy. Follow its final `next_action`; report a genuine blocker instead of declaring the Kernel incorrect or building another retry loop. |

@@ -16,7 +16,14 @@ import tarfile
 import uuid
 from pathlib import Path
 
-from aka.light.experiment.store import JOB_ROOT_ENV, EvidenceUnavailable, digest, private_write, read_json
+from aka.light.experiment.store import (
+    JOB_ROOT_ENV,
+    RUNTIME_REQUEST_ID_ENV,
+    EvidenceUnavailable,
+    digest,
+    private_write,
+    read_json,
+)
 from aka.light.evaluation.evaluation_failures import embedded_device_failure
 
 DEFAULT_MAX_INFRA_RETRIES = 2
@@ -503,12 +510,22 @@ def execute_job(
     submission = state.get("submission", 0)
     retries = state.get("retries", {})
     wire_key = state.get("idempotency_key")
+    runtime_request_ids = [
+        value
+        for value in state.get("runtime_request_ids", [])
+        if isinstance(value, str) and value
+    ]
+    current_runtime_request_id = os.environ.get(RUNTIME_REQUEST_ID_ENV)
+    if current_runtime_request_id and current_runtime_request_id not in runtime_request_ids:
+        runtime_request_ids.append(current_runtime_request_id)
     if idempotent_submission and not wire_key and state.get("phase") == "submitting":
         raise EvidenceUnavailable("Old submission has no persisted wire key; operator reconciliation required")
     wire_key = wire_key or uuid.uuid4().hex
 
     def save(phase, process=None):
         value = {"phase": phase, "submission": submission, "retries": retries, "identity": identity}
+        if runtime_request_ids:
+            value["runtime_request_ids"] = runtime_request_ids
         if idempotent_submission:
             value["idempotency_key"] = wire_key
         if process is not None:

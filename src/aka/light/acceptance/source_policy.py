@@ -100,17 +100,10 @@ def optimization_mode_directive(
             numerical_validation_enabled=numerical_validation_enabled,
         )
 
-    if framework_key(framework) == "triton":
-        framework_rule = (
-            "The submitted candidate's implementation framework is exactly **Triton** until the "
-            "Supervisor starts the mandatory Triton-to-Gluon phase; later submissions must use "
-            "Gluon. Do not submit a candidate that switches early, switches back, or mixes compute DSLs."
-        )
-    else:
-        framework_rule = (
-            f"The submitted candidate's implementation framework is exactly **{framework}**. "
-            "This is a hard final-candidate constraint, not a development-method restriction."
-        )
+    framework_rule = (
+        f"The submitted candidate's implementation framework is exactly **{framework}**. "
+        "This is a hard final-candidate constraint, not a development-method restriction."
+    )
     numerical_rule = (
         "Numerical review produces targeted Supervisor-run probes. A measured failure is returned "
         "for repair; fix the candidate, rerun ordinary validation, and resubmit without changing "

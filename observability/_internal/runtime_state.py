@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report Campaign, trajectory, Episode and Session progress for AKA Light."""
+"""Build Campaign, trajectory, Episode and Session state projections."""
 from __future__ import annotations
 
 import argparse
@@ -10,17 +10,17 @@ from pathlib import Path
 import re
 import sys
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from observability.common import (
-    TERMINAL_CAMPAIGN_PHASES,
+from observability._internal.common import (
     TERMINAL_EPISODE_STATUSES,
     KIND_PATTERN,
     add_output_arguments,
     age_seconds,
     attempt_documents,
+    campaign_runtime_configuration,
     discover_scopes,
     emit,
     main_error,
@@ -81,7 +81,7 @@ def _episode_rows(attempts: list[dict], active: int | None) -> list[dict]:
 
 def _session_rows(scope) -> list[dict]:
     rows = []
-    root = scope.workspace / ".atrex_long_horizon" / "episodes"
+    root = scope.segment_root / "episodes"
     for usage_path in sorted(root.glob("e*/sessions/run-*/token-usage.json")):
         value = read_json(usage_path, default={})
         if not isinstance(value, dict):
@@ -105,32 +105,35 @@ def _session_rows(scope) -> list[dict]:
 
 
 def _progress(scope) -> dict:
-    root = scope.workspace / ".atrex_long_horizon"
+    root = scope.segment_root
     state = read_json(root / "state.json", default={})
     state = state if isinstance(state, dict) else {}
     active = read_json(root / "active_episode.json", default={})
     active = active if isinstance(active, dict) else {}
     identity = read_json(root / "public-identity.json", default={})
     identity = identity if isinstance(identity, dict) else {}
-    running = writer_active(scope.workspace)
+    writer = writer_active(scope.workspace)
     terminal = read_json(scope.workspace / "trace-retention-manifest.json", default={})
     terminal = terminal if isinstance(terminal, dict) else {}
-    if running:
+    if writer:
         phase = str(active.get("phase") or "running")
     elif (root / "pause-requested").exists():
         phase = "paused"
     else:
-        phase = str(terminal.get("status") or "stopped")
-    paths = [root / "state.json", root / "active_episode.json", scope.workspace / "memory/live.json"]
+        phase = str(terminal.get("status") or "not_running")
+    paths = [root / "state.json", root / "active_episode.json"]
     updated = max((value for value in (_mtime(path) for path in paths) if value), default=None)
-    current_episode = active.get("episode") if type(active.get("episode")) is int else None
+    episode_checkpoint = active.get("episode") if type(active.get("episode")) is int else None
+    runtime_configuration = campaign_runtime_configuration(scope.workspace)
     return {
         "campaign_id": identity.get("campaign_id"),
         "phase": phase,
-        "writer_active": running,
-        "episode": current_episode,
+        "writer_active": writer,
+        "episode": episode_checkpoint if writer else None,
+        "episode_checkpoint": episode_checkpoint,
         "completed_episodes": state.get("episodes"),
         "updated_at": updated,
+        "runtime_configuration": runtime_configuration,
     }
 
 
@@ -229,7 +232,7 @@ def _conversation_phase(path: Path) -> tuple[str, str | None, str | None]:
 def _active_session_rows(scope, *, current_episode: int | None, writer_active: bool, stale_after: float) -> list[dict]:
     if not writer_active:
         return []
-    root = scope.workspace / ".atrex_long_horizon" / "episodes"
+    root = scope.segment_root / "episodes"
     rows = []
     for usage_path in sorted(root.glob("e*/sessions/run-*/token-usage.json")):
         value = read_json(usage_path, default={})
@@ -265,10 +268,52 @@ def _active_session_rows(scope, *, current_episode: int | None, writer_active: b
                 "started_at": value.get("started_at"),
                 "updated_at": updated_at,
                 "stagnation_seconds": stale,
-                "health": "stalled" if stale is not None and stale > stale_after else "active",
+                "activity_state": (
+                    "no_recent_activity"
+                    if stale is not None and stale > stale_after
+                    else "recent_activity"
+                ),
             }
         )
     return rows
+
+
+def _search_projection(state: dict | None) -> dict | None:
+    """Project persisted scheduler facts without claiming process liveness."""
+    if not isinstance(state, dict):
+        return None
+    active = state.get("active") if isinstance(state.get("active"), dict) else {}
+    jobs = [row for row in active.get("jobs", []) if isinstance(row, dict)]
+    active_phase = active.get("phase")
+    if not jobs:
+        asynchronous = (
+            state.get("asynchronous")
+            if isinstance(state.get("asynchronous"), dict)
+            else {}
+        )
+        raw_jobs = asynchronous.get("jobs")
+        if isinstance(raw_jobs, dict):
+            jobs = [row for row in raw_jobs.values() if isinstance(row, dict)]
+    return {
+        "source": "persisted_scheduler_checkpoint",
+        "epoch": state.get("epoch"),
+        "completed_epochs": state.get("completed_epochs"),
+        "active_phase": active_phase,
+        "stop_reason": state.get("stop_reason"),
+        "active_winner": active.get("winner"),
+        "global_best": state.get("global_best"),
+        "options": state.get("options") if isinstance(state.get("options"), dict) else None,
+        "binding_digest": state.get("binding") if isinstance(state.get("binding"), str) else None,
+        "token_budget": state.get("token_budget"),
+        "lineages": state.get("lineages") if isinstance(state.get("lineages"), dict) else {},
+        "jobs": [
+            {
+                key: job.get(key)
+                for key in ("epoch", "trajectory", "episode", "step", "status")
+            }
+            for job in jobs
+        ],
+    }
 
 
 def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
@@ -311,7 +356,11 @@ def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
                 "started_at": value.get("started_at"),
                 "updated_at": updated_at,
                 "stagnation_seconds": stale,
-                "health": "stalled" if stale is not None and stale > stale_after else "active",
+                "activity_state": (
+                    "no_recent_activity"
+                    if stale is not None and stale > stale_after
+                    else "recent_activity"
+                ),
             }
         )
     return rows
@@ -319,6 +368,7 @@ def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
 
 def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
     scopes = discover_scopes(workspace)
+    scheduler_checkpoint = _search_projection(search_state(scopes[0].workspace))
     rows = []
     for scope in scopes:
         progress = _progress(scope)
@@ -329,32 +379,32 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
             writer_active=progress["writer_active"],
             stale_after=stale_after,
         )
-        if not active_sessions:
+        if progress["writer_active"] and not active_sessions:
             active_sessions = _active_startup_session_rows(
                 scope,
                 stale_after=stale_after,
             )
-        activity_points = [
-            (age_seconds(progress["updated_at"]), progress["updated_at"]),
-            *[
-                (session["stagnation_seconds"], session["updated_at"])
-                for session in active_sessions
-            ],
-        ]
+        activity_points = []
+        if progress["writer_active"]:
+            activity_points = [
+                (age_seconds(progress["updated_at"]), progress["updated_at"]),
+                *[
+                    (session["stagnation_seconds"], session["updated_at"])
+                    for session in active_sessions
+                ],
+            ]
         latest_activity = min(
             (point for point in activity_points if point[0] is not None),
             default=(None, None),
             key=lambda point: point[0],
         )
         age, latest_activity_at = latest_activity
-        if progress["phase"] in TERMINAL_CAMPAIGN_PHASES:
-            health = progress["phase"]
-        elif (progress["writer_active"] or active_sessions) and (age is None or age <= stale_after):
-            health = "healthy"
-        elif progress["writer_active"] or active_sessions:
-            health = "stalled"
+        if progress["writer_active"] and (age is None or age <= stale_after):
+            liveness = "running_recent_activity"
+        elif progress["writer_active"]:
+            liveness = "running_no_recent_activity"
         else:
-            health = "inactive"
+            liveness = "not_running"
         recorded_sessions = _session_rows(scope)
         active_ids = {row["session_id"] for row in active_sessions}
         for session in recorded_sessions:
@@ -365,13 +415,16 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                 "trajectory": scope.trajectory,
                 "workspace": str(scope.workspace),
                 "campaign_id": progress["campaign_id"],
+                "runtime_configuration": progress["runtime_configuration"],
                 "phase": progress["phase"],
                 "writer_active": progress["writer_active"],
                 "current_episode": progress["episode"],
+                "episode_checkpoint": progress["episode_checkpoint"],
                 "completed_episodes": progress["completed_episodes"],
+                "state_updated_at": progress["updated_at"],
                 "latest_activity_at": latest_activity_at,
                 "stagnation_seconds": age,
-                "health": health,
+                "liveness": liveness,
                 "episode_counts": dict(Counter(row["category"] for row in episodes)),
                 "episodes": episodes,
                 "active_session_count": len(active_sessions),
@@ -380,32 +433,13 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
             }
         )
 
-    search = search_state(scopes[0].workspace)
-    search_summary = None
-    if search is not None:
-        active = search.get("active") if isinstance(search.get("active"), dict) else {}
-        search_summary = {
-            "epoch": search.get("epoch"),
-            "completed_epochs": search.get("completed_epochs"),
-            "phase": active.get("phase"),
-            "stop_reason": search.get("stop_reason"),
-            "winner": active.get("winner"),
-            "jobs": [
-                {
-                    key: job.get(key)
-                    for key in ("epoch", "trajectory", "episode", "step", "status")
-                }
-                for job in active.get("jobs", [])
-                if isinstance(job, dict)
-            ],
-        }
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "observed_at": observed_at(),
         "campaign_workspace": str(scopes[0].workspace),
         "stale_after_seconds": stale_after,
         "scopes": rows,
-        "search": search_summary,
+        "scheduler_checkpoint": scheduler_checkpoint,
     }
 
 
@@ -413,14 +447,14 @@ def render(value: dict) -> str:
     lines = ["AKA Light 运行状态", ""]
     lines.append(
         table(
-            ["Scope", "Campaign Phase", "Episode", "Done", "Health", "Stale(s)", "Active Sessions"],
+            ["Scope", "Campaign Phase", "Episode", "Done", "Liveness", "Stale(s)", "Active Sessions"],
             [
                 [
                     row["scope"],
                     row["phase"],
                     row["current_episode"],
                     row["completed_episodes"],
-                    row["health"],
+                    row["liveness"],
                     round(row["stagnation_seconds"], 1) if row["stagnation_seconds"] is not None else None,
                     row["active_session_count"],
                 ]
@@ -445,20 +479,20 @@ def render(value: dict) -> str:
     lines += ["", "Active Agent Sessions"]
     lines.append(
         table(
-            ["Scope", "Stage", "Episode", "Session", "Backend", "Agent Phase", "Tool", "Phase(s)", "Health"],
+            ["Scope", "Stage", "Episode", "Session", "Backend", "Agent Phase", "Tool", "Phase(s)", "Activity"],
             [
                 [
                     row["scope"], row["stage"], row["episode"], row["session_id"], row["backend"], row["phase"],
                     row["tool"], round(row["phase_seconds"], 1) if row["phase_seconds"] is not None else None,
-                    row["health"],
+                    row["activity_state"],
                 ]
                 for row in active_sessions
             ],
         )
     )
-    if value["search"]:
-        search = value["search"]
-        lines += ["", f"Search: epoch={search['epoch']} completed={search['completed_epochs']} phase={search['phase']} stop={search['stop_reason'] or '—'}"]
+    if value["scheduler_checkpoint"]:
+        search = value["scheduler_checkpoint"]
+        lines += ["", f"Scheduler checkpoint: epoch={search['epoch']} completed={search['completed_epochs']} active_phase={search['active_phase'] or '—'} stop={search['stop_reason'] or '—'}"]
     return "\n".join(lines)
 
 

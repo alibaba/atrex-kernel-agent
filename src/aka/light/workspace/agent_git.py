@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 IGNORED = (
-    "scratch/", "tools/", "skills/", "memory/", "input/", "eval/", "profiles/",
-    "plans/", "directions/", "experiments/", "records/", "reference/",
+    "scratch/", "tools/", "skills/", "input/", "eval/", "profiles/",
+    "plans/", "directions/", "experiments/", "records/", "research-library/", "reference/",
     "reference-projects/", "references/", "gpu-wiki/", "atrex-bench/",
     ".atrex_*/", ".orchestrator_mode.json", ".orchestrator_state.json",
     ".claude/", ".qoder/", ".agents/",
@@ -39,6 +39,7 @@ TRACKED_IGNORED = (
     "/scratch",
     "/tools",
     "/skills",
+    "/research-library",
     "/reference",
     "/reference-projects",
     "/references",
@@ -50,7 +51,6 @@ TRACKED_IGNORED = (
     "/.orchestrator_state.json",
     "/.atrex_long_horizon/",
     "/verification_artifacts/.atrex_long_horizon_verify/",
-    "/memory/live.json",
     "/atrex-bench",
 )
 
@@ -98,10 +98,14 @@ def _run(
 
 
 class AgentGit:
-    def __init__(self, workspace: Path, bundle: Path):
+    def __init__(self, workspace: Path, bundle: Path | None = None):
         self.workspace = workspace
         self.bundle = bundle
-        self.checkout_state = bundle.with_name(bundle.name + ".checkout.json")
+        self.checkout_state = (
+            bundle.with_name(bundle.name + ".checkout.json")
+            if bundle is not None
+            else None
+        )
 
     def _configure(self) -> None:
         settings = {
@@ -175,6 +179,8 @@ class AgentGit:
 
     def _restore_branches(self) -> None:
         """Restore every Agent branch and the previously checked-out branch."""
+        if self.checkout_state is None:
+            return
         rows = _run(
             self.workspace,
             "for-each-ref",
@@ -217,7 +223,7 @@ class AgentGit:
 
     def _fetch_bundle(self) -> None:
         """Import recovery and peer refs without replacing live local branches."""
-        if not self.bundle.is_file():
+        if self.bundle is None or not self.bundle.is_file():
             return
         _run(
             self.workspace,
@@ -228,11 +234,14 @@ class AgentGit:
             "+refs/heads/*:refs/remotes/atrex-resume/heads/*",
             "+refs/tags/*:refs/tags/*",
             "+refs/atrex/*:refs/atrex/*",
+            "+refs/remotes/atrex/*:refs/remotes/atrex/*",
             "+refs/notes/*:refs/notes/*",
         )
 
     def _record_active_branch(self) -> None:
         """Store checkout recovery outside Agent Git."""
+        if self.checkout_state is None:
+            return
         branch = _run(
             self.workspace, "symbolic-ref", "--quiet", "--short", "HEAD", check=False
         ).stdout.strip()
@@ -253,7 +262,7 @@ class AgentGit:
             self._configure()
             initialize_gitignore(self.workspace)
             self._fetch_bundle()
-            if self.bundle.is_file():
+            if self.bundle is not None and self.bundle.is_file():
                 self._restore_branches()
         else:
             self._configure()
@@ -323,6 +332,7 @@ class AgentGit:
             "refs/heads",
             "refs/tags",
             "refs/atrex",
+            "refs/remotes/atrex",
             check=False,
         )
         return refs.returncode == 0 and bool(refs.stdout.strip())
@@ -453,6 +463,8 @@ class AgentGit:
         head = self.head()
         if head is None:
             return None
+        if self.bundle is None:
+            return head
         self._record_active_branch()
         self.bundle.parent.mkdir(parents=True, exist_ok=True)
         temporary = self.bundle.with_suffix(".tmp")

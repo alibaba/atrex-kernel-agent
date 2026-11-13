@@ -46,7 +46,7 @@ echo "  Kernel:     $KERNEL_DEMO"
 echo "=========================================="
 
 # Step 1: Create workspace directory structure
-mkdir -p "$WORKSPACE"/{memory,scratch}
+mkdir -p "$WORKSPACE/scratch"
 
 # Step 2: Initialize git
 cd "$WORKSPACE"
@@ -72,6 +72,7 @@ profiles/*/att/*.otf2
 /scratch
 /tools
 /skills
+/research-library
 /reference
 /reference-projects
 /references
@@ -83,7 +84,6 @@ profiles/*/att/*.otf2
 /.orchestrator_state.json
 /.atrex_long_horizon/
 /verification_artifacts/.atrex_long_horizon_verify/
-/memory/live.json
 /atrex-bench
 EOF
 
@@ -97,5 +97,5 @@ cp "$SCRIPT_DIR/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
 echo ""
 echo "Workspace initialized at: $WORKSPACE"
 echo ""
-echo "Supervisor staging ready: kernel.py + impl/, CLAUDE.md, memory/, scratch/."
+echo "Supervisor staging ready: kernel.py + impl/, CLAUDE.md, scratch/."
 echo "kernel.py is the evaluator entry point; optional host/CUDA helpers belong under impl/."

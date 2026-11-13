@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
-"""Report the private Research Store and Agent-visible Research Board projection."""
+"""Build private Research Store and Agent-visible Research Board projections."""
 from __future__ import annotations
 
 import argparse
 from collections import Counter
 import json
 from pathlib import Path
+import subprocess
 import sys
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
 from aka.light.research.store import _apply, _empty  # noqa: E402
-from observability.common import (  # noqa: E402
+from observability._internal.common import (  # noqa: E402
     add_output_arguments,
     discover_scopes,
     emit,
@@ -50,31 +51,99 @@ def _research_state(root: Path) -> dict:
             if not isinstance(event, dict) or event.get("sequence") != state["sequence"] + 1:
                 raise ValueError(f"Research event sequence is invalid at {path}")
             _apply(state, event)
+            if event.get("type") in {"queue.synchronized", "shared_queue.synchronized"}:
+                state["_observability_last_shared_queue_sync"] = {
+                    "sequence": event.get("sequence"),
+                    "origin": event.get("origin") if isinstance(event.get("origin"), dict) else {},
+                    "recorded_at": event.get("recorded_at") or event.get("created_at"),
+                }
     return state
 
 
-def _latest_modules(scope) -> list[str]:
+def _peer_refs(workspace: Path, *, limit: int = 64) -> dict:
+    process = subprocess.run(
+        [
+            "git",
+            "for-each-ref",
+            "--sort=-creatordate",
+            "--format=%(refname)%09%(objectname)",
+            "refs/remotes/atrex",
+        ],
+        cwd=workspace,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+        check=False,
+    )
+    if process.returncode != 0:
+        return {"available": False, "count": None, "returned": 0, "truncated": False, "refs": []}
     rows = []
-    for path in (scope.audit_root / "journals" / "episodes").glob("e*/journal.json"):
-        value = read_json(path, default={})
-        if isinstance(value, dict) and type(value.get("episode")) is int:
-            rows.append((value["episode"], value))
-    if not rows:
-        return []
-    value = max(rows, key=lambda item: item[0])[1]
+    for line in process.stdout.splitlines():
+        ref, _, commit = line.partition("\t")
+        if ref and commit:
+            rows.append({"ref": ref, "kernel_commit_id": commit})
+    return {
+        "available": True,
+        "count": len(rows),
+        "returned": min(len(rows), limit),
+        "truncated": len(rows) > limit,
+        "refs": rows[:limit],
+    }
+
+
+def _latest_modules(scope) -> list[str] | None:
+    value = read_json(scope.audit_root / "state.json", default={})
+    if not isinstance(value, dict):
+        return None
     modules = value.get("tool_modules")
     if isinstance(modules, list):
         return [item for item in modules if item in {"directions", "experiments"}]
-    return ["directions", "experiments"] if value.get("research_records", True) else []
+    if value.get("research_records") is False:
+        return []
+    return None
 
 
 def _claim_review_summary(scope) -> dict:
     qualities = Counter()
     statuses = Counter()
     total = 0
-    for path in (scope.audit_root / "journals" / "episodes").glob(
-        "e*/claim-audit/*/outcome.json"
-    ):
+    from aka.light.runtime.paths import supervisor_campaign_base_root
+
+    library = supervisor_campaign_base_root(scope.workspace) / "research-library"
+    paths = [
+        *library.glob("directions/*/v*/review/result.json"),
+        *library.glob("directions/*/attempts/*/review/result.json"),
+        *library.glob("experiments/*/v*/review/result.json"),
+        *library.glob("experiments/*/attempts/*/review/result.json"),
+    ]
+    for path in sorted(paths):
+        value = read_json(path, default={})
+        if not isinstance(value, dict):
+            continue
+        origin = value.get("origin")
+        trajectory = origin.get("trajectory") if isinstance(origin, dict) else None
+        if scope.trajectory is not None and trajectory != scope.trajectory:
+            continue
+        total += 1
+        statuses[str(value.get("status") or "unknown")] += 1
+        review = value.get("review")
+        quality = review.get("claim_review_quality") if isinstance(review, dict) else None
+        qualities[str(quality or "unavailable")] += 1
+    # Read-only compatibility for pre-object-bound Campaigns.
+    from aka.light.runtime.paths import supervisor_research_catalog_root
+
+    legacy_paths = [
+        *(scope.audit_root / "claim-audit").glob("*/outcome.json"),
+        *(
+            supervisor_research_catalog_root(scope.workspace)
+            / "reviews"
+            / (
+                f"T{scope.trajectory}"
+                if scope.trajectory is not None else "T1"
+            )
+        ).glob("e*/claim-audit/*/outcome.json"),
+    ]
+    for path in sorted(legacy_paths):
         value = read_json(path, default={})
         if not isinstance(value, dict):
             continue
@@ -159,13 +228,22 @@ def snapshot(workspace: Path) -> dict:
                     if value not in (None, [], {})
                 }
             )
-        progress = scope.workspace / "PROGRESS.md"
+        progress = scope.agent_workspace / "PROGRESS.md"
+        enabled_modules = _latest_modules(scope)
+        current_lineage = f"T{scope.trajectory}" if scope.trajectory is not None else None
+        current_lineage_state = (
+            state["lineages"].get(current_lineage, {})
+            if current_lineage is not None
+            else {}
+        )
         scopes.append(
             {
                 "scope": scope.label,
                 "trajectory": scope.trajectory,
+                "agent_workspace": str(scope.agent_workspace),
                 "revision": state["sequence"],
-                "enabled_modules": _latest_modules(scope),
+                "enabled_modules": enabled_modules,
+                "module_configuration_available": enabled_modules is not None,
                 "direction_counts": dict(
                     sorted(Counter(str(row.get("status") or "unknown") for row in directions).items())
                 ),
@@ -173,6 +251,14 @@ def snapshot(workspace: Path) -> dict:
                 "directions": directions,
                 "experiments": experiments,
                 "lineages": state["lineages"],
+                "focus_direction_id": current_lineage_state.get("focus_direction_id"),
+                "active_direction_ids": current_lineage_state.get("active_direction_ids", []),
+                "local_direction_queue": list(state["queue"]),
+                "shared_direction_queue": list(state["shared_queue"]),
+                "last_shared_queue_sync": state.get(
+                    "_observability_last_shared_queue_sync"
+                ),
+                "peer_git_refs": _peer_refs(scope.agent_workspace),
                 "claim_reviews": _claim_review_summary(scope),
                 "progress_projection": {
                     "path": str(progress),
@@ -193,10 +279,11 @@ def render(value: dict) -> str:
     rows = []
     for scope in value["scopes"]:
         counts = scope["direction_counts"]
+        modules = scope["enabled_modules"]
         rows.append(
             [
                 scope["scope"],
-                ",".join(scope["enabled_modules"]) or "off",
+                "unavailable" if modules is None else ",".join(modules) or "off",
                 scope["revision"],
                 sum(counts.values()),
                 counts.get("in_progress", 0),

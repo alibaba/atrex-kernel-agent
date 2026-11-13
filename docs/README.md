@@ -23,7 +23,7 @@ describe the versions and environments identified in those documents.
 | --- | --- |
 | [Tool Runtime](supervisor-runtime.md) | HTTP authority, GPU/Wiki tools, public results and deadlines |
 | [Measurement records](measurement-records.md) | Source/task identity, deduplication, result queries and GPU recovery |
-| [Runtime Journal](runtime-journal.md) | Default report-only workflow and optional research annotations |
+| [Runtime research and submissions](runtime-journal.md) | Direction/Experiment records and exact-commit submission audit |
 | [Handoff and promotion](supervisor-promotion.md) | Source sealing, acceptance, ABBA, promotion-audit repair |
 | [Session observability](session-observability.md) | Capture configuration, transcripts, usage and failure boundaries |
 | [Core plugin framework](plugin-framework.md) | Composition, service contracts, lifecycle and ownership |

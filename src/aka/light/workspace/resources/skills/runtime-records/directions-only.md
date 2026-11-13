@@ -6,7 +6,7 @@ allowed-tools: "Bash Read"
 
 # Runtime Direction records
 
-Direction recording is enabled; Experiment commands are disabled. Start with root `PROGRESS.md`, then open only relevant `directions/<status>/*.json` and `records/*.json`. These Runtime projections are read-only.
+Direction recording is enabled; Experiment commands are disabled. Start with root `PROGRESS.md`, then open only relevant `research-library/directions/<direction_id>/vN/direction.json` and `records/*.json`; the greatest visible `vN` is current. These Runtime projections are read-only.
 Read or query relevant `records/<gateway_record_id>.json` files directly, selecting only needed
 fields or bounded text; do not print complete Records or long streams into the Session.
 

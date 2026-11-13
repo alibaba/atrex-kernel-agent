@@ -153,7 +153,10 @@ class WikiService:
                 normalized[i + 1] = read_regular_bytes(Path(normalized[i + 1]), limit=128 * 1024).decode()
             elif word.startswith("--file="):
                 normalized[i] = "--file=" + read_regular_bytes(Path(word.split("=", 1)[1]), limit=128 * 1024).decode()
-        scope = str(capability.journal.service.path) if capability.journal else str(capability.workspace.resolve())
+        scope = (
+            str(capability.journal.service.campaign_root.resolve())
+            if capability.journal else str(capability.workspace.resolve())
+        )
         provider = {"model": policy.model or environment.get("ANTHROPIC_MODEL", ""),
                     "endpoint": policy.base_url or environment.get("ANTHROPIC_BASE_URL", "")}
         if policy.settings_file:
@@ -256,7 +259,10 @@ class WikiService:
         request_id = uuid.uuid4().hex
         live = lambda: owner._live(capability)
         revision = self.pinned_revision()
-        scope = str(capability.journal.service.path) if capability.journal else str(capability.workspace.resolve())
+        scope = (
+            str(capability.journal.service.campaign_root.resolve())
+            if capability.journal else str(capability.workspace.resolve())
+        )
         key = digest({"schema": 2, "scope": scope, "operation": operation, "payload": payload,
                       "policy": asdict(policy), "revision": self._identity()})
         record = {"request_id": request_id, "query_key": key, "tool": operation,

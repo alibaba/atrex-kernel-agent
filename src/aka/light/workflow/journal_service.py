@@ -16,6 +16,7 @@ import logging
 import math
 import os
 import re
+import shutil
 import stat
 import subprocess
 import tempfile
@@ -52,11 +53,13 @@ from aka.light.experiment.identifiers import (
 )
 from aka.light.experiment.store import (
     MeasurementStore,
+    digest as evidence_digest,
     private_write,
     private_write_bytes,
     read_json,
 )
 from aka.light.evaluation.provider import result_from_response
+from aka.light.workflow.claim_review import canonical_review_quality
 from aka.light.workspace.files import (
     MAX_FILE_BYTES,
     publish,
@@ -82,6 +85,14 @@ DIRECTION_UPDATE_FIELDS = {"action", "direction_id", "analysis"}
 DIRECTION_CLOSURE_FIELDS = DIRECTION_UPDATE_FIELDS
 DIRECTION_CLOSURE_OPTIONAL_FIELDS = {"reopen_condition", "supporting_experiment_ids"}
 _EVIDENCE_KINDS = {"run", "same_allocation_abba", "profile", "dev", "check", "disassemble"}
+_SHARED_GATEWAY_RECORD_REASONS = frozenset({
+    "visible_direction_reference",
+    "visible_experiment_reference",
+    "passing_full_evaluate",
+    "accepted_submission_full_evaluate",
+    "lineage_winner_full_evaluate",
+    "global_winner_full_evaluate",
+})
 EXPERIMENT_FIELDS = {"name", "intent", "interpretation"}
 EXPERIMENT_OPTIONAL_FIELDS = {"experiment_id", "gateway_record_ids", "references"}
 LEGACY_EXPERIMENT_FIELDS = {
@@ -109,6 +120,16 @@ MAX_EXPERIMENT_REFERENCE_TOTAL_BYTES = 64 * 1024 * 1024
 MAX_PROGRESS_FRONTIER_ROWS = 20
 
 _REVIEW_SESSION_AUDIT_KEY = "_review_session_audit"
+_REVIEW_STAGING_PATH_KEY = "_review_staging_path"
+_REVIEW_CLAIM_ID_KEY = "_review_claim_id"
+_REVIEW_CLAIM_REVISION_KEY = "_review_claim_revision"
+_PRIVATE_REVIEW_KEYS = {
+    "evidence_manifest",
+    _REVIEW_SESSION_AUDIT_KEY,
+    _REVIEW_STAGING_PATH_KEY,
+    _REVIEW_CLAIM_ID_KEY,
+    _REVIEW_CLAIM_REVISION_KEY,
+}
 _ACTIVE_DIRECTION_EXPERIMENT_RUNTIME_ACTION = (
     "Keep the Direction active unless its objective, planned variants, and stop "
     "conditions are genuinely exhausted."
@@ -135,7 +156,7 @@ def _agent_claim_review(review: Mapping[str, object]) -> dict[str, object]:
     return {
         key: deepcopy(value)
         for key, value in review.items()
-        if key not in {"evidence_manifest", _REVIEW_SESSION_AUDIT_KEY}
+        if key not in _PRIVATE_REVIEW_KEYS
     }
 
 
@@ -148,6 +169,20 @@ def _private_claim_review(review: Mapping[str, object]) -> dict[str, object]:
     return result
 
 
+def _durable_private_claim_review(
+    review: Mapping[str, object],
+) -> dict[str, object]:
+    """Return private Review evidence without transient attachment metadata."""
+    result = _private_claim_review(review)
+    for key in (
+        _REVIEW_STAGING_PATH_KEY,
+        _REVIEW_CLAIM_ID_KEY,
+        _REVIEW_CLAIM_REVISION_KEY,
+    ):
+        result.pop(key, None)
+    return result
+
+
 def _review_projection(review: Mapping[str, object] | None) -> dict[str, object]:
     """Keep only durable decision state from an independent claim review."""
     if not isinstance(review, Mapping):
@@ -156,7 +191,8 @@ def _review_projection(review: Mapping[str, object] | None) -> dict[str, object]
     if quality is None:  # Read pre-v2 private receipts during migration.
         quality = review.get("verdict")
     if quality is None and review.get("status") == "unavailable":
-        quality = "unreviewed"
+        quality = "review_unavailable"
+    quality = canonical_review_quality(quality)
     if quality is None:
         return {}
     projected: dict[str, object] = {"claim_review_quality": quality}
@@ -174,7 +210,9 @@ def _review_projection(review: Mapping[str, object] | None) -> dict[str, object]
 def _durable_review_fields(value: Mapping[str, object]) -> dict[str, object]:
     """Canonicalize durable Review fields while reading pre-rename history."""
     result: dict[str, object] = {}
-    quality = value.get("claim_review_quality", value.get("review_quality"))
+    quality = canonical_review_quality(
+        value.get("claim_review_quality", value.get("review_quality"))
+    )
     if quality is not None:
         result["claim_review_quality"] = quality
     safe = value.get(
@@ -482,41 +520,6 @@ def load_journal(path: Path) -> dict[str, Any]:
     return value
 
 
-def accepted_submission_kernel_ids(
-    campaign_root: Path,
-    *,
-    through_episode: int | None = None,
-) -> set[str]:
-    """Return exact Agent commits accepted by submit-kernel.
-
-    Journal acceptance is the only nomination source. MeasurementStore later
-    decides whether each nominated commit has a passing, complete Evaluate with
-    usable performance evidence.
-    """
-    accepted: set[str] = set()
-    for path in sorted((campaign_root / "episodes").glob("e*/journal.json")):
-        try:
-            episode = int(path.parent.name[1:])
-        except ValueError:
-            continue
-        if through_episode is not None and episode > through_episode:
-            continue
-        journal = load_journal(path)
-        if journal.get("episode") != episode:
-            raise RuntimeStateError(
-                "Private Runtime Episode state has a mismatched Journal identity."
-            )
-        for submission in journal.get("kernel_submissions", []):
-            if (
-                isinstance(submission, Mapping)
-                and submission.get("accepted") is True
-                and isinstance(commit_id := submission.get("kernel_commit_id"), str)
-                and KERNEL_RECORD_ID_RE.fullmatch(commit_id) is not None
-            ):
-                accepted.add(commit_id)
-    return accepted
-
-
 def _index_historical_journal(index: _HistoryIndex, path: Path, episode: int) -> None:
     try:
         journal = load_journal(path)
@@ -582,10 +585,12 @@ def _shared_research(campaign_root: Path) -> dict[str, Any]:
             "schema_version": 1,
             "revision": "",
             "through_epoch": 0,
+            "research_catalog_through_sequence": 0,
             "directions": {},
             "statuses": {},
             "experiments": [],
             "experiments_by_id": {},
+            "gateway_record_ids": [],
             "research_queue": [],
             "accepted_submission_kernel_ids": {},
             "lineage_winners": {},
@@ -598,11 +603,34 @@ def _shared_research(campaign_root: Path) -> dict[str, Any]:
         or not isinstance(value.get("revision"), str)
         or type(value.get("through_epoch")) is not int
         or value["through_epoch"] < 0
+        or type(value.get("research_catalog_through_sequence", 0)) is not int
+        or value.get("research_catalog_through_sequence", 0) < 0
         or not isinstance(value.get("directions"), dict)
         or not isinstance(value.get("experiments"), list)
+        or not isinstance(value.get("gateway_record_ids", []), list)
         or not isinstance(value.get("research_queue", []), list)
     ):
         raise RuntimeStateError("Shared Epoch research evidence has an unsupported schema.")
+    gateway_record_ids = value.get("gateway_record_ids", [])
+    if (
+        any(
+            not isinstance(record_id, str)
+            or GATEWAY_RECORD_ID_RE.fullmatch(record_id) is None
+            for record_id in gateway_record_ids
+        )
+        or len(set(gateway_record_ids)) != len(gateway_record_ids)
+    ):
+        raise RuntimeStateError("Shared Gateway Record identities are invalid.")
+    gateway_record_reasons = value.get("gateway_record_reasons", {})
+    if (
+        not isinstance(gateway_record_reasons, dict)
+        or set(gateway_record_reasons) - set(gateway_record_ids)
+        or any(
+            reason not in _SHARED_GATEWAY_RECORD_REASONS
+            for reason in gateway_record_reasons.values()
+        )
+    ):
+        raise RuntimeStateError("Shared Gateway Record publication reasons are invalid.")
     lineage_winners = value.get("lineage_winners", {})
     global_best = value.get("global_best")
     if not isinstance(lineage_winners, dict) or (
@@ -711,6 +739,7 @@ def _shared_research(campaign_root: Path) -> dict[str, Any]:
         "statuses": statuses,
         "experiments": experiments,
         "experiments_by_id": experiments_by_id,
+        "gateway_record_ids": sorted(gateway_record_ids),
         "accepted_submission_kernel_ids": validated_accepted,
         "lineage_winners": validated_winners,
         "global_best": validated_global,
@@ -742,18 +771,92 @@ def research_projection(current: Path, campaign_root: Path) -> dict[str, Any]:
     return {"directions": directions, "experiments": experiments}
 
 
-def _visible_history(current: Path, campaign_root: Path) -> _VisibleHistory:
-    """Replay finalized history once, then ingest only newly completed Episodes.
+def _visible_history(
+    current: Path | dict[str, Any], campaign_root: Path
+) -> _VisibleHistory:
+    """Build the visible research state for one validated mutation.
 
-    A restarted Supervisor rebuilds the projection from private Journals. During
-    a running Campaign finalized Journals are immutable; the current Journal is
-    still read on every request. An older unfinished Episode is rechecked and
-    forces a rebuild if it is finalized later than expected.
+    Current Light passes an in-memory snapshot read directly from the central
+    Research Store. Path input remains only for the separate Legacy workflow.
     """
-    current_value = load_journal(current)
+    current_value = current if isinstance(current, dict) else load_journal(current)
     episode = current_value.get("episode")
     if not isinstance(episode, int) or isinstance(episode, bool) or episode < 0:
         raise RuntimeStateError("Private Runtime state has an invalid Episode identity")
+    central = current_value.get("central_research")
+    if isinstance(central, Mapping):
+        # Current Light keeps research authority in the central append-only
+        # Research Store. The caller-owned mapping is one bounded validation
+        # snapshot and is never persisted as a second authority.
+        raw_directions = central.get("directions", {})
+        raw_directions = (
+            raw_directions if isinstance(raw_directions, Mapping) else {}
+        )
+        raw_queue = central.get("queue", [])
+        queue = raw_queue if isinstance(raw_queue, list) else []
+        ordered_direction_ids: list[str] = []
+        seen_direction_ids: set[str] = set()
+        for direction_id in queue:
+            if (
+                isinstance(direction_id, str)
+                and isinstance(raw_directions.get(direction_id), Mapping)
+                and direction_id not in seen_direction_ids
+            ):
+                ordered_direction_ids.append(direction_id)
+                seen_direction_ids.add(direction_id)
+        for direction_id, direction in raw_directions.items():
+            if (
+                isinstance(direction_id, str)
+                and isinstance(direction, Mapping)
+                and direction_id not in seen_direction_ids
+            ):
+                ordered_direction_ids.append(direction_id)
+                seen_direction_ids.add(direction_id)
+        local_directions = {
+            direction_id: deepcopy(raw_directions[direction_id])
+            for direction_id in ordered_direction_ids
+        }
+        local_experiments = {
+            key: deepcopy(value)
+            for key, value in central.get("experiments", {}).items()
+            if isinstance(key, str) and isinstance(value, Mapping)
+        }
+        shared = _shared_research(campaign_root)
+        directions = {
+            key: deepcopy(value) for key, value in shared["directions"].items()
+        }
+        directions.update(local_directions)
+        experiments_by_id = {
+            key: deepcopy(value)
+            for key, value in shared["experiments_by_id"].items()
+        }
+        experiments_by_id.update(local_experiments)
+        shared_direction_ids = {
+            key for key in shared["directions"] if key not in local_directions
+        } | {
+            key
+            for key, value in local_directions.items()
+            if value.get("access") == "peer_read_only"
+        }
+        shared_experiment_ids = {
+            key for key in shared["experiments_by_id"] if key not in local_experiments
+        } | {
+            key
+            for key, value in local_experiments.items()
+            if value.get("access") == "peer_read_only"
+        }
+        return _VisibleHistory(
+            current=current_value,
+            directions=directions,
+            statuses={
+                key: str(value.get("status"))
+                for key, value in directions.items()
+            },
+            experiments=list(experiments_by_id.values()),
+            experiments_by_id=experiments_by_id,
+            shared_direction_ids=frozenset(shared_direction_ids),
+            shared_experiment_ids=frozenset(shared_experiment_ids),
+        )
     root = campaign_root.resolve()
     shared = _shared_research(root)
     with _HISTORY_LOCK:
@@ -887,9 +990,9 @@ def _apply_direction_events(
                     _text(event.get("rationale"), "Direction rationale")
                 if "success_criteria" in event:
                     _text_list(event.get("success_criteria"), "Direction success_criteria")
-                revision = event.get("revision", 1)
-                if type(revision) is not int or revision < 1:
-                    raise ValueError("Direction revision must be a positive integer")
+                revision = event.get("revision", 0)
+                if type(revision) is not int or revision < 0:
+                    raise ValueError("Direction revision must be a non-negative integer")
             _text_list(event.get("supporting_experiment_ids", []), "supporting_experiment_ids")
             _text_list(event.get("gateway_record_ids", []), "gateway_record_ids")
         except ValueError as error:
@@ -899,7 +1002,7 @@ def _apply_direction_events(
         if action == "propose":
             direction = {
                 "direction_id": direction_id,
-                "revision": event.get("revision", 1),
+                "revision": event.get("revision", 0),
                 "name": event["name"],
                 "change_scope": scope,
                 "objective": objective,
@@ -952,6 +1055,18 @@ def _apply_direction_events(
             direction.update(_durable_review_fields(event))
         elif direction_id in views:
             direction = _editable_direction(views, direction_id)
+            previous_revision = direction.get("revision", 0)
+            revision = event.get(
+                "revision",
+                previous_revision + 1
+                if type(previous_revision) is int and previous_revision >= 0
+                else None,
+            )
+            if type(revision) is not int or revision < 1:
+                raise RuntimeStateError(
+                    "Reviewed Direction state has an invalid revision"
+                )
+            direction["revision"] = revision
             direction["status"] = _DIRECTION_STATUS[action]
             direction["analysis"] = event.get("analysis")
             direction["updated_at"] = event.get("recorded_at")
@@ -966,7 +1081,10 @@ def _apply_direction_events(
 
 
 def _direction_state(
-    current: Path, campaign_root: Path, *, history: _VisibleHistory | None = None
+    current: Path | dict[str, Any],
+    campaign_root: Path,
+    *,
+    history: _VisibleHistory | None = None,
 ) -> tuple[ChainMap[str, dict[str, Any]], ChainMap[str, str]]:
     if history is None:
         history = _visible_history(current, campaign_root)
@@ -982,13 +1100,19 @@ def _direction_state(
 
 
 def _direction_views(
-    current: Path, campaign_root: Path, *, history: _VisibleHistory | None = None
+    current: Path | dict[str, Any],
+    campaign_root: Path,
+    *,
+    history: _VisibleHistory | None = None,
 ) -> Mapping[str, dict[str, Any]]:
     return _direction_state(current, campaign_root, history=history)[0]
 
 
 def _visible_experiments(
-    current: Path, campaign_root: Path, *, history: _VisibleHistory | None = None
+    current: Path | dict[str, Any],
+    campaign_root: Path,
+    *,
+    history: _VisibleHistory | None = None,
 ) -> list[dict[str, Any]]:
     if history is None:
         history = _visible_history(current, campaign_root)
@@ -1021,6 +1145,9 @@ def _public_direction(direction: Mapping[str, object]) -> dict[str, Any]:
         visible["objective"] = visible["hypothesis"]
     visible.pop("hypothesis", None)
     visible.pop("hypothesis_status", None)
+    if "owner_lineage" not in visible and isinstance(visible.get("proposed_by"), str):
+        visible["owner_lineage"] = visible["proposed_by"]
+    visible.pop("proposed_by", None)
     visible.update(_durable_review_fields(visible))
     visible.pop("review_quality", None)
     visible.pop("review_next_check", None)
@@ -1034,6 +1161,9 @@ def _public_direction(direction: Mapping[str, object]) -> dict[str, Any]:
 def _public_experiment(experiment: Mapping[str, object]) -> dict[str, Any]:
     """Return the complete decision-useful Experiment workspace projection."""
     visible = deepcopy(dict(experiment))
+    if "owner_lineage" not in visible and isinstance(visible.get("recorded_by"), str):
+        visible["owner_lineage"] = visible["recorded_by"]
+    visible.pop("recorded_by", None)
     visible.update(_durable_review_fields(visible))
     visible.pop("review_quality", None)
     visible.pop("review_next_check", None)
@@ -1086,6 +1216,640 @@ def _projection_json(value: object) -> bytes:
     ).encode()
 
 
+def _catalog_claim_event(event: Mapping[str, object]) -> tuple[str, dict[str, Any]] | None:
+    kind = event.get("type")
+    payload = event.get("payload")
+    payload = payload if isinstance(payload, Mapping) else {}
+    if kind == "direction.observed" and isinstance(payload.get("direction"), Mapping):
+        return "directions", deepcopy(dict(payload["direction"]))
+    if kind == "experiment.observed" and isinstance(payload.get("experiment"), Mapping):
+        return "experiments", deepcopy(dict(payload["experiment"]))
+    return None
+
+
+def _catalog_visible_events(
+    catalog: ResearchStore,
+    *,
+    trajectory: int,
+    synchronization: str,
+    peer_through_sequence: int | None,
+) -> tuple[list[dict[str, Any]], int]:
+    events = catalog.events()
+    latest_sequence = events[-1]["sequence"] if events else 0
+    visible = []
+    for event in events:
+        claim = _catalog_claim_event(event)
+        if claim is None:
+            continue
+        origin = event.get("origin")
+        owner = origin.get("trajectory") if isinstance(origin, Mapping) else None
+        if owner == trajectory:
+            visible.append(event)
+            continue
+        if synchronization == "asynchronous":
+            visible.append(event)
+            continue
+        if (
+            synchronization == "synchronous"
+            and type(peer_through_sequence) is int
+            and event["sequence"] <= peer_through_sequence
+        ):
+            visible.append(event)
+    return visible, latest_sequence
+
+
+def _catalog_claim_version(
+    events: list[dict[str, Any]],
+    *,
+    claim_type: str,
+    claim_id: str,
+    through_sequence: int | None = None,
+) -> int:
+    """Return the stable Agent-visible version number at a catalog position.
+
+    Direction drafts share mutable ``v0`` until ``start`` performs the first
+    independent Review. Every reviewed Direction state is immutable ``v1+``.
+    Experiments are reviewed on first submission and therefore start at ``v1``.
+    """
+    identity_field = "direction_id" if claim_type == "directions" else "experiment_id"
+    version = 0
+    for event in events:
+        sequence = event.get("sequence")
+        if through_sequence is not None and type(sequence) is int and sequence > through_sequence:
+            break
+        claim = _catalog_claim_event(event)
+        if claim is None or claim[0] != claim_type:
+            continue
+        if claim[1].get(identity_field) != claim_id:
+            continue
+        if claim_type == "directions" and canonical_review_quality(
+            claim[1].get("claim_review_quality", claim[1].get("review_quality"))
+        ) == "review_not_requested":
+            continue
+        version += 1
+    return version
+
+
+def _catalog_versions_by_sequence(
+    events: list[dict[str, Any]],
+) -> dict[int, int]:
+    """Index per-identity visible versions in one linear catalog pass."""
+    reviewed_counts: dict[tuple[str, str], int] = {}
+    result: dict[int, int] = {}
+    for event in events:
+        claim = _catalog_claim_event(event)
+        sequence = event.get("sequence")
+        if claim is None or type(sequence) is not int:
+            continue
+        claim_type, value = claim
+        identity_field = (
+            "direction_id" if claim_type == "directions" else "experiment_id"
+        )
+        claim_id = value.get(identity_field)
+        if not isinstance(claim_id, str):
+            continue
+        key = (claim_type, claim_id)
+        if claim_type == "directions" and canonical_review_quality(
+            value.get("claim_review_quality", value.get("review_quality"))
+        ) == "review_not_requested":
+            result[sequence] = 0
+            continue
+        reviewed_counts[key] = reviewed_counts.get(key, 0) + 1
+        result[sequence] = reviewed_counts[key]
+    return result
+
+
+def _prune_managed_projection(
+    root: Path,
+    expected_files: AbstractSet[str],
+    expected_directories: AbstractSet[str] = frozenset(),
+    *,
+    preserve_private_reviews: bool = False,
+) -> None:
+    """Remove stale files from one Runtime-owned Agent projection tree."""
+    if not root.exists():
+        return
+    if root.is_symlink() or not root.is_dir():
+        raise RuntimeStateError(f"Runtime projection root is not a directory: {root}")
+    for current, directories, files in os.walk(root, topdown=False, followlinks=False):
+        current_path = Path(current)
+        for name in files:
+            path = current_path / name
+            relative = path.relative_to(root).as_posix()
+            metadata = path.lstat()
+            if not stat.S_ISREG(metadata.st_mode):
+                raise RuntimeStateError(
+                    f"Runtime projection contains a non-regular file: {path}"
+                )
+            parts = Path(relative).parts
+            if preserve_private_reviews and (
+                "review" in parts or "attempts" in parts
+            ):
+                continue
+            if relative not in expected_files:
+                path.unlink()
+        for name in directories:
+            path = current_path / name
+            relative = path.relative_to(root).as_posix()
+            if path.is_symlink():
+                raise RuntimeStateError(
+                    f"Runtime projection contains a symbolic link: {path}"
+                )
+            parts = Path(relative).parts
+            if preserve_private_reviews and (
+                "review" in parts or "attempts" in parts
+            ):
+                continue
+            if relative in expected_directories:
+                continue
+            try:
+                path.rmdir()
+            except OSError as error:
+                if error.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                    raise
+
+
+def _retire_legacy_research_projection(workspace: Path) -> None:
+    """Remove superseded top-level Direction/Experiment convenience views."""
+    for name in ("directions", "experiments"):
+        root = workspace / name
+        _prune_managed_projection(root, frozenset())
+        try:
+            root.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            if error.errno not in {errno.ENOTEMPTY, errno.EEXIST}:
+                raise
+
+
+def _catalog_version_entries(
+    *,
+    catalog_root: Path,
+    catalog_events: list[dict[str, Any]],
+    events: list[dict[str, Any]],
+    trajectory: int | None,
+) -> dict[
+    tuple[str, str, int],
+    tuple[str, dict[str, Any], dict[str, bytes], set[str]],
+]:
+    """Build stable version entries from selected Catalog events.
+
+    Version numbers are always computed against the complete Campaign Catalog;
+    filtering changes visibility, never identity.  ``trajectory=None`` builds
+    the canonical Campaign Library.  A concrete trajectory adds only the
+    Agent-facing ownership/access projection.
+    """
+    versions_by_sequence = _catalog_versions_by_sequence(catalog_events)
+    versions: dict[
+        tuple[str, str, int],
+        tuple[str, dict[str, Any], dict[str, bytes], set[str]],
+    ] = {}
+    for event in events:
+        claim = _catalog_claim_event(event)
+        if claim is None:
+            continue
+        claim_type, value = claim
+        identity_field = (
+            "direction_id" if claim_type == "directions" else "experiment_id"
+        )
+        claim_id = value.get(identity_field)
+        if not isinstance(claim_id, str):
+            raise RuntimeStateError("Central Research Catalog contains an invalid claim ID")
+        origin = event.get("origin")
+        owner = origin.get("trajectory") if isinstance(origin, Mapping) else None
+        if trajectory is not None:
+            value["access"] = (
+                "local_writable" if owner == trajectory else "peer_read_only"
+            )
+        else:
+            # Access is a lineage projection property, not canonical claim
+            # content.  The Campaign Library stores ownership once and each
+            # workspace copy derives local_writable/peer_read_only.
+            value.pop("access", None)
+        value.setdefault(
+            "owner_lineage",
+            f"T{owner}" if type(owner) is int and owner > 0 else "unknown",
+        )
+        public = (
+            _public_direction(value)
+            if claim_type == "directions"
+            else _public_experiment(value)
+        )
+        sequence = int(event["sequence"])
+        version = versions_by_sequence.get(sequence, -1)
+        if version < 0 or (claim_type == "experiments" and version == 0):
+            raise RuntimeStateError(
+                "Central Research Catalog contains an invalid claim version"
+            )
+        version_root = (
+            Path("research-library")
+            / claim_type
+            / claim_id
+            / f"v{version}"
+        )
+        reference_payloads: dict[str, bytes] = {}
+        reference_directories: set[str] = set()
+        if claim_type == "experiments" and value.get("references"):
+            reference_revision = value.get("reference_revision", 1)
+            manifest, payloads = _read_experiment_reference_archive(
+                catalog_root.parent / "research-library",
+                claim_id,
+                reference_revision,
+            )
+            reference_root = version_root / "references"
+            public["references"] = [
+                (reference_root / relative).as_posix()
+                for relative in manifest["source_references"]
+            ]
+            for relative, data in payloads.items():
+                relative_path = (reference_root / relative).as_posix()
+                reference_payloads[relative_path] = data
+            for relative in manifest["directories"]:
+                reference_directories.add((reference_root / relative).as_posix())
+        claim_filename = "direction.json" if claim_type == "directions" else "experiment.json"
+        claim_path = (version_root / claim_filename).as_posix()
+        versions[(claim_type, claim_id, version)] = (
+            claim_path,
+            public,
+            reference_payloads,
+            reference_directories,
+        )
+    return versions
+
+
+def _publish_research_library_tree(
+    root: Path,
+    versions: Mapping[
+        tuple[str, str, int],
+        tuple[str, dict[str, Any], dict[str, bytes], set[str]],
+    ],
+    *,
+    canonical: bool,
+) -> tuple[set[str], set[str]]:
+    """Atomically publish one canonical Library or disposable Agent copy."""
+    expected_files: set[str] = set()
+    expected_directories: set[str] = set()
+
+    def target(relative: str | Path) -> Path:
+        path = Path(relative)
+        return path.relative_to("research-library") if canonical else path
+
+    for (claim_type, _claim_id, version), (
+        claim_path,
+        public,
+        reference_payloads,
+        reference_directories,
+    ) in sorted(versions.items()):
+        for relative_path in reference_directories:
+            with open_private_directory(root / target(relative_path)):
+                pass
+            expected_directories.add(
+                Path(relative_path).relative_to("research-library").as_posix()
+            )
+        for relative_path, data in reference_payloads.items():
+            publish_if_changed(root, target(relative_path).as_posix(), data)
+            expected_files.add(
+                Path(relative_path).relative_to("research-library").as_posix()
+            )
+        claim_data = _projection_json(public)
+        target_claim_path = target(claim_path)
+        absolute_claim_path = root / target_claim_path
+        if canonical and absolute_claim_path.exists() and not (
+            claim_type == "directions" and version == 0
+        ):
+            existing = read_regular_bytes(absolute_claim_path, limit=MAX_FILE_BYTES + 1)
+            if existing != claim_data:
+                raise RuntimeStateError(
+                    f"Immutable Research Library version changed: {claim_path}"
+                )
+        publish_if_changed(root, target_claim_path.as_posix(), claim_data)
+        expected_files.add(Path(claim_path).relative_to("research-library").as_posix())
+        if canonical and claim_type == "experiments" and public.get("references"):
+            reference_manifest = Path(claim_path).parent / ".references.json"
+            if (root / target(reference_manifest)).is_file():
+                expected_files.add(
+                    reference_manifest.relative_to("research-library").as_posix()
+                )
+    _prune_managed_projection(
+        root if canonical else root / "research-library",
+        expected_files,
+        expected_directories,
+        preserve_private_reviews=canonical,
+    )
+    return expected_files, expected_directories
+
+
+def project_campaign_research_library(
+    *,
+    catalog_root: Path,
+    workspace: Path,
+    trajectory: int,
+    synchronization: str,
+    peer_through_sequence: int | None = None,
+    library_root: Path | None = None,
+) -> dict[str, object]:
+    """Publish the canonical Library and one visibility-filtered Agent copy.
+
+    The Campaign Library owns the complete versioned content.  Agent workspaces
+    contain ordinary, disposable files so native and Bubblewrap profiles share
+    one projection contract.  Local revisions are always current; synchronous
+    peer revisions stop at the sealed Epoch watermark and asynchronous peers
+    follow the Catalog head.
+    """
+    if synchronization not in {"independent", "synchronous", "asynchronous"}:
+        raise ValueError("Invalid research synchronization mode")
+    if type(trajectory) is not int or trajectory <= 0:
+        raise ValueError("Research projection requires a positive trajectory")
+    catalog = ResearchStore(catalog_root / "events")
+    events, latest_sequence = _catalog_visible_events(
+        catalog,
+        trajectory=trajectory,
+        synchronization=synchronization,
+        peer_through_sequence=peer_through_sequence,
+    )
+    catalog_events = catalog.events()
+    library_root = library_root or catalog_root.parent / "research-library"
+    canonical_versions = _catalog_version_entries(
+        catalog_root=catalog_root,
+        catalog_events=catalog_events,
+        events=catalog_events,
+        trajectory=None,
+    )
+    _publish_research_library_tree(
+        library_root,
+        canonical_versions,
+        canonical=True,
+    )
+    visible_versions = _catalog_version_entries(
+        catalog_root=catalog_root,
+        catalog_events=catalog_events,
+        events=events,
+        trajectory=trajectory,
+    )
+    # Immutable reviewed versions are copied from the canonical Campaign
+    # Library, not reconstructed independently in each Agent workspace.  Only
+    # ``access`` is lineage-specific.  Mutable v0 drafts retain the selected
+    # Catalog snapshot so synchronous peers do not observe a post-watermark
+    # rewrite before the next Epoch boundary.
+    for key, entry in list(visible_versions.items()):
+        claim_type, _claim_id, version = key
+        if claim_type == "directions" and version == 0:
+            continue
+        claim_path, projected, references, directories = entry
+        canonical_path = library_root / Path(claim_path).relative_to(
+            "research-library"
+        )
+        try:
+            canonical_public = read_json(canonical_path, limit=MAX_FILE_BYTES)
+        except (FileNotFoundError, OSError, ValueError) as error:
+            raise RuntimeStateError(
+                f"Canonical Research Library version is unavailable: {claim_path}"
+            ) from error
+        if not isinstance(canonical_public, dict):
+            raise RuntimeStateError(
+                f"Canonical Research Library version is invalid: {claim_path}"
+            )
+        access = projected.get("access")
+        if isinstance(access, str):
+            canonical_public["access"] = access
+        visible_versions[key] = (
+            claim_path,
+            canonical_public,
+            references,
+            directories,
+        )
+    _publish_research_library_tree(
+        workspace,
+        visible_versions,
+        canonical=False,
+    )
+    counts = {
+        claim_type: sum(1 for key in visible_versions if key[0] == claim_type)
+        for claim_type in ("directions", "experiments")
+    }
+    _retire_legacy_research_projection(workspace)
+    manifest = {
+        "schema_version": 1,
+        "trajectory": trajectory,
+        "synchronization": synchronization,
+        "peer_through_sequence": (
+            peer_through_sequence if synchronization == "synchronous" else None
+        ),
+        "catalog_head_sequence": latest_sequence,
+        "visible_version_counts": counts,
+        "ownership": (
+            "Only the original owner may revise an identity. Peer claims are read-only; "
+            "derive a new local identity to continue them."
+        ),
+    }
+    return manifest
+
+
+def publish_catalog_shared_research(
+    *,
+    catalog_root: Path,
+    research_root: Path,
+    trajectory: int,
+    synchronization: str,
+    peer_through_sequence: int | None = None,
+) -> None:
+    """Refresh the Runtime-readable peer view from the central catalog."""
+    catalog = ResearchStore(catalog_root / "events")
+    events, _latest_sequence = _catalog_visible_events(
+        catalog,
+        trajectory=trajectory,
+        synchronization=synchronization,
+        peer_through_sequence=peer_through_sequence,
+    )
+    directions: dict[str, dict[str, Any]] = {}
+    experiments: dict[str, dict[str, Any]] = {}
+    for event in events:
+        origin = event.get("origin")
+        owner = origin.get("trajectory") if isinstance(origin, Mapping) else None
+        if owner == trajectory:
+            continue
+        claim = _catalog_claim_event(event)
+        if claim is None:
+            continue
+        claim_type, value = claim
+        if claim_type == "directions":
+            direction_id = value.get("direction_id")
+            if not isinstance(direction_id, str):
+                raise RuntimeStateError("Central Direction has an invalid identity")
+            value["owner_lineage"] = f"T{owner}"
+            if value.get("status") == "in_progress":
+                value["owner"] = f"T{owner}"
+            directions[direction_id] = value
+        else:
+            experiment_id = value.get("experiment_id")
+            if not isinstance(experiment_id, str):
+                raise RuntimeStateError("Central Experiment has an invalid identity")
+            value["owner_lineage"] = f"T{owner}"
+            experiments[experiment_id] = value
+    try:
+        previous = _shared_research(research_root)
+    except RuntimeStateError:
+        previous = {}
+    queue = [
+        direction_id
+        for direction_id in previous.get("research_queue", [])
+        if direction_id in directions
+    ]
+    queue.extend(
+        direction_id
+        for direction_id, direction in directions.items()
+        if direction.get("status") in {"proposed", "in_progress", "deferred", "blocked"}
+        and direction_id not in queue
+    )
+    previous_reasons = previous.get("gateway_record_reasons", {})
+    persistent_record_reasons = {
+        "passing_full_evaluate",
+        "accepted_submission_full_evaluate",
+        "lineage_winner_full_evaluate",
+        "global_winner_full_evaluate",
+    }
+    record_reasons = {
+        record_id: reason
+        for record_id, reason in previous_reasons.items()
+        if isinstance(record_id, str)
+        and isinstance(reason, str)
+        and reason in persistent_record_reasons
+    } if isinstance(previous_reasons, Mapping) else {}
+
+    def share_claim_records(value: Mapping[str, object], reason: str) -> None:
+        record_ids = value.get("gateway_record_ids", [])
+        if not isinstance(record_ids, list):
+            return
+        for record_id in record_ids:
+            if isinstance(record_id, str):
+                record_reasons.setdefault(record_id, reason)
+
+    for direction in directions.values():
+        share_claim_records(direction, "visible_direction_reference")
+    for experiment in experiments.values():
+        share_claim_records(experiment, "visible_experiment_reference")
+
+    # Passing full Evaluates also cross trajectory boundaries independently of
+    # claim citations. An accepted submission necessarily points at one of
+    # these Records.
+    from aka.light.experiment.frontier import (
+        kernel_full_evaluation_evidence,
+        standard_full_evaluation,
+    )
+
+    measurement_store = MeasurementStore(catalog_root.parent / "measurements")
+    for registration_path in sorted((catalog_root / "lineages").glob("T*.json")):
+        try:
+            registration = read_json(registration_path, limit=MAX_FILE_BYTES)
+        except (FileNotFoundError, OSError, ValueError):
+            continue
+        owner = registration.get("trajectory")
+        owner_research_value = registration.get("research_root")
+        legacy_journals_value = registration.get("journals_root")
+        if (
+            type(owner) is not int
+            or owner <= 0
+            or owner == trajectory
+            or not isinstance(
+                owner_research_value or legacy_journals_value, str
+            )
+        ):
+            continue
+        try:
+            owner_research_root = (
+                Path(owner_research_value).resolve(strict=True)
+                if isinstance(owner_research_value, str)
+                else Path(legacy_journals_value).resolve(strict=True).parent
+                / "research"
+            )
+        except (FileNotFoundError, OSError):
+            continue
+        owner_research = ResearchStore(owner_research_root).read()
+        lineage = owner_research.get("lineages", {}).get(f"T{owner}", {})
+        local_record_ids = set(
+            lineage.get("gateway_record_ids", [])
+            if isinstance(lineage, Mapping)
+            and isinstance(lineage.get("gateway_record_ids", []), list)
+            else []
+        )
+        for record_id in local_record_ids:
+            try:
+                parsed = standard_full_evaluation(
+                    measurement_store.read(record_id)
+                )
+            except (OSError, ValueError, KeyError, TypeError):
+                continue
+            if isinstance(parsed, Mapping) and parsed.get("passed") is True:
+                record_reasons.setdefault(record_id, "passing_full_evaluate")
+        from aka.light.workflow.submissions import (
+            accepted_submission_kernel_ids as central_accepted_submission_kernel_ids,
+        )
+
+        for commit_id in central_accepted_submission_kernel_ids(
+            catalog_root.parent / "submissions", lineage=f"T{owner}"
+        ):
+            evidence = kernel_full_evaluation_evidence(measurement_store, commit_id)
+            if evidence.get("status") == "passed":
+                record_id = evidence.get("gateway_record_id")
+                if isinstance(record_id, str):
+                    record_reasons[record_id] = (
+                        "accepted_submission_full_evaluate"
+                    )
+
+    # Epoch publications already selected exact winner evidence. Retain those
+    # immutable IDs when refreshing the asynchronous claim projection.
+    for winner in previous.get("lineage_winners", {}).values():
+        if isinstance(winner, Mapping) and isinstance(
+            winner.get("gateway_record_id"), str
+        ):
+            record_reasons.setdefault(
+                winner["gateway_record_id"], "lineage_winner_full_evaluate"
+            )
+    global_best = previous.get("global_best")
+    if isinstance(global_best, Mapping) and isinstance(
+        global_best.get("gateway_record_id"), str
+    ):
+        record_reasons.setdefault(
+            global_best["gateway_record_id"], "global_winner_full_evaluate"
+        )
+
+    for record_id in sorted(record_reasons):
+        try:
+            measurement_store.read(record_id)
+        except (OSError, ValueError, KeyError, TypeError) as error:
+            raise RuntimeStateError(
+                f"Shared Gateway Record is unavailable: {record_id}"
+            ) from error
+    value = {
+        "schema_version": 1,
+        "revision": evidence_digest({
+            "directions": directions,
+            "experiments": experiments,
+            "gateway_record_reasons": record_reasons,
+            "synchronization": synchronization,
+            "peer_through_sequence": peer_through_sequence,
+        }),
+        "through_epoch": previous.get("through_epoch", 0),
+        "research_catalog_through_sequence": (
+            peer_through_sequence
+            if synchronization == "synchronous" and type(peer_through_sequence) is int
+            else _latest_sequence
+        ),
+        "directions": directions,
+        "experiments": [experiments[key] for key in sorted(experiments)],
+        "gateway_record_ids": sorted(record_reasons),
+        "gateway_record_reasons": record_reasons,
+        "research_queue": queue,
+        "accepted_submission_kernel_ids": previous.get(
+            "accepted_submission_kernel_ids", {}
+        ),
+        "lineage_winners": previous.get("lineage_winners", {}),
+        "global_best": previous.get("global_best"),
+    }
+    private_write(shared_research_path(research_root), value)
+
+
 def _public_gateway_record(store: MeasurementStore, record_id: str) -> dict[str, Any]:
     """Return one standardized Agent-visible measurement projection."""
     from aka.light.evaluation.public_result import seal_response
@@ -1104,6 +1868,7 @@ def _git_visible_record_ids(
     workspace: Path,
     *,
     commit_reachable: Callable[[str], bool] | None = None,
+    record_ids: Iterable[str] | None = None,
 ) -> set[str]:
     """Expose records only when every referenced Kernel is exact, reachable Git."""
     from aka.light.workspace.agent_git import AgentGit
@@ -1113,7 +1878,9 @@ def _git_visible_record_ids(
     commit_reachable = commit_reachable or git.commit_reachable
     visible: set[str] = set()
     checked: dict[str, bool] = {}
-    for record_id in store.record_ids():
+    for record_id in (
+        sorted(set(record_ids)) if record_ids is not None else store.record_ids()
+    ):
         try:
             record = store.read(record_id)
             if record.get("request", {}).get("visibility") == "supervisor_private_v0":
@@ -1440,25 +2207,32 @@ def _capture_experiment_references(
 
 def _archive_experiment_references(
     workspace: Path,
-    campaign_root: Path,
+    library_root: Path,
     experiment_id: str,
     reference_revision: int,
     raw: object,
 ) -> list[str]:
     references, directories, files = _capture_experiment_references(workspace, raw)
     archive_root = _experiment_reference_archive_root(
-        campaign_root, experiment_id, reference_revision
+        library_root, experiment_id, reference_revision
     )
     archived_references = [
-        (Path("experiments") / experiment_id / "references" / path).as_posix()
+        (
+            Path("research-library")
+            / "experiments"
+            / experiment_id
+            / f"v{reference_revision}"
+            / "references"
+            / path
+        ).as_posix()
         for path in references
     ]
     for directory in sorted(directories):
-        with open_private_directory(archive_root / "files" / directory):
+        with open_private_directory(archive_root / "references" / directory):
             pass
     file_rows = []
     for path, data in sorted(files.items()):
-        private_write_bytes(archive_root / "files" / path, data)
+        private_write_bytes(archive_root / "references" / path, data)
         file_rows.append({
             "path": path,
             "size": len(data),
@@ -1473,7 +2247,7 @@ def _archive_experiment_references(
         "directories": sorted(directories),
         "files": file_rows,
     }
-    manifest_path = archive_root / "manifest.json"
+    manifest_path = archive_root / ".references.json"
     try:
         existing = read_json(manifest_path, limit=MAX_FILE_BYTES)
     except FileNotFoundError:
@@ -1487,29 +2261,28 @@ def _archive_experiment_references(
 
 
 def _experiment_reference_archive_root(
-    campaign_root: Path, experiment_id: str, reference_revision: int
+    library_root: Path, experiment_id: str, reference_revision: int
 ) -> Path:
     if type(reference_revision) is not int or reference_revision < 1:
         raise RuntimeStateError(
             f"Experiment {experiment_id} has an invalid reference revision."
         )
-    root = campaign_root / "experiment-archives" / experiment_id
-    # Keep revision 1 at its historical path so existing Campaigns remain readable.
     return (
-        root
-        if reference_revision == 1
-        else root / "revisions" / f"revision-{reference_revision:08d}"
+        library_root
+        / "experiments"
+        / experiment_id
+        / f"v{reference_revision}"
     )
 
 
 def _read_experiment_reference_archive(
-    campaign_root: Path, experiment_id: str, reference_revision: int = 1
+    library_root: Path, experiment_id: str, reference_revision: int = 1
 ) -> tuple[dict[str, Any], dict[str, bytes]]:
     archive_root = _experiment_reference_archive_root(
-        campaign_root, experiment_id, reference_revision
+        library_root, experiment_id, reference_revision
     )
     try:
-        manifest = read_json(archive_root / "manifest.json", limit=MAX_FILE_BYTES)
+        manifest = read_json(archive_root / ".references.json", limit=MAX_FILE_BYTES)
     except (FileNotFoundError, OSError, ValueError) as error:
         raise RuntimeStateError(
             f"Experiment {experiment_id} reference archive is unavailable."
@@ -1538,10 +2311,24 @@ def _read_experiment_reference_archive(
             f"Experiment {experiment_id} reference archive manifest is invalid."
         ) from error
     expected_archived = [
+        (
+            Path("research-library")
+            / "experiments"
+            / experiment_id
+            / f"v{reference_revision}"
+            / "references"
+            / path
+        ).as_posix()
+        for path in source_references
+    ]
+    legacy_archived = [
         (Path("experiments") / experiment_id / "references" / path).as_posix()
         for path in source_references
     ]
-    if manifest["archived_references"] != expected_archived:
+    if (
+        manifest["archived_references"] != expected_archived
+        and manifest["archived_references"] != legacy_archived
+    ):
         raise RuntimeStateError(
             f"Experiment {experiment_id} reference archive paths are inconsistent."
         )
@@ -1579,7 +2366,7 @@ def _read_experiment_reference_archive(
             raise RuntimeStateError(f"Experiment {experiment_id} reference archive is invalid.")
         try:
             data = read_regular_bytes(
-                archive_root / "files" / relative,
+                archive_root / "references" / relative,
                 limit=MAX_EXPERIMENT_REFERENCE_FILE_BYTES + 1,
             )
         except (OSError, ValueError) as error:
@@ -1595,78 +2382,6 @@ def _read_experiment_reference_archive(
             raise RuntimeStateError(f"Experiment {experiment_id} reference archive is invalid.")
         payloads[path] = data
     return manifest, payloads
-
-
-def copy_experiment_reference_archive(
-    source_campaign_root: Path,
-    destination_campaign_root: Path,
-    experiment_id: str,
-    reference_revision: int = 1,
-) -> None:
-    """Copy one immutable Experiment attachment revision across trajectory stores."""
-    manifest, payloads = _read_experiment_reference_archive(
-        source_campaign_root, experiment_id, reference_revision
-    )
-    destination = _experiment_reference_archive_root(
-        destination_campaign_root, experiment_id, reference_revision
-    )
-    try:
-        existing = read_json(destination / "manifest.json", limit=MAX_FILE_BYTES)
-    except FileNotFoundError:
-        existing = None
-    except (OSError, ValueError) as error:
-        raise RuntimeStateError(
-            f"Destination archive for Experiment {experiment_id} is unreadable."
-        ) from error
-    if existing is not None and existing != manifest:
-        raise RuntimeStateError(
-            f"Destination archive for Experiment {experiment_id} conflicts with shared evidence."
-        )
-    for directory in manifest["directories"]:
-        try:
-            relative = relative_path(directory)
-        except (TypeError, ValueError) as error:
-            raise RuntimeStateError(
-                f"Experiment {experiment_id} reference archive contains an unsafe directory."
-            ) from error
-        with open_private_directory(destination / "files" / relative):
-            pass
-    for path, data in payloads.items():
-        private_write_bytes(destination / "files" / path, data)
-    private_write(destination / "manifest.json", manifest)
-
-
-def _project_experiment_references(
-    campaign_root: Path,
-    workspace: Path,
-    experiment: Mapping[str, object],
-) -> None:
-    references = experiment.get("references")
-    if not references:
-        # Journals recorded before reference archives were introduced remain readable.
-        # An explicitly empty optional list has no archive to project.
-        return
-    experiment_id = experiment.get("experiment_id")
-    if not isinstance(experiment_id, str):
-        raise RuntimeStateError("Visible Experiment has no valid identity.")
-    reference_revision = experiment.get("reference_revision", 1)
-    if type(reference_revision) is not int or reference_revision < 1:
-        raise RuntimeStateError(
-            f"Experiment {experiment_id} has an invalid reference revision."
-        )
-    manifest, payloads = _read_experiment_reference_archive(
-        campaign_root, experiment_id, reference_revision
-    )
-    if references != manifest["archived_references"]:
-        raise RuntimeStateError(
-            f"Experiment {experiment_id} references do not match its immutable archive."
-        )
-    prefix = Path("experiments") / experiment_id / "references"
-    for directory in manifest["directories"]:
-        with open_private_directory(workspace / prefix / directory):
-            pass
-    for path, data in payloads.items():
-        publish_if_changed(workspace, (prefix / path).as_posix(), data)
 
 
 def _progress_markdown(
@@ -1934,11 +2649,13 @@ def _progress_markdown(
             blocker_text = "none recorded."
     research_locations = ["`records/<gateway_record_id>.json`"]
     if "directions" in modules:
-        research_locations.append("`directions/<status>/<direction_id>.json`")
+        research_locations.append(
+            "`research-library/directions/<direction_id>/vN/direction.json`"
+        )
     if "experiments" in modules:
-        research_locations.append("`experiments/<experiment_id>/experiment.json`")
-        if "directions" not in modules:
-            research_locations.append("`experiments/index.json`")
+        research_locations.append(
+            "`research-library/experiments/<experiment_id>/vN/experiment.json`"
+        )
     lines = [
         "# Current state",
         "",
@@ -1966,7 +2683,7 @@ def _progress_markdown(
         "",
         "Visible evidence and research projections: " + ", ".join(research_locations) + ".",
         *([
-            "Experiment files declare `recorded_by` and `access`; revise only "
+            "Experiment files declare `owner_lineage` and `access`; revise only "
             "`local_writable` Experiments and extend `peer_read_only` evidence with a new local record."
         ] if "experiments" in modules else []),
         "",
@@ -2026,7 +2743,7 @@ def _progress_markdown(
                     owner = (
                         f"owner `{raw_status.removeprefix('in_progress(').removesuffix(')')}`; "
                     )
-                proposer = item.get("proposed_by")
+                proposer = item.get("owner_lineage", item.get("proposed_by"))
                 proposer_text = (
                     f"proposed by `{text(proposer)}`; "
                     if isinstance(proposer, str) and proposer else ""
@@ -2135,34 +2852,11 @@ def _progress_markdown(
     return "\n".join(lines).encode()
 
 
-def _remove_stale_direction_projection(
-    workspace: Path,
-    direction_id: str,
-    *,
-    current_status: str,
+def _save_journal(
+    target: Path | dict[str, Any],
+    campaign_root: Path,
+    journal: dict[str, Any],
 ) -> None:
-    """Remove old status copies without replacing the unchanged current projection."""
-    filename = f"{direction_id}.json"
-    directories = [workspace / "directions"]
-    directories.extend(
-        workspace / "directions" / status
-        for status in _DIRECTION_PROJECTION_STATUSES
-        if status != current_status
-    )
-    for directory in directories:
-        with open_private_directory(directory) as parent:
-            try:
-                metadata = os.stat(filename, dir_fd=parent, follow_symlinks=False)
-            except FileNotFoundError:
-                continue
-            if not stat.S_ISREG(metadata.st_mode):
-                raise RuntimeStateError(
-                    f"Direction projection path is not a regular file: {directory / filename}"
-                )
-            os.unlink(filename, dir_fd=parent)
-
-
-def _save_journal(path: Path, campaign_root: Path, journal: dict[str, Any]) -> None:
     if (
         len(json.dumps(journal, indent=2, sort_keys=True, allow_nan=False).encode()) + 1
         > MAX_FILE_BYTES
@@ -2171,11 +2865,18 @@ def _save_journal(path: Path, campaign_root: Path, journal: dict[str, Any]) -> N
             "Runtime-managed Episode state exceeds 16 MiB; finish this Episode before adding more evidence",
             code="journal_size_limit",
         )
-    private_write(path, journal)
+    if isinstance(target, dict):
+        if target is not journal:
+            target.clear()
+            target.update(journal)
+        return
+    private_write(target, journal)
 
 
-def _mutable_journal(path: Path, module: str | None = None) -> dict[str, Any]:
-    journal = load_journal(path)
+def _mutable_journal(
+    source: Path | dict[str, Any], module: str | None = None
+) -> dict[str, Any]:
+    journal = source if isinstance(source, dict) else load_journal(source)
     if module is not None and not _module_enabled(journal, module):
         label = "Direction" if module == "directions" else "Experiment"
         raise AgentRequestError(
@@ -2198,18 +2899,21 @@ def _mutable_journal(path: Path, module: str | None = None) -> dict[str, Any]:
     return journal
 
 
-def _append_event(path: Path, campaign_root: Path, event: dict[str, Any]) -> None:
-    journal = _mutable_journal(path, "directions")
+def _append_event(
+    state: Path | dict[str, Any], campaign_root: Path, event: dict[str, Any]
+) -> None:
+    journal = _mutable_journal(state, "directions")
     events = journal["direction_events"]
     events.append(event)
-    _save_journal(path, campaign_root, journal)
+    _save_journal(state, campaign_root, journal)
 
 
 def update_direction(
-    path: Path,
+    path: Path | dict[str, Any],
     campaign_root: Path,
     request: Mapping[str, object],
     *,
+    measurement_root: Path | None = None,
     review_claim: Callable[[str, Mapping[str, object]], dict[str, object]] | None = None,
 ) -> dict[str, object]:
     current = _mutable_journal(path, "directions")
@@ -2256,7 +2960,7 @@ def update_direction(
             "direction_event_id": f"directionevent_{uuid.uuid4().hex}",
             "direction_id": direction_id,
             "action": "propose",
-            "revision": 1,
+            "revision": 0,
             "name": _text(value["name"], "Direction name"),
             "change_scope": _change_scope(value["change_scope"]),
             "objective": _text(value["objective"], "Direction objective"),
@@ -2274,13 +2978,14 @@ def update_direction(
             # A proposal is an exploration draft, not an established research
             # claim.  Independent review is intentionally deferred until the
             # trajectory commits resources with action=start.
-            "claim_review_quality": "not_reviewed",
+            "claim_review_quality": "review_not_requested",
             **ancestry,
         }
         if not experiments_enabled:
             event["gateway_record_ids"] = _validate_record_ids(
                 campaign_root,
                 value.get("gateway_record_ids", []),
+                measurement_root=measurement_root,
                 allow_empty=True,
                 label="Direction",
             )
@@ -2322,7 +3027,8 @@ def update_direction(
                 "Direction is outside this trajectory's editable history",
                 code="direction_not_found",
                 next_action=(
-                    "Use a direction_id from the current directions/<status>/ projection. "
+                    "Use a direction_id from the highest visible vN under "
+                    "research-library/directions/<direction_id>/. "
                     "If this is a new optimization claim, submit action=propose without a "
                     "direction_id instead."
                 ),
@@ -2330,14 +3036,16 @@ def update_direction(
         advance_direction(dict(statuses), direction_id, action)
         previous = views[direction_id]
         status_before_mutation = str(previous.get("status"))
-        previous_revision = previous.get("revision", 1)
-        if type(previous_revision) is not int or previous_revision < 1:
+        previous_revision = previous.get("revision", 0)
+        if type(previous_revision) is not int or previous_revision < 0:
             raise RuntimeStateError("Visible Direction has an invalid revision")
         event = {
             "direction_event_id": f"directionevent_{uuid.uuid4().hex}",
             "direction_id": direction_id,
             "action": action,
-            "revision": previous_revision + 1,
+            "revision": (
+                0 if status_before_mutation == "proposed" else previous_revision + 1
+            ),
             "name": _text(value["name"], "Direction name"),
             "change_scope": _change_scope(value["change_scope"]),
             "objective": _text(value["objective"], "Direction objective"),
@@ -2355,7 +3063,7 @@ def update_direction(
         }
         if status_before_mutation == "proposed":
             # Editing an unstarted draft does not spend a reviewer Session.
-            event["claim_review_quality"] = "not_reviewed"
+            event["claim_review_quality"] = "review_not_requested"
         if not experiments_enabled:
             event["gateway_record_ids"] = _validate_record_ids(
                 campaign_root,
@@ -2364,6 +3072,7 @@ def update_direction(
                     if "gateway_record_ids" in value
                     else previous.get("gateway_record_ids", [])
                 ),
+                measurement_root=measurement_root,
                 allow_empty=True,
                 label="Direction",
             )
@@ -2418,6 +3127,7 @@ def update_direction(
                 value,
                 history=history,
                 experiments_enabled=experiments_enabled,
+                measurement_root=measurement_root,
             )
             if action in _CLOSURES
             else []
@@ -2432,10 +3142,14 @@ def update_direction(
                 "reopen_condition",
                 "A deferred or blocked Direction requires reopen_condition",
             )
+        previous_revision = views[direction_id].get("revision", 0)
+        if type(previous_revision) is not int or previous_revision < 0:
+            raise RuntimeStateError("Visible Direction has an invalid revision")
         event = {
             "direction_event_id": f"directionevent_{uuid.uuid4().hex}",
             "direction_id": direction_id,
             "action": action,
+            "revision": previous_revision + 1,
             "analysis": _text(value["analysis"], "Direction analysis"),
             "recorded_at": _now(),
             "supporting_experiment_ids": supporting,
@@ -2452,6 +3166,7 @@ def update_direction(
                     if "gateway_record_ids" in value
                     else views[direction_id].get("gateway_record_ids", [])
                 ),
+                measurement_root=measurement_root,
                 allow_empty=True,
                 label="Direction",
             )
@@ -2470,6 +3185,8 @@ def update_direction(
         and review_required
         else None
     )
+    if review_required and review_claim is None:
+        event["claim_review_quality"] = "review_unavailable"
     if isinstance(review, Mapping) and review.get("claim_review_quality") == "unsupported":
         error = AgentRequestError(
             "Independent research review rejected this Direction; nothing was archived.",
@@ -2486,23 +3203,22 @@ def update_direction(
     review_projection = _review_projection(review)
     event.update(review_projection)
     _append_event(path, campaign_root, event)
-    direction_status = (
-        views[direction_id]["status"]
-        if action == _DIRECTION_REVISION_ACTION else _DIRECTION_STATUS[action]
-    )
     result: dict[str, object] = {
         "status": "updated" if action == _DIRECTION_REVISION_ACTION else "recorded",
         "direction_id": direction_id,
-        "archive_path": f"directions/{direction_status}/{direction_id}.json",
     }
-    if action in {"propose", _DIRECTION_REVISION_ACTION}:
-        result["revision"] = event["revision"]
+    result["revision"] = event["revision"]
     if review is not None:
         result["review"] = dict(review)
     return result
 
 
-def _read_private_gateway_evidence(journals_root: Path, record_id: str) -> dict[str, Any]:
+def _read_private_gateway_evidence(
+    journals_root: Path,
+    record_id: str,
+    *,
+    measurement_root: Path | None = None,
+) -> dict[str, Any]:
     """Read a Journal-internal evidence view from the private Measurement Store.
 
     ``journals_root`` is the Runtime-owned ``<scope>/journals`` collection;
@@ -2514,7 +3230,9 @@ def _read_private_gateway_evidence(journals_root: Path, record_id: str) -> dict[
     """
     if GATEWAY_RECORD_ID_RE.fullmatch(record_id) is None:
         raise ValueError("Gateway Record ID must be a valid gateway-... ID returned by the Runtime")
-    store = MeasurementStore(journals_root.parent / "measurements")
+    store = MeasurementStore(
+        measurement_root or journals_root.parent / "measurements"
+    )
     try:
         record = store.read(record_id)
     except FileNotFoundError as error:
@@ -2557,13 +3275,17 @@ def _has_passing_evaluate(
     record_ids: object,
     kernel_digest: str,
     kernel_id: str | None = None,
+    *,
+    measurement_root: Path | None = None,
 ) -> bool:
     if not isinstance(record_ids, list):
         return False
     for record_id in record_ids:
         if not isinstance(record_id, str):
             continue
-        record = _read_private_gateway_evidence(campaign_root, record_id)
+        record = _read_private_gateway_evidence(
+            campaign_root, record_id, measurement_root=measurement_root
+        )
         if _passing_evaluate(record, kernel_digest, kernel_id=kernel_id):
             return True
     return False
@@ -2594,6 +3316,7 @@ def _validate_record_ids(
     campaign_root: Path,
     raw: object,
     *,
+    measurement_root: Path | None = None,
     label: str = "Experiment",
     allow_empty: bool = False,
 ) -> list[str]:
@@ -2618,7 +3341,9 @@ def _validate_record_ids(
         raise field_error("gateway_record_ids", f"{label} gateway_record_ids must not contain duplicates")
     for index, record_id in enumerate(records):
         try:
-            record = _read_private_gateway_evidence(campaign_root, record_id)
+            record = _read_private_gateway_evidence(
+                campaign_root, record_id, measurement_root=measurement_root
+            )
         except ValueError as error:
             raise field_error(f"gateway_record_ids.{index}", str(error),
                               next_action="Check records/<gateway_record_id>.json, correct the citation, then resubmit.") from error
@@ -2645,8 +3370,9 @@ def _completed_record(record: Mapping[str, Any]) -> bool:
 
 
 def _closure_support(
-    path: Path, campaign_root: Path, direction_id: str, value: Mapping[str, object],
+    path: Path | dict[str, Any], campaign_root: Path, direction_id: str, value: Mapping[str, object],
     *, history: _VisibleHistory | None = None, experiments_enabled: bool = True,
+    measurement_root: Path | None = None,
 ) -> list[str]:
     if not experiments_enabled:
         if value.get("supporting_experiment_ids") not in (None, []):
@@ -2661,7 +3387,8 @@ def _closure_support(
             "Experiments owned by this Direction.",
             code="direction_support_required",
             next_action=(
-                "Inspect experiments/*/experiment.json and retain only entries whose direction_id "
+                "Inspect the highest visible vN under research-library/experiments/*/ and retain "
+                "only entries whose direction_id "
                 "matches this Direction, or omit supporting_experiment_ids when the lifecycle "
                 "decision does not rely on a saved Experiment."
             ),
@@ -2685,16 +3412,18 @@ def _closure_support(
         _validate_record_ids(
             campaign_root,
             experiment.get("gateway_record_ids", []),
+            measurement_root=measurement_root,
             allow_empty=True,
         )
     return selected
 
 
 def record_experiment(
-    path: Path,
+    path: Path | dict[str, Any],
     campaign_root: Path,
     request: Mapping[str, object],
     *,
+    measurement_root: Path | None = None,
     archive_references: Callable[[str, int, object], list[str]] | None = None,
     review_claim: Callable[[str, Mapping[str, object]], dict[str, object]] | None = None,
 ) -> dict[str, object]:
@@ -2752,7 +3481,8 @@ def record_experiment(
                 "Experiment is outside this trajectory's editable history",
                 code="experiment_not_found",
                 next_action=(
-                    "Use an experiment_id from this trajectory's experiments/ projection, or "
+                    "Use an experiment_id from the highest visible vN under this trajectory's "
+                    "research-library/experiments/ projection, or "
                     "omit experiment_id to create a new Experiment."
                 ),
             )
@@ -2832,6 +3562,7 @@ def record_experiment(
             if "gateway_record_ids" in value
             else existing.get("gateway_record_ids", []) if existing is not None else []
         ),
+        measurement_root=measurement_root,
         allow_empty=True,
     )
     intent = (
@@ -2970,9 +3701,6 @@ def record_experiment(
         "status": "updated" if existing is not None else "recorded",
         "experiment_id": experiment["experiment_id"],
         "revision": revision,
-        "archive_path": (
-            f"experiments/{experiment['experiment_id']}/experiment.json"
-        ),
     }
     if review is not None:
         result["review"] = dict(review)
@@ -2982,7 +3710,13 @@ def record_experiment(
 
 
 class SupervisorJournalService:
-    """Execute scoped Journal operations over one private Episode document."""
+    """Execute scoped research and submission operations for one audit segment.
+
+    Direction/Experiment authority is the central Research Store and
+    submit-kernel authority is the Campaign Submission Store. Validation uses
+    an in-memory snapshot of those authorities; Light creates no Episode
+    Journal or compatibility transaction document.
+    """
 
     def __init__(
         self,
@@ -2992,6 +3726,14 @@ class SupervisorJournalService:
         evidence_root: Path,
         git_workspace: Path | None = None,
         research_root: Path | None = None,
+        research_synchronization: str = "independent",
+        measurement_root: Path | None = None,
+        submissions_root: Path | None = None,
+        episode: int = 0,
+        base_commit: str = "",
+        base_kernel_id: str | None = None,
+        episode_branch: str = "work",
+        tool_modules: tuple[str, ...] | list[str] = ("directions", "experiments"),
         session_capture_root: Path | None = None,
         origin: Mapping[str, object] | None = None,
         claim_reviewer: Callable[..., Mapping[str, object]] | None = None,
@@ -3000,15 +3742,149 @@ class SupervisorJournalService:
         self.git_workspace = git_workspace or workspace
         self.campaign_root = campaign_root
         self.evidence_root = evidence_root
+        self.evidence_root.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.session_capture_root = (
             session_capture_root.resolve() if session_capture_root is not None else None
         )
-        self.path = evidence_root / "journal.json"
+        self.episode = episode
+        self.base_commit = base_commit
+        self.base_kernel_id = base_kernel_id
+        self.episode_branch = episode_branch
+        self.tool_modules = tuple(tool_modules)
+        if len(set(self.tool_modules)) != len(self.tool_modules) or set(
+            self.tool_modules
+        ) - JOURNAL_MODULES:
+            raise ValueError(
+                "tool_modules may contain only unique directions and experiments"
+            )
         self.origin = dict(origin or {"trajectory": 1})
         self.claim_reviewer = claim_reviewer
+        self.measurement_root = (
+            measurement_root or campaign_root.parent / "measurements"
+        )
+        self.submissions_root = submissions_root or campaign_root.parent / "submissions"
         self.research = ResearchStore(
             research_root or campaign_root.parent / "research"
         )
+        if research_synchronization not in {
+            "independent", "synchronous", "asynchronous"
+        }:
+            raise ValueError("Invalid research synchronization mode")
+        self.research_synchronization = research_synchronization
+        from aka.light.runtime.paths import (
+            supervisor_research_catalog_root,
+            supervisor_research_library_root,
+        )
+        self.research_catalog_root = supervisor_research_catalog_root(self.git_workspace)
+        self.research_library_root = supervisor_research_library_root(
+            self.git_workspace
+        )
+        from aka.light.runtime.paths import supervisor_review_root
+
+        self.review_staging_root = supervisor_review_root(self.git_workspace)
+        self._claim_audits: dict[str, dict[str, object]] = {}
+        self.research_catalog = ResearchStore(self.research_catalog_root / "events")
+        trajectory = self.origin.get("trajectory", 1)
+        if type(trajectory) is not int or trajectory <= 0:
+            raise ValueError("Research catalog registration requires a positive trajectory")
+        private_write(
+            self.research_catalog_root / "lineages" / f"T{trajectory}.json",
+            {
+                "schema_version": 1,
+                "trajectory": trajectory,
+                "workspace": str(self.workspace.resolve()),
+                "research_root": str(self.campaign_root.resolve()),
+                "synchronization": self.research_synchronization,
+            },
+        )
+        if self.research_synchronization == "asynchronous":
+            publish_catalog_shared_research(
+                catalog_root=self.research_catalog_root,
+                research_root=self.campaign_root,
+                trajectory=trajectory,
+                synchronization="asynchronous",
+            )
+        self._refresh_research_state()
+
+    def _refresh_research_state(self) -> None:
+        """Read one bounded in-memory validation snapshot from central authority."""
+        self._research_state: dict[str, Any] = {
+            "schema_version": 2,
+            "runtime_managed": True,
+            "research_records": bool(self.tool_modules),
+            "tool_modules": list(self.tool_modules),
+            "episode": self.episode,
+            "memory_version": None,
+            "base_commit": self.base_commit,
+            "base_kernel_id": self.base_kernel_id,
+            "episode_branch": self.episode_branch,
+            "state": "in_progress",
+            "direction_events": [],
+            "experiments": [],
+            "kernel_submissions": [],
+            "central_research": self.research.read(),
+            "created_at": _now(),
+        }
+
+    def _catalog_peer_watermark(self) -> int | None:
+        if self.research_synchronization != "synchronous":
+            return None
+        value = _shared_research(self.campaign_root).get(
+            "research_catalog_through_sequence"
+        )
+        return value if type(value) is int and value >= 0 else 0
+
+    def _project_research_catalog(self) -> None:
+        trajectory = int(self.origin.get("trajectory", 1))
+        project_campaign_research_library(
+            catalog_root=self.research_catalog_root,
+            library_root=self.research_library_root,
+            workspace=self.workspace,
+            trajectory=trajectory,
+            synchronization=self.research_synchronization,
+            peer_through_sequence=self._catalog_peer_watermark(),
+        )
+
+    def _fanout_asynchronous_catalog(self) -> None:
+        if self.research_synchronization != "asynchronous":
+            return
+        registrations = self.research_catalog_root / "lineages"
+        for path in sorted(registrations.glob("T*.json")):
+            try:
+                registration = read_json(path, limit=MAX_FILE_BYTES)
+                trajectory = registration.get("trajectory")
+                workspace_value = registration.get("workspace")
+                research_value = registration.get("research_root")
+                synchronization = registration.get("synchronization")
+                if (
+                    type(trajectory) is not int
+                    or trajectory <= 0
+                    or not isinstance(workspace_value, str)
+                    or not isinstance(research_value, str)
+                    or synchronization != "asynchronous"
+                ):
+                    continue
+                workspace = Path(workspace_value).resolve(strict=True)
+                if not workspace.is_dir():
+                    continue
+                research_root = Path(research_value).resolve(strict=True)
+                publish_catalog_shared_research(
+                    catalog_root=self.research_catalog_root,
+                    research_root=research_root,
+                    trajectory=trajectory,
+                    synchronization="asynchronous",
+                )
+                project_campaign_research_library(
+                    catalog_root=self.research_catalog_root,
+                    workspace=workspace,
+                    trajectory=trajectory,
+                    synchronization="asynchronous",
+                )
+            except (FileNotFoundError, OSError, ValueError, RuntimeStateError):
+                logging.getLogger(__name__).exception(
+                    "Could not refresh asynchronous central Research projection %s",
+                    path,
+                )
 
     def record_token_checkpoint(
         self,
@@ -3102,8 +3978,37 @@ class SupervisorJournalService:
             return None
         return claim_id, revision
 
-    def _claim_review_index_path(self, claim_type: str, claim_id: str) -> Path:
-        return self.campaign_root / "claim-review-index" / claim_type / f"{claim_id}.json"
+    @staticmethod
+    def _claim_collection(claim_type: str) -> str:
+        if claim_type == "direction":
+            return "directions"
+        if claim_type == "experiment":
+            return "experiments"
+        raise ValueError(f"Unsupported reviewed claim type: {claim_type}")
+
+    def _claim_root(self, claim_type: str, claim_id: str) -> Path:
+        return self.research_library_root / self._claim_collection(claim_type) / claim_id
+
+    @staticmethod
+    def _accepted_review_session(value: Mapping[str, object]) -> str | None:
+        review = value.get("review")
+        if not isinstance(review, Mapping):
+            review = value
+        audit = review.get("session_audit")
+        if not isinstance(audit, Mapping):
+            return None
+        attempts = audit.get("attempts")
+        if not isinstance(attempts, list):
+            return None
+        for row in reversed(attempts):
+            if (
+                isinstance(row, Mapping)
+                and row.get("status") == "accepted"
+                and isinstance(row.get("session_id"), str)
+                and row.get("session_id")
+            ):
+                return str(row["session_id"])
+        return None
 
     def _prior_claim_review_session(
         self, claim_type: str, target: Mapping[str, object]
@@ -3112,157 +4017,98 @@ class SupervisorJournalService:
         if identity is None:
             return None
         claim_id, _revision = identity
+        root = self._claim_root(claim_type, claim_id)
+        candidates = [
+            *root.glob("v*/review/result.json"),
+            *root.glob("attempts/*/review/result.json"),
+        ]
+        candidates.sort(
+            key=lambda path: path.stat().st_mtime_ns if path.exists() else 0,
+            reverse=True,
+        )
+        for path in candidates:
+            try:
+                value = read_json(path, limit=MAX_FILE_BYTES)
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+            session_id = self._accepted_review_session(value)
+            if session_id is not None and len(session_id) <= 512:
+                return session_id
+        # Read-only migration input for Campaigns created before Reviews were
+        # attached to immutable claim revisions. Never update this index.
+        legacy_index = (
+            self.campaign_root
+            / "claim-review-index"
+            / claim_type
+            / f"{claim_id}.json"
+        )
         try:
-            value = read_json(
-                self._claim_review_index_path(claim_type, claim_id),
-                limit=MAX_FILE_BYTES,
-            )
+            legacy = read_json(legacy_index, limit=MAX_FILE_BYTES)
         except (FileNotFoundError, OSError, ValueError):
             return None
-        session_id = value.get("session_id")
+        session_id = legacy.get("session_id")
         if (
-            value.get("schema") != "atrex.research-claim-review-session-index.v1"
-            or value.get("claim_type") != claim_type
-            or value.get("claim_id") != claim_id
-            or not isinstance(session_id, str)
-            or not session_id
-            or len(session_id) > 512
+            legacy.get("schema") == "atrex.research-claim-review-session-index.v1"
+            and legacy.get("claim_type") == claim_type
+            and legacy.get("claim_id") == claim_id
+            and isinstance(session_id, str)
+            and 0 < len(session_id) <= 512
         ):
-            return None
-        return session_id
-
-    def _remember_claim_review_session(
-        self,
-        claim_type: str,
-        target: Mapping[str, object],
-        review: Mapping[str, object],
-    ) -> None:
-        identity = self._reviewed_claim_identity(claim_type, target)
-        audit = review.get(_REVIEW_SESSION_AUDIT_KEY)
-        if identity is None or not isinstance(audit, Mapping):
-            return
-        attempts = audit.get("attempts")
-        if not isinstance(attempts, list):
-            return
-        accepted = next(
-            (
-                row for row in reversed(attempts)
-                if isinstance(row, Mapping)
-                and row.get("status") == "accepted"
-                and isinstance(row.get("session_id"), str)
-                and row.get("session_id")
-            ),
-            None,
-        )
-        if accepted is None:
-            return
-        claim_id, revision = identity
-        private_write(
-            self._claim_review_index_path(claim_type, claim_id),
-            {
-                "schema": "atrex.research-claim-review-session-index.v1",
-                "claim_type": claim_type,
-                "claim_id": claim_id,
-                "claim_revision": revision,
-                "session_id": accepted["session_id"],
-                "conversation_path": accepted.get("conversation_path"),
-                "updated_at": _now(),
-            },
-        )
+            return session_id
+        return None
 
     def _begin_claim_audit(self, claim_type: str, submission: object) -> str:
-        """Durably capture every Agent claim submission before validation."""
+        """Track one request until it is bound to its claim or Runtime audit."""
         audit_id = "claimaudit_" + uuid.uuid4().hex
-        audit_root = self.evidence_root / "claim-audit" / audit_id
-        private_write(
-            audit_root / "submission.json",
-            {
-                "schema": "atrex.research-claim-audit.v1",
-                "audit_id": audit_id,
-                "claim_type": claim_type,
-                "received_at": _now(),
-                "origin": deepcopy(self.origin),
-                "submission": deepcopy(submission),
-            },
-        )
+        pending: dict[str, object] = {
+            "claim_type": claim_type,
+            "received_at": _now(),
+            "origin": deepcopy(self.origin),
+            "submission": deepcopy(submission),
+        }
         if claim_type == "experiment" and isinstance(submission, Mapping):
-            raw_references = submission.get("references")
-            if raw_references is None:
-                private_write(
-                    audit_root / "references" / "manifest.json",
-                    {
-                        "schema": "atrex.research-claim-audit-references.v1",
-                        "requested": False,
-                        "source_references": [],
-                        "directories": [],
-                        "files": [],
-                    },
+            references = submission.get("references")
+            if references not in (None, []):
+                snapshot_root = (
+                    self.review_staging_root
+                    / "claim-requests"
+                    / audit_id
+                    / "references"
                 )
-            elif raw_references == []:
-                private_write(
-                    audit_root / "references" / "manifest.json",
-                    {
-                        "schema": "atrex.research-claim-audit-references.v1",
-                        "requested": True,
-                        "source_references": [],
-                        "directories": [],
-                        "files": [],
-                    },
-                )
-            else:
                 try:
-                    references, directories, files = _capture_experiment_references(
-                        self.workspace, raw_references
+                    source_paths, directories, files = _capture_experiment_references(
+                        self.workspace, references
                     )
-                except Exception as error:
-                    response = getattr(error, "response", None)
-                    private_write(
-                        audit_root / "references" / "manifest.json",
-                        {
-                            "schema": "atrex.research-claim-audit-references.v1",
-                            "requested": True,
-                            "capture_status": "failed",
-                            "source_references": deepcopy(raw_references),
-                            "error": (
-                                deepcopy(dict(response))
-                                if isinstance(response, Mapping) else
-                                {
-                                    "type": type(error).__name__,
-                                    "message": str(error)[:2000],
-                                }
-                            ),
-                        },
-                    )
+                except Exception as error:  # Validation returns the useful error separately.
+                    pending["reference_capture_error"] = {
+                        "type": type(error).__name__,
+                        "message": str(error)[:2000],
+                    }
                 else:
                     for directory in sorted(directories):
-                        with open_private_directory(
-                            audit_root / "references" / "files" / directory
-                        ):
+                        with open_private_directory(snapshot_root / "files" / directory):
                             pass
                     rows = []
-                    for path, data in sorted(files.items()):
-                        private_write_bytes(
-                            audit_root / "references" / "files" / path,
-                            data,
-                        )
+                    for relative, data in sorted(files.items()):
+                        private_write_bytes(snapshot_root / "files" / relative, data)
                         rows.append({
-                            "path": path,
+                            "path": relative,
                             "size": len(data),
                             "sha256": hashlib.sha256(data).hexdigest(),
                         })
                     private_write(
-                        audit_root / "references" / "manifest.json",
+                        snapshot_root / "manifest.json",
                         {
-                            "schema": "atrex.research-claim-audit-references.v1",
+                            "schema": "atrex.bound-claim-reference-snapshot.v1",
                             "requested": True,
                             "capture_status": "captured",
-                            "source_references": [
-                                path.as_posix() for path in references
-                            ],
+                            "source_references": [path.as_posix() for path in source_paths],
                             "directories": sorted(directories),
                             "files": rows,
                         },
                     )
+                    pending["reference_snapshot_root"] = str(snapshot_root)
+        self._claim_audits[audit_id] = pending
         return audit_id
 
     def _finish_claim_audit(
@@ -3273,15 +4119,29 @@ class SupervisorJournalService:
         result: Mapping[str, object] | None = None,
         error: BaseException | None = None,
     ) -> None:
-        """Record the final disposition without exposing private audit identity."""
+        """Attach rejected reviewed attempts; Runtime audit owns other failures."""
+        pending = self._claim_audits.pop(audit_id, {})
+        reference_value = pending.get("reference_snapshot_root")
+        reference_snapshot = (
+            Path(reference_value)
+            if isinstance(reference_value, str) and reference_value
+            else None
+        )
         outcome: dict[str, object] = {
-            "schema": "atrex.research-claim-audit-outcome.v1",
+            "schema": "atrex.bound-claim-review.v1",
             "audit_id": audit_id,
             "finished_at": _now(),
             "status": status,
+            "claim_type": pending.get("claim_type"),
+            "submission": deepcopy(pending.get("submission")),
+            "origin": deepcopy(pending.get("origin")),
         }
         if result is not None:
             outcome["result"] = deepcopy(dict(result))
+        if error is None:
+            if reference_snapshot is not None and reference_snapshot.is_dir():
+                shutil.rmtree(reference_snapshot.parent.parent)
+            return
         if error is not None:
             response = getattr(error, "response", None)
             if isinstance(response, Mapping):
@@ -3294,28 +4154,95 @@ class SupervisorJournalService:
                 }
             private_review = getattr(error, "private_review", None)
             if isinstance(private_review, Mapping):
-                outcome["private_review"] = deepcopy(dict(private_review))
-        private_write(
-            self.evidence_root / "claim-audit" / audit_id / "outcome.json",
-            outcome,
-        )
+                outcome["review"] = _durable_private_claim_review(private_review)
+                claim_id = private_review.get(_REVIEW_CLAIM_ID_KEY)
+                claim_revision = private_review.get(_REVIEW_CLAIM_REVISION_KEY)
+                staging_value = private_review.get(_REVIEW_STAGING_PATH_KEY)
+                claim_type = pending.get("claim_type")
+                if (
+                    claim_type in {"direction", "experiment"}
+                    and isinstance(claim_id, str)
+                    and type(claim_revision) is int
+                    and claim_revision >= 1
+                ):
+                    attempt_root = (
+                        self._claim_root(str(claim_type), claim_id)
+                        / "attempts"
+                        / audit_id
+                    )
+                    review_root = attempt_root / "review"
+                    staging = (
+                        Path(staging_value)
+                        if isinstance(staging_value, str) and staging_value
+                        else None
+                    )
+                    if staging is not None and staging.is_dir():
+                        private_write(staging / "result.json", outcome)
+                        from aka.light.workflow.review_archive import (
+                            move_review,
+                            remove_empty_parents,
+                        )
 
-    def _observe_direction(self, direction_id: str) -> None:
-        direction = _direction_views(self.path, self.campaign_root).get(direction_id)
+                        move_review(staging, review_root)
+                        remove_empty_parents(
+                            staging.parent, stop=self.review_staging_root
+                        )
+                    else:
+                        private_write(review_root / "result.json", outcome)
+                    if reference_snapshot is not None and reference_snapshot.is_dir():
+                        shutil.copytree(
+                            reference_snapshot,
+                            attempt_root / "references",
+                            symlinks=False,
+                        )
+                        shutil.rmtree(reference_snapshot.parent.parent)
+                    return
+        # Validation errors without a stable reviewed identity are already
+        # preserved by the Runtime request audit. Experiment files need their
+        # own immutable bytes even when validation failed before an identity
+        # could be allocated, so retain those as an explicitly unbound attempt.
+        if reference_snapshot is not None and reference_snapshot.is_dir():
+            unbound = (
+                self.research_library_root
+                / "experiments"
+                / "unbound-attempts"
+                / audit_id
+            )
+            private_write(unbound / "result.json", outcome)
+            shutil.copytree(
+                reference_snapshot,
+                unbound / "references",
+                symlinks=False,
+            )
+            shutil.rmtree(reference_snapshot.parent.parent)
+
+    def _observe_direction(self, direction_id: str) -> int:
+        direction = _direction_views(self._research_state, self.campaign_root).get(direction_id)
         if direction is None:
             raise RuntimeStateError("Recorded Direction is missing from the visible projection")
         visible = deepcopy(direction)
-        visible.setdefault("proposed_by", self.lineage)
+        visible.setdefault("owner_lineage", self.lineage)
+        visible.pop("proposed_by", None)
         visible["access"] = "local_writable"
         if visible.get("status") == "in_progress" and not visible.get("owner"):
             visible["owner"] = self.lineage
         self.research.observe_direction(visible, origin=self.origin)
+        catalog_state = self.research_catalog.observe_direction(
+            visible, origin=self.origin
+        )
+        self._fanout_asynchronous_catalog()
+        return _catalog_claim_version(
+            self.research_catalog.events(),
+            claim_type="directions",
+            claim_id=direction_id,
+            through_sequence=int(catalog_state["sequence"]),
+        )
 
-    def _observe_experiment(self, experiment_id: str) -> None:
+    def _observe_experiment(self, experiment_id: str) -> int:
         experiment = next(
             (
                 item
-                for item in _visible_experiments(self.path, self.campaign_root)
+                for item in _visible_experiments(self._research_state, self.campaign_root)
                 if item.get("experiment_id") == experiment_id
             ),
             None,
@@ -3323,35 +4250,55 @@ class SupervisorJournalService:
         if experiment is None:
             raise RuntimeStateError("Recorded Experiment is missing from the visible projection")
         visible = deepcopy(experiment)
-        visible.setdefault("recorded_by", self.lineage)
+        visible.setdefault("owner_lineage", self.lineage)
+        visible.pop("recorded_by", None)
         visible["access"] = "local_writable"
         self.research.observe_experiment(visible, origin=self.origin)
+        catalog_state = self.research_catalog.observe_experiment(
+            visible, origin=self.origin
+        )
+        self._fanout_asynchronous_catalog()
+        return _catalog_claim_version(
+            self.research_catalog.events(),
+            claim_type="experiments",
+            claim_id=experiment_id,
+            through_sequence=int(catalog_state["sequence"]),
+        )
 
     def _sync_research(self) -> None:
-        history = _visible_history(self.path, self.campaign_root)
+        history = _visible_history(self._research_state, self.campaign_root)
         for direction_id, direction in _direction_views(
-            self.path, self.campaign_root, history=history
+            self._research_state, self.campaign_root, history=history
         ).items():
             visible = deepcopy(direction)
             if direction_id in history.shared_direction_ids:
-                # Current shared projections include proposed_by. Keep legacy
+                # Current shared projections include owner identity. Keep legacy
                 # shared data honest instead of attributing it to this reader.
-                visible.setdefault("proposed_by", visible.get("owner") or "unknown")
+                visible.setdefault(
+                    "owner_lineage",
+                    visible.get("proposed_by") or visible.get("owner") or "unknown",
+                )
+                visible.pop("proposed_by", None)
                 visible["access"] = "peer_read_only"
             else:
-                visible.setdefault("proposed_by", self.lineage)
+                visible.setdefault("owner_lineage", self.lineage)
+                visible.pop("proposed_by", None)
                 visible["access"] = "local_writable"
             if visible.get("status") == "in_progress" and not visible.get("owner"):
                 visible["owner"] = self.lineage
             self.research.observe_direction(visible, origin=self.origin)
-        for experiment in _visible_experiments(self.path, self.campaign_root):
+        for experiment in _visible_experiments(self._research_state, self.campaign_root):
             visible = deepcopy(experiment)
             experiment_id = visible.get("experiment_id")
             if experiment_id in history.shared_experiment_ids:
-                visible.setdefault("recorded_by", "unknown")
+                visible.setdefault(
+                    "owner_lineage", visible.get("recorded_by") or "unknown"
+                )
+                visible.pop("recorded_by", None)
                 visible["access"] = "peer_read_only"
             else:
-                visible.setdefault("recorded_by", self.lineage)
+                visible.setdefault("owner_lineage", self.lineage)
+                visible.pop("recorded_by", None)
                 visible["access"] = "local_writable"
             self.research.observe_experiment(visible, origin=self.origin)
         queue = shared_research_queue(self.campaign_root)
@@ -3368,6 +4315,26 @@ class SupervisorJournalService:
         frontier and winner set only after an accepted submit-kernel review.
         """
         kernel_commit_id = agent_result.get("kernel_commit_id")
+        record_id = agent_result.get("gateway_record_id")
+        trajectory = self.origin.get("trajectory", 1)
+        lineage = f"T{trajectory if type(trajectory) is int and trajectory > 0 else 1}"
+        state = self.research.read()
+        current = state.get("lineages", {}).get(lineage, {})
+        gateway_record_ids = list(
+            current.get("gateway_record_ids", [])
+            if isinstance(current, Mapping)
+            and isinstance(current.get("gateway_record_ids", []), list)
+            else []
+        )
+        if (
+            isinstance(record_id, str)
+            and GATEWAY_RECORD_ID_RE.fullmatch(record_id) is not None
+            and record_id not in gateway_record_ids
+        ):
+            gateway_record_ids.append(record_id)
+            self.research.checkpoint_lineage(
+                {"gateway_record_ids": gateway_record_ids}, origin=self.origin
+            )
         if (
             not isinstance(kernel_commit_id, str)
             or KERNEL_RECORD_ID_RE.fullmatch(kernel_commit_id) is None
@@ -3395,21 +4362,22 @@ class SupervisorJournalService:
     ) -> None:
         """Materialize the Agent-visible research history in the workspace.
 
-        The private Journal, Research Store, Measurement Store, and Git remain
+        The Research Store, Submission Store, Measurement Store, and Git remain
         authoritative. PROGRESS.md and these JSON files are normal-file projections for
         search, remote ``command`` probes, and long-running engineering work;
         Agent edits are never read back as Runtime state and are overwritten on
         the next refresh.
         """
-        journal = load_journal(self.path)
-        modules = set(_tool_modules(journal))
+        self._project_research_catalog()
+        self._refresh_research_state()
+        modules = set(self.tool_modules)
 
         if synchronize:
             self._sync_research()
         research = self.research.read()
         from aka.light.experiment.frontier import kernel_pareto_frontier, latest_gateway_result
         from aka.light.workspace.agent_git import AgentGit
-        store = MeasurementStore(self.campaign_root.parent / "measurements")
+        store = MeasurementStore(self.measurement_root)
         trajectory = self.origin.get("trajectory", 1)
         git = AgentGit(
             self.workspace,
@@ -3422,13 +4390,55 @@ class SupervisorJournalService:
                 reachable_cache[commit_id] = git.commit_reachable(commit_id)
             return reachable_cache[commit_id]
 
+        current_lineage = f"T{trajectory if type(trajectory) is int and trajectory > 0 else 1}"
+        lineage_state = research.get("lineages", {}).get(current_lineage, {})
+        local_record_ids = set(
+            value
+            for value in (
+                lineage_state.get("gateway_record_ids", [])
+                if isinstance(lineage_state, Mapping)
+                else []
+            )
+            if isinstance(value, str)
+        )
+        if self.measurement_root.resolve() == (
+            self.campaign_root.parent / "measurements"
+        ).resolve():
+            # Serial Campaigns own the complete Campaign Store. The explicit
+            # lineage Record index is required only when several trajectories
+            # share one central Store.
+            local_record_ids.update(store.record_ids())
+        # Older Campaigns did not checkpoint local Record IDs in Research.
+        # Runtime lifecycle receipts preserve the exact lineage ownership.
+        from aka.light.runtime.paths import runtime_audit_files
+
+        for path in runtime_audit_files(self.campaign_root.parent):
+            try:
+                audit = read_json(path, limit=MAX_FILE_BYTES)
+            except (FileNotFoundError, OSError, ValueError):
+                continue
+            record_id = audit.get("gateway_record_id")
+            if isinstance(record_id, str):
+                local_record_ids.add(record_id)
+        shared = _shared_research(self.campaign_root)
+        shared_record_ids = {
+            value
+            for value in shared.get("gateway_record_ids", [])
+            if isinstance(value, str)
+        }
         visible_record_ids = _git_visible_record_ids(
             store,
             self.workspace,
             commit_reachable=commit_reachable,
+            record_ids=local_record_ids | shared_record_ids,
         )
-        shared = _shared_research(self.campaign_root)
-        local_accepted_kernel_ids = accepted_submission_kernel_ids(self.campaign_root)
+        from aka.light.workflow.submissions import (
+            accepted_submission_kernel_ids as central_accepted_submission_kernel_ids,
+        )
+
+        local_accepted_kernel_ids = central_accepted_submission_kernel_ids(
+            self.submissions_root, lineage=self.lineage
+        )
         peer_accepted_kernel_ids = {
             commit_id
             for commit_ids in shared.get(
@@ -3450,22 +4460,16 @@ class SupervisorJournalService:
         board["latest_result"] = latest_gateway_result(
             store, record_ids=visible_record_ids
         )
-        from aka.light.workspace.baseline import (
-            ensure_baseline_gateway_record,
-            read_baseline_record,
-        )
-        # V0 facts live beside the private Controller repository, not inside
-        # the projected Agent workspace.  Expose only the Agent-visible base
-        # commit identity from the Runtime Journal; never leak the Controller
-        # commit stored in the private V0 receipt.
-        ensure_baseline_gateway_record(self.git_workspace)
+        from aka.light.workspace.baseline import read_baseline_record
+        # V0 is an ordinary Campaign MeasurementStore record. Project only its
+        # bounded summary and stable Gateway identity into PROGRESS.md.
         baseline = read_baseline_record(self.git_workspace) or {}
         performance = baseline.get("performance")
         performance = performance if isinstance(performance, Mapping) else {}
         correctness = baseline.get("correctness")
         correctness = correctness if isinstance(correctness, Mapping) else {}
         board["v0_baseline"] = {
-            "kernel_commit_id": journal.get("base_kernel_id"),
+            "kernel_commit_id": self.base_kernel_id,
             "latency_us_geomean": performance.get("latency_us_geomean"),
             "measured_shape_count": performance.get("measured_shape_count"),
             "correctness_status": correctness.get("status"),
@@ -3537,135 +4541,11 @@ class SupervisorJournalService:
                 _projection_json(_public_gateway_record(store, record_id)),
             )
 
-        if not modules:
-            return
-
-        if "directions" in modules and (direction_ids is None or direction_ids):
-            with open_private_directory(self.workspace / "directions"):
-                pass
-            local_queue_ranks = {
-                direction_id: rank
-                for rank, direction_id in enumerate(research.get("queue", []), 1)
-                if isinstance(direction_id, str)
-            }
-            shared_queue_ranks = {
-                direction_id: rank
-                for rank, direction_id in enumerate(research.get("shared_queue", []), 1)
-                if isinstance(direction_id, str)
-            }
-            research_directions = research.get("directions", {})
-            research_directions = (
-                research_directions if isinstance(research_directions, Mapping) else {}
-            )
-            for direction_id, direction in _direction_views(
-                self.path, self.campaign_root
-            ).items():
-                if direction_ids is not None and direction_id not in direction_ids:
-                    continue
-                visible = _git_reachable_projection(
-                    _public_direction(direction), commit_reachable
-                )
-                research_direction = research_directions.get(direction_id)
-                if isinstance(research_direction, Mapping):
-                    for field in ("owner", "proposed_by", "access"):
-                        if field in research_direction:
-                            visible[field] = deepcopy(research_direction[field])
-                if direction_id in local_queue_ranks:
-                    visible["local_rank"] = local_queue_ranks[direction_id]
-                if direction_id in shared_queue_ranks:
-                    visible["shared_rank"] = shared_queue_ranks[direction_id]
-                status = visible.get("status")
-                if status not in _DIRECTION_PROJECTION_STATUSES:
-                    raise RuntimeStateError(
-                        f"Visible Direction {direction_id} has invalid status {status!r}."
-                    )
-                _remove_stale_direction_projection(
-                    self.workspace,
-                    direction_id,
-                    current_status=status,
-                )
-                publish_if_changed(
-                    self.workspace,
-                    f"directions/{status}/{direction_id}.json",
-                    _projection_json(visible),
-                )
-
-        if "experiments" in modules and (experiment_ids is None or experiment_ids):
-            with open_private_directory(self.workspace / "experiments"):
-                pass
-
-            research_experiments = research.get("experiments", {})
-            research_experiments = (
-                research_experiments if isinstance(research_experiments, Mapping) else {}
-            )
-            visible_experiments = _visible_experiments(self.path, self.campaign_root)
-            if "directions" not in modules:
-                index = []
-                for experiment in visible_experiments:
-                    experiment_id = experiment.get("experiment_id")
-                    if not isinstance(experiment_id, str):
-                        continue
-                    research_experiment = research_experiments.get(experiment_id, {})
-                    index.append({
-                        "experiment_id": experiment_id,
-                        "name": experiment.get("name"),
-                        "recorded_by": (
-                            research_experiment.get("recorded_by")
-                            if isinstance(research_experiment, Mapping) else None
-                        ),
-                        "access": (
-                            research_experiment.get("access")
-                            if isinstance(research_experiment, Mapping) else None
-                        ),
-                        "claim_review_quality": experiment.get(
-                            "claim_review_quality", experiment.get("review_quality")
-                        ),
-                        "gateway_record_count": len(
-                            experiment.get("gateway_record_ids", [])
-                        ),
-                    })
-                publish_if_changed(
-                    self.workspace,
-                    "experiments/index.json",
-                    _projection_json(index),
-                )
-            else:
-                # A stable workspace may be reused after the research-module
-                # configuration changes.  The compact index belongs only to
-                # Experiment-only mode; leaving an older copy visible would
-                # present two conflicting navigation contracts to the Agent.
-                index_path = self.workspace / "experiments" / "index.json"
-                if index_path.exists():
-                    index_path.unlink()
-            for experiment in visible_experiments:
-                experiment_id = experiment.get("experiment_id")
-                if (
-                    not isinstance(experiment_id, str)
-                    or EXPERIMENT_ID_RE.fullmatch(experiment_id) is None
-                ):
-                    raise RuntimeStateError(
-                        "Visible Experiment has an invalid identity; restore private Runtime research state."
-                    )
-                if experiment_ids is not None and experiment_id not in experiment_ids:
-                    continue
-                visible = _git_reachable_projection(
-                    _public_experiment(experiment), commit_reachable
-                )
-                research_experiment = research_experiments.get(experiment_id)
-                if isinstance(research_experiment, Mapping):
-                    for field in ("recorded_by", "access"):
-                        if field in research_experiment:
-                            visible[field] = deepcopy(research_experiment[field])
-                publish_if_changed(
-                    self.workspace,
-                    f"experiments/{experiment_id}/experiment.json",
-                    _projection_json(visible),
-                )
-                _project_experiment_references(
-                    self.campaign_root,
-                    self.workspace,
-                    experiment,
-                )
+        if "experiments" in modules:
+            # Claims themselves are projected only by the versioned central
+            # Research Library. Keep evidence validation here so a readable
+            # claim can never silently cite a missing private Gateway Record.
+            for experiment in _visible_experiments(self._research_state, self.campaign_root):
                 for record_id in experiment.get("gateway_record_ids", []):
                     if (
                         not isinstance(record_id, str)
@@ -3701,7 +4581,7 @@ class SupervisorJournalService:
                 record_ids=record_ids,
             )
         except (OSError, ValueError, RuntimeStateError) as error:
-            # The Journal mutation is already durable. Returning an ordinary
+            # The Research/Submission mutation is already durable. Returning an ordinary
             # failure would invite the Agent to repeat a non-idempotent propose
             # or record operation. Report the stale convenience projection in
             # the successful mutation receipt instead.
@@ -3800,7 +4680,7 @@ class SupervisorJournalService:
         documents: list[dict[str, Any]] = [target]
         if claim_type == "direction":
             direction_id = target.get("direction_id")
-            existing = _direction_views(self.path, self.campaign_root).get(direction_id)
+            existing = _direction_views(self._research_state, self.campaign_root).get(direction_id)
             if target.get("action") == "propose":
                 proposal = target
             elif (
@@ -3840,7 +4720,7 @@ class SupervisorJournalService:
                         )
             experiments = {
                 item.get("experiment_id"): item
-                for item in _visible_experiments(self.path, self.campaign_root)
+                for item in _visible_experiments(self._research_state, self.campaign_root)
                 if isinstance(item, dict)
             }
             for experiment_id in dict.fromkeys(experiment_ids):
@@ -3857,7 +4737,7 @@ class SupervisorJournalService:
         elif claim_type == "experiment":
             direction_id = target.get("direction_id")
             if isinstance(direction_id, str):
-                direction = _direction_views(self.path, self.campaign_root).get(direction_id)
+                direction = _direction_views(self._research_state, self.campaign_root).get(direction_id)
                 if isinstance(direction, Mapping):
                     publish(
                         root / "submissions",
@@ -3867,7 +4747,7 @@ class SupervisorJournalService:
         else:
             raise RuntimeStateError("Research claim type is invalid")
 
-        store = MeasurementStore(self.campaign_root.parent / "measurements")
+        store = MeasurementStore(self.measurement_root)
         public_records: list[dict[str, Any]] = []
         missing_records: list[str] = []
         for record_id in sorted(self._claim_gateway_ids(documents)):
@@ -3926,6 +4806,20 @@ class SupervisorJournalService:
         """Review one validated claim before it becomes canonical research state."""
         if self.claim_reviewer is None:
             return {}
+        identity = self._reviewed_claim_identity(claim_type, target)
+        if identity is None:
+            raise RuntimeStateError(
+                "A reviewed research claim has no stable identity and revision"
+            )
+        claim_id, claim_revision = identity
+        staging_root = (
+            self.review_staging_root
+            / "claims"
+            / self._claim_collection(claim_type)
+            / claim_id
+            / ("pending_" + uuid.uuid4().hex)
+            / "review"
+        )
         try:
             with tempfile.TemporaryDirectory(
                 prefix="claim-review-", dir=self.evidence_root
@@ -3949,12 +4843,17 @@ class SupervisorJournalService:
                     or parameter.kind == inspect.Parameter.VAR_KEYWORD
                     for parameter in reviewer_parameters
                 )
-                raw_review = (
-                    self.claim_reviewer(
-                        root, resume_session_id=resume_session_id
-                    )
-                    if supports_resume else self.claim_reviewer(root)
+                supports_archive = any(
+                    parameter.name == "archive_root"
+                    or parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in reviewer_parameters
                 )
+                reviewer_kwargs: dict[str, object] = {}
+                if supports_resume:
+                    reviewer_kwargs["resume_session_id"] = resume_session_id
+                if supports_archive:
+                    reviewer_kwargs["archive_root"] = staging_root
+                raw_review = self.claim_reviewer(root, **reviewer_kwargs)
                 if not isinstance(raw_review, Mapping):
                     raise ValueError("research review must be a JSON object")
                 review_value = dict(raw_review)
@@ -3968,12 +4867,13 @@ class SupervisorJournalService:
             )
             review_receipt: dict[str, object] = {
                 "archive_status": "archived",
-                "claim_review_quality": "unreviewed",
+                "claim_review_quality": "review_unavailable",
                 "evidence_eligible": False,
                 "runtime_action": (
-                    "The reviewer is unavailable. Runtime will preserve this record as unreviewed; "
-                    "do not treat it as established research. Continue with bounded evidence or "
-                    "ask the operator to restore the claim reviewer."
+                    "The reviewer remained unavailable after one automatic retry. Runtime will "
+                    "preserve this record as review_unavailable; do not treat it as established "
+                    "research. Continue with bounded evidence or ask the operator to restore the "
+                    "claim reviewer."
                 ),
             }
             if session_audit is not None:
@@ -4010,9 +4910,9 @@ class SupervisorJournalService:
             review_receipt["evidence_manifest"] = manifest
             if session_audit is not None:
                 review_receipt[_REVIEW_SESSION_AUDIT_KEY] = session_audit
-            self._remember_claim_review_session(
-                claim_type, target, review_receipt
-            )
+        review_receipt[_REVIEW_STAGING_PATH_KEY] = str(staging_root)
+        review_receipt[_REVIEW_CLAIM_ID_KEY] = claim_id
+        review_receipt[_REVIEW_CLAIM_REVISION_KEY] = claim_revision
         return review_receipt
 
     def _persist_claim_review(
@@ -4022,43 +4922,55 @@ class SupervisorJournalService:
         claim_type: str,
         audit_id: str,
     ) -> dict[str, object]:
-        """Archive a completed/unavailable review after its claim is durable."""
+        """Attach the private Review archive to the immutable claim revision."""
         review = result.get("review")
         if not isinstance(review, Mapping):
             return result
         review_receipt = deepcopy(dict(review))
-        review_id = "review_" + uuid.uuid4().hex
         archive_path = str(result["archive_path"])
-        private_review = _private_claim_review(review_receipt)
-        review_archive_path = f"claim-reviews/{review_id}.json"
+        private_review = _durable_private_claim_review(review_receipt)
         claim_revision = result.get("revision")
         revision_row = (
             {"claim_revision": claim_revision}
             if type(claim_revision) is int and claim_revision > 0 else {}
         )
-        private_write(
-            self.evidence_root / review_archive_path,
-            {
-                "review_id": review_id,
-                "claim_type": claim_type,
-                "claim_archive_path": archive_path,
-                **revision_row,
-                **private_review,
-            },
-        )
-        link: dict[str, object] = {
-            "schema": "atrex.research-claim-audit-review-link.v1",
-            "review_id": review_id,
-            "review_archive_path": review_archive_path,
+        bound_result: dict[str, object] = {
+            "schema": "atrex.bound-claim-review.v1",
+            "claim_type": claim_type,
             "claim_archive_path": archive_path,
             **revision_row,
+            "submission": deepcopy(
+                self._claim_audits.get(audit_id, {}).get("submission")
+            ),
+            "origin": deepcopy(
+                self._claim_audits.get(audit_id, {}).get("origin")
+            ),
+            "review": private_review,
+            "archived_at": _now(),
         }
-        if "session_audit" in private_review:
-            link["session_audit"] = deepcopy(private_review["session_audit"])
-        private_write(
-            self.evidence_root / "claim-audit" / audit_id / "review.json",
-            link,
+        claim_file = self.research_library_root.parent / archive_path
+        if not claim_file.is_file():
+            raise RuntimeStateError(
+                "Canonical research claim is unavailable while attaching its Review"
+            )
+        review_root = claim_file.parent / "review"
+        staging_value = review_receipt.get(_REVIEW_STAGING_PATH_KEY)
+        staging = (
+            Path(staging_value)
+            if isinstance(staging_value, str) and staging_value
+            else None
         )
+        if staging is not None and staging.is_dir():
+            private_write(staging / "result.json", bound_result)
+            from aka.light.workflow.review_archive import (
+                move_review,
+                remove_empty_parents,
+            )
+
+            move_review(staging, review_root)
+            remove_empty_parents(staging.parent, stop=self.review_staging_root)
+        else:
+            private_write(review_root / "result.json", bound_result)
         return {
             **result,
             "review": _agent_claim_review(review_receipt),
@@ -4066,7 +4978,7 @@ class SupervisorJournalService:
 
     def execute(
         self, request: Mapping[str, object], *,
-        review_kernel: Callable[[str], dict[str, Any]] | None = None,
+        review_kernel: Callable[[str, str], dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         operation = request.get("operation")
         if not isinstance(operation, str):
@@ -4079,7 +4991,8 @@ class SupervisorJournalService:
         }
         if operation not in fields:
             raise ValueError(f"unsupported Runtime research/report operation: {operation}")
-        journal = load_journal(self.path)
+        self._refresh_research_state()
+        journal = self._research_state
         module = ("directions" if operation in {"direction_update",
                                                   "direction_prioritize"}
                   else "experiments" if operation == "experiment_record"
@@ -4093,8 +5006,6 @@ class SupervisorJournalService:
         required = {"operation"}
         required.add(fields[operation])
         require_fields(dict(request), required, label="Runtime research/report operation")
-        if operation in {"direction_update", "experiment_record", "kernel_submit"}:
-            self._check_legacy_journal()
         if operation == "direction_update":
             body = request.get("request")
             audit_id = self._begin_claim_audit("direction", body)
@@ -4102,16 +5013,20 @@ class SupervisorJournalService:
                 if not isinstance(body, Mapping):
                     raise ValueError("direction_update requires a request object")
                 result = update_direction(
-                    self.path,
+                    self._research_state,
                     self.campaign_root,
                     body,
+                    measurement_root=self.measurement_root,
                     review_claim=(
                         self._review_claim_before_mutation
                         if self.claim_reviewer is not None else None
                     ),
                 )
                 direction_id = str(result["direction_id"])
-                self._observe_direction(direction_id)
+                library_version = self._observe_direction(direction_id)
+                result["archive_path"] = (
+                    f"research-library/directions/{direction_id}/v{library_version}/direction.json"
+                )
                 if body.get("action") == "start":
                     self.research.focus_direction(direction_id, origin=self.origin)
                 published = self._publish_after_mutation(
@@ -4200,13 +5115,14 @@ class SupervisorJournalService:
                     raise ValueError("experiment_record requires a request object")
                 body = dict(body)
                 result = record_experiment(
-                    self.path,
+                    self._research_state,
                     self.campaign_root,
                     body,
+                    measurement_root=self.measurement_root,
                     archive_references=lambda experiment_id, revision, references: (
                         _archive_experiment_references(
                             self.workspace,
-                            self.campaign_root,
+                            self.research_library_root,
                             experiment_id,
                             revision,
                             references,
@@ -4218,7 +5134,10 @@ class SupervisorJournalService:
                     ),
                 )
                 experiment_id = str(result["experiment_id"])
-                self._observe_experiment(experiment_id)
+                library_version = self._observe_experiment(experiment_id)
+                result["archive_path"] = (
+                    f"research-library/experiments/{experiment_id}/v{library_version}/experiment.json"
+                )
                 observed = self.research.read().get("experiments", {}).get(
                     experiment_id, {}
                 )
@@ -4275,7 +5194,31 @@ class SupervisorJournalService:
                 )
             if review_kernel is None:
                 raise RuntimeStateError("Kernel submission review is unavailable")
-            reviewed = review_kernel(commit_id)
+            submission_id = "submission-" + uuid.uuid4().hex
+            try:
+                review_parameters = inspect.signature(review_kernel).parameters.values()
+            except (TypeError, ValueError):
+                review_parameters = ()
+            accepts_submission_id = any(
+                parameter.kind in {
+                    inspect.Parameter.VAR_POSITIONAL,
+                    inspect.Parameter.VAR_KEYWORD,
+                }
+                or parameter.name == "submission_id"
+                for parameter in review_parameters
+            ) or sum(
+                parameter.kind
+                in {
+                    inspect.Parameter.POSITIONAL_ONLY,
+                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                }
+                for parameter in review_parameters
+            ) >= 2
+            reviewed = (
+                review_kernel(commit_id, submission_id)
+                if accepts_submission_id
+                else review_kernel(commit_id)
+            )
             if not isinstance(reviewed, dict):
                 raise RuntimeStateError("Kernel submission review returned invalid state")
             evaluation_evidence = deepcopy(
@@ -4285,19 +5228,16 @@ class SupervisorJournalService:
                 evaluation_evidence.get("status") == "passed"
             )
             reviewed = {**reviewed, "accepted": accepted}
-            journal = load_journal(self.path)
-            submissions = journal.setdefault("kernel_submissions", [])
-            if not isinstance(submissions, list):
-                raise RuntimeStateError("Kernel submission audit state is invalid")
             submitted_at = _now()
             audit = {
+                "submission_id": submission_id,
+                "lineage": self.lineage,
+                "episode": self.episode,
                 "kernel_commit_id": commit_id,
                 "submitted_at": submitted_at,
                 **deepcopy(reviewed),
             }
             if accepted:
-                submission_id = "submission-" + uuid.uuid4().hex
-                audit["submission_id"] = submission_id
                 checkpoint = self.record_token_checkpoint(
                     event="accepted-submit-kernel",
                     checkpoint_id=submission_id,
@@ -4311,8 +5251,9 @@ class SupervisorJournalService:
                 )
                 if checkpoint is not None:
                     audit["token_checkpoint"] = checkpoint
-            submissions.append(audit)
-            private_write(self.path, journal)
+            from aka.light.workflow.submissions import append_submission
+
+            append_submission(self.submissions_root, audit)
             review_status = reviewed.get("review", {})
             source_accepted = (
                 not bool(reviewed.get("diagnostics"))
@@ -4364,6 +5305,7 @@ class SupervisorJournalService:
                 "runtime_action": runtime_action,
             }
             if accepted:
+                self._fanout_asynchronous_catalog()
                 return self._publish_after_mutation(
                     result,
                     direction_ids=frozenset(),
@@ -4372,83 +5314,6 @@ class SupervisorJournalService:
                 )
             return result
         raise ValueError(f"unsupported Runtime research/report operation: {operation}")
-
-    def _check_legacy_journal(self) -> None:
-        from aka.light.agent.session_tail import read_regular_bytes
-
-        try:
-            raw = read_regular_bytes(
-                self.git_workspace / ".atrex_long_horizon/journal.json", limit=MAX_FILE_BYTES + 1
-            )
-        except FileNotFoundError:
-            return
-        except (OSError, ValueError) as error:
-            if isinstance(error, OSError) and error.errno not in {
-                errno.ELOOP,
-                errno.ENOTDIR,
-                errno.EISDIR,
-                errno.ENAMETOOLONG,
-            }:
-                raise RuntimeStateError(
-                    "Legacy .atrex_long_horizon/journal.json cannot be read because storage access failed",
-                    code="legacy_journal_unavailable",
-                ) from error
-            raise AgentRequestError(
-                "Legacy .atrex_long_horizon/journal.json is invalid; repair it before using "
-                "Runtime research/report tools",
-                code="legacy_journal_invalid",
-                next_action=(
-                    "Make .atrex_long_horizon a real workspace directory and journal.json "
-                    "a regular JSON file, with no symlinks in either path. Preserve existing "
-                    "file content. No research/report mutation was applied; retry the request "
-                    "after repairing the path."
-                ),
-            ) from error
-        if len(raw) > MAX_FILE_BYTES:
-            raise ValueError("Legacy .atrex_long_horizon/journal.json exceeds its size limit")
-        try:
-            legacy = json.loads(raw)
-        except ValueError as error:
-            raise ValueError(
-                "Legacy .atrex_long_horizon/journal.json is invalid; repair it before using "
-                "Runtime research/report tools"
-            ) from error
-        if not isinstance(legacy, dict):
-            raise ValueError("Legacy .atrex_long_horizon/journal.json must contain a JSON object")
-        current = load_journal(self.path)
-        if legacy.get("runtime_journal_projection") is True:
-            expected_public_base = (
-                current.get("base_kernel_id") or current["base_commit"]
-            )
-            if (
-                legacy.get("episode") != current["episode"]
-                or legacy.get("base_commit") != expected_public_base
-                or legacy.get("episode_branch") != current["episode_branch"]
-            ):
-                raise ValueError(
-                    "Legacy .atrex_long_horizon/journal.json projection belongs to a different Episode"
-                )
-        elif legacy.get("experiments") or legacy.get("state", "in_progress") != "in_progress":
-            raise AgentRequestError(
-                "This Episode already uses the legacy .atrex_long_horizon/journal.json protocol; "
-                "current Runtime research/report mutations "
-                "cannot be used in the same Episode",
-                code="journal_protocol_conflict",
-                repairable=False,
-                next_action=(
-                    "Preserve the workspace and legacy .atrex_long_horizon/journal.json unchanged. "
-                    "This Light Session no "
-                    "longer exposes the legacy append/finalize protocol, so the operator must "
-                    "either resume the Episode with a compatible legacy Runtime or start a fresh "
-                    "Campaign and import the retained Kernel source. Do not retry current Runtime "
-                    "research/report mutations, erase Experiments, or reset the legacy file to "
-                    "switch protocols."
-                ),
-            )
-
-
-
-
 
 __all__ = [
     "DIRECTION_CHANGE_SCOPES",
@@ -4461,7 +5326,6 @@ __all__ = [
     "EXPERIMENT_FIELDS",
     "EXPERIMENT_OPTIONAL_FIELDS",
     "SupervisorJournalService",
-    "copy_experiment_reference_archive",
     "initialize_journal",
     "journal_lock",
     "load_journal",

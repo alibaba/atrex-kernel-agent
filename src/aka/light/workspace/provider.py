@@ -1,10 +1,14 @@
-"""Task provider owns temporary controller worktrees and Agent workspace setup."""
+"""Task provider owns source setup and the persistent Agent workspace.
+
+Legacy worktree operations remain inherited only for the separate Legacy
+workflow contract. AKA Light does not call them: every audit segment reuses the
+same trajectory repository.
+"""
 from dataclasses import replace
 import subprocess
 
 from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
 from aka.legacy.evaluation.resources import profile_driver_script
-from aka.contracts.workspace import CandidateHandle
 from aka.contracts.content import WorkspaceFile
 from aka.light.workspace.files import publish
 from aka.light.workspace.resource_catalog import resource
@@ -13,10 +17,22 @@ from aka.light.workspace.resource_catalog import resource
 class ManagedCandidateWorkspace(GitCandidateWorkspace):
     managed_drafts = True
 
-    def __init__(self, *, inherit_state: bool = True, file_system: str | None = None, source_tree: dict | None = None):
-        if type(inherit_state) is not bool:
-            raise ValueError("inherit_state must be boolean")
-        self.inherit_state = inherit_state
+    def __init__(
+        self,
+        *,
+        inherit_state: bool | None = None,
+        file_system: str | None = None,
+        source_tree: dict | None = None,
+    ):
+        # Read old Light compositions that explicitly stored the former default,
+        # but do not retain the retired per-Episode workspace mode.
+        if inherit_state is not None and type(inherit_state) is not bool:
+            raise ValueError("inherit_state must be a boolean when reading an old config")
+        if inherit_state is False:
+            raise ValueError(
+                "inherit_state=false is retired; Light always uses one persistent "
+                "trajectory workspace"
+            )
         if file_system is not None:
             from .sources import select
             select(file_system)
@@ -40,21 +56,13 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
         return task_selection(self.file_system, framework=framework, source_tree=source_tree)
 
     def activate_file_system(self, workspace, system):
+        from .sources.private_state import bind
         from .sources.registry import resolve
-        from .sources.common import SELECTION
-        import json
-        current, _ = resolve(workspace, revision='HEAD')
+
+        current, contract = resolve(workspace, revision='HEAD')
         if current.name != system.name:
             raise ValueError(f'Selected {system.name} file system requires a matching candidate; found {current.name}')
-        data = (json.dumps({'name':system.name}, sort_keys=True)+'\n').encode()
-        path = workspace / SELECTION
-        if path.is_file() and path.read_bytes() != data:
-            raise ValueError('File system selection cannot change when resuming a Campaign')
-        publish(workspace, SELECTION, data)
-        subprocess.run(['git','add','--',SELECTION],cwd=workspace,check=True)
-        changed = subprocess.run(['git','diff','--cached','--quiet','--',SELECTION],cwd=workspace)
-        if changed.returncode:
-            subprocess.run(['git','commit','-q','-m','Pin candidate file system','--',SELECTION],cwd=workspace,check=True)
+        bind(workspace, file_system=system.name, contract=contract)
 
     def prepare_sol(self, workspace, content, *, problem_files):
         # SourceProvider owns implementation bytes, not the selected Workflow's
@@ -96,7 +104,6 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
         publish(workspace, "README.md", b"# Kernel optimization workspace\n")
         from aka.light.workspace.agent_git import initialize_gitignore
         initialize_gitignore(workspace)
-        (workspace / "memory").mkdir(exist_ok=True)
         if not (workspace / ".git").exists():
             subprocess.run(["git", "init", "-q", str(workspace)], check=True)
             subprocess.run(["git", "-C", str(workspace), "config", "user.name", "GPU Kernel Optimizer"], check=True)
@@ -108,26 +115,4 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
 
     def open_draft(self, workspace, root, **options):
         from aka.light.workspace.episode import EpisodeWorkspace
-        return EpisodeWorkspace(workspace, root, inherit_state=self.inherit_state, **options)
-
-    def plan(self, workspace, episode, base_commit, root=None):
-        from aka.light.workspace.git import EpisodeWorktree
-        handle = EpisodeWorktree.plan(workspace, episode, base_commit, root)
-        return CandidateHandle(handle.episode, handle.base_commit, handle.branch, handle.path)
-
-    def restore_handle(self, episode, base_commit, branch, path):
-        return CandidateHandle(episode, base_commit, branch, path)
-
-    @staticmethod
-    def _implementation(handle):
-        from aka.light.workspace.git import EpisodeWorktree
-        return EpisodeWorktree(handle.episode, handle.base_commit, handle.branch, handle.path)
-
-    def reset_scratch(self, handle):
-        self._implementation(handle).reset_scratch()
-
-    def materialize(self, handle, workspace):
-        self._implementation(handle).materialize(workspace)
-
-    def remove(self, handle, workspace):
-        self._implementation(handle).remove(workspace)
+        return EpisodeWorkspace(workspace, root, **options)

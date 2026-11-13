@@ -131,6 +131,13 @@ The default `--optimization-mode fast` exposes the benchmark contract, lets the 
 DSL and permits declared reproducible compute libraries. `performance` keeps Agent-selected DSL
 but requires self-authored core compute. `ultra` additionally requires an explicit `--framework`.
 Use a new workspace when changing optimization mode, DSL policy, or Shape visibility.
+The selected workspace is a non-Git Campaign container. Light stores Campaign
+state directly inside it and creates Git repositories only for
+`lineages/tNNNN/agent-workspace`; do not initialize the Campaign root as Git or
+reuse a legacy Controller repository in place.
+The initial V0 full Evaluate is stored as an ordinary private Gateway Record in
+`measurements/`. Light does not create a separate `baseline/` directory, and V0
+does not participate in accepted-submission winner or Pareto selection.
 
 ## Launch Light
 
@@ -225,7 +232,6 @@ Save a composition patch, then pass `--patch /path/to/options.json` before `--`:
     {"id": "workflow", "config": {
       "startup": true,
       "numerical_validation": true,
-      "generate_memory": true,
       "episode_timeout_seconds": 14400
     }},
     {"id": "light_journal", "config": {"tool_modules": ["directions"]}}
@@ -233,8 +239,8 @@ Save a composition patch, then pass `--patch /path/to/options.json` before `--`:
 }
 ```
 
-This example explicitly enables supplemental numerical probes and generated memory, adds a
-four-hour Episode limit, and selects Direction-only research recording. Direction and Experiment
+This example explicitly enables supplemental numerical probes, adds a four-hour Episode limit,
+and selects Direction-only research recording. Direction and Experiment
 modules are both enabled by default; use `[]` for report-only mode. Standard evaluator correctness,
 measurement records, report validation, and ABBA remain required regardless of these options.
 
@@ -288,9 +294,8 @@ See [execution recovery](measurement-records.md#failure-and-recovery-policy).
 | --- | --- |
 | Agent Git repository | Complete implementation history, current HEAD, branches and imported peer refs |
 | `.atrex_versions/vN.json` | Supervisor-owned segment and outcome facts when generated memory is disabled |
-| `memory/vN.json` | Optional summaries, enabled by `workflow.generate_memory` |
 | `.atrex_long_horizon/` | Episode state, attempts, usage observations, and Session archives |
-| Private Supervisor scope | Measurement snapshots, Journals, commit-review audits, source archives, and GPU checkpoints outside Agent Git |
+| Private Supervisor scope | Measurement snapshots, central Research/Submission stores, Runtime audit, source archives, and GPU checkpoints outside Agent Git |
 | `profiles/` and requested artifacts | Available profiler outputs and diagnostic evidence |
 
 Raw private stores and Session traces are not public submission artifacts. The optional

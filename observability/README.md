@@ -1,165 +1,94 @@
-# AKA observability scripts
+# AKA Light observability
 
-This directory contains read-only operator scripts for inspecting running AKA
-Campaigns. Scripts must not submit, cancel, or mutate Agate work.
+Language: [简体中文完整手册](USAGE.md) | [Complete English guide](USAGE.en.md)
 
-Use Python 3.10 or newer. Every status command accepts a top-level Light
-Campaign workspace, prints a compact human-readable table by default, and
-supports `--json` or `--compact` for machine-readable output.
+This directory exposes exactly eight supported operator commands. They inspect durable Campaign
+evidence without submitting, retrying, cancelling, or mutating Runtime/Agate work.
 
-## Commands
+Pooled search uses one Campaign-private state tree. Lineage-specific Research, Session,
+and Runtime-audit data are namespaced below `lineages/tNNNN/`; immutable Gateway Records are
+stored once in the Campaign Measurement Store. Observability attributes central Records to their
+originating lineage from Runtime audits instead of treating shared evidence as copied local data.
 
-按可观测性计划逐项说明命令、字段和预期输出的中文操作手册见
-[`USAGE.md`](USAGE.md)。
-
-| Area | Command |
+| Operator question | Command |
 |---|---|
-| Campaign, trajectory, Episode and Session status | `light_runtime_status.py` |
-| Performance, correctness and per-Shape winners | `light_performance.py` |
-| Accepted and best passing full-Eval latency | `light_latency_status.py` |
-| `submit-kernel` decisions, rejection reasons and exact Evaluate evidence | `light_submission_status.py` (`light_acceptance.py` is a compatibility alias) |
-| Agate call overview, current checkpoints, historical retries and errors | `light_agate_status.py` |
-| All physical Agate attempts for one Gateway Record | `light_gateway_jobs.py` |
-| Main-Agent Session/Episode tokens, per-kind Review usage, and Kernel milestone checkpoints | `light_token_time.py` |
-| Runtime Tool counts, outcomes, duration and attribution | `light_tool_usage.py` |
-| Research Board, Direction/Experiment queues, sharing and Review audit | `light_research_status.py` |
-| Kernel source, raw Agate jobs and Agent-visible response | `export_light_evidence.py` |
-| GPU Wiki queries, latency, results and adoption | `light_wiki_usage.py` |
+| What is each lineage doing, including Direction/Experiment state and tokens? | `light_lineage_status.py` |
+| Which evaluated Kernels, observed implementation technologies, and nested submit-kernel decisions did each lineage produce? | `light_kernel_history.py` |
+| Which accepted commit is best by GeoMean and by individual Shape? | `light_kernel_best.py` |
+| How often does each Runtime kind succeed/fail and how long does it take? | `light_runtime_calls.py` |
+| How often does each physical Agate kind succeed/fail and what are its timings? | `light_agate_calls.py` |
+| Export one commit's source and all bound measurements | `export_light_kernel.py` |
+| Expand one Gateway Record into every physical Agate submission | `light_gateway_jobs.py` |
+| Export one Gateway Record's Runtime request, raw Agate attempts, and Agent receipt | `export_light_gateway_record.py` |
 
-Examples:
+Implementation shared by these commands lives under `_internal/` and is not a supported CLI.
+
+## Quick start
 
 ```bash
-python3 observability/light_runtime_status.py /path/to/campaign
-python3 observability/light_performance.py /path/to/campaign --json
-python3 observability/light_submission_status.py /path/to/campaign
-python3 observability/light_agate_status.py /path/to/campaign --json
-python3 observability/light_gateway_jobs.py /path/to/campaign \
-  --gateway-record-id gateway-0123456789abcdef0123456789abcdef --json
-python3 observability/light_token_time.py /path/to/campaign
-python3 observability/light_tool_usage.py /path/to/campaign
-python3 observability/light_research_status.py /path/to/campaign
-python3 observability/light_wiki_usage.py /path/to/campaign
+export AKA_REPO=/path/to/atrex-kernel-agent
+export CAMPAIGN=/path/to/light-campaign
+
+python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_history.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_best.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_runtime_calls.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_agate_calls.py" "$CAMPAIGN" --json
 ```
 
-The commands automatically include pooled-search trajectory workspaces. Token usage may use the
-structured `estimated` fallback recorded from a finalized Session conversation when every Provider
-counter is absent. Other facts that are not durably persisted remain unavailable rather than being
-inferred from unstructured logs.
-
-Main-Agent and independent-Review totals are intentionally separate. Review usage is grouped by
-`final_source_policy_review`, `direction_claim_review`, `experiment_claim_review`, and
-`supplemental_numerical_review`, including invocation counts. Reasoning tokens are reported as a
-separate field when the provider exposes a native counter. If all Provider counters are absent,
-reasoning text may instead be estimated from explicitly captured reasoning blocks; it is still a
-subset of output and is not added to total tokens twice.
-`all_paths_totals` provides the combined main-Agent plus all-Review bill; provider-native
-reasoning remains a separate breakdown and is not added to `total_tokens` twice.
-Each passing standard full Evaluate and accepted `submit-kernel` also records an immutable
-Supervisor-private checkpoint of cumulative main-Agent, per-kind Review, and all-path usage.
-`light_token_time.py` exposes these as `passing_full_evaluate_token_checkpoints` and
-`accepted_submission_token_checkpoints`. A live Provider counter that has not settled is retained
-with `measurement=partial` rather than being mislabeled exact. Exact Agent active time,
-exact Agate-wait time, actual retry sleep intervals,
-Runtime slot/queue occupancy, or a lossless audit-receipt-to-Session join. The
-corresponding commands return `null` plus an availability explanation for
-those fields; all other reported values come from durable Campaign records.
-
-## Export one measurement and its evidence
+Filter recent Runtime or Agate calls only when details are needed:
 
 ```bash
-python3 observability/export_light_evidence.py /path/to/campaign \
-  --gateway-record-id gateway-0123456789abcdef0123456789abcdef \
-  --output /path/to/new-export-directory
+python3 "$AKA_REPO/observability/light_runtime_calls.py" "$CAMPAIGN" \
+  --kind evaluate --status failed --last 20 --json
+python3 "$AKA_REPO/observability/light_agate_calls.py" "$CAMPAIGN" \
+  --status failed --status pending --last 20 --json
 ```
 
-The new directory contains:
-
-- `kernel/`: the exact measured source package;
-- `agate-jobs.json`: raw physical Agate responses and Job IDs;
-- `agent-response.json`: the response exposed to the Agent by Light;
-- `manifest.json`: identities and provenance for the export.
-
-## Light latency status
-
-`light_latency_status.py` reports two distinct facts:
-
-- `accepted_best`: the lowest GeoMean latency among verified accepted `submit-kernel` decisions;
-- `best_passing_full_eval`: the lowest GeoMean latency observed in a passing,
-  standard full Agate Eval, whether or not that Kernel was submitted.
-
-Current Light uses the Agent's clean Git HEAD as the public Kernel identity. Both
-accepted state and Measurement Records expose it as `kernel_commit_id`; the
-Supervisor's separate archive commit remains private audit data. The script
-resolves each accepted private-Journal `kernel_submissions[]` entry, checks that
-its full-Evaluate Gateway Record names the same Agent commit, and returns the
-immutable Record identity and verified source-artifact digest. Episode
-`attempt.json` is execution telemetry only and is never an acceptance source.
-
-The exact state and Measurement Record sources are documented in
-[`light-latency-data-sources.md`](light-latency-data-sources.md).
-
-Run it from any directory with Python 3.10 or newer:
+Trace one logical measurement:
 
 ```bash
-python3 /path/to/atrex-kernel-agent/observability/light_latency_status.py \
-  /path/to/light-campaign-workspace
+RECORD=gateway-0123456789abcdef0123456789abcdef
+python3 "$AKA_REPO/observability/light_gateway_jobs.py" "$CAMPAIGN" \
+  --gateway-record-id "$RECORD" --json
+python3 "$AKA_REPO/observability/export_light_gateway_record.py" "$CAMPAIGN" \
+  --gateway-record-id "$RECORD" --output /path/to/new-gateway-evidence
 ```
 
-Continuously refresh every 30 seconds:
+Export one exact Agent commit and its bound measurements:
 
 ```bash
-python3 /path/to/atrex-kernel-agent/observability/light_latency_status.py \
-  /path/to/light-campaign-workspace --watch 30
-```
-
-For line-oriented collection:
-
-```bash
-python3 /path/to/atrex-kernel-agent/observability/light_latency_status.py \
-  /path/to/light-campaign-workspace --watch 30 --compact
-```
-
-The command automatically discovers all durable measurement scopes belonging
-to the supplied top-level Campaign workspace. No trajectory or search-mode
-selection is required.
-
-Only completed, cacheable, untruncated standard full Eval records with passing
-correctness are eligible for `best_passing_full_eval`. Correctness-only,
-single-Shape/subset, custom-input, ABBA, Profile, Dev, failed, and running work
-is excluded. Per-Shape Pareto minima are deliberately not combined into an
-unmeasured synthetic Kernel.
-
-## Export a reported Kernel source package
-
-Export an accepted or measured result by its Agent Kernel commit:
-
-```bash
-python3 /path/to/atrex-kernel-agent/observability/export_light_source.py \
-  /path/to/light-campaign-workspace \
+python3 "$AKA_REPO/observability/export_light_kernel.py" "$CAMPAIGN" \
   --kernel-commit-id 0123456789abcdef0123456789abcdef01234567 \
-  --output /path/to/exported-source
+  --output /path/to/new-kernel-evidence
 ```
 
-Export a measured result by its Gateway Record:
+Export paths must not exist. The six status/query tools support human-readable output, `--json`,
+and `--compact`; use each command's `--help` as the final CLI authority.
 
-```bash
-python3 /path/to/atrex-kernel-agent/observability/export_light_source.py \
-  /path/to/light-campaign-workspace \
-  --gateway-record-id gateway-0123456789abcdef0123456789abcdef \
-  --output /path/to/exported-source
+## Identity and evidence authority
+
+Keep the layers distinct:
+
+```text
+Agent Git commit
+→ Runtime request ID
+→ Gateway Record ID
+→ primary Agate Job ID
+→ optional Ray/backend Job ID
 ```
 
-The latency status JSON can be consumed directly. The exporter uses
-`kernel_commit_id` for either result, and prefers the evidence-bound
-`gateway_record_id` for `best_passing_full_eval`:
+Use the Gateway Record ID to retrieve a complete logical request. A Record can contain multiple
+physical Jobs because of Shape batches, retries, or Ray Data execution. A backend Job ID alone may
+not have an independently persisted raw response.
 
-```bash
-python3 /path/to/atrex-kernel-agent/observability/export_light_source.py \
-  /path/to/light-campaign-workspace \
-  --status-json /path/to/status.json \
-  --select best_passing_full_eval \
-  --output /path/to/exported-source
-```
+Public JSON uses `runtime_request_id`, `agate_job_id`, and `backend_agate_job_ids`. Upstream
+`request_id`, `job_id`, and `backend_job_ids` appear only inside explicitly raw evidence files.
 
-The output path must not already exist. Every source format is materialized as
-a directory, preserving the single-file, source-tree, or CUDA manifest layout.
+Current winners require an accepted `submit-kernel` receipt for the exact Agent commit, a passing
+standard full Evaluate for that commit, and complete per-Shape performance evidence. Historical
+Framework Baseline, handoff, promotion, canonical `vN`, or Episode acceptance fields are not
+current winner authority.
+
+For all options, JSON schemas, field semantics, timing definitions, token accounting, examples,
+and audit workflows, read [USAGE.md](USAGE.md) or [USAGE.en.md](USAGE.en.md).

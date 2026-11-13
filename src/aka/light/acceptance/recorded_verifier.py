@@ -38,7 +38,7 @@ class RecordedABBAValidator(GatewayABBAValidator):
         return f"""## ABBA comparisons and terminal acceptance
 
 During exploration, you may compare the clean committed candidate against any baseline commit
-reachable from local Git or `refs/atrex/shared/` by running:
+reachable from local Git or a peer remote-tracking ref such as `atrex/T2` by running:
 
 ```bash
 python3 tools/sandbox.py --kind run --mode full --baseline-commit <FULL_GIT_COMMIT>

@@ -2,6 +2,11 @@
 
 Use this file for live status, diagnosis, metrics and reproducibility. Run read-only tools from a checkout compatible with the campaign. Never submit, cancel or mutate Agate work during a status-only request.
 
+For the complete option matrix, expected JSON examples and field-by-field semantics, use the
+dedicated `atrex-aka-light-observability` skill and read the matching guide from the same checkout
+as the Campaign tooling: `observability/USAGE.md` for Chinese or
+`observability/USAGE.en.md` for English.
+
 ```bash
 export AKA_REPO=/path/to/atrex-kernel-agent
 export CAMPAIGN=/path/to/light-campaign-workspace
@@ -10,17 +15,37 @@ export CAMPAIGN=/path/to/light-campaign-workspace
 ## First pass
 
 ```bash
-python3 "$AKA_REPO/observability/light_runtime_status.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_submission_status.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_agate_status.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_history.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_best.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_runtime_calls.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_agate_calls.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_gateway_jobs.py" "$CAMPAIGN" \
   --gateway-record-id gateway-0123456789abcdef0123456789abcdef --json
-python3 "$AKA_REPO/observability/light_token_time.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_research_status.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_tool_usage.py" "$CAMPAIGN" --json
 ```
 
-Use `--help` before optional filters or watch flags. Status scripts are convenience projections; immutable Gateway Records, Runtime audit, private Journal `kernel_submissions`, MeasurementStore, Agent Git, search checkpoint, and current `PROGRESS.md`/`frontier.json` are the authority for their respective facts.
+`light_runtime_calls.py` and `light_agate_calls.py` retain a Campaign-wide
+summary by kind while `--kind`, `--status` and `--last N` select bounded
+details. Agate waiting averages use only durable `created_at -> started_at`
+timing. Use `light_gateway_jobs.py` for every physical submission belonging
+to one logical Gateway Record.
+
+Use `--help` before optional filters or watch flags. Status scripts are convenience projections; immutable Gateway Records, Runtime audit, Campaign `submissions/`, MeasurementStore, Agent Git, search checkpoint, and current `PROGRESS.md`/`frontier.json` are the authority for their respective facts.
+
+Pooled Campaigns have one private state tree and one canonical MeasurementStore. Research,
+submission, Session, and Runtime-audit facts carry a lineage namespace; Gateway Record bytes do
+not. Attribute a Record to its originating lineage from the Runtime audit rather than looking for
+or creating trajectory-local copies.
+
+Current Runtime receipts are written at request start and finalized in place. Their stable
+`runtime_request_id` is also retained by the Gateway Record and physical Job checkpoint. Kernel history,
+winner and export commands expose `evidence_health`; never interpret a missing/corrupt Record or
+token checkpoint as an empty result.
+
+Live execution and scheduler state are separate. `light_lineage_status.py` treats the
+nonblocking writer-lock observation as live execution authority. Its
+`scheduler_checkpoint` is only the last persisted scheduling fact and must never make a
+trajectory appear active by itself.
 
 ## Current winner model
 
@@ -38,7 +63,7 @@ accepted submit-kernel receipt for exact Agent commit
 - An unsubmitted full Evaluate remains valid measurement evidence in `records/`, but it is not a lineage/global winner and is not broadcast as one.
 - `submit-kernel` acceptance should refresh the local winner/frontier promptly; cross-trajectory global state follows the configured synchronization point.
 
-Do not use old fields named `promoted`, `incumbent`, canonical `vN`, or Episode `attempt.json.accepted` as current winner authority. `light_submission_status.py` joins private `kernel_submissions` to exact MeasurementStore evidence; `light_acceptance.py` is only its compatibility alias.
+Do not use old fields named `promoted`, `incumbent`, canonical `vN`, or Episode `attempt.json.accepted` as current winner authority. `light_kernel_history.py` joins Campaign Submission Store records to exact MeasurementStore evidence, and `light_kernel_best.py` selects only verified accepted submissions.
 
 ## State boundaries
 
@@ -63,6 +88,12 @@ Supervisor-private and are not projected into the Agent workspace.
 
 `waiting_agate` does not prove the remote job is currently running. Correlate the logical Runtime call with saved physical job records. A transport timeout, queue timeout, Ray failure or missing terminal response is infrastructure evidence, not candidate correctness failure.
 
+In Agate summaries, `queue_seconds` is only `created_at → started_at`, `execution_seconds` is
+`started_at → finished_at`, and `total_seconds` is `created_at → finished_at`. Runtime end-to-end
+duration is reported separately. Ray Data backend IDs may only have an outer-job response; check
+`response_scope` and `raw_backend_response_available` before treating an export as the raw
+backend response.
+
 ## Diagnose slow or failed progress
 
 1. Identify scope, trajectory, Epoch, Episode audit segment, Session, pending tool and newest durable timestamp.
@@ -74,11 +105,13 @@ Supervisor-private and are not projected into the Agent workspace.
 7. For research friction, inspect Direction/Experiment request, inline Review result and private audit; do not infer that a Review state changed the Kernel.
 8. For pooled search, inspect each lineage independently and the last completed sharing boundary.
 
-Preserve `null` and explicit availability reasons. Do not estimate missing token splits, active time, queue time or retry sleep from wall-clock timestamps alone.
+Do not estimate missing token splits, active time, queue time or retry sleep from wall-clock
+timestamps alone. Default status output omits facts that are not durably available instead of
+inventing values or returning explanatory placeholder fields.
 
 ## Research and sharing
 
-`PROGRESS.md` is a compact projection, not the complete Research Store. Use `light_research_status.py` and private events to inspect:
+`PROGRESS.md` is a compact projection, not the complete Research Store. Use `light_lineage_status.py` to inspect:
 
 - local Direction queue, focus and lifecycle;
 - shared discovery pool and source trajectory;
@@ -99,9 +132,9 @@ Gateway Record IDs use the public `gateway-...` identity. Physical `ev_...` job 
 
 ## Token and tool analysis
 
-Use `light_token_time.py` for main-Agent Session/trajectory/Episode totals and for a separate
-per-kind independent-Review ledger. Review calls and tokens are grouped as final-source policy,
-Direction claim, Experiment claim, and supplemental-numerical review; they are never merged into main-Agent totals.
+Use `light_lineage_status.py` for per-lineage main-Agent and independent-Review totals.
+Use `light_kernel_history.py` for immutable cumulative token snapshots at each passing full
+Evaluate and accepted submission. Review tokens remain separate from main-Agent totals.
 Every managed main-Agent or Review invocation also archives a complete `conversation.jsonl` and
 `token-usage.json` under Supervisor-private Campaign state. These raw Review transcripts are not
 projected into the optimizer workspace; only bounded verdicts and explicitly selected historical
@@ -109,9 +142,11 @@ main-Agent evidence may be Agent-visible.
 Input, output, cache, total, and reasoning tokens are shown separately. When all Provider counters
 are absent, finalized conversation text supplies a best-effort `estimated` input/output/reasoning
 total while cache fields remain null. A missing reasoning counter is not inferred when other native
-Provider counters are available. Use `light_tool_usage.py` for
-Runtime audit counts, outcomes and durations. Do not join independent logs by timestamp when no
-stable request identity exists.
+Provider counters are available. Use `light_runtime_calls.py` for
+Runtime audit counts, outcomes and durations. It includes running calls and validation/lifecycle
+rejections for current receipts, plus p50/p95/max, coverage and error breakdowns. Filter Runtime or
+Agate calls with repeatable `--kind`, `--status`, `--lineage`, optional `--since/--until`, and
+`--last`. Do not join old independent logs by timestamp when no stable request identity exists.
 The JSON `all_paths_totals` object adds main-Agent and every Review total, while keeping reasoning
 as a non-additive breakdown. Its measurement distinguishes `exact`, `estimated`, `partial`, and
 `unavailable` coverage.
@@ -120,24 +155,22 @@ Long provider calls can cross the shell frontend's 600-second foreground boundar
 
 ## Export source and evidence
 
-Export a complete evidence bundle:
+Export one commit with its source, exact bound measurements, Gateway IDs and
+physical Agate IDs:
 
 ```bash
-python3 "$AKA_REPO/observability/export_light_evidence.py" "$CAMPAIGN" \
-  --gateway-record-id gateway-0123456789abcdef0123456789abcdef \
-  --output /path/to/new-evidence-directory
+python3 "$AKA_REPO/observability/export_light_kernel.py" "$CAMPAIGN" \
+  --kernel-commit-id 0123456789abcdef0123456789abcdef01234567 \
+  --output /path/to/new-kernel-evidence
 ```
 
-Export source by Agent Git commit or Gateway Record:
+Export one logical Gateway Record with its audited Runtime request, every raw Agate
+attempt and exact Agent-visible response:
 
 ```bash
-python3 "$AKA_REPO/observability/export_light_source.py" "$CAMPAIGN" \
-  --kernel-commit-id 0123456789abcdef0123456789abcdef01234567 \
-  --output /path/to/new-source-directory
-
-python3 "$AKA_REPO/observability/export_light_source.py" "$CAMPAIGN" \
+python3 "$AKA_REPO/observability/export_light_gateway_record.py" "$CAMPAIGN" \
   --gateway-record-id gateway-0123456789abcdef0123456789abcdef \
-  --output /path/to/new-source-directory
+  --output /path/to/new-gateway-evidence
 ```
 
 The output path must not exist. Export before destructive cleanup or when comparing raw Agate output with the Agent-visible projection.
@@ -147,11 +180,11 @@ The output path must not exist. Export before destructive cleanup or when compar
 Report only supported facts:
 
 - checkout commit and campaign workspace;
-- per-lineage Epoch/Episode segment, health, Session phase and staleness;
+- per-lineage Epoch/Episode segment, writer liveness, Session phase and staleness;
 - best accepted submission and best measured passing full Evaluate, clearly distinguished;
 - exact Agent commit and Gateway Record identities;
 - pending/failed Agate batches, error class, retries and reuse;
 - token totals requested by the user;
-- missing/incomplete fields and their availability reason.
+- material missing evidence only when its absence changes the conclusion.
 
 Anchor all conclusions to the newest durable timestamp. A read-only inspection does not authorize restart, retry, cleanup or deletion.

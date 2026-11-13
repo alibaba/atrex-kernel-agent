@@ -15,7 +15,7 @@ AKA Light runs persistent GPU-kernel optimization Sessions and sends GPU work to
 | Validate an operator | Check [problem inputs](references/problem-inputs.md) |
 | Start/resume/stop | Follow [operations](references/operations.md) |
 | Configure CLI or composition | Read [configuration](references/configuration.md) |
-| Inspect a live campaign or export evidence | Read [observability](references/observability.md) |
+| Inspect a live campaign or export evidence | Prefer the dedicated `atrex-aka-light-observability` skill; otherwise read [observability](references/observability.md) |
 
 Do not use this skill for the Legacy `workflow` Profile or standalone Aone Sandbox lifecycle.
 
@@ -53,7 +53,7 @@ The checkout later supplied through `--repo-root` must match the installed wheel
 
 There is no Framework Baseline stage, `episode-report`, candidate sealing, terminal handoff, automatic terminal ABBA, or Supervisor promotion threshold in the current Light workflow. Explicit ABBA remains available as an Agent-requested measurement operation.
 
-Public Kernel identities are full Agent Git commit IDs. Controller state remains private task/V0 authority and audit storage; it is not a candidate Git mirror. Peer Git is imported through read-only refs and never overwrites local HEAD.
+Public Kernel identities are full Agent Git commit IDs. `--workspace` names a non-Git Campaign container; only `lineages/tNNNN/agent-workspace` repositories own Kernel history. Campaign-level V0 authority and audit storage live directly below that root. Peer Git is imported through read-only refs and never overwrites local HEAD.
 
 ## Choose mode and profile
 
@@ -106,7 +106,25 @@ Set `workflow.config.search` to an explicit empty mapping to select serial mode.
 
 Episode active time has no limit by default; set `workflow.config.episode_timeout_seconds` only when a limit is wanted. `--token-budget 0` means no token cap. Agate request, queue and per-Shape execution budgets are separate.
 
-At synchronization boundaries, pooled search publishes eligible Direction/Experiment records, relevant Gateway Records, peer Agent Git refs, accepted-submission winners and the aggregated Direction queue. It does not merge scratch files or conversations and does not rewrite another trajectory's checkout.
+Pooled search keeps Campaign-wide scheduling facts in root `coordinator.json`, serialized by
+`coordinator.lock`. Each immutable synchronization event is self-contained under
+`publications/pNNNNNNNN/`: `publication.json` stores global metadata, `sources/tNNNN/` stores
+producer Git history and `imports/tNNNN.json` stores consumer receipts. Each lineage keeps its
+HEAD, Session, completed Episode, lineage winner, persistent Agent Git repository, Research queue,
+Session capture and Runtime audit under `lineages/tNNNN/`; there are no Episode Journals. The
+common Agent V0 Git root lives once under `bootstrap/agent-v0.{bundle,json}`; there is no
+Campaign-level `peer-git/` or lineage `git-sharing/` wrapper. Immutable
+Gateway Records live once in the Campaign Measurement Store,
+Direction/Experiment versions live once in the Campaign Research Library, and every submit-kernel
+decision lives once under Campaign `submissions/`. Each Agent workspace receives ordinary
+visibility-filtered Library files. Bubblewrap overlays that subtree read-only; native-mode changes
+are disposable and repaired on refresh. At synchronization boundaries Light publishes every
+archived Direction/Experiment identity with its actual review quality, relevant Gateway Record
+IDs, peer Agent Git refs, accepted-submission winners and the aggregated Direction queue. Review
+quality controls evidentiary weight, not visibility. Light does not merge scratch files or
+conversations or rewrite another trajectory's checkout.
+
+The Campaign root has no `.git`, `.atrex-supervisor-runtime`, path-hash wrapper, `search/`, `peer-git/` or `git-sharing/`. Campaign scheduling and all synchronization artifacts are represented by `coordinator.json`, `coordinator.lock` and self-contained `publications/pNNNNNNNN/` directories; common V0 Git bootstrap state lives in `bootstrap/`; lineage-owned mutable state and Agent workspaces live in `lineages/`. V0 is a private full-Evaluate Gateway Record in `measurements/`; there is no separate baseline store. It is reference evidence, not an accepted submission or Pareto/winner candidate.
 
 ## Launch
 
@@ -150,16 +168,21 @@ Resume with the same checkout behavior, workspace, profile composition, problem 
 Start inspection with:
 
 ```bash
-python3 "$AKA_REPO/observability/light_runtime_status.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_submission_status.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_agate_status.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_history.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_best.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_runtime_calls.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_agate_calls.py" "$CAMPAIGN" --json
 python3 "$AKA_REPO/observability/light_gateway_jobs.py" "$CAMPAIGN" \
   --gateway-record-id gateway-0123456789abcdef0123456789abcdef --json
-python3 "$AKA_REPO/observability/light_token_time.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_research_status.py" "$CAMPAIGN" --json
 ```
 
-For performance authority, inspect `PROGRESS.md`, `frontier.json`, private `kernel_submissions`, MeasurementStore and immutable Gateway Records. Do not interpret old promotion-oriented fields or scripts as current winner authority. Export evidence by Gateway Record ID and source by Agent Git commit ID before destructive cleanup.
+For performance authority, inspect `PROGRESS.md`, `frontier.json`, Campaign `submissions/`, MeasurementStore and immutable Gateway Records. Do not interpret old promotion-oriented fields or scripts as current winner authority. Export evidence by Gateway Record ID and source by Agent Git commit ID before destructive cleanup.
+
+Current Runtime receipts are created before execution and finalized in place; their request IDs
+are retained by Gateway Records and physical Job checkpoints. Kernel history, winner and export
+views expose `evidence_health`. In Agate timing, `queue_seconds` is queue time and
+`total_seconds` is Agate submitted-to-terminal time; Runtime end-to-end duration is separate.
 
 ## Safety boundaries
 
@@ -167,7 +190,7 @@ For performance authority, inspect `PROGRESS.md`, `frontier.json`, private `kern
 - A timeout, queue failure, missing receipt or transport error is not a correctness failure.
 - Stop through the owning Supervisor/workload and verify Agent, Runtime and children exit.
 - Workspace or Sandbox deletion requires explicit authorization.
-- Do not edit private Runtime, Journal, MeasurementStore, checkpoint, lock or Git state to force recovery.
+- Do not edit private Runtime audit, Research Store, Submission Store, MeasurementStore, checkpoint, lock or Git state to force recovery.
 
 ## Read as needed
 

@@ -129,6 +129,29 @@ def _main_rows(session_capture_root: Path | None, occurred_at: datetime) -> tupl
 
 def _review_rows(audit_root: Path, occurred_at: datetime) -> tuple[list[dict], list[str]]:
     rows, warnings = [], []
+    lineage = None
+    campaign_root = audit_root
+    if audit_root.parent.name == "lineages":
+        campaign_root = audit_root.parent.parent
+        suffix = audit_root.name.removeprefix("t")
+        if suffix.isdigit() and int(suffix) > 0:
+            lineage = f"T{int(suffix)}"
+    from aka.light.workflow.review_archive import bound_review_usage_rows
+
+    for value in bound_review_usage_rows(campaign_root, lineage=lineage):
+        recorded = _timestamp(value.get("recorded_at"))
+        if recorded is not None and recorded > occurred_at:
+            continue
+        rows.append({
+            "review_kind": value.get("review_kind"),
+            "label": value.get("label"),
+            "session_id": value.get("session_id"),
+            "recorded_at": value.get("recorded_at"),
+            "usage": _usage(value.get("usage")),
+            "source": value.get("source"),
+        })
+    # Read-only compatibility for Campaigns created before Reviews were bound
+    # directly to Direction/Experiment revisions and submissions.
     for path in sorted((audit_root / "review-usage").glob("*/*.json")):
         try:
             value = _json(path)

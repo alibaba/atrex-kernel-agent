@@ -11,6 +11,7 @@ from aka.light.experiment.store import (
     ABBA_BATCH_ROOT_ENV,
     BATCH_ROOT_ENV,
     JOB_ROOT_ENV,
+    RUNTIME_REQUEST_ID_ENV,
     DuplicateTask,
     RecordNotFound,
     digest,
@@ -240,6 +241,8 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     JOB_ROOT_ENV: str(directory),
                     "ATREX_AKA_IDENTITY_KEY": store.identity_key.hex(),
                 }
+                if effects.request_id:
+                    env[RUNTIME_REQUEST_ID_ENV] = effects.request_id
                 if operation in {"evaluate", "same_allocation_abba"}:
                     # A task may finish only a subset of Shape batches before
                     # an infrastructure outage. Keep completed batches at a
@@ -428,18 +431,22 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     ) from error
             return response
     except DuplicateTask as error:
-        if reuse_completed and error.record_id:
-            # reserve() has already validated the exact task identity and its
-            # cacheability. This switch is never accepted from HTTP/Agent argv.
+        if error.record_id:
+            # reserve() has already validated the complete task identity and
+            # cacheability. A completed exact match is therefore the normal
+            # result of this call, regardless of which lineage created the
+            # canonical Record. Keep the reuse marker private to Runtime; the
+            # Agent-facing compact receipt is identical to a fresh completion.
             return dict(store.read(error.record_id)["response"], reused=True)
         return task_conflict_response(error)
 
 
 def task_conflict_response(error: DuplicateTask) -> dict:
+    if error.record_id:
+        raise RuntimeError(
+            "Completed exact Gateway tasks must be returned through normal Record reuse"
+        )
     info = error.response()
-    recovery = ([{"path": f"records/{error.record_id}.json",
-                  "instruction": "Read the projected completed result; do not resubmit this exact Kernel task."}]
-                if error.record_id else [{"instruction": info["next_action"]}])
+    recovery = [{"instruction": info["next_action"]}]
     response = error_response(info.pop("message"), repairable=False, recovery=recovery, **info)
-    response["previous_gateway_record_id"] = error.record_id
     return {"exit_code": 2, "stdout": "", "stderr": json.dumps(response) + "\n"}

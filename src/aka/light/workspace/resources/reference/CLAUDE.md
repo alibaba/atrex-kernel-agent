@@ -20,8 +20,8 @@ operations and request schemas. Do not infer a different workflow from unrelated
 
 - Edit only the SourceProvider-declared candidate. The default source tree uses `kernel.py` plus
   optional files under `impl/`; other providers may declare a single file or a native manifest.
-  Keep evaluator inputs, public contracts, `CLAUDE.md`, `README.md`, and canonical `memory/v*.json`
-  unchanged. Edit `solution.json` only when `WORKSPACE.md` declares it candidate metadata.
+  Keep evaluator inputs, public contracts, `CLAUDE.md`, and `README.md` unchanged. Edit
+  `solution.json` only when `WORKSPACE.md` declares it candidate metadata.
 - Use the trajectory's local Git repository for checkpoints, branches, comparison, and rollback.
   Before every Kernel-bound Runtime request, commit the complete candidate and leave the worktree
   clean. Runtime never commits Agent work on your behalf. The full HEAD is `kernel_commit_id`; every

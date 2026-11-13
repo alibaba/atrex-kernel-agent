@@ -71,6 +71,7 @@ def account_review(
     label: str,
     backend: str,
     model: str = "",
+    persist_separate_receipt: bool = True,
 ) -> None:
     """Account one reviewer without mutating the main-Agent token counter."""
     usage = getattr(result, "terminal_usage", None)
@@ -92,6 +93,8 @@ def account_review(
                 file=sys.stderr,
                 flush=True,
             )
+    if not persist_separate_receipt:
+        return
     try:
         workspace = getattr(campaign, "workspace", None)
         if workspace is None:

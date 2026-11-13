@@ -212,14 +212,9 @@ def run_session(
 def _production_review_candidate_paths(workspace: Path) -> list[Path]:
     """Return the complete, bounded source set shown to the production reviewer."""
     from aka.light.workspace.sources import policy_at, collect
-    from aka.light.workspace.sources.common import POLICY
     policy = policy_at(workspace)
     if policy is not None:
-        paths = [workspace / name for name in sorted(collect(workspace, policy))]
-        policy_path = workspace / POLICY
-        if policy_path.is_file():
-            paths.append(policy_path)
-        return paths
+        return [workspace / name for name in sorted(collect(workspace, policy))]
     paths = [
         workspace / "kernel.py",
         workspace / "solution.json",
@@ -377,6 +372,7 @@ def _sandbox_command(
     terminal_validation: bool = False,
     evaluation_step_timeout: int = DEFAULT_EVALUATION_STEP_TIMEOUT,
     gpu_clock_mhz: int | None = None,
+    job_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the private GPU executor for trusted Supervisor verification."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
@@ -425,7 +421,11 @@ def _sandbox_command(
     # Bootstrap runs before the HTTP Runtime exists. Keep accepted IDs and the
     # exact uploaded wire request outside the workspace so recovery polls/replays
     # that same submission instead of creating an untracked replacement.
-    environment[JOB_ROOT_ENV] = str(supervisor_campaign_root(workspace) / "trusted-jobs")
+    environment[JOB_ROOT_ENV] = str(
+        job_root
+        if job_root is not None
+        else supervisor_campaign_root(workspace) / "trusted-jobs"
+    )
     environment.pop(TERMINAL_VALIDATION_ENV, None)
     if terminal_validation:
         environment[TERMINAL_VALIDATION_ENV] = "1"
@@ -603,19 +603,19 @@ def _local_test_record(workspace: Path, version: str, result: dict, *, existing:
     return data
 
 
-def _record_local_test_result(workspace: Path, version: str, result: dict, *, generate_memory: bool = False) -> Path:
-    """Persist non-V0 evaluator facts; V0 belongs to Supervisor-private state."""
+def _record_local_test_result(workspace: Path, version: str, result: dict) -> Path:
+    """Persist legacy non-V0 version facts; V0 is a Gateway Measurement."""
     from aka.light.workspace.versions import save_version_record, version_record_path
     number = int(version[1:]) if re.fullmatch(r"v[0-9]+", version) else -1
     if number == 0:
-        raise ValueError("V0 evaluator facts must use Supervisor-private baseline storage")
-    path = version_record_path(workspace, number, prefer_summary=generate_memory)
+        raise ValueError("V0 evaluator facts must use the Campaign Measurement Store")
+    path = version_record_path(workspace, number)
     try:
         existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
     except (OSError, json.JSONDecodeError):
         existing = {}
     data = _local_test_record(workspace, version, result, existing=existing)
-    return save_version_record(workspace, number, data, generate_memory=generate_memory)
+    return save_version_record(workspace, number, data)
 
 
 def detect_arch(

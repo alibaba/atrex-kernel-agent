@@ -27,6 +27,7 @@ KERNEL_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 JOB_ROOT_ENV = "ATREX_AKA_MEASUREMENT_JOB_ROOT"
 ABBA_BATCH_ROOT_ENV = "ATREX_AKA_ABBA_BATCH_ROOT"
 BATCH_ROOT_ENV = "ATREX_AKA_SHAPE_BATCH_ROOT"
+RUNTIME_REQUEST_ID_ENV = "ATREX_AKA_RUNTIME_REQUEST_ID"
 MAX_RECORD_BYTES = 32 * 1024 * 1024
 MAX_RECORD_HEADER_BYTES = 16 * 1024
 RECORD_HEADER_FIELDS = frozenset({"gateway_record_id", "operation", "created_at", "kernels"})
@@ -141,12 +142,9 @@ class DuplicateTask(RuntimeError):
                          "Identical Gateway task is already running")
 
     def response(self) -> dict:
-        return {"code": "duplicate_gateway_task", "message": str(self),
-                "gateway_record_id": self.record_id,
-                "next_action": (
-                    "Read records/" + self.record_id + ".json; do not resubmit the completed task."
-                    if self.record_id else
-                    "Wait for the original request; do not launch a second identical job.")}
+        raise RuntimeError(
+            "Completed exact Gateway tasks are internal cache hits, not Agent errors"
+        )
 
 
 class TaskRunning(DuplicateTask):
@@ -458,7 +456,16 @@ class MeasurementStore:
             private_write(marker, {"status": "running", "gateway_record_id": record_id})
             with self._active_lock:
                 self._active_tasks[key] = TaskRunning(reservation_deadline, request_id)
-            yield MeasurementTask(self, key, record_id, directory, request, kernels, marker)
+            yield MeasurementTask(
+                self,
+                key,
+                record_id,
+                directory,
+                request,
+                kernels,
+                marker,
+                request_id=request_id,
+            )
         finally:
             try:
                 if acquired:
@@ -502,9 +509,21 @@ class MeasurementStore:
 
 
 class MeasurementTask:
-    def __init__(self, store, key, record_id, directory, request, kernels, marker):
+    def __init__(
+        self,
+        store,
+        key,
+        record_id,
+        directory,
+        request,
+        kernels,
+        marker,
+        *,
+        request_id="",
+    ):
         self.store, self.key, self.record_id = store, key, record_id
         self.directory, self.request, self.kernels, self.marker = directory, request, kernels, marker
+        self.request_id = request_id
 
     def finish(self, response: dict, *, cacheable: bool, pending: bool = False) -> dict:
         from aka.light.evaluation.public_result import seal_response
@@ -517,6 +536,8 @@ class MeasurementTask:
                   "operation": self.request["operation"], "response": response,
                   "result_digest": digest(response), "cacheable": cacheable,
                   "created_at": datetime.now(timezone.utc).isoformat()}
+        if self.request_id:
+            record["runtime_request_id"] = self.request_id
         # Match private_write's actual encoding, including envelope and escaping.
         # Refuse before publication: reserve() can recover this running task's
         # existing Jobs instead of leaving an unreadable validation_pending record.

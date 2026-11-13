@@ -1,8 +1,10 @@
 # Direction-only requests
 
 The Direction module is enabled and the Experiment module is disabled. Runtime maintains
-`PROGRESS.md`, `directions/<status>/<direction_id>.json`, and flat
-`records/<gateway_record_id>.json`. Read these generated files directly; do not edit them.
+`PROGRESS.md`, `research-library/directions/<direction_id>/vN/direction.json` versions, and flat
+`records/<gateway_record_id>.json`. Draft `v0` is updated before start; reviewed `v1+` is immutable.
+The greatest visible `vN` is current. Read these
+generated files directly; do not edit them.
 
 ## Propose, select, and progress work
 
@@ -87,12 +89,12 @@ checkpoint.
 ## Continue imported peer history
 
 Peer source history is already imported under refs such as
-`refs/atrex/shared/T2/e0001/head`. Keep or commit local work before switching, then use normal Git:
+`atrex/T2`. Keep or commit local work before switching, then use normal Git:
 
 ```bash
-git log --oneline --decorate refs/atrex/shared/T2/e0001/head
-git diff HEAD refs/atrex/shared/T2/e0001/head
-git switch -c explore/t2-e0001 refs/atrex/shared/T2/e0001/head
+git log --oneline --decorate atrex/T2
+git diff HEAD atrex/T2
+git switch -c explore/t2 atrex/T2
 ```
 
 Switching source does not establish correctness or performance; evaluate the resulting clean HEAD.

@@ -3,7 +3,7 @@
 Light stores measurement facts outside Agent drafts and recognizes identical tasks across
 Sessions and Episodes. The Experiment service owns source/request identity, private records,
 deduplication, and checkpoints. Evaluation owns plan/result semantics; Execution owns physical
-jobs. Journal annotations and promotion decisions are separate responsibilities.
+jobs. Research revisions and exact-commit submission review are separate central stores.
 
 ## Lifecycle
 
@@ -21,10 +21,16 @@ The Tool Runtime owns authorization and the enclosing deadline.
 
 ## Records and identity
 
-Campaign records live under
-`<workspace-parent>/.atrex-supervisor-runtime/<workspace-key>/measurements/`.
+Campaign records live under `<campaign-workspace>/measurements/`.
 The store includes a private identity key, Kernel snapshots, Gateway records with frozen
 inputs and repetition/job checkpoints, and task reservation indexes.
+
+The initial V0 full Evaluate is recorded here immediately, using the same
+request/source/result integrity envelope as later Evaluates. Its visibility is
+Supervisor-private and it is used only as reference evidence; it is not an
+accepted submission and does not enter the Pareto frontier or winner selection.
+New Campaigns have no separate V0/baseline store. Pre-MeasurementStore V0 files
+are read only for legacy migration.
 
 - `kernel_commit_id` is the full Git commit ID and binds the exact committed candidate artifact. For multi-file layouts this includes
   the complete serialized source snapshot, headers, and build settings, not only `kernel.py`.
@@ -64,8 +70,15 @@ ABBA accepts `--baseline-commit`; Runtime validates reachability and exports the
 Root `PROGRESS.md` returns observed
 per-shape minima from eligible passing full Evaluations, not a measured composite kernel.
 
-An Agent duplicate returns `duplicate_gateway_task` with an existing record reference
-and recovery guidance. In-progress duplicates instruct the caller to wait.
+In pooled search, each lineage sees its local Records, Records cited by the Direction/Experiment
+revisions currently visible to that lineage, and passing standard full Evaluates. Accepted submissions
+and selected winners therefore expose their complete Evaluate evidence automatically. There is no
+Agent operation for publishing arbitrary local Records; all trajectories read the same Campaign
+Measurement Store rather than receiving copied records.
+
+An exact completed duplicate reuses the existing validated Record and returns the same normal
+completed receipt without submitting another Agate task. Cache reuse is not exposed as an Agent
+error. In-progress duplicates still instruct the caller to wait because no terminal Record exists.
 Do not change labels or delete indexes to force a new random sample.
 
 ## Failure and recovery policy

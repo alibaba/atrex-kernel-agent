@@ -10,7 +10,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from aka.core.errors import CompositionError
 from aka.contracts.agent import AgentRuntimeCapabilities, NativeInvocation, TokenUsage
+from aka.contracts.content import SourceContent, WorkspaceFile
+from aka.contracts.problem import InitialSource
+from aka.contracts.workflow import CampaignRequest, ProblemSource, WorkflowSettings
 from aka.contracts.workspace import CandidateHandle
 from aka.light.agent.home import SESSION_HOME_ROOT_ENV, prepare_agent_environment
 from aka.light.agent.runtime.model import AgentRunRequest as RuntimeAgentRunRequest
@@ -20,10 +24,28 @@ from aka.light.experiment.frontier import (
     kernel_full_evaluation_evidence,
     kernel_pareto_frontier,
 )
-from aka.light.experiment.store import MeasurementStore
+from aka.light.experiment import records as experiment_records
+from aka.light.experiment.store import DuplicateTask, MeasurementStore
 from aka.light.research import ResearchStore
 from aka.light.runtime.server import _Handler, _journal_evidence_hint
-from aka.light.runtime.paths import supervisor_campaign_root
+from aka.light.runtime.paths import (
+    campaign_runtime_configuration,
+    initialize_campaign_root,
+    legacy_supervisor_campaign_root,
+    record_campaign_v0,
+    supervisor_campaign_base_root,
+    supervisor_campaign_root,
+    supervisor_measurement_root,
+    supervisor_research_library_root,
+    supervisor_submission_root,
+)
+from aka.light.workflow.submissions import (
+    accepted_submission_kernel_ids,
+    append_submission,
+    migrate_legacy_journals,
+    submissions,
+)
+from aka.light.workflow.store import CampaignStore
 from aka.light.runtime.request_errors import AgentRequestError
 from aka.light.runtime.request_feedback import augment_error, journal_schema
 from aka.light.runtime.server import RuntimeConfig, SupervisorRuntime
@@ -31,11 +53,11 @@ from aka.light.workflow.journal_service import (
     SupervisorJournalService,
     _progress_markdown,
     _shared_research,
-    _remove_stale_direction_projection,
-    copy_experiment_reference_archive,
     initialize_journal,
     load_journal,
     private_write,
+    publish_catalog_shared_research,
+    project_campaign_research_library,
     research_projection,
     shared_research_path,
     update_direction,
@@ -43,13 +65,24 @@ from aka.light.workflow.journal_service import (
 from aka.light.workflow.journal import JournalFactory
 from aka.light.workflow.models import SupervisorState
 from aka.light.workflow.bootstrap import Campaign
-from aka.light.workflow.claim_review import validate_review
+from aka.light.workflow.campaign import ManagedCampaign
+from aka.light.workflow.claim_review import canonical_review_quality, validate_review
 from aka.light.workflow.episode import LongHorizonCampaign
-from aka.light.workflow.search import PooledSearch, SearchOptions, read_state
+from aka.light.workflow.search import (
+    COORDINATOR_STATE,
+    PooledSearch,
+    SearchOptions,
+    lineage_state_path,
+    merge_lineage_state,
+    publication_import_path,
+    publication_path,
+    publication_source_root,
+    read_state,
+)
+from aka.light.workflow.provider import WorkflowOptions
 from aka.light.workflow.search_driver import (
     EpisodeSearchDriver,
     _aggregate_direction_queue,
-    _shareable_claim,
 )
 from aka.light.workflow.session import LongSessionRunner
 from aka.light.workspace.agent_git import (
@@ -60,8 +93,15 @@ from aka.light.workspace.auxiliary import AuxiliaryWorkspace
 from aka.light.workspace.episode import EpisodeWorkspace
 from aka.light.workspace.files import publish_if_changed
 from aka.light.workspace.provider import ManagedCandidateWorkspace
-from aka.light.workspace.shared_history import export_epoch, import_exports
+from aka.light.workspace.shared_history import (
+    export_publication,
+    import_exports_into_repository,
+)
 from aka.light.workspace.sources import default_tree, from_git, install, pack, snapshot
+from aka.light.workspace.sources.private_state import (
+    bind as bind_source_state,
+    read as read_source_state,
+)
 
 
 def _claim_review(verdict: str, findings: list[dict[str, object]]) -> dict[str, object]:
@@ -85,6 +125,725 @@ def _claim_finding(judgment: str, *, critical: bool) -> dict[str, object]:
         "reason": "The supplied evidence has the stated level of support.",
         "evidence": ["gateway-records/gateway-example/record.json"],
     }
+
+
+def _test_launch_composition(**overrides) -> dict[str, object]:
+    value = {
+        "lock_version": 2,
+        "profile": "light",
+        "variables_digest": "variables",
+        "core_version": "test",
+        "core_digest": "core",
+        "tokens": [],
+        "entries": [],
+    }
+    value.update(overrides)
+    return value
+
+
+def _test_source_binding(
+    source: bytes = b"def run():\n    return None\n",
+) -> dict[str, object]:
+    contract, _ = default_tree({"kernel.py": source})
+    return {"file_system": "source_tree", "contract": contract}
+
+
+def test_campaign_manifest_atomically_owns_launch_composition(tmp_path):
+    composition = _test_launch_composition(profile="light-sandbox")
+    root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="operator-a",
+        launch_composition=composition,
+        source=_test_source_binding(),
+    )
+
+    assert json.loads((root / "campaign.json").read_text()) == {
+        "schema_version": 3,
+        "layout": "atrex.light.campaign.v3",
+        "name": "operator-a",
+        "launch_composition": composition,
+        "source": _test_source_binding(),
+        "v0": None,
+        "runtime_configuration": None,
+    }
+    assert (root / "campaign.lock").is_file()
+    assert not (root / ".atrex_plugins").exists()
+    assert initialize_campaign_root(
+        root,
+        name="operator-a",
+        launch_composition=composition,
+        source=_test_source_binding(),
+    ) == root
+
+    with pytest.raises(CompositionError, match="core_digest: changed"):
+        initialize_campaign_root(
+            root,
+            name="operator-a",
+            launch_composition=_test_launch_composition(
+                profile="light-sandbox", core_digest="different"
+            ),
+            source=_test_source_binding(),
+        )
+    with pytest.raises(ValueError, match="source contract differs"):
+        initialize_campaign_root(
+            root,
+            name="operator-a",
+            launch_composition=composition,
+            source=_test_source_binding(b"def run():\n    return 3\n"),
+        )
+
+
+def test_campaign_manifest_owns_one_source_binding_for_every_lineage(tmp_path):
+    binding = _test_source_binding()
+    root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="operator-a",
+        launch_composition=_test_launch_composition(),
+        source=binding,
+    )
+    first = root / "lineages" / "t0001" / "agent-workspace"
+    second = root / "lineages" / "t0002" / "agent-workspace"
+    first.mkdir(parents=True)
+    second.mkdir(parents=True)
+
+    for workspace in (first, second):
+        bind_source_state(
+            workspace,
+            file_system=binding["file_system"],
+            contract=binding["contract"],
+        )
+        assert read_source_state(workspace) == (
+            binding["file_system"],
+            binding["contract"],
+        )
+
+    assert not (root / "source").exists()
+    assert not (root / "lineages" / "t0001" / "source").exists()
+    assert not (root / "lineages" / "t0002" / "source").exists()
+
+    different = _test_source_binding(b"def run():\n    return 2\n")
+    with pytest.raises(ValueError, match="source contract cannot change"):
+        bind_source_state(
+            first,
+            file_system=different["file_system"],
+            contract=different["contract"],
+        )
+
+
+def test_v2_campaign_migrates_matching_detached_source_into_manifest(tmp_path):
+    root = tmp_path / "campaign"
+    root.mkdir()
+    composition = _test_launch_composition()
+    binding = _test_source_binding()
+    (root / "campaign.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "layout": "atrex.light.campaign.v2",
+                "name": "operator-a",
+                "launch_composition": composition,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    detached = root / "lineages" / "t0001" / "source"
+    detached.mkdir(parents=True)
+    (detached / "file-system.json").write_text(
+        json.dumps({"schema_version": 1, "name": binding["file_system"]}) + "\n"
+    )
+    (detached / "source-contract.json").write_text(
+        json.dumps({"schema_version": 1, "contract": binding["contract"]}) + "\n"
+    )
+
+    initialize_campaign_root(
+        root,
+        name="operator-a",
+        launch_composition=composition,
+        source=binding,
+    )
+
+    manifest = json.loads((root / "campaign.json").read_text())
+    assert manifest["schema_version"] == 3
+    assert manifest["source"] == binding
+    assert not detached.exists()
+
+
+def test_managed_campaign_freezes_source_before_writing_manifest(monkeypatch, tmp_path):
+    composition = _test_launch_composition()
+    monkeypatch.setattr(
+        "aka.bootstrap.continuation.read",
+        lambda _environment: json.dumps({"identity": composition}),
+    )
+    request = CampaignRequest(
+        problem=ProblemSource(tmp_path / "problem"),
+        workspace=tmp_path / "campaign",
+        name="vector-add",
+        settings=WorkflowSettings(
+            platform="L20N",
+            framework="cuda",
+            optimization_mode="ultra",
+        ),
+    )
+    problem = SimpleNamespace(
+        initial_source=InitialSource(
+            kind="native",
+            entry=tmp_path / "input.py",
+            files=(),
+        ),
+        evaluation=SimpleNamespace(
+            runtime_root=tmp_path / "atrex-bench",
+            private_reference_dir=None,
+        ),
+    )
+
+    class SourceProvider:
+        def prepare(self, _request):
+            assert not (request.workspace / "campaign.json").exists()
+            return SourceContent(
+                (WorkspaceFile("kernel.py", text="def run():\n    return None\n"),)
+            )
+
+    workflow = SimpleNamespace(
+        candidate=ManagedCandidateWorkspace(),
+        source=SourceProvider(),
+        options=WorkflowOptions(search=None),
+        agent=SimpleNamespace(
+            options=SimpleNamespace(
+                sandbox="none", bwrap_executable="bwrap", read_only_paths=()
+            )
+        ),
+        problem=object(),
+        tool_runtime=object(),
+    )
+    evaluation = SimpleNamespace(
+        hardware="L20N",
+        profile="",
+        url="",
+        timeout=1200,
+        ssh="",
+        ssh_init="",
+        ssh_gpu=None,
+        health_command="",
+        verify_repeats=4,
+        evaluation_step_timeout=300,
+        shape_batch_size=10,
+        gpu_clock_mhz=None,
+        min_improvement_pct=0.0,
+    )
+
+    campaign = ManagedCampaign.create(request, problem, workflow, evaluation)
+
+    manifest = json.loads((request.workspace / "campaign.json").read_text())
+    assert manifest["schema_version"] == 3
+    assert manifest["source"]["file_system"] == "source_tree"
+    assert manifest["source"]["contract"]["editable_roots"] == [
+        "kernel.py",
+        "impl",
+    ]
+    assert manifest["v0"] is None
+    assert (request.workspace / "campaign.lock").is_file()
+    assert not (request.workspace / "initial-source").exists()
+    assert not (request.workspace / "source").exists()
+    assert campaign.workspace == (
+        request.workspace / "lineages" / "t0001" / "agent-workspace"
+    )
+
+
+def test_campaign_v0_identity_points_to_the_measurement_store_archive(tmp_path):
+    root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="operator-a",
+        launch_composition=_test_launch_composition(),
+        source=_test_source_binding(),
+    )
+    workspace = root / "lineages" / "t0001" / "agent-workspace"
+    workspace.mkdir(parents=True)
+    commit = "a" * 40
+    source = pack(
+        {"kernel.py": b"def run():\n    return None\n"},
+        _test_source_binding()["contract"],
+    )
+    identity = MeasurementStore(supervisor_measurement_root(workspace)).kernel(
+        source, commit
+    )
+
+    record_campaign_v0(
+        workspace,
+        kernel_commit_id=commit,
+        kernel_artifact_digest=identity["kernel_artifact_digest"],
+    )
+    # Recording the same immutable identity is idempotent.
+    record_campaign_v0(
+        workspace,
+        kernel_commit_id=commit,
+        kernel_artifact_digest=identity["kernel_artifact_digest"],
+    )
+
+    manifest = json.loads((root / "campaign.json").read_text())
+    assert manifest["v0"] == {
+        "kernel_commit_id": commit,
+        "kernel_artifact_digest": identity["kernel_artifact_digest"],
+    }
+    assert (
+        root / "measurements" / "kernels" / commit / "kernel.py"
+    ).read_bytes() == source
+    assert not (root / "initial-source").exists()
+
+    other = MeasurementStore(supervisor_measurement_root(workspace)).kernel(
+        source, "b" * 40
+    )
+    with pytest.raises(ValueError, match="V0 identity cannot change"):
+        record_campaign_v0(
+            workspace,
+            kernel_commit_id="b" * 40,
+            kernel_artifact_digest=other["kernel_artifact_digest"],
+        )
+
+
+def test_detached_runtime_configuration_is_read_only_compatibility(tmp_path):
+    workspace = tmp_path / "legacy-workspace"
+    workspace.mkdir()
+    legacy_root = legacy_supervisor_campaign_root(workspace)
+    legacy_root.mkdir(parents=True)
+    detached = legacy_root / "runtime-config.json"
+    detached.write_text(
+        json.dumps({"hardware": "L20D", "optimization_mode": "ultra"}) + "\n",
+        encoding="utf-8",
+    )
+    before = detached.read_bytes()
+
+    assert campaign_runtime_configuration(workspace) == {
+        "hardware": "L20D",
+        "optimization_mode": "ultra",
+    }
+    assert detached.read_bytes() == before
+
+
+def test_campaign_manifest_without_runtime_snapshot_is_accepted(tmp_path):
+    root = tmp_path / "older-campaign"
+    root.mkdir()
+    composition = _test_launch_composition()
+    (root / "campaign.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "layout": "atrex.light.campaign.v2",
+                "name": "operator-a",
+                "launch_composition": composition,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert initialize_campaign_root(
+        root,
+        name="operator-a",
+        launch_composition=composition,
+        source=_test_source_binding(),
+    ) == root
+    assert campaign_runtime_configuration(root) is None
+    migrated = json.loads((root / "campaign.json").read_text())
+    assert migrated["schema_version"] == 3
+    assert migrated["source"] == _test_source_binding()
+
+
+def test_new_campaign_rejects_detached_composition_directory(tmp_path):
+    root = tmp_path / "campaign"
+    (root / ".atrex_plugins").mkdir(parents=True)
+
+    with pytest.raises(ValueError, match="must be empty"):
+        initialize_campaign_root(
+            root,
+            name="operator-a",
+            launch_composition=_test_launch_composition(),
+            source=_test_source_binding(),
+        )
+
+
+def test_existing_campaign_rejects_detached_composition_authority(tmp_path):
+    root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="operator-a",
+        launch_composition=_test_launch_composition(),
+        source=_test_source_binding(),
+    )
+    detached = root / ".atrex_plugins" / "composition.json"
+    detached.parent.mkdir()
+    detached.write_text("{}\n")
+
+    with pytest.raises(ValueError, match="must live only in campaign.json"):
+        initialize_campaign_root(
+            root,
+            name="operator-a",
+            launch_composition=_test_launch_composition(),
+            source=_test_source_binding(),
+        )
+
+
+def test_legacy_review_quality_names_are_projected_with_unambiguous_meaning():
+    assert canonical_review_quality("not_reviewed") == "review_not_requested"
+    assert canonical_review_quality("unreviewed") == "review_unavailable"
+    assert canonical_review_quality("supported") == "supported"
+
+
+def test_completed_exact_gateway_task_reuses_normal_record_response(
+    monkeypatch, tmp_path
+):
+    record_id = "gateway-" + "a" * 32
+    cached = {
+        "exit_code": 0,
+        "stdout": "completed\n",
+        "stderr": "",
+        "agent_result": {
+            "operation": "dev",
+            "status": "completed",
+            "gateway_record_id": record_id,
+            "result": {"exit_code": 0},
+        },
+    }
+
+    class Store:
+        identity_key = b"test-identity"
+
+        @staticmethod
+        def reserve(*_args, **_kwargs):
+            raise DuplicateTask(record_id)
+
+        @staticmethod
+        def read(requested_record_id):
+            assert requested_record_id == record_id
+            return {"response": cached}
+
+    evaluation = SimpleNamespace(
+        prepare=lambda *_args, **_kwargs: SimpleNamespace(
+            request={"operation": "dev"},
+            inputs={},
+            repetitions=1,
+            runtime_pins={},
+        )
+    )
+    effects = SimpleNamespace(
+        mode="fast",
+        repetitions=1,
+        kernel_ids={},
+        deadline=None,
+        request_id="",
+    )
+    monkeypatch.setattr(
+        "aka.light.workspace.sources.measurement_artifacts",
+        lambda _request, _inputs: {},
+    )
+
+    result = experiment_records.execute(
+        Store(),
+        evaluation,
+        effects,
+        tmp_path,
+        SimpleNamespace(),
+        [],
+        {},
+        [],
+    )
+
+    assert result == {**cached, "reused": True}
+    assert "duplicate_gateway_task" not in json.dumps(result)
+    assert "previous_gateway_record_id" not in json.dumps(result)
+
+
+def test_v0_is_recorded_once_in_campaign_measurements_without_baseline_store(
+    monkeypatch, tmp_path
+):
+    campaign_root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="v0-measurement",
+        launch_composition=_test_launch_composition(),
+        source=_test_source_binding(),
+    )
+    workspace = campaign_root / "lineages" / "t0001" / "agent-workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "kernel.py").write_text("class Model:\n    pass\n")
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "test"], cwd=workspace, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "kernel.py"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "V0 source"], cwd=workspace, check=True
+    )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    result = {
+        "all_pass": True,
+        "latency_us_geomean": 1.0,
+        "latency_us_arith_mean": 1.1,
+        "latency_us_by_shape": {"0": 1.0},
+        "performance_objective": "latency_us_geomean",
+    }
+    calls = []
+
+    def execute_v0(*_args, **kwargs):
+        calls.append(kwargs)
+        state = kwargs["job_root"] / "jobs" / "ev_v0" / "state.json"
+        state.parent.mkdir(parents=True)
+        state.write_text(
+            json.dumps({"process": {"stdout": json.dumps({"job_id": "ev_v0"})}})
+        )
+        return subprocess.CompletedProcess(
+            ["python", "test_kernel.py"],
+            0,
+            "[test_kernel] RESULT_JSON=" + json.dumps(result) + "\n",
+            "",
+        )
+
+    monkeypatch.setattr("aka.light.workflow.bootstrap._sandbox_command", execute_v0)
+    campaign = SimpleNamespace(
+        workspace=workspace,
+        sandbox_hardware="L20N",
+        sandbox_profile="",
+        sandbox_url="",
+        sandbox_timeout=900,
+        sandbox_ssh="",
+        sandbox_ssh_init="",
+        sandbox_health_command="",
+        private_reference_dir=None,
+        evaluation_step_timeout=300,
+        gpu_clock_mhz=None,
+        _print_v0_evaluator_output=lambda _process: None,
+        _generalized_memory_coverage_problem=lambda _memory: None,
+    )
+
+    measured = Campaign._run_v0_evaluator(campaign, commit)
+    Campaign._finalize_v0_measurement(campaign, measured, commit)
+    assert measured == result
+    assert len(calls) == 1
+    assert calls[0]["terminal_validation"] is True
+    assert calls[0]["job_root"].is_relative_to(
+        campaign_root / "measurements" / "records"
+    )
+    assert not (campaign_root / "baseline").exists()
+    assert not (workspace / "memory" / "v0.json").exists()
+    assert not (workspace / ".atrex_versions" / "v0.json").exists()
+
+    from aka.light.workspace.baseline import read_baseline_record
+
+    summary = read_baseline_record(workspace)
+    assert summary["git_commit_hash"] == commit
+    assert summary["gateway_record_id"].startswith("gateway-")
+    assert summary["backend_job_ids"] == ["ev_v0"]
+    record = MeasurementStore(supervisor_measurement_root(workspace)).read(
+        summary["gateway_record_id"]
+    )
+    assert record["request"]["visibility"] == "supervisor_private_v0"
+    assert record["response"]["agent_result"]["result"]["correct"] is True
+    archived = record["kernels"]["candidate"]
+    manifest = json.loads((campaign_root / "campaign.json").read_text())
+    assert manifest["v0"] == {
+        "kernel_commit_id": commit,
+        "kernel_artifact_digest": archived["kernel_artifact_digest"],
+    }
+    assert not (campaign_root / "initial-source").exists()
+
+    # Restart/recovery reuses the same canonical Record and submits no GPU job.
+    measured_again = Campaign._run_v0_evaluator(campaign, commit)
+    assert measured_again["all_pass"] is True
+    assert len(calls) == 1
+
+
+def test_rejected_v0_remains_a_failed_measurement_not_a_baseline_file(
+    monkeypatch, tmp_path
+):
+    campaign_root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="rejected-v0",
+        launch_composition=_test_launch_composition(),
+        source=_test_source_binding(),
+    )
+    workspace = campaign_root / "lineages" / "t0001" / "agent-workspace"
+    workspace.mkdir(parents=True)
+    (workspace / "kernel.py").write_text("class Model:\n    pass\n")
+    subprocess.run(["git", "init", "-q"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "config", "user.name", "test"], cwd=workspace, check=True
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=workspace,
+        check=True,
+    )
+    subprocess.run(["git", "add", "kernel.py"], cwd=workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-qm", "V0 source"], cwd=workspace, check=True
+    )
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=workspace,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    failed = {"all_pass": False, "failures": ["shape 0 mismatch"]}
+    monkeypatch.setattr(
+        "aka.light.workflow.bootstrap._sandbox_command",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess(
+            ["python", "test_kernel.py"],
+            1,
+            "[test_kernel] RESULT_JSON=" + json.dumps(failed) + "\n",
+            "",
+        ),
+    )
+    campaign = SimpleNamespace(
+        workspace=workspace,
+        sandbox_hardware="L20N",
+        sandbox_profile="",
+        sandbox_url="",
+        sandbox_timeout=900,
+        sandbox_ssh="",
+        sandbox_ssh_init="",
+        sandbox_health_command="",
+        private_reference_dir=None,
+        evaluation_step_timeout=300,
+        gpu_clock_mhz=None,
+        _print_v0_evaluator_output=lambda _process: None,
+    )
+
+    with pytest.raises(RuntimeError, match="V0 Evaluate failed"):
+        Campaign._run_v0_evaluator(campaign, commit)
+
+    from aka.light.workspace.baseline import read_baseline_record
+
+    store = MeasurementStore(supervisor_measurement_root(workspace))
+    record_ids = store.record_ids()
+    assert len(record_ids) == 1
+    record = store.read(record_ids[0])
+    # A deterministic correctness rejection is terminal reusable evidence; it
+    # is still excluded from the passing V0 reference lookup below.
+    assert record["cacheable"] is True
+    assert record["response"]["agent_result"]["result"]["correct"] is False
+    assert read_baseline_record(workspace) is None
+    assert not (campaign_root / "baseline").exists()
+
+
+def test_campaign_research_catalog_sync_watermark_and_async_head(tmp_path):
+    catalog_root = tmp_path / "research-catalog"
+    catalog = ResearchStore(catalog_root / "events")
+    direction_id = "direction_" + "a" * 32
+
+    def observe(revision: int, objective: str):
+        return catalog.observe_direction(
+            {
+                "direction_id": direction_id,
+                "revision": revision,
+                "name": "persistent redesign",
+                "change_scope": "major_redesign",
+                "objective": objective,
+                "applicability": "all measured regimes",
+                "expected_benefit": "material full-workload improvement",
+                "plan": ["implement", "measure"],
+                "stop_conditions": [],
+                "status": "in_progress",
+                "owner_lineage": "T1",
+                "access": "local_writable",
+            },
+            origin={"epoch": 1, "trajectory": 1, "episode": 1},
+        )
+
+    first = observe(1, "revision one")
+    watermark = first["sequence"]
+    observe(2, "revision two")
+
+    synchronous = tmp_path / "synchronous"
+    synchronous.mkdir()
+    project_campaign_research_library(
+        catalog_root=catalog_root,
+        workspace=synchronous,
+        trajectory=2,
+        synchronization="synchronous",
+        peer_through_sequence=watermark,
+    )
+    sync_latest = json.loads(
+        (
+            synchronous / "research-library" / "directions" / direction_id
+            / "v1" / "direction.json"
+        ).read_text()
+    )
+    assert sync_latest["revision"] == 1
+    assert sync_latest["owner_lineage"] == "T1"
+    assert sync_latest["access"] == "peer_read_only"
+    assert not (synchronous / "research-library" / "manifest.json").exists()
+    assert not (
+        synchronous / "research-library" / "directions" / direction_id / "latest.json"
+    ).exists()
+
+    observe(3, "revision three")
+    project_campaign_research_library(
+        catalog_root=catalog_root,
+        workspace=synchronous,
+        trajectory=2,
+        synchronization="synchronous",
+        peer_through_sequence=watermark,
+    )
+    assert json.loads(
+        (
+            synchronous / "research-library" / "directions" / direction_id
+            / "v1" / "direction.json"
+        ).read_text()
+    )["revision"] == 1
+    assert not (
+        synchronous / "research-library" / "directions" / direction_id / "v2"
+    ).exists()
+    canonical_latest = json.loads(
+        (
+            tmp_path / "research-library" / "directions" / direction_id
+            / "v3" / "direction.json"
+        ).read_text()
+    )
+    assert canonical_latest["revision"] == 3
+    assert canonical_latest["owner_lineage"] == "T1"
+
+    # Agent copies are disposable.  A native (non-bwrap) Agent can alter one,
+    # but the next Runtime projection repairs it from Campaign authority.
+    projected = (
+        synchronous / "research-library" / "directions" / direction_id
+        / "v1" / "direction.json"
+    )
+    projected.write_text('{"tampered": true}\n')
+    project_campaign_research_library(
+        catalog_root=catalog_root,
+        workspace=synchronous,
+        trajectory=2,
+        synchronization="synchronous",
+        peer_through_sequence=watermark,
+    )
+    assert json.loads(projected.read_text())["revision"] == 1
+
+    asynchronous = tmp_path / "asynchronous"
+    asynchronous.mkdir()
+    project_campaign_research_library(
+        catalog_root=catalog_root,
+        workspace=asynchronous,
+        trajectory=2,
+        synchronization="asynchronous",
+    )
+    async_latest = json.loads(
+        (
+            asynchronous / "research-library" / "directions" / direction_id
+            / "v3" / "direction.json"
+        ).read_text()
+    )
+    assert async_latest["revision"] == 3
+    assert async_latest["owner_lineage"] == "T1"
 
 
 def test_claim_review_verdict_ignores_noncritical_limitations():
@@ -397,6 +1156,7 @@ def test_direction_only_review_receives_direct_gateway_records(tmp_path):
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("directions",),
         claim_reviewer=reviewer,
     )
     result = service.execute({
@@ -507,6 +1267,7 @@ def test_derived_direction_review_resolves_experiment_gateway_records(tmp_path):
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("directions", "experiments"),
         claim_reviewer=reviewer,
     )
     source = service.execute({
@@ -616,6 +1377,7 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("directions", "experiments"),
     )
 
     proposed = service.execute({
@@ -632,7 +1394,7 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
     })
     direction_id = proposed["direction_id"]
     assert proposed["archive_path"] == (
-        f"directions/proposed/{direction_id}.json"
+        f"research-library/directions/{direction_id}/v0/direction.json"
     )
     started = service.execute({
         "operation": "direction_update",
@@ -643,7 +1405,7 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
         },
     })
     assert started["archive_path"] == (
-        f"directions/in_progress/{direction_id}.json"
+        f"research-library/directions/{direction_id}/v1/direction.json"
     )
     (workspace / "scratch" / "probe.md").parent.mkdir(parents=True)
     (workspace / "scratch" / "probe.md").write_text("probe evidence\n", encoding="utf-8")
@@ -670,12 +1432,13 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
         {"shape_a": 12.5, "shape_b": 8.25},
         kernel_commit_id=second_commit,
     )
-    journal = load_journal(evidence / "journal.json")
-    journal["kernel_submissions"].append({
+    append_submission(tmp_path / "scope" / "submissions", {
+        "submission_id": "submission-" + "1" * 32,
+        "lineage": "T1",
+        "episode": 1,
         "accepted": True,
         "kernel_commit_id": pareto_kernel_commit_id,
     })
-    private_write(evidence / "journal.json", journal)
     unsubmitted_source = b"def kernel():\n    return 3\n"
     (workspace / "kernel.py").write_bytes(unsubmitted_source)
     unsubmitted_commit = agent_git.checkpoint("faster but unsubmitted Kernel")
@@ -698,26 +1461,28 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
     })
     experiment_id = recorded["experiment_id"]
     assert recorded["archive_path"] == (
-        f"experiments/{experiment_id}/experiment.json"
+        f"research-library/experiments/{experiment_id}/v1/experiment.json"
     )
-    stored_experiment = load_journal(evidence / "journal.json")["experiments"][0]
+    stored_experiment = ResearchStore(tmp_path / "research").read()["experiments"][
+        experiment_id
+    ]
     assert set(stored_experiment) == {
         "experiment_id", "sequence", "name", "intent", "gateway_record_ids",
         "interpretation", "direction_id", "references", "revision",
-        "reference_revision",
+        "reference_revision", "owner_lineage", "access", "origin",
     }
 
     direction = json.loads(
-        (workspace / "directions" / "in_progress" / f"{direction_id}.json").read_text()
+        (workspace / started["archive_path"]).read_text()
     )
     experiment = json.loads(
-        (workspace / "experiments" / experiment_id / "experiment.json").read_text()
+        (workspace / recorded["archive_path"]).read_text()
     )
     gateway = json.loads(
         (workspace / "records" / f"{record_id}.json").read_text()
     )
     assert direction["status"] == "in_progress"
-    assert direction["proposed_by"] == "T1"
+    assert direction["owner_lineage"] == "T1"
     assert direction["access"] == "local_writable"
     assert direction["applicability"] == (
         "Long-context attention shapes on the target GPU."
@@ -727,45 +1492,51 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
     )
     assert "completed_plan_steps" not in direction
     assert "next_step" not in direction
-    assert direction["local_rank"] == 1
     assert "associated_experiment_ids" not in direction
     assert experiment["direction_id"] == direction_id
-    assert experiment["recorded_by"] == "T1"
+    assert experiment["owner_lineage"] == "T1"
     assert experiment["access"] == "local_writable"
     assert set(experiment) == {
         "experiment_id", "name", "intent", "gateway_record_ids", "interpretation",
-        "direction_id", "references", "revision", "recorded_by", "access",
+        "direction_id", "references", "revision", "owner_lineage", "access",
     }
-    assert not (workspace / "experiments" / "index.json").exists()
     archived_probe = (
-        workspace / "experiments" / experiment_id / "references" / "scratch" / "probe.md"
+        workspace / "research-library" / "experiments" / experiment_id
+        / "v1" / "references" / "scratch" / "probe.md"
     )
     archived_result = (
-        workspace / "experiments" / experiment_id / "references"
+        workspace / "research-library" / "experiments" / experiment_id / "v1" / "references"
         / "scratch" / "analysis" / "result.json"
     )
     archived_empty = (
-        workspace / "experiments" / experiment_id / "references"
+        workspace / "research-library" / "experiments" / experiment_id / "v1" / "references"
         / "scratch" / "analysis" / "empty"
     )
     assert experiment["references"] == [
-        f"experiments/{experiment_id}/references/scratch/probe.md",
-        f"experiments/{experiment_id}/references/scratch/analysis",
+        f"research-library/experiments/{experiment_id}/v1/references/scratch/probe.md",
+        f"research-library/experiments/{experiment_id}/v1/references/scratch/analysis",
     ]
     assert archived_probe.read_text() == "probe evidence\n"
     assert json.loads(archived_result.read_text()) == {"winner": "ksplit2"}
     assert archived_empty.is_dir()
-    copied_journals = tmp_path / "copied" / "journals"
-    copy_experiment_reference_archive(journals, copied_journals, experiment_id)
     assert (
-        copied_journals / "experiment-archives" / experiment_id
-        / "files" / "scratch" / "probe.md"
+        service.research_library_root / "experiments"
+        / experiment_id / "v1" / "references" / "scratch" / "probe.md"
     ).read_text() == "probe evidence\n"
+    assert (
+        service.research_library_root / "experiments"
+        / experiment_id / "v1" / ".references.json"
+    ).is_file()
+    assert not (
+        workspace / "research-library" / "experiments" / experiment_id
+        / "v1" / ".references.json"
+    ).exists()
+    assert not (service.research_catalog_root / "archives").exists()
     assert gateway["gateway_record_id"] == record_id
     assert gateway["kernel_commit_id"] == kernel_id
     assert "kernel_id" not in gateway
     assert "request" not in gateway and "inputs" not in gateway
-    assert not (workspace / "experiments" / experiment_id / "records").exists()
+    assert not (workspace / "research-library" / "experiments" / experiment_id / "records").exists()
 
     service.publish_research_files()
     progress = (workspace / "PROGRESS.md").read_text()
@@ -814,14 +1585,12 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
     assert frontier["best_full_evaluation"]["kernel_commit_id"] == pareto_kernel_commit_id
 
     # Recovery rebuilds deleted convenience files from authoritative stores.
-    (workspace / "directions" / "in_progress" / f"{direction_id}.json").unlink()
+    (workspace / started["archive_path"]).unlink()
     (workspace / "records" / f"{record_id}.json").unlink()
     (workspace / "scratch" / "probe.md").write_text("mutated later\n", encoding="utf-8")
     archived_probe.unlink()
     service.publish_research_files()
-    assert (
-        workspace / "directions" / "in_progress" / f"{direction_id}.json"
-    ).is_file()
+    assert (workspace / started["archive_path"]).is_file()
     assert (workspace / "records" / f"{record_id}.json").is_file()
     assert archived_probe.read_text() == "probe evidence\n"
 
@@ -844,6 +1613,7 @@ def test_local_experiment_can_be_revised_without_losing_audit_or_references(tmp_
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("experiments",),
     )
     (workspace / "scratch").mkdir()
     (workspace / "scratch" / "note.txt").write_text("revision one\n")
@@ -873,27 +1643,29 @@ def test_local_experiment_can_be_revised_without_losing_audit_or_references(tmp_
         "status": "updated",
         "experiment_id": experiment_id,
         "revision": 2,
-        "archive_path": f"experiments/{experiment_id}/experiment.json",
+        "archive_path": (
+            f"research-library/experiments/{experiment_id}/v2/experiment.json"
+        ),
     }
-    journal = load_journal(evidence / "journal.json")
-    assert len(journal["experiments"]) == 1
-    stored = journal["experiments"][0]
+    research = ResearchStore(tmp_path / "research")
+    stored = research.read()["experiments"][experiment_id]
     assert stored["revision"] == 2
     assert stored["sequence"] == 1
     assert stored["references"] == [
-        f"experiments/{experiment_id}/references/scratch/note.txt"
+        f"research-library/experiments/{experiment_id}/v1/references/scratch/note.txt"
     ]
     assert stored["reference_revision"] == 1
     projected = json.loads(
-        (workspace / "experiments" / experiment_id / "experiment.json").read_text()
+        (workspace / revised["archive_path"]).read_text()
     )
     assert projected["revision"] == 2
     assert projected["interpretation"].startswith("The measured implementation")
     assert "reference_revision" not in projected
     assert (
-        workspace / "experiments" / experiment_id / "references" / "scratch" / "note.txt"
+        workspace / "research-library" / "experiments" / experiment_id
+        / "v2" / "references" / "scratch" / "note.txt"
     ).read_text() == "revision one\n"
-    assert len(list((evidence / "claim-audit").glob("*/submission.json"))) == 2
+    assert not (evidence / "claim-audit").exists()
 
     (workspace / "scratch" / "note.txt").write_text("revision three\n")
     replaced = service.execute({
@@ -907,16 +1679,12 @@ def test_local_experiment_can_be_revised_without_losing_audit_or_references(tmp_
         },
     })
     assert replaced["revision"] == 3
-    assert load_journal(evidence / "journal.json")["experiments"][0][
-        "reference_revision"
-    ] == 3
+    assert research.read()["experiments"][experiment_id]["reference_revision"] == 3
     assert (
-        workspace / "experiments" / experiment_id / "references" / "scratch" / "note.txt"
+        workspace / "research-library" / "experiments" / experiment_id
+        / "v3" / "references" / "scratch" / "note.txt"
     ).read_text() == "revision three\n"
 
-    finalized = load_journal(evidence / "journal.json")
-    finalized.update(state="pivot", finalized_at="2026-11-04T00:00:00+00:00")
-    private_write(evidence / "journal.json", finalized)
     next_evidence = journals / "episodes" / "e00000002"
     next_evidence.mkdir()
     initialize_journal(
@@ -942,9 +1710,9 @@ def test_local_experiment_can_be_revised_without_losing_audit_or_references(tmp_
         },
     })
     assert cross_episode["revision"] == 4
-    assert len(load_journal(next_evidence / "journal.json")["experiments"]) == 1
+    assert research.read()["experiments"][experiment_id]["revision"] == 4
     assert json.loads(
-        (workspace / "experiments" / experiment_id / "experiment.json").read_text()
+        (workspace / cross_episode["archive_path"]).read_text()
     )["revision"] == 4
 
 
@@ -966,6 +1734,7 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("directions",),
     )
     proposed = service.execute({
         "operation": "direction_update",
@@ -980,7 +1749,7 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
         },
     })
     direction_id = proposed["direction_id"]
-    assert proposed["revision"] == 1
+    assert proposed["revision"] == 0
     service.execute({
         "operation": "direction_update",
         "request": {
@@ -1011,12 +1780,16 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
         "status": "updated",
         "direction_id": direction_id,
         "revision": 2,
-        "archive_path": f"directions/in_progress/{direction_id}.json",
+        "archive_path": f"research-library/directions/{direction_id}/v2/direction.json",
     }
-    events = load_journal(evidence / "journal.json")["direction_events"]
-    assert [event["action"] for event in events] == ["propose", "start", "revise"]
+    events = [
+        event
+        for event in ResearchStore(tmp_path / "research").events()
+        if event["type"] == "direction.observed"
+    ]
+    assert [event["payload"]["direction"]["revision"] for event in events] == [0, 1, 2]
     projected = json.loads(
-        (workspace / "directions" / "in_progress" / f"{direction_id}.json").read_text()
+        (workspace / revised["archive_path"]).read_text()
     )
     assert projected["revision"] == 2
     assert projected["objective"].endswith("workload regimes.")
@@ -1025,7 +1798,7 @@ def test_open_local_direction_can_be_revised_with_stable_identity(tmp_path):
     assert projected["status"] == "in_progress"
     assert "completed_plan_steps" not in projected
     assert "next_step" not in projected
-    assert len(list((evidence / "claim-audit").glob("*/submission.json"))) == 3
+    assert not (evidence / "claim-audit").exists()
 
     service.execute({
         "operation": "direction_update",
@@ -1214,7 +1987,7 @@ def test_missing_claim_revision_ids_return_repairable_guidance(tmp_path):
         })
     direction_error = missing_direction.value.response["error"]
     assert direction_error["code"] == "direction_not_found"
-    assert "directions/<status>/" in direction_error["next_action"]
+    assert "research-library/directions/" in direction_error["next_action"]
     assert "action=propose" in direction_error["next_action"]
 
     with pytest.raises(AgentRequestError) as missing_experiment:
@@ -1229,7 +2002,7 @@ def test_missing_claim_revision_ids_return_repairable_guidance(tmp_path):
         })
     experiment_error = missing_experiment.value.response["error"]
     assert experiment_error["code"] == "experiment_not_found"
-    assert "experiments/" in experiment_error["next_action"]
+    assert "research-library/experiments/" in experiment_error["next_action"]
     assert "omit experiment_id" in experiment_error["next_action"]
 
 
@@ -1300,14 +2073,38 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
         },
     })
     direction_id = proposed["direction_id"]
-    assert proposed["archive_path"] == f"directions/proposed/{direction_id}.json"
+    assert proposed["archive_path"] == (
+        f"research-library/directions/{direction_id}/v0/direction.json"
+    )
     assert "review" not in proposed
     projected_draft = json.loads(
         (workspace / proposed["archive_path"]).read_text()
     )
-    assert projected_draft["claim_review_quality"] == "not_reviewed"
+    assert projected_draft["claim_review_quality"] == "review_not_requested"
     assert "review_path" not in proposed
-    assert not list((workspace / "directions").rglob("*.review.json"))
+    assert not list((workspace / "research-library").rglob("*.review.json"))
+
+    revised_draft = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "revise",
+            "direction_id": direction_id,
+            "name": "Split KV architecture family",
+            "change_scope": "major_redesign",
+            "objective": "Explore a bounded split-KV architecture family.",
+            "applicability": "Long-context attention shapes.",
+            "expected_benefit": "Reduce end-to-end latency.",
+            "plan": ["Compile a bounded probe", "Compare viable split factors"],
+        },
+    })
+    assert revised_draft["archive_path"] == proposed["archive_path"]
+    assert revised_draft["revision"] == 0
+    assert "review" not in revised_draft
+    projected_draft = json.loads(
+        (workspace / revised_draft["archive_path"]).read_text()
+    )
+    assert projected_draft["name"] == "Split KV architecture family"
+    assert projected_draft["claim_review_quality"] == "review_not_requested"
 
     started = service.execute({
         "operation": "direction_update",
@@ -1317,12 +2114,22 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
             "analysis": "This is the highest-value unresolved path.",
         },
     })
+    assert started["archive_path"] == (
+        f"research-library/directions/{direction_id}/v1/direction.json"
+    )
     assert started["review"]["archive_status"] == "archived"
     assert started["review"]["evidence_eligible"] is True
     assert started["review"]["claim_review_quality"] == "supported"
     assert "evidence_manifest" not in started["review"]
     assert "_review_session_audit" not in started["review"]
     assert "session_audit" not in started["review"]
+    reviewed_direction = json.loads(
+        (workspace / started["archive_path"]).read_text()
+    )
+    assert reviewed_direction["status"] == "in_progress"
+    assert reviewed_direction["claim_review_quality"] == "supported"
+    assert projected_draft["status"] == "proposed"
+    assert projected_draft["claim_review_quality"] == "review_not_requested"
     recorded = service.execute({
         "operation": "experiment_record",
         "request": {
@@ -1333,7 +2140,7 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
     })
     experiment_id = recorded["experiment_id"]
     assert recorded["archive_path"] == (
-        f"experiments/{experiment_id}/experiment.json"
+        f"research-library/experiments/{experiment_id}/v1/experiment.json"
     )
     assert "review_path" not in recorded
     assert "evidence_manifest" not in recorded["review"]
@@ -1345,41 +2152,33 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
         "Keep the Direction active unless its objective, planned variants, and stop "
         "conditions are genuinely exhausted."
     )
-    assert not (workspace / "experiments" / experiment_id / "review.json").exists()
+    assert not (
+        workspace / "research-library" / "experiments" / experiment_id / "v1" / "review.json"
+    ).exists()
     assert len(reviewed_targets) == 2
-    audit_outcomes = [
-        json.loads(path.read_text())
-        for path in (evidence / "claim-audit").glob("*/outcome.json")
-    ]
-    assert len(audit_outcomes) == 3
-    assert {item["status"] for item in audit_outcomes} == {"archived"}
-    reviewed_outcomes = [
-        item for item in audit_outcomes if "review" in item.get("result", {})
-    ]
-    assert len(reviewed_outcomes) == 2
-    assert all(item["result"]["review"]["claim_review_quality"] == "supported"
-               for item in reviewed_outcomes)
+    library = supervisor_research_library_root(workspace)
     private_reviews = [
         json.loads(path.read_text())
-        for path in (evidence / "claim-reviews").glob("review_*.json")
+        for path in (
+            library / "directions" / direction_id / "v1" / "review"
+        ).glob("result.json")
+    ] + [
+        json.loads(path.read_text())
+        for path in (
+            library / "experiments" / experiment_id / "v1" / "review"
+        ).glob("result.json")
     ]
     assert len(private_reviews) == 2
+    assert all(
+        row["review"]["claim_review_quality"] == "supported"
+        for row in private_reviews
+    )
     assert {
-        row["session_audit"]["attempts"][0]["session_id"]
+        row["review"]["session_audit"]["attempts"][0]["session_id"]
         for row in private_reviews
     } == {"review-session-1", "review-session-2"}
-    audit_links = [
-        json.loads(path.read_text())
-        for path in (evidence / "claim-audit").glob("*/review.json")
-    ]
-    assert len(audit_links) == 2
-    assert all(
-        row["review_archive_path"].startswith("claim-reviews/review_")
-        and row["session_audit"]["attempts"][0]["conversation_path"].endswith(
-            "/conversation.jsonl"
-        )
-        for row in audit_links
-    )
+    assert not (evidence / "claim-reviews").exists()
+    assert not (evidence / "claim-review-index").exists()
 
 
 def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
@@ -1453,7 +2252,12 @@ def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
         _run_session=run_session,
         _account=lambda _result, _label: None,
     )
-    review = Campaign.review_research_claim(campaign, bundle)
+    archive_root = evidence / "review"
+    review = Campaign.review_research_claim(
+        campaign,
+        bundle,
+        archive_root=archive_root,
+    )
 
     audit = review.pop("_review_session_audit")
     assert review == valid_review
@@ -1462,15 +2266,18 @@ def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
         "provider-session-1", "provider-session-2"
     ]
     for row in audit["attempts"]:
-        conversation = evidence / row["conversation_path"]
-        token_usage = evidence / row["token_usage_path"]
+        conversation = archive_root / row["conversation_path"]
+        token_usage = archive_root / row["token_usage_path"]
         assert conversation.is_file()
         assert conversation.name == "conversation.jsonl"
         assert token_usage.is_file()
         assert token_usage.name == "token-usage.json"
 
     resumed_review = Campaign.review_research_claim(
-        campaign, bundle, resume_session_id="provider-session-2"
+        campaign,
+        bundle,
+        resume_session_id="provider-session-2",
+        archive_root=archive_root,
     )
     resumed_audit = resumed_review.pop("_review_session_audit")
     assert resumed_review == valid_review
@@ -1498,6 +2305,7 @@ def test_experiment_only_review_does_not_invent_direction_status(tmp_path):
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("experiments",),
         claim_reviewer=lambda _root: _claim_review(
             "supported",
             [_claim_finding("supported", critical=True)],
@@ -1719,8 +2527,12 @@ def test_unsupported_research_claims_are_not_archived(tmp_path):
     assert response["error"]["review"]["claim_review_quality"] == "unsupported"
     assert "evidence_manifest" not in response["error"]["review"]
     assert "will not be archived" in response["error"]["review"]["runtime_action"]
-    direction_events = load_journal(evidence / "journal.json")["direction_events"]
-    assert [event["action"] for event in direction_events] == ["propose"]
+    direction_events = [
+        event
+        for event in ResearchStore(tmp_path / "research").events()
+        if event["type"] == "direction.observed"
+    ]
+    assert [event["payload"]["direction"]["revision"] for event in direction_events] == [0]
     assert (workspace / proposed["archive_path"]).is_file()
 
     experiment_evidence = journals / "episodes" / "e00000002"
@@ -1737,6 +2549,7 @@ def test_unsupported_research_claims_are_not_archived(tmp_path):
         campaign_root=journals,
         evidence_root=experiment_evidence,
         research_root=tmp_path / "experiment-research",
+        tool_modules=("experiments",),
         claim_reviewer=reviewer,
     )
     (workspace / "scratch").mkdir()
@@ -1758,34 +2571,29 @@ def test_unsupported_research_claims_are_not_archived(tmp_path):
     assert response["error"]["review"]["claim_review_quality"] == "unsupported"
     assert load_journal(experiment_evidence / "journal.json")["experiments"] == []
     assert not (workspace / "experiments").exists()
-    assert not (evidence / "claim-reviews").exists()
-    assert not (experiment_evidence / "claim-reviews").exists()
-    direction_audit = list((evidence / "claim-audit").glob("*/outcome.json"))
-    experiment_audit = list(
-        (experiment_evidence / "claim-audit").glob("*/outcome.json")
-    )
-    assert len(direction_audit) == 2
-    assert len(experiment_audit) == 1
+    library = supervisor_research_library_root(workspace)
     unsupported_audits = [
-        path
-        for path in (*direction_audit, *experiment_audit)
-        if json.loads(path.read_text())["status"] == "unsupported"
+        *library.glob("directions/*/attempts/*/review/result.json"),
+        *library.glob("experiments/*/attempts/*/review/result.json"),
     ]
     assert len(unsupported_audits) == 2
     for path in unsupported_audits:
         outcome = json.loads(path.read_text())
         assert outcome["status"] == "unsupported"
         assert outcome["error"]["error"]["review"]["claim_review_quality"] == "unsupported"
-        assert outcome["private_review"]["evidence_manifest"]["claim_type"] in {
+        assert outcome["review"]["evidence_manifest"]["claim_type"] in {
             "direction", "experiment"
         }
-        assert outcome["private_review"]["session_audit"]["attempts"][0][
+        assert outcome["review"]["session_audit"]["attempts"][0][
             "conversation_path"
         ].endswith("/conversation.jsonl")
-        assert "_review_session_audit" not in outcome["private_review"]
-        submission = json.loads((path.parent / "submission.json").read_text())
-        assert submission["claim_type"] in {"direction", "experiment"}
-    experiment_audit_root = experiment_audit[0].parent
+        assert "_review_session_audit" not in outcome["review"]
+        assert outcome["claim_type"] in {"direction", "experiment"}
+    experiment_audit_root = next(
+        path.parents[1]
+        for path in unsupported_audits
+        if json.loads(path.read_text())["claim_type"] == "experiment"
+    )
     reference_manifest = json.loads(
         (experiment_audit_root / "references" / "manifest.json").read_text()
     )
@@ -1836,6 +2644,7 @@ def test_partial_experiment_is_projected_but_cannot_support_terminal_verdict(tmp
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("directions", "experiments"),
         claim_reviewer=reviewer,
     )
     direction_id = service.execute({
@@ -1874,9 +2683,7 @@ def test_partial_experiment_is_projected_but_cannot_support_terminal_verdict(tmp
         },
     })
     experiment_id = recorded["experiment_id"]
-    projected = json.loads(
-        (workspace / "experiments" / experiment_id / "experiment.json").read_text()
-    )
+    projected = json.loads((workspace / recorded["archive_path"]).read_text())
     assert projected["claim_review_quality"] == "partially_supported"
     assert projected["scope_safe_interpretation"] == (
         "Treat the result as a bounded observation only."
@@ -1915,6 +2722,7 @@ def test_missing_experiment_reference_is_repairable_and_records_nothing(tmp_path
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("experiments",),
     )
     record_id, _ = _measurement(
         MeasurementStore(tmp_path / "scope" / "measurements"),
@@ -1936,12 +2744,8 @@ def test_missing_experiment_reference_is_repairable_and_records_nothing(tmp_path
 
     assert rejected.value.response["error"]["code"] == "reference_not_found"
     assert rejected.value.response["issues"][0]["path"] == "references.0"
-    assert load_journal(evidence / "journal.json")["experiments"] == []
-    audit_outcomes = list((evidence / "claim-audit").glob("*/outcome.json"))
-    assert len(audit_outcomes) == 1
-    audit = json.loads(audit_outcomes[0].read_text())
-    assert audit["status"] == "rejected"
-    assert audit["error"]["error"]["code"] == "reference_not_found"
+    assert ResearchStore(tmp_path / "research").read()["experiments"] == {}
+    assert not (evidence / "claim-audit").exists()
 
 
     (workspace / "scratch").mkdir()
@@ -1959,10 +2763,10 @@ def test_missing_experiment_reference_is_repairable_and_records_nothing(tmp_path
             },
         })
     assert linked.value.response["error"]["code"] == "reference_symlink_forbidden"
-    assert load_journal(evidence / "journal.json")["experiments"] == []
+    assert ResearchStore(tmp_path / "research").read()["experiments"] == {}
 
 
-def test_direction_projection_moves_between_status_directories(tmp_path):
+def test_direction_draft_projection_tracks_lifecycle_without_status_directories(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
     journals = tmp_path / "scope" / "journals"
@@ -1980,9 +2784,10 @@ def test_direction_projection_moves_between_status_directories(tmp_path):
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("directions",),
     )
 
-    direction_id = service.execute({
+    proposed_result = service.execute({
         "operation": "direction_update",
         "request": {
             "action": "propose",
@@ -1993,13 +2798,14 @@ def test_direction_projection_moves_between_status_directories(tmp_path):
             "expected_benefit": "Reduce latency by exposing CTA parallelism.",
             "plan": ["Compile a bounded probe"],
         },
-    })["direction_id"]
-    proposed = workspace / "directions" / "proposed" / f"{direction_id}.json"
-    active = workspace / "directions" / "in_progress" / f"{direction_id}.json"
+    })
+    direction_id = proposed_result["direction_id"]
+    proposed = workspace / proposed_result["archive_path"]
     assert proposed.is_file()
-    assert not active.exists()
+    assert json.loads(proposed.read_text())["status"] == "proposed"
+    assert not (workspace / "directions").exists()
 
-    service.execute({
+    started = service.execute({
         "operation": "direction_update",
         "request": {
             "action": "start",
@@ -2007,9 +2813,13 @@ def test_direction_projection_moves_between_status_directories(tmp_path):
             "analysis": "This is the highest-value bounded probe.",
         },
     })
-    assert not proposed.exists()
-    assert active.is_file()
-    assert json.loads(active.read_text())["status"] == "in_progress"
+    assert started["archive_path"] == (
+        f"research-library/directions/{direction_id}/v1/direction.json"
+    )
+    assert json.loads(proposed.read_text())["status"] == "proposed"
+    assert json.loads((workspace / started["archive_path"]).read_text())[
+        "status"
+    ] == "in_progress"
 
     progress = (workspace / "PROGRESS.md").read_text()
     assert "### Local work queue" in progress
@@ -2090,6 +2900,11 @@ def test_submit_kernel_records_review_without_finalizing_episode(monkeypatch, tm
                 "dsl_policy": "not_applicable",
                 "production_policy": "not_applicable",
             },
+            "implementation_review": {
+                "availability": "available",
+                "technologies": ["cuda"],
+                "dsl_policy": "pinned",
+            },
             "diagnostics": [],
             "evaluation_evidence": {
                 "status": "passed",
@@ -2120,17 +2935,18 @@ def test_submit_kernel_records_review_without_finalizing_episode(monkeypatch, tm
             "review. Continue development or end the Session."
         ),
     }
-    journal = load_journal(journal_path)
-    assert journal["state"] == "in_progress"
-    assert "finalized_at" not in journal
-    assert journal["kernel_submissions"][0]["kernel_commit_id"] == commit_id
-    assert journal["kernel_submissions"][0]["accepted"] is True
-    assert journal["kernel_submissions"][0]["token_checkpoint"][
-        "total_tokens"
-    ] == 100
-    assert (tmp_path / "scope" / journal["kernel_submissions"][0][
-        "token_checkpoint"
-    ]["path"]).is_file()
+    submission_rows = submissions(tmp_path / "scope" / "submissions")
+    assert len(submission_rows) == 1
+    submission = submission_rows[0]
+    assert submission["kernel_commit_id"] == commit_id
+    assert submission["accepted"] is True
+    assert submission["implementation_review"] == {
+        "availability": "available",
+        "technologies": ["cuda"],
+        "dsl_policy": "pinned",
+    }
+    assert submission["token_checkpoint"]["total_tokens"] == 100
+    assert (tmp_path / "scope" / submission["token_checkpoint"]["path"]).is_file()
     assert refreshes == [{
         "synchronize": False,
         "direction_ids": frozenset(),
@@ -2221,7 +3037,7 @@ def test_submit_kernel_schema_and_prompt_have_no_handoff_contract():
         / "src/aka/light/workflow/prompts/episode.md"
     ).read_text(encoding="utf-8")
     assert "Repeat `probe → candidate → measurement → revert/keep` cycles" in prompt
-    assert "Use `submit-kernel` for final-source compliance feedback" in prompt
+    assert "Use `submit-kernel` when you judge an exact commit ready" in prompt
     assert "greatest plausible full-workload impact" in prompt
     assert "instead of avoiding high-upside work" in prompt
     assert "Manage development with Agent Git" in prompt
@@ -2604,6 +3420,7 @@ def test_progress_is_projected_even_when_research_modules_are_disabled(tmp_path)
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=(),
     )
     source = b"def kernel():\n    return 1\n"
     (workspace / "kernel.py").write_bytes(source)
@@ -2735,6 +3552,7 @@ def test_private_historical_kernel_snapshot_is_not_projected_without_git_commit(
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("experiments",),
     )
     store = MeasurementStore(tmp_path / "scope" / "measurements")
     record_id, private_kernel_id = _measurement(
@@ -2771,14 +3589,15 @@ def test_progress_projection_mentions_only_enabled_experiment_module(tmp_path):
         campaign_root=journals,
         evidence_root=evidence,
         research_root=tmp_path / "research",
+        tool_modules=("experiments",),
     )
 
     service.publish_research_files()
 
     progress = (workspace / "PROGRESS.md").read_text()
-    assert "experiments/<experiment_id>/experiment.json" in progress
-    assert "experiments/index.json" in progress
-    assert (workspace / "experiments" / "index.json").is_file()
+    assert "research-library/experiments/<experiment_id>/vN/experiment.json" in progress
+    assert "experiments/index.json" not in progress
+    assert not (workspace / "experiments").exists()
     assert "## Directions" not in progress
     assert "directions/<status>" not in progress
     assert "**Hypothesis:**" not in progress
@@ -2857,7 +3676,7 @@ def test_runtime_install_does_not_mutate_tracked_gitignore(tmp_path):
     ignores = (workspace / ".gitignore").read_text(encoding="utf-8").splitlines()
     assert "/.atrex_long_horizon/" in ignores
     assert "/verification_artifacts/.atrex_long_horizon_verify/" in ignores
-    assert "/memory/live.json" in ignores
+    assert "/memory/live.json" not in ignores
     repository = AgentGit(workspace, tmp_path / "agent.bundle")
     repository.prepare()
     before = (workspace / ".gitignore").read_bytes()
@@ -2947,9 +3766,10 @@ def test_agent_git_keeps_single_file_auxiliary_metadata_private(tmp_path):
 def test_agent_git_reincludes_cuda_manifest_candidate_metadata(tmp_path):
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / ".atrex_file_system.json").write_text(
-        '{"name": "cuda_manifest"}\n', encoding="utf-8"
-    )
+    from aka.light.workspace.sources.cuda_manifest import POLICY
+    from aka.light.workspace.sources.private_state import bind
+
+    bind(workspace, file_system="cuda_manifest", contract=POLICY)
     (workspace / "solution.json").write_text(
         json.dumps(
             {
@@ -2991,7 +3811,7 @@ def test_agent_git_reincludes_cuda_manifest_candidate_metadata(tmp_path):
 
 
 
-def test_legacy_journal_conflict_returns_supported_operator_recovery(tmp_path):
+def test_light_ignores_legacy_journal_files_and_creates_no_transaction_file(tmp_path):
     workspace = tmp_path / "workspace"
     legacy_root = workspace / ".atrex_long_horizon"
     legacy_root.mkdir(parents=True)
@@ -3002,23 +3822,29 @@ def test_legacy_journal_conflict_returns_supported_operator_recovery(tmp_path):
     journals = tmp_path / "journals"
     evidence = journals / "episodes" / "e00000001"
     evidence.mkdir(parents=True)
-    initialize_journal(
-        evidence / "journal.json",
-        episode=1,
-        base_commit="a" * 40,
-        branch="episode",
-    )
     service = SupervisorJournalService(
         workspace=workspace,
         campaign_root=journals,
         evidence_root=evidence,
+        research_root=tmp_path / "research",
+        tool_modules=("directions",),
     )
+    result = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "propose",
+            "name": "Ignore legacy state",
+            "change_scope": "incremental",
+            "objective": "Validate directly against the central Research Store.",
+            "applicability": "Current Light campaigns.",
+            "expected_benefit": "Avoid legacy transaction-state coupling.",
+            "plan": ["Record one central Direction revision."],
+        },
+    })
 
-    with pytest.raises(AgentRequestError) as rejected:
-        service._check_legacy_journal()
-    action = rejected.value.response["error"]["next_action"]
-    assert "compatible legacy Runtime" in action
-    assert "<JOURNAL_CLI>" not in action
+    assert result["status"] == "recorded"
+    assert ResearchStore(tmp_path / "research").read()["directions"]
+    assert list(tmp_path.rglob("research-transaction.json")) == []
 
 
 def test_publish_if_changed_skips_identical_projection_and_heals_changes(tmp_path):
@@ -3030,26 +3856,6 @@ def test_publish_if_changed_skips_identical_projection_and_heals_changes(tmp_pat
     assert (workspace / "records/value.json").stat().st_mtime_ns == first
     assert publish_if_changed(workspace, "records/value.json", b"two") is True
     assert (workspace / "records/value.json").read_bytes() == b"two"
-
-
-def test_direction_projection_cleanup_preserves_current_status_file(tmp_path):
-    workspace = tmp_path / "workspace"
-    direction_id = "direction_" + "a" * 32
-    current = workspace / "directions" / "in_progress" / f"{direction_id}.json"
-    stale = workspace / "directions" / "proposed" / f"{direction_id}.json"
-    current.parent.mkdir(parents=True)
-    stale.parent.mkdir(parents=True)
-    current.write_text("current", encoding="utf-8")
-    stale.write_text("stale", encoding="utf-8")
-
-    _remove_stale_direction_projection(
-        workspace,
-        direction_id,
-        current_status="in_progress",
-    )
-
-    assert current.read_text(encoding="utf-8") == "current"
-    assert not stale.exists()
 
 
 def test_existing_trajectory_session_resumes_on_first_invocation(tmp_path):
@@ -3321,6 +4127,7 @@ def _finalized_journal(path: Path, *, episode: int, suffix: str, record_id: str)
             "gateway_record_ids": [record_id],
             "analysis": "The measurement is reusable evidence",
             "direction_id": direction_id,
+            "claim_review_quality": "partially_supported",
         }
     ]
     private_write(path, value)
@@ -3481,6 +4288,29 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
     journals = tmp_path / "journals"
     shared_direction = "direction_" + "1" * 32
     shared_experiment = "experiment_" + "2" * 32
+    shared_direction_value = {
+        "direction_id": shared_direction,
+        "name": "shared direction",
+        "change_scope": "major_redesign",
+        "hypothesis": "shared hypothesis",
+        "plan": ["test it"],
+        "stop_conditions": [],
+        "status": "proposed",
+        "analysis": "shared analysis",
+        "supporting_experiment_ids": [],
+        "associated_experiment_ids": [shared_experiment],
+    }
+    shared_experiment_value = {
+        "experiment_id": shared_experiment,
+        "recorded_by": "T2",
+        "sequence": 1,
+        "name": "shared experiment",
+        "objective": "shared optimization objective",
+        "change": "shared change",
+        "gateway_record_ids": [],
+        "analysis": "shared result",
+        "direction_id": shared_direction,
+    }
     private_write(
         shared_research_path(journals),
         {
@@ -3488,32 +4318,9 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
             "revision": "revision-1",
             "through_epoch": 1,
             "directions": {
-                shared_direction: {
-                    "direction_id": shared_direction,
-                    "name": "shared direction",
-                    "change_scope": "major_redesign",
-                    "hypothesis": "shared hypothesis",
-                    "plan": ["test it"],
-                    "stop_conditions": [],
-                    "status": "proposed",
-                    "analysis": "shared analysis",
-                    "supporting_experiment_ids": [],
-                    "associated_experiment_ids": [shared_experiment],
-                }
+                shared_direction: shared_direction_value,
             },
-            "experiments": [
-                {
-                    "experiment_id": shared_experiment,
-                    "recorded_by": "T2",
-                    "sequence": 1,
-                    "name": "shared experiment",
-                    "objective": "shared optimization objective",
-                    "change": "shared change",
-                    "gateway_record_ids": [],
-                    "analysis": "shared result",
-                    "direction_id": shared_direction,
-                }
-            ],
+            "experiments": [shared_experiment_value],
             "research_queue": [shared_direction],
         },
     )
@@ -3529,26 +4336,51 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
         workspace=workspace,
         campaign_root=journals,
         evidence_root=current.parent,
+        research_synchronization="asynchronous",
+    )
+    catalog = ResearchStore(service.research_catalog_root / "events")
+    catalog.observe_direction(
+        {
+            **shared_direction_value,
+            "owner_lineage": "T2",
+            "access": "local_writable",
+        },
+        origin={"epoch": 1, "trajectory": 2, "episode": 1},
+    )
+    catalog.observe_experiment(
+        {
+            **shared_experiment_value,
+            "owner_lineage": "T2",
+            "access": "local_writable",
+        },
+        origin={"epoch": 1, "trajectory": 2, "episode": 1},
+    )
+    publish_catalog_shared_research(
+        catalog_root=service.research_catalog_root,
+        research_root=journals,
+        trajectory=1,
+        synchronization="asynchronous",
     )
 
     service.publish_research_files()
     loaded = json.loads(
         (
-            workspace / "directions" / "proposed" / f"{shared_direction}.json"
+            workspace / "research-library" / "directions" / shared_direction
+            / "v1" / "direction.json"
         ).read_text(encoding="utf-8")
     )
     experiment = json.loads(
-        (workspace / "experiments" / shared_experiment / "experiment.json").read_text(
-            encoding="utf-8"
-        )
+        (
+            workspace / "research-library" / "experiments" / shared_experiment
+            / "v1" / "experiment.json"
+        ).read_text(encoding="utf-8")
     )
 
     assert loaded["direction_id"] == shared_direction
     assert "associated_experiment_ids" not in loaded
     assert loaded["access"] == "peer_read_only"
-    assert loaded["shared_rank"] == 1
     assert experiment["experiment_id"] == shared_experiment
-    assert experiment["recorded_by"] == "T2"
+    assert experiment["owner_lineage"] == "T2"
     assert experiment["access"] == "peer_read_only"
     assert "origin" not in loaded and "shared" not in loaded
     assert "origin" not in experiment and "shared" not in experiment
@@ -3595,7 +4427,7 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
     assert "shared rank #1" in progress
     assert "absorb compatible peer mechanisms and evidence" in progress
     assert "`derived_from_direction_ids`" in progress
-    assert "Experiment files declare `recorded_by` and `access`" in progress
+    assert "Experiment files declare `owner_lineage` and `access`" in progress
 
     proposed = service.execute(
         {
@@ -3619,33 +4451,82 @@ def test_shared_research_is_visible_without_agent_facing_origin_fields(tmp_path)
 
 def test_search_epoch_seals_other_trajectory_research_and_measurements(tmp_path):
     driver = EpisodeSearchDriver.__new__(EpisodeSearchDriver)
-    driver.root = tmp_path / "search"
+    controller = tmp_path / "controller"
+    controller.mkdir()
+    campaign_root = supervisor_campaign_root(controller)
+    initialize_campaign_root(
+        campaign_root,
+        name="pooled-sharing-test",
+        launch_composition=_test_launch_composition(),
+        source=_test_source_binding(),
+    )
+    driver.campaign = SimpleNamespace(workspace=controller)
+    driver.root = campaign_root
     driver.children = {}
     identities = {}
     records = {}
+    local_only_records = {}
+    passing_full_records = {}
     kernels = {}
+    store = MeasurementStore(supervisor_measurement_root(controller))
     for number, suffix in ((1, "1"), (2, "2")):
-        workspace = tmp_path / f"trajectory-{number}"
-        workspace.mkdir()
+        workspace = campaign_root / "lineages" / f"t{number:04d}" / "agent-workspace"
+        _install(workspace, "def run():\n    return None\n")
+        AgentGit(workspace).prepare()
         child = SimpleNamespace(workspace=workspace)
         driver.children[number] = child
         runtime_root = supervisor_campaign_root(workspace)
-        store = MeasurementStore(runtime_root / "measurements")
         record_id, kernel_id = _measurement(
             store, f"def kernel_{number}():\n    return {number}\n".encode(), f"t{number}"
+        )
+        local_only_record_id, _ = _measurement(
+            store,
+            f"def local_probe_{number}():\n    return {number}\n".encode(),
+            f"t{number}-local-only",
+        )
+        passing_full_record_id, _ = _passing_full_measurement(
+            store,
+            f"def full_candidate_{number}():\n    return {number}\n".encode(),
+            f"t{number}-passing-full",
+            {"shape_a": float(number), "shape_b": float(number + 1)},
         )
         journal = runtime_root / "journals" / "episodes" / "e00000001" / "journal.json"
         identities[number] = _finalized_journal(
             journal, episode=1, suffix=suffix, record_id=record_id
         )
         research = ResearchStore(runtime_root / "research")
+        research.checkpoint_lineage(
+            {
+                "gateway_record_ids": [
+                    record_id,
+                    local_only_record_id,
+                    passing_full_record_id,
+                ],
+            },
+            origin={"epoch": 1, "trajectory": number, "episode": 1},
+        )
         research.observe_direction(
             {
                 "direction_id": identities[number][0],
                 "name": f"direction-{suffix}",
                 "change_scope": "major_redesign",
+                "objective": "A shared optimization objective",
+                "applicability": "Long-context shapes.",
+                "expected_benefit": "Reduce full-workload latency.",
                 "status": "deferred",
                 "plan": ["implement", "measure"],
+                "supporting_experiment_ids": [identities[number][1]],
+            },
+            origin={"epoch": 1, "trajectory": number, "episode": 1},
+        )
+        research.observe_experiment(
+            {
+                "experiment_id": identities[number][1],
+                "name": f"experiment-{suffix}",
+                "intent": "Measure the bounded candidate.",
+                "interpretation": "The measured result supports the scoped decision.",
+                "gateway_record_ids": [record_id],
+                "direction_id": identities[number][0],
             },
             origin={"epoch": 1, "trajectory": number, "episode": 1},
         )
@@ -3656,6 +4537,8 @@ def test_search_epoch_seals_other_trajectory_research_and_measurements(tmp_path)
                 origin={"epoch": 1, "trajectory": number, "episode": 1},
             )
         records[number], kernels[number] = record_id, kernel_id
+        local_only_records[number] = local_only_record_id
+        passing_full_records[number] = passing_full_record_id
 
     jobs = [
         {"epoch": 1, "trajectory": 1, "episode": 1, "status": "completed"},
@@ -3667,10 +4550,10 @@ def test_search_epoch_seals_other_trajectory_research_and_measurements(tmp_path)
     for number in (1, 2):
         other = 2 if number == 1 else 1
         runtime_root = supervisor_campaign_root(driver.children[number].workspace)
-        shared = json.loads(shared_research_path(runtime_root / "journals").read_text())
+        shared = json.loads(shared_research_path(runtime_root / "research").read_text())
         assert set(shared["directions"]) == {identities[other][0]}
         shared_direction = shared["directions"][identities[other][0]]
-        assert shared_direction["proposed_by"] == f"T{other}"
+        assert shared_direction["owner_lineage"] == f"T{other}"
         assert shared_direction["objective"] == "A shared optimization objective"
         assert "hypothesis" not in shared_direction
         assert "hypothesis_status" not in shared_direction
@@ -3678,15 +4561,132 @@ def test_search_epoch_seals_other_trajectory_research_and_measurements(tmp_path)
             [identities[1][0], identities[2][0]]
         )
         assert {row["experiment_id"] for row in shared["experiments"]} == {identities[other][1]}
-        assert shared["experiments"][0]["recorded_by"] == f"T{other}"
+        assert shared["experiments"][0]["owner_lineage"] == f"T{other}"
         assert "origin" not in shared_direction
-        store = MeasurementStore(runtime_root / "measurements")
-        assert set(store.record_ids()) == set(records.values())
+        assert not (runtime_root / "measurements" / "identity.key").exists()
+        assert set(store.record_ids()) == (
+            set(records.values())
+            | set(local_only_records.values())
+            | set(passing_full_records.values())
+        )
         assert store.read_kernel(kernels[other]).startswith(b"def kernel_")
+        assert local_only_records[other] not in shared["gateway_record_ids"]
+        assert records[other] in shared["gateway_record_ids"]
+        assert records[number] not in shared["gateway_record_ids"]
+        assert passing_full_records[other] in shared["gateway_record_ids"]
+        assert passing_full_records[number] in shared["gateway_record_ids"]
 
-    receipt = json.loads((driver.root / "epochs" / "e00000001-shared.json").read_text())
-    assert set(receipt["gateway_record_ids"]) == set(records.values())
+    publication = read_state(publication_path(driver.root, 1))
+    assert publication["synchronization"] == "synchronous"
+    assert publication["watermark"]["trajectory_episodes"] == {
+        "T1": 1,
+        "T2": 1,
+    }
+    assert [source["trajectory"] for source in publication["sources"]] == [
+        "T1",
+        "T2",
+    ]
+    for number in (1, 2):
+        git_publication = publication_source_root(campaign_root, 1, number)
+        assert (git_publication / "history.bundle").is_file()
+        receipt = json.loads((git_publication / "receipt.json").read_text())
+        assert receipt["trajectory"] == number
+        assert receipt["publication"] == 1
+        assert "epoch" not in receipt
+    assert not (campaign_root / "peer-git").exists()
+    receipt = publication["evidence"]
+    assert set(receipt["gateway_record_ids"]) == (
+        set(records.values()) | set(passing_full_records.values())
+    )
+    assert not (driver.root / "epochs").exists()
+    assert not (driver.root / "async-publications").exists()
     assert driver.epoch_sealed(1)
+
+
+def test_pooled_private_state_uses_one_campaign_root_with_lineage_namespaces(tmp_path):
+    controller = tmp_path / "controller"
+    controller.mkdir()
+    campaign_root = legacy_supervisor_campaign_root(controller)
+    trajectory = campaign_root / "search" / "trajectories" / "t0002"
+    (trajectory / ".git").mkdir(parents=True)
+    (trajectory / ".git" / "atrex-search-origin.json").write_text(
+        json.dumps({
+            "bootstrap": "bootstrap",
+            "trajectory": 2,
+            "campaign": str(controller),
+        }),
+        encoding="utf-8",
+    )
+
+    assert supervisor_campaign_base_root(trajectory) == campaign_root
+    assert supervisor_campaign_root(trajectory) == campaign_root / "lineages" / "t0002"
+    assert supervisor_measurement_root(trajectory) == campaign_root / "measurements"
+
+
+def test_direct_campaign_root_contains_private_state_and_only_agent_workspace_has_git(
+    tmp_path,
+):
+    campaign = initialize_campaign_root(
+        tmp_path / "campaign-A",
+        name="operator-a",
+        launch_composition=_test_launch_composition(profile="light-sandbox"),
+        source=_test_source_binding(),
+    )
+    agent = campaign / "lineages" / "t0001" / "agent-workspace"
+    agent.mkdir(parents=True)
+    subprocess.run(["git", "init", "-q", str(agent)], check=True)
+
+    assert not (campaign / ".git").exists()
+    assert not (campaign / ".atrex-supervisor-runtime").exists()
+    assert supervisor_campaign_base_root(campaign) == campaign
+    assert supervisor_campaign_base_root(agent) == campaign
+    assert supervisor_campaign_root(agent) == campaign / "lineages" / "t0001"
+    assert supervisor_measurement_root(agent) == campaign / "measurements"
+    assert CampaignStore(agent).root == campaign / "lineages" / "t0001" / "segments"
+
+
+def test_pooled_private_state_rejects_origin_marker_path_redirection(tmp_path):
+    controller = tmp_path / "controller"
+    controller.mkdir()
+    workspace = tmp_path / "not-a-campaign-trajectory"
+    (workspace / ".git").mkdir(parents=True)
+    (workspace / ".git" / "atrex-search-origin.json").write_text(
+        json.dumps({
+            "bootstrap": "bootstrap",
+            "trajectory": 1,
+            "campaign": str(controller),
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="does not match"):
+        supervisor_campaign_root(workspace)
+
+
+def test_pooled_recovery_moves_legacy_trajectory_state_into_campaign_lineage(tmp_path):
+    controller = tmp_path / "controller"
+    controller.mkdir()
+    campaign_root = legacy_supervisor_campaign_root(controller)
+    trajectory = campaign_root / "search" / "trajectories" / "t0001"
+    (trajectory / ".git").mkdir(parents=True)
+    (trajectory / ".git" / "atrex-search-origin.json").write_text(
+        json.dumps({
+            "bootstrap": "bootstrap",
+            "trajectory": 1,
+            "campaign": str(controller),
+        }),
+        encoding="utf-8",
+    )
+    legacy = legacy_supervisor_campaign_root(trajectory)
+    (legacy / "journals").mkdir(parents=True)
+    (legacy / "journals" / "legacy.json").write_text("{}\n", encoding="utf-8")
+    driver = EpisodeSearchDriver.__new__(EpisodeSearchDriver)
+
+    driver._migrate_trajectory_private_root(trajectory)
+
+    destination = campaign_root / "lineages" / "t0001"
+    assert not legacy.exists()
+    assert (destination / "journals" / "legacy.json").is_file()
 
 
 def test_shared_direction_queue_averages_normalized_trajectory_ranks():
@@ -3754,12 +4754,32 @@ def test_shared_direction_queue_preserves_unvoted_inherited_order():
     ) == ["c", "a", "b"]
 
 
-def test_only_explicitly_low_quality_reviewed_claims_are_withheld_from_sharing():
-    assert _shareable_claim({"claim_review_quality": "supported"}) is True
-    assert _shareable_claim({}) is True  # legacy/pre-review compatibility
-    assert _shareable_claim({"claim_review_quality": "not_reviewed"}) is False
-    assert _shareable_claim({"claim_review_quality": "partially_supported"}) is False
-    assert _shareable_claim({"claim_review_quality": "unreviewed"}) is False
+def test_epoch_merge_keeps_owner_latest_revision_regardless_of_review_quality():
+    direction_id = "direction_" + "a" * 32
+    owner_latest = {
+        "direction_id": direction_id,
+        "revision": 2,
+        "claim_review_quality": "partially_supported",
+    }
+    peer_cached = {
+        "direction_id": direction_id,
+        "revision": 1,
+        "claim_review_quality": "supported",
+    }
+
+    merged, origins = EpisodeSearchDriver._merge_named(
+        {1: {direction_id: owner_latest}, 2: {direction_id: peer_cached}},
+        {direction_id: {"epoch": 1, "trajectory": 1, "episode": 1}},
+        {1: {direction_id: 2}, 2: {}},
+        [
+            {"epoch": 2, "trajectory": 1, "episode": 2},
+            {"epoch": 2, "trajectory": 2, "episode": 2},
+        ],
+        "Direction",
+    )
+
+    assert merged[direction_id] == owner_latest
+    assert origins[direction_id]["trajectory"] == 1
 
 
 def test_multiple_active_directions_require_explicit_experiment_binding(tmp_path):
@@ -3830,9 +4850,7 @@ def test_multiple_active_directions_require_explicit_experiment_binding(tmp_path
             "interpretation": "The observation belongs only to that Direction.",
         },
     })
-    projected = json.loads(
-        (workspace / "experiments" / recorded["experiment_id"] / "experiment.json").read_text()
-    )
+    projected = json.loads((workspace / recorded["archive_path"]).read_text())
     assert projected["direction_id"] == directions[0]
 
 
@@ -3844,9 +4862,6 @@ def test_pooled_search_seals_peer_evidence_without_promotion(tmp_path):
     calls = []
 
     class Driver:
-        def identity(self):
-            return "binding"
-
         def bootstrap(self):
             return {"latency_us_geomean": 10.0}
 
@@ -3875,14 +4890,31 @@ def test_pooled_search_seals_peer_evidence_without_promotion(tmp_path):
         def tokens(self):
             return 1
 
+    root = tmp_path / "campaign-A"
     result = PooledSearch(
-        tmp_path / "search",
+        root,
         SearchOptions(epochs=1, trajectories=1, episodes_per_trajectory=1, max_parallel_episodes=1),
         Driver(),
     ).run()
 
     assert result == "search: completed Epoch budget"
     assert calls == [("initialize", 1), ("prepare", 1), ("seal", 1)]
+    coordinator = read_state(root / COORDINATOR_STATE)
+    assert set(coordinator) == {
+        "schema_version",
+        "epoch",
+        "active",
+        "completed_epochs",
+        "global_best",
+    }
+    assert (root / "coordinator.lock").is_file()
+    assert not (root / "search").exists()
+    assert read_state(lineage_state_path(root, 1))["completed_episodes"] == 1
+    publication = read_state(publication_path(root, 1))
+    assert publication["synchronization"] == "synchronous"
+    assert publication["scheduler"]["phase"] == "completed"
+    assert not (root / "epochs").exists()
+    assert not (root / "async-publications").exists()
 
 
 def test_search_synchronization_rejects_unknown_mode():
@@ -3921,9 +4953,9 @@ def test_episode_search_role_specialization_prompt_switch(tmp_path, enabled):
     )
     prompt = LongHorizonCampaign(base)._prompt(
         episode=1,
-        worktree=CandidateHandle(1, "a" * 40, "work", tmp_path),
+        segment=CandidateHandle(1, "a" * 40, "work", tmp_path),
     )
-    assert "Search location: Epoch 1, Trajectory 1, Episode 1" in prompt
+    assert "Your trajectory: T1. Search location: Epoch 1, Episode 1" in prompt
     assert ("T1 role: bounded exploitation" in prompt) is enabled
 
 
@@ -3960,7 +4992,7 @@ def test_episode_search_prompt_describes_actual_publication_boundary(
     )
     prompt = LongHorizonCampaign(base)._prompt(
         episode=1,
-        worktree=CandidateHandle(1, "a" * 40, "work", tmp_path),
+        segment=CandidateHandle(1, "a" * 40, "work", tmp_path),
     )
     assert expected in prompt
 
@@ -3974,9 +5006,6 @@ def test_asynchronous_search_advances_without_waiting_for_slow_peer(tmp_path):
     token_count = 0
 
     class Driver:
-        def identity(self):
-            return "binding"
-
         def bootstrap(self):
             return seed
 
@@ -4042,11 +5071,25 @@ def test_asynchronous_search_advances_without_waiting_for_slow_peer(tmp_path):
     assert result == "search: completed asynchronous Episode budget"
     assert slow_peer_released.is_set()
     assert calls.index(("run", 1, 2)) < calls.index(("run", 2, 1))
-    state = read_state(root / "state.json")
-    assert state["lineages"]["1"]["completed_episodes"] == 2
-    assert state["lineages"]["2"]["completed_episodes"] == 2
+    state = read_state(root / COORDINATOR_STATE)
+    assert "lineages" not in state
+    assert read_state(lineage_state_path(root, 1))["completed_episodes"] == 2
+    assert read_state(lineage_state_path(root, 2))["completed_episodes"] == 2
     assert state["completed_epochs"] == 2
     assert state["asynchronous"]["latest_publication"] == 4
+    publications = sorted((root / "publications").glob("p*/publication.json"))
+    assert [path.parent.name for path in publications] == [
+        "p00000001",
+        "p00000002",
+        "p00000003",
+        "p00000004",
+    ]
+    assert all(
+        read_state(path)["synchronization"] == "asynchronous"
+        for path in publications
+    )
+    assert not (root / "epochs").exists()
+    assert not (root / "async-publications").exists()
 
 
 def test_wiki_query_missing_input_file_is_a_structured_agent_error(tmp_path):
@@ -4142,7 +5185,7 @@ def test_episode_prompt_uses_reachable_agent_comparison_base(tmp_path):
 
     prompt = LongHorizonCampaign(base)._prompt(
         episode=1,
-        worktree=CandidateHandle(1, controller_base, "work", controller),
+        segment=CandidateHandle(1, controller_base, "work", controller),
         agent_workspace=agent_workspace,
     )
 
@@ -4185,25 +5228,63 @@ def test_pooled_trajectories_restore_one_canonical_agent_v0(tmp_path):
     canonical = driver._canonical_agent_root(bootstrap)
 
     v0_commit = canonical["agent_v0_commit_id"]
-    assert canonical["controller_v0_commit_id"] == controller_commit
+    campaign_root = supervisor_campaign_base_root(controller)
+    assert driver._canonical_agent_bundle == campaign_root / "bootstrap" / "agent-v0.bundle"
+    assert driver._canonical_agent_receipt == campaign_root / "bootstrap" / "agent-v0.json"
+    assert driver._publication_source_root(2, 3) == publication_source_root(
+        campaign_root, 3, 2
+    )
+    assert driver._publication_import_receipt(2, 3) == publication_import_path(
+        campaign_root, 3, 2
+    )
+    assert not (campaign_root / "peer-git").exists()
+    assert canonical == {
+        "schema_version": 2,
+        "source_sha256": hashlib.sha256(v0_source).hexdigest(),
+        "agent_v0_commit_id": controller_commit,
+    }
     assert driver._canonical_agent_root(bootstrap) == canonical
 
     restored_heads = []
     for number in (1, 2, 3):
-        child = SimpleNamespace(workspace=tmp_path / f"trajectory-{number}")
-        child.workspace.mkdir()
-        driver._seed_trajectory_agent_root(child, canonical)
-        child_runtime_root = supervisor_campaign_root(child.workspace)
+        child_runtime_root = tmp_path / f"trajectory-{number}"
+        child_runtime_root.mkdir()
         child_agent_workspace = child_runtime_root / "agent-workspace"
-        install(child_agent_workspace, v0_source)
-        child_agent = AgentGit(
-            child_agent_workspace,
-            child_runtime_root / "adaptive-state" / "agent-git.bundle",
+        subprocess.run(
+            [
+                "git",
+                "clone",
+                "--quiet",
+                "--no-hardlinks",
+                str(driver._canonical_agent_bundle),
+                str(child_agent_workspace),
+            ],
+            check=True,
         )
+        subprocess.run(
+            ["git", "checkout", "--quiet", "-B", "work", v0_commit],
+            cwd=child_agent_workspace,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "remote", "remove", "origin"],
+            cwd=child_agent_workspace,
+            check=True,
+        )
+        source_state = read_source_state(controller)
+        assert source_state is not None
+        file_system, contract = source_state
+        bind_source_state(
+            child_agent_workspace,
+            file_system=file_system,
+            contract=contract,
+        )
+        child_agent = AgentGit(child_agent_workspace)
         child_agent.prepare()
         restored_heads.append(child_agent.head())
         assert child_agent.commit_reachable(v0_commit)
         assert snapshot(child_agent_workspace) == v0_source
+        assert not (child_runtime_root / "adaptive-state").exists()
 
     assert restored_heads == [v0_commit, v0_commit, v0_commit]
 
@@ -4428,9 +5509,21 @@ def test_research_store_rotates_bounded_segments_and_rebuilds(tmp_path, monkeypa
 @pytest.mark.parametrize(
     ("modules", "included", "excluded"),
     [
-        (("directions",), "directions/<status>/*.json", "experiments/*/experiment.json"),
-        (("experiments",), "experiments/*/experiment.json", "directions/<status>/*.json"),
-        ((), "records/<gateway_record_id>.json", "experiments/*/experiment.json"),
+        (
+            ("directions",),
+            "research-library/directions/<direction_id>/vN/direction.json",
+            "research-library/experiments/<experiment_id>/vN/experiment.json",
+        ),
+        (
+            ("experiments",),
+            "research-library/experiments/<experiment_id>/vN/experiment.json",
+            "research-library/directions/<direction_id>/vN/direction.json",
+        ),
+        (
+            (),
+            "records/<gateway_record_id>.json",
+            "research-library/experiments/<experiment_id>/vN/experiment.json",
+        ),
     ],
 )
 def test_journal_repair_hint_mentions_only_enabled_modules(modules, included, excluded):
@@ -4548,11 +5641,16 @@ def test_agent_git_head_is_kernel_id_only_for_clean_exact_source(tmp_path):
     first = repository.kernel_commit(source)
     assert len(first) in {40, 64}
 
-    (workspace / "directions" / "proposed").mkdir(parents=True)
-    (workspace / "directions" / "proposed" / ("direction_" + "1" * 32 + ".json")).write_text(
-        "{}\n", encoding="utf-8"
+    direction = (
+        workspace / "research-library" / "directions"
+        / ("direction_" + "1" * 32) / "v0"
     )
-    experiment = workspace / "experiments" / ("experiment_" + "2" * 32)
+    direction.mkdir(parents=True)
+    (direction / "direction.json").write_text("{}\n", encoding="utf-8")
+    experiment = (
+        workspace / "research-library" / "experiments"
+        / ("experiment_" + "2" * 32) / "v1"
+    )
     experiment.mkdir(parents=True)
     (experiment / "experiment.json").write_text("{}\n", encoding="utf-8")
     (workspace / "PROGRESS.md").write_text("# Runtime projection\n", encoding="utf-8")
@@ -4576,7 +5674,7 @@ def test_agent_git_head_is_kernel_id_only_for_clean_exact_source(tmp_path):
 
 
 
-def test_agent_workspace_projects_memory_commits_into_agent_git(tmp_path):
+def test_agent_workspace_does_not_project_controller_memory(tmp_path):
     controller = _controller_repository(
         tmp_path / "controller", "def run():\n    return 1\n"
     )
@@ -4594,21 +5692,26 @@ def test_agent_workspace_projects_memory_commits_into_agent_git(tmp_path):
         encoding="utf-8",
     )
     agent_root = tmp_path / "runtime" / "agent-workspace"
+    (agent_root / "memory").mkdir(parents=True)
+    (agent_root / "memory" / "v1.json").write_text(
+        "stale projected summary\n", encoding="utf-8"
+    )
     view = EpisodeWorkspace(
         controller,
         tmp_path / "evidence",
-        adaptive_root=tmp_path / "runtime" / "adaptive-state",
-        episode=1,
         persistent_root=agent_root,
     )
 
     view.prepare()
 
     agent_commit = view.agent_git.head()
-    projected = json.loads((agent_root / "memory" / "v1.json").read_text())
     assert agent_commit and agent_commit != controller_commit
-    assert projected["git_commit_hash"] == agent_commit
-    assert projected["long_horizon"]["candidate_commit"] == agent_commit
+    assert not (agent_root / "memory" / "v1.json").exists()
+    retired = list(
+        (tmp_path / "runtime" / "retired-agent-memory").glob("*/memory/v1.json")
+    )
+    assert len(retired) == 1
+    assert retired[0].read_text(encoding="utf-8") == "stale projected summary\n"
 
 
 def test_agent_workspace_is_stable_across_episode_controller_worktrees(tmp_path):
@@ -4640,13 +5743,17 @@ def test_agent_workspace_is_stable_across_episode_controller_worktrees(tmp_path)
         check=True,
     )
     runtime_root = tmp_path / "runtime"
+    runtime_root.mkdir()
+    (runtime_root / "agent-workspace-state.json").write_text(
+        json.dumps({"workspace_mode": "persistent", "kernel_digest": "legacy"})
+        + "\n",
+        encoding="utf-8",
+    )
     agent_root = runtime_root / "agent-workspace"
 
     first = EpisodeWorkspace(
         first_controller,
         tmp_path / "evidence-1",
-        adaptive_root=runtime_root / "adaptive-state",
-        episode=1,
         persistent_root=agent_root,
     )
     assert first.prepare() == agent_root
@@ -4674,13 +5781,19 @@ def test_agent_workspace_is_stable_across_episode_controller_worktrees(tmp_path)
     (agent_root / "scratch" / "probe.txt").write_text(
         "keep across episodes\n", encoding="utf-8"
     )
+    (agent_root / "tools" / "custom_probe.py").write_text(
+        "print('persistent tool')\n", encoding="utf-8"
+    )
+    custom_skill = agent_root / "skills" / "custom-optimization"
+    custom_skill.mkdir()
+    (custom_skill / "SKILL.md").write_text(
+        "# Persistent optimization skill\n", encoding="utf-8"
+    )
     first.publish()
 
     second = EpisodeWorkspace(
         second_controller,
         tmp_path / "evidence-2",
-        adaptive_root=runtime_root / "adaptive-state",
-        episode=2,
         persistent_root=agent_root,
     )
     assert second.prepare() == agent_root
@@ -4691,6 +5804,12 @@ def test_agent_workspace_is_stable_across_episode_controller_worktrees(tmp_path)
     assert (agent_root / "scratch" / "probe.txt").read_text(encoding="utf-8") == (
         "keep across episodes\n"
     )
+    assert (agent_root / "tools" / "custom_probe.py").read_text(
+        encoding="utf-8"
+    ) == "print('persistent tool')\n"
+    assert (custom_skill / "SKILL.md").read_text(encoding="utf-8") == (
+        "# Persistent optimization skill\n"
+    )
     assert subprocess.run(
         ["git", "branch", "--show-current"],
         cwd=agent_root,
@@ -4698,9 +5817,164 @@ def test_agent_workspace_is_stable_across_episode_controller_worktrees(tmp_path)
         capture_output=True,
         check=True,
     ).stdout.strip() == "experiment/persistent"
-    assert json.loads(
-        (runtime_root / "agent-workspace-state.json").read_text(encoding="utf-8")
-    )["workspace_mode"] == "persistent"
+    assert not (runtime_root / "agent-workspace-state.json").exists()
+    assert not (runtime_root / "state.json").exists()
+    assert not (runtime_root / "adaptive-state").exists()
+
+
+def test_runtime_reuses_agent_repository_without_episode_worktree(tmp_path):
+    campaign_root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="persistent-agent-repository",
+        launch_composition=_test_launch_composition(),
+        source=_test_source_binding(b"def run():\n    return 1\n"),
+    )
+    agent = _controller_repository(
+        campaign_root / "lineages" / "t0001" / "agent-workspace",
+        "def run():\n    return 1\n",
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=agent,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    lineage_state = campaign_root / "lineages" / "t0001" / "state.json"
+    merge_lineage_state(
+        lineage_state,
+        1,
+        completed_episodes=0,
+        session_id="persistent-session",
+        lineage_winner={"kernel_commit_id": head, "latency_us_geomean": 5.0},
+    )
+    runtime = SupervisorRuntime(
+        RuntimeConfig(hardware="L20D", workspace=agent, wiki_enabled=False),
+        workspace_provider=ManagedCandidateWorkspace(),
+    )
+    try:
+        runtime_configuration = campaign_runtime_configuration(agent)
+        assert runtime_configuration is not None
+        assert runtime_configuration["hardware"] == "L20D"
+        assert runtime_configuration["transport"] == "agate_sdk"
+        assert runtime_configuration["source_checkout"]["git_commit_id"]
+        manifest = json.loads((campaign_root / "campaign.json").read_text())
+        assert manifest["source"] == _test_source_binding(
+            b"def run():\n    return 1\n"
+        )
+        assert not (
+            campaign_root
+            / "lineages"
+            / "t0001"
+            / "runtime-config.json"
+        ).exists()
+        first = runtime.register_episode(
+            agent,
+            episode=1,
+            base_commit=head,
+            branch="work",
+            memory_version=1,
+            managed_agent_workspace=True,
+        )
+        assert first == agent.resolve()
+        merged = json.loads(lineage_state.read_text())
+        assert merged["session_id"] == "persistent-session"
+        assert merged["lineage_winner"]["kernel_commit_id"] == head
+        assert merged["current_episode"] == 1
+        (agent / "kernel.py").write_text(
+            "def run():\n    return 2\n", encoding="utf-8"
+        )
+        (agent / "scratch" / "probe.txt").write_text(
+            "unfinished probe\n", encoding="utf-8"
+        )
+
+        second = runtime.register_episode(
+            agent,
+            episode=2,
+            base_commit=head,
+            branch="work",
+            memory_version=2,
+            managed_agent_workspace=True,
+        )
+
+        assert second == first
+        assert (agent / "kernel.py").read_text(encoding="utf-8").endswith(
+            "return 2\n"
+        )
+        assert (agent / "scratch" / "probe.txt").read_text(
+            encoding="utf-8"
+        ) == "unfinished probe\n"
+        assert not (campaign_root / "lineages" / "t0001" / "segment-worktrees").exists()
+        assert not (campaign_root / "search" / "trajectories").exists()
+        assert runtime.journals[agent.resolve()].service.episode == 2
+        assert not (campaign_root / "lineages" / "t0001" / "journals").exists()
+        lineage_state = json.loads(
+            (campaign_root / "lineages" / "t0001" / "state.json").read_text()
+        )
+        assert lineage_state["current_episode"] == 2
+        assert lineage_state["segment_status"] == "active"
+        assert not {
+            "agent_git",
+            "kernel_digest",
+            "controller_kernel_digest",
+            "workspace_mode",
+            "research_records",
+            "research_modules",
+            "runtime_plugins",
+        }.intersection(lineage_state)
+    finally:
+        runtime.close()
+
+
+def test_legacy_episode_submissions_migrate_once_into_campaign_store(tmp_path):
+    legacy = tmp_path / "legacy-journals"
+    journal = legacy / "episodes" / "e00000003" / "journal.json"
+    journal.parent.mkdir(parents=True)
+    accepted_commit = "a" * 40
+    rejected_commit = "b" * 40
+    journal.write_text(
+        json.dumps(
+            {
+                "kernel_submissions": [
+                    {
+                        "kernel_commit_id": accepted_commit,
+                        "accepted": True,
+                        "submitted_at": "2026-11-01T00:00:00+00:00",
+                        "evaluation_evidence": {
+                            "status": "passed",
+                            "gateway_record_id": "gateway-" + "1" * 32,
+                        },
+                    },
+                    {
+                        "kernel_commit_id": rejected_commit,
+                        "accepted": False,
+                        "submitted_at": "2026-11-01T00:01:00+00:00",
+                        "diagnostics": ["final-source review rejected the commit"],
+                    },
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = tmp_path / "submissions"
+
+    assert migrate_legacy_journals(legacy, store, lineage="T2") == 2
+    first = submissions(store, lineage="T2")
+    assert len(first) == 2
+    assert accepted_submission_kernel_ids(store, lineage="T2") == {
+        accepted_commit
+    }
+
+    # Re-registering or moving a Campaign must not duplicate immutable audit
+    # rows. The migration identity does not depend on the absolute path.
+    assert migrate_legacy_journals(legacy, store, lineage="T2") == 0
+    moved = tmp_path / "moved-journals"
+    moved.mkdir()
+    moved_journal = moved / "episodes" / "e00000003" / "journal.json"
+    moved_journal.parent.mkdir(parents=True)
+    moved_journal.write_bytes(journal.read_bytes())
+    assert migrate_legacy_journals(moved, store, lineage="T2") == 0
+    assert submissions(store, lineage="T2") == first
 
 
 def test_runtime_rebinds_stable_agent_workspace_to_next_episode_journal(tmp_path):
@@ -4791,10 +6065,9 @@ def test_runtime_rebinds_stable_agent_workspace_to_next_episode_journal(tmp_path
             ["git", "rev-list", "--all", "--count"], cwd=second,
             text=True, capture_output=True, check=True,
         ).stdout.strip() == commits_before
-        assert runtime.journals[second].service.path == runtime.episode_journal_path(2)
-        assert runtime.journals[first_controller.resolve()].service.path == (
-            runtime.episode_journal_path(1)
-        )
+        assert runtime.journals[second].service.episode == 2
+        assert runtime.journals[first_controller.resolve()].service.episode == 1
+        assert not (runtime.audit_root / "journals").exists()
     finally:
         runtime.close()
 
@@ -4859,14 +6132,19 @@ def test_epoch_git_exchange_filters_paths_and_preserves_peer_ref(tmp_path):
     )
     source.persist()
 
-    export = tmp_path / "peer.bundle"
-    receipt = export_epoch(
-        source_workspace, export, trajectory=2, epoch=1, audit_path=tmp_path / "peer.json"
+    publication_root = tmp_path / "publications" / "p00000001"
+    export = publication_root / "history.bundle"
+    receipt = export_publication(
+        source_workspace,
+        export,
+        trajectory=2,
+        publication=1,
+        audit_path=publication_root / "receipt.json",
     )
     assert receipt["commit_count"] >= 1
     assert b"scratch/secret.txt" not in export.read_bytes()
     assert subprocess.run(
-        ["git", "show-ref", "--verify", "refs/atrex/shared/T2/e0001/head"],
+        ["git", "show-ref", "--verify", "refs/remotes/atrex/T2"],
         cwd=source_workspace,
         capture_output=True,
         check=False,
@@ -4874,24 +6152,25 @@ def test_epoch_git_exchange_filters_paths_and_preserves_peer_ref(tmp_path):
 
     destination = tmp_path / "destination"
     _install(destination, "def run():\n    return 0\n")
-    local = AgentGit(destination, tmp_path / "destination.bundle")
+    local = AgentGit(destination)
     local.prepare()
-    local.persist()
-    imported = import_exports(
-        tmp_path / "destination.bundle",
+    imported = import_exports_into_repository(
+        destination,
         [export],
         notes={
-            "refs/atrex/shared/T2/e0001/head": {
+            "refs/remotes/atrex/T2": {
                 "measurement_status": "measured", "kernel_id": "4" * 40
             }
         },
         audit_path=tmp_path / "import.json",
     )
-    assert imported["shared_refs"] == ["refs/atrex/shared/T2/e0001/head"]
+    assert imported["imports"] == ["T2@p00000001"]
+    assert imported["shared_refs"] == ["refs/remotes/atrex/T2"]
     assert imported["commit_mappings"] == [
         {
-            "export": "peer.bundle",
-            "source_ref": "refs/atrex/shared/T2/e0001/head",
+            "trajectory": 2,
+            "publication": 1,
+            "source_ref": "refs/remotes/atrex/T2",
             "original_agent_commit": receipt["original_agent_commit"],
             "imported_commit": imported["commit_mappings"][0]["imported_commit"],
         }
@@ -4899,38 +6178,36 @@ def test_epoch_git_exchange_filters_paths_and_preserves_peer_ref(tmp_path):
     assert imported["commit_mappings"][0]["imported_commit"]
     assert imported["commit_mappings"][0]["imported_commit"] == receipt["original_agent_commit"]
 
-    # A trajectory-stable repository imports refs added to its recovery bundle
-    # in place; it does not need a newly projected Episode workspace.
-    local.prepare()
+    # A trajectory-stable repository imports peer refs in place; it does not
+    # need a recovery bundle or newly projected Episode workspace.
     assert subprocess.run(
-        ["git", "show-ref", "--verify", "refs/atrex/shared/T2/e0001/head"],
+        ["git", "show-ref", "--verify", "refs/remotes/atrex/T2"],
         cwd=destination,
         text=True,
         capture_output=True,
         check=True,
     ).returncode == 0
+    remote_branches = subprocess.run(
+        ["git", "branch", "-r", "--format=%(refname:short)"],
+        cwd=destination,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.splitlines()
+    assert "atrex/T2" in remote_branches
 
-    inspect = tmp_path / "inspect"
-    inspect.mkdir()
-    subprocess.run(["git", "init", "-q"], cwd=inspect, check=True)
-    subprocess.run(
-        ["git", "fetch", str(tmp_path / "destination.bundle"),
-         "+refs/atrex/*:refs/atrex/*", "+refs/notes/*:refs/notes/*"],
-        cwd=inspect, check=True, capture_output=True,
-    )
     tree = subprocess.run(
-        ["git", "ls-tree", "-r", "--name-only", "refs/atrex/shared/T2/e0001/head"],
-        cwd=inspect, text=True, capture_output=True, check=True,
+        ["git", "ls-tree", "-r", "--name-only", "refs/remotes/atrex/T2"],
+        cwd=destination, text=True, capture_output=True, check=True,
     ).stdout.splitlines()
     assert tree == [
-        ".atrex_source.json",
         ".gitignore",
         "impl/peer.py",
         "kernel.py",
     ]
     messages = subprocess.run(
-        ["git", "log", "--format=%s", "refs/atrex/shared/T2/e0001/head"],
-        cwd=inspect, text=True, capture_output=True, check=True,
+        ["git", "log", "--format=%s", "refs/remotes/atrex/T2"],
+        cwd=destination, text=True, capture_output=True, check=True,
     ).stdout.splitlines()
     original_messages = subprocess.run(
         ["git", "log", "--format=%s", receipt["original_agent_commit"]],
@@ -4942,7 +6219,7 @@ def test_epoch_git_exchange_filters_paths_and_preserves_peer_ref(tmp_path):
     assert messages == original_messages
 
 
-def test_epoch_git_exchange_broadcasts_non_head_lineage_winner(tmp_path):
+def test_epoch_git_exchange_keeps_stable_ref_on_published_head(tmp_path):
     source_workspace = tmp_path / "source"
     _install(source_workspace, "def run():\n    return 1\n")
     source = AgentGit(source_workspace, tmp_path / "source.bundle")
@@ -4962,36 +6239,39 @@ def test_epoch_git_exchange_broadcasts_non_head_lineage_winner(tmp_path):
     head = source.head()
     assert head and head != winner
 
-    export = tmp_path / "peer.bundle"
-    receipt = export_epoch(
+    publication_root = tmp_path / "publications" / "p00000001"
+    export = publication_root / "history.bundle"
+    receipt = export_publication(
         source_workspace,
         export,
         trajectory=2,
-        epoch=1,
+        publication=1,
         lineage_winner_commit_id=winner,
-        audit_path=tmp_path / "peer.json",
+        audit_path=publication_root / "receipt.json",
     )
-    assert receipt["original_agent_commits"] == {
-        "head": head,
-        "lineage_winner": winner,
-    }
+    assert receipt["source_ref"] == "refs/remotes/atrex/T2"
+    assert receipt["original_agent_commit"] == head
+    assert receipt["lineage_winner_commit_id"] == winner
 
     destination = tmp_path / "destination"
     _install(destination, "def run():\n    return 0\n")
-    local = AgentGit(destination, tmp_path / "destination.bundle")
+    local = AgentGit(destination)
     local.prepare()
-    local.persist()
-    imported = import_exports(
-        tmp_path / "destination.bundle",
+    imported = import_exports_into_repository(
+        destination,
         [export],
         audit_path=tmp_path / "import.json",
     )
     mapping = imported["commit_mappings"][0]
-    assert mapping["imported_commits"] == {
-        "head": head,
-        "lineage_winner": winner,
-    }
-    local.prepare()
+    assert mapping["source_ref"] == "refs/remotes/atrex/T2"
+    assert mapping["imported_commit"] == head
+    assert subprocess.run(
+        ["git", "rev-parse", "refs/remotes/atrex/T2"],
+        cwd=destination,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip() == head
     assert subprocess.run(
         ["git", "cat-file", "-e", f"{winner}^{{commit}}"],
         cwd=destination,
@@ -4999,6 +6279,41 @@ def test_epoch_git_exchange_broadcasts_non_head_lineage_winner(tmp_path):
         check=False,
     ).returncode == 0
     assert local.head() != winner
+
+    local_head = local.head()
+    (source_workspace / "kernel.py").write_text(
+        "def run():\n    return 3\n", encoding="utf-8"
+    )
+    subprocess.run(["git", "add", "kernel.py"], cwd=source_workspace, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "Agent: publish newer HEAD"],
+        cwd=source_workspace,
+        check=True,
+    )
+    newer_head = source.head()
+    newer_root = tmp_path / "publications" / "p00000002"
+    newer_export = newer_root / "history.bundle"
+    export_publication(
+        source_workspace,
+        newer_export,
+        trajectory=2,
+        publication=2,
+        lineage_winner_commit_id=winner,
+        audit_path=newer_root / "receipt.json",
+    )
+    import_exports_into_repository(
+        destination,
+        [newer_export],
+        audit_path=tmp_path / "import-2.json",
+    )
+    assert subprocess.run(
+        ["git", "rev-parse", "atrex/T2"],
+        cwd=destination,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip() == newer_head
+    assert local.head() == local_head
 
 
 def test_peer_in_progress_direction_does_not_block_local_lease(tmp_path):
@@ -5140,9 +6455,6 @@ def test_pooled_search_derives_observational_winners_without_promoting(tmp_path)
     seed = {"latency_us_geomean": 10.0, "name": "seed"}
 
     class Driver:
-        def identity(self):
-            return "binding"
-
         def bootstrap(self):
             return seed
 
@@ -5183,18 +6495,21 @@ def test_pooled_search_derives_observational_winners_without_promoting(tmp_path)
         Driver(),
     ).run()
     assert result == "search: completed Epoch budget"
-    state = read_state(root / "state.json")
+    state = read_state(root / COORDINATOR_STATE)
     assert state["global_best"]["kernel_commit_id"] == "1" * 40
     assert state["global_best"]["trajectory"] == 1
+    assert "lineages" not in state
+    first = read_state(lineage_state_path(root, 1))
+    second = read_state(lineage_state_path(root, 2))
     assert (
-        state["lineages"]["1"]["lineage_winner"]["kernel_commit_id"]
+        first["lineage_winner"]["kernel_commit_id"]
         == "1" * 40
     )
-    assert state["lineages"]["2"]["lineage_winner"] is None
-    assert state["lineages"]["1"]["agent_head_commit_id"] == "1" * 40
-    assert state["lineages"]["2"]["agent_head_commit_id"] == "2" * 40
-    assert state["lineages"]["1"]["session_id"] == "session-t1"
-    assert state["lineages"]["2"]["session_id"] == "session-t2"
+    assert second["lineage_winner"] is None
+    assert first["agent_head_commit_id"] == "1" * 40
+    assert second["agent_head_commit_id"] == "2" * 40
+    assert first["session_id"] == "session-t1"
+    assert second["session_id"] == "session-t2"
 
 
 def test_pooled_search_rejects_pre_submitted_winner_checkpoint(tmp_path):
@@ -5208,12 +6523,11 @@ def test_pooled_search_rejects_pre_submitted_winner_checkpoint(tmp_path):
     )
 
     class Driver:
-        def identity(self):
-            return "binding"
+        pass
 
     root = tmp_path / "search"
     root.mkdir()
-    (root / "state.json").write_text(json.dumps({
+    (root / COORDINATOR_STATE).write_text(json.dumps({
         "schema_version": 1,
         "options": {
             "epochs": 2,

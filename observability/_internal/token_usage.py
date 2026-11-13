@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
-"""Report Session/Episode token usage, wall time and token efficiency."""
+"""Build Session/Episode token usage and token-checkpoint projections."""
 from __future__ import annotations
 
 import argparse
-from collections import Counter
 from pathlib import Path
 import sys
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from observability.common import (
+from observability._internal.common import (
     add_output_arguments,
     attempt_documents,
     discover_scopes,
@@ -55,6 +54,28 @@ def _summed_session_usage(rows: list[dict]) -> dict:
 
 def _review_rows(scope) -> list[dict]:
     rows = []
+    from aka.light.runtime.paths import supervisor_campaign_base_root
+    from aka.light.workflow.review_archive import bound_review_usage_rows
+
+    campaign_root = supervisor_campaign_base_root(scope.workspace)
+    lineage = f"T{scope.trajectory}" if scope.trajectory is not None else None
+    for value in bound_review_usage_rows(campaign_root, lineage=lineage):
+        rows.append({
+            "scope": scope.label,
+            "trajectory": scope.trajectory,
+            "review_kind": value.get("review_kind"),
+            "label": value.get("label"),
+            "backend": None,
+            "model": None,
+            "recorded_at": value.get("recorded_at"),
+            "session_id": value.get("session_id"),
+            "exit_status": value.get("exit_status"),
+            "timed_out": value.get("timed_out") is True,
+            "usage": _usage(value.get("usage")),
+            "observation_errors": [],
+            "record_path": value.get("source"),
+        })
+    # Read-only compatibility for pre-object-bound Review receipts.
     root = scope.audit_root / "review-usage"
     for path in sorted(root.glob("*/*.json")):
         value = read_json(path, default={})
@@ -205,7 +226,7 @@ def _all_paths_totals(
 
 def _session_rows(scope) -> list[dict]:
     rows = []
-    root = scope.workspace / ".atrex_long_horizon" / "episodes"
+    root = scope.segment_root / "episodes"
     for path in sorted(root.glob("e*/sessions/run-*/token-usage.json")):
         value = read_json(path, default={})
         if not isinstance(value, dict):
@@ -273,7 +294,6 @@ def snapshot(workspace: Path) -> dict:
     episodes = []
     reviews = []
     token_checkpoints = []
-    incidents = Counter()
     for scope in discover_scopes(workspace):
         attempts = {
             attempt["episode"]: attempt
@@ -288,11 +308,6 @@ def snapshot(workspace: Path) -> dict:
         for session in scope_sessions:
             if session["stage"] == "episode" and isinstance(session["episode"], int):
                 session_by_episode.setdefault(session["episode"], []).append(session)
-            text = " ".join([*session["warnings"], *session["capture_errors"]]).casefold()
-            if "output" in text and "trunc" in text:
-                incidents["output_truncation"] += 1
-            if "rate_limit" in text or "throttl" in text:
-                incidents["rate_limit"] += 1
         telemetry_episodes = set()
         for telemetry in telemetry_documents(scope):
             episode = telemetry.get("episode")
@@ -300,16 +315,6 @@ def snapshot(workspace: Path) -> dict:
                 telemetry_episodes.add(episode)
             phase_tokens = telemetry.get("phase_tokens") if isinstance(telemetry.get("phase_tokens"), dict) else {}
             terminal = _usage(phase_tokens.get("terminal_usage"))
-            invocations = telemetry.get("invocations") if isinstance(telemetry.get("invocations"), list) else []
-            for invocation in invocations:
-                if not isinstance(invocation, dict):
-                    continue
-                kind = str(invocation.get("failure_kind") or "").casefold()
-                code = str(invocation.get("provider_error_code") or "").casefold()
-                if "output" in kind and "limit" in kind:
-                    incidents["output_truncation"] += 1
-                if "rate" in kind or "rate" in code or "throttl" in code:
-                    incidents["rate_limit"] += 1
             episodes.append(
                 {
                     "scope": scope.label,
@@ -324,8 +329,6 @@ def snapshot(workspace: Path) -> dict:
                     "reason_codes": telemetry.get("reason_codes") or [],
                     "session_count": len(session_by_episode.get(episode, [])),
                     "wall_seconds": sum(row["wall_seconds"] or 0.0 for row in session_by_episode.get(episode, [])) or None,
-                    "active_seconds": None,
-                    "agate_wait_seconds": None,
                 }
             )
         for episode, episode_sessions in sorted(session_by_episode.items()):
@@ -347,15 +350,8 @@ def snapshot(workspace: Path) -> dict:
                     "reason_codes": ["telemetry_summary_unavailable"],
                     "session_count": len(episode_sessions),
                     "wall_seconds": sum(row["wall_seconds"] or 0.0 for row in episode_sessions) or None,
-                    "active_seconds": None,
-                    "agate_wait_seconds": None,
                 }
             )
-        counts = Counter(
-            row["episode"] for row in scope_sessions
-            if row["stage"] == "episode" and isinstance(row["episode"], int)
-        )
-        incidents["session_restart"] += sum(max(0, count - 1) for count in counts.values())
 
     episodes.sort(key=lambda row: (row["scope"], row["episode"] if isinstance(row["episode"], int) else -1))
     startup_sessions = [row for row in sessions if row["stage"] != "episode"]
@@ -383,7 +379,6 @@ def snapshot(workspace: Path) -> dict:
         )
         for key in TOKEN_KEYS
     }
-    episode_totals = [row["usage"].get("total_tokens") for row in episodes if isinstance(row["usage"].get("total_tokens"), int)]
     reviews.sort(key=lambda row: (
         row["scope"], row["review_kind"], str(row.get("recorded_at") or "")
     ))
@@ -408,40 +403,14 @@ def snapshot(workspace: Path) -> dict:
         main_rows=[*episodes, *startup_sessions],
         review_rows=reviews,
     )
-    return {
-        "schema_version": 4,
+    result = {
+        "schema_version": 5,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
-        # Compatibility alias retained for existing consumers. Both fields are
-        # main-Agent-only and intentionally exclude every independent reviewer.
-        "totals": token_totals,
         "main_agent_totals": token_totals,
         "all_paths_totals": all_paths_totals,
-        "startup_totals": startup_token_totals,
         "review_totals": review_summary,
         "review_totals_by_kind": review_kinds,
-        "token_availability": {
-            "input_tokens": "available when the Agent backend reports usage",
-            "output_tokens": "available when the Agent backend reports usage",
-            "reasoning_tokens": (
-                "reported separately when the backend exposes a native reasoning counter; "
-                "otherwise null and never inferred from output_tokens"
-            ),
-            "cache_read_tokens": "available when the Agent backend reports usage",
-            "cache_write_tokens": "available when the Agent backend reports usage",
-            "episode_fallback": (
-                "when telemetry.summary.json is absent, totals use the sum of that Episode's "
-                "captured Session usage and mark measurement=session_capture_fallback"
-            ),
-        },
-        "episode_unit": "one Agent-defined Light Episode segment",
-        "average_tokens_per_episode": sum(episode_totals) / len(episode_totals) if episode_totals else None,
-        "incidents": dict(sorted(incidents.items())),
-        "time_availability": {
-            "wall_seconds": "available for finalized captured Sessions",
-            "active_seconds": "not durably persisted by current main",
-            "agate_wait_seconds": "not durably persisted by current main",
-        },
         "sessions": sessions,
         "episodes": episodes,
         "reviews": reviews,
@@ -455,6 +424,9 @@ def snapshot(workspace: Path) -> dict:
             if row.get("event") == "accepted-submit-kernel"
         ],
     }
+    if startup_sessions:
+        result["startup_totals"] = startup_token_totals
+    return result
 
 
 def render(value: dict) -> str:
@@ -531,9 +503,6 @@ def render(value: dict) -> str:
                 row["usage"].get("measurement"),
             ] for row in checkpoints],
         ))
-    lines += ["", f"Average tokens per Episode: {value['average_tokens_per_episode'] if value['average_tokens_per_episode'] is not None else '—'}",
-              f"Incidents: {value['incidents']}",
-              "Active time / Agate wait time: unavailable in durable main records"]
     return "\n".join(lines)
 
 

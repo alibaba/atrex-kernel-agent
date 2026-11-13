@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Report Runtime Tool calls, outcomes, durations and Session attribution."""
+"""Read authoritative Runtime Tool audit calls, outcomes and durations."""
 from __future__ import annotations
 
 import argparse
@@ -8,19 +8,21 @@ import json
 from pathlib import Path
 import sys
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from observability.common import (
+from observability._internal.common import (
     add_output_arguments,
     discover_scopes,
     emit,
     KIND_PATTERN,
-    load_snapshot,
     main_error,
     observed_at,
+    elapsed_seconds,
+    age_seconds,
     read_json,
+    runtime_audit_paths,
     table,
 )
 
@@ -31,7 +33,12 @@ def _tool(operation: object, argv: object) -> str:
     if operation == "gateway":
         match = KIND_PATTERN.search(text)
         return match.group(1) if match else "gateway"
-    if operation in {"journal", "wiki", "plugin"} and values:
+    # Wiki audit argv starts with the natural-language question, not a command
+    # name.  Treating that value as the tool explodes the summary cardinality
+    # and can expose an entire prompt as a table label.
+    if operation == "wiki":
+        return "wiki-query"
+    if operation in {"journal", "plugin"} and values:
         return values[0]
     return str(operation or "unknown")
 
@@ -68,62 +75,65 @@ def _stream_duration(*streams: object) -> float | None:
     return None
 
 
-def _structured_success(content: object) -> tuple[bool | None, str]:
-    """Read an explicit result status; never infer failure from prose substrings."""
-    if not isinstance(content, str):
-        return None, "unavailable"
-    candidates = []
-    payloads = [content, *content.splitlines()]
-    for line in payloads:
-        payload = line.split("=", 1)[-1] if "_JSON=" in line else line
-        try:
-            value = json.loads(payload)
-        except ValueError:
-            continue
-        if isinstance(value, dict):
-            candidates.append(value)
-    for value in candidates:
-        exit_code = value.get("exit_code")
-        if type(exit_code) is int:
-            return exit_code == 0, "structured_exit_code"
-        success = value.get("success")
-        if type(success) is bool:
-            return success, "structured_success"
-        ok = value.get("ok")
-        if type(ok) is bool:
-            return ok, "structured_ok"
-        status = str(value.get("status") or "").casefold()
-        if status in {"completed", "succeeded", "success", "passed", "pass", "reused"}:
-            return True, "structured_status"
-        if status in {"failed", "failure", "error", "cancelled", "canceled", "rejected"}:
-            return False, "structured_status"
-        if isinstance(value.get("error"), dict) or value.get("error_class"):
-            return False, "structured_error"
-    return None, "unavailable"
+def _status_success(status: object) -> bool | None:
+    value = str(status or "").casefold()
+    if value in {"completed", "succeeded", "success", "passed", "reused"}:
+        return True
+    if value in {
+        "failed", "failure", "error", "cancelled", "canceled", "rejected",
+        "timed_out", "timeout",
+    }:
+        return False
+    return None
 
 
 def _audit_calls(scope) -> list[dict]:
     rows = []
-    for path in sorted(scope.audit_root.glob("request-*.json")):
+    for path in runtime_audit_paths(scope):
         value = read_json(path, default={})
         if not isinstance(value, dict):
             continue
-        duration = _stream_duration(value.get("stdout"), value.get("stderr"))
+        state = value.get("state")
+        duration = value.get("duration_seconds")
+        if type(duration) not in {int, float} or duration < 0:
+            duration = elapsed_seconds(value.get("started_at"), value.get("finished_at"))
+        if duration is None:
+            duration = _stream_duration(value.get("stdout"), value.get("stderr"))
+        exit_code = value.get("exit_code")
+        if state == "succeeded":
+            success = True
+        elif state == "failed":
+            success = False
+        else:
+            success = exit_code == 0 if type(exit_code) is int else None
+        started_at = value.get("started_at") or value.get("created_at")
         rows.append(
             {
                 "scope": scope.label,
                 "trajectory": scope.trajectory,
                 "request_id": path.stem.removeprefix("request-"),
-                "created_at": value.get("created_at"),
-                "tool": _tool(value.get("operation"), value.get("argv")),
+                "created_at": started_at,
+                "started_at": started_at,
+                "finished_at": value.get("finished_at"),
+                "tool": value.get("tool") or _tool(value.get("operation"), value.get("argv")),
                 "operation_family": value.get("operation"),
-                "success": value.get("exit_code") == 0,
-                "success_basis": "audit_exit_code",
-                "exit_code": value.get("exit_code"),
+                "status": state,
+                "success": success,
+                "success_basis": (
+                    "request_lifecycle"
+                    if state in {"succeeded", "failed", "pending", "running"}
+                    else "audit_exit_code"
+                    if type(exit_code) is int
+                    else "unavailable"
+                ),
+                "exit_code": exit_code if type(exit_code) is int else None,
                 "duration_seconds": duration,
+                "pending_age_seconds": age_seconds(started_at)
+                if state in {"running", "pending"}
+                else None,
+                "http_status": value.get("http_status"),
+                "error": value.get("error") if isinstance(value.get("error"), dict) else None,
                 "gateway_record_id": value.get("gateway_record_id"),
-                "session_id": None,
-                "episode": None,
             }
         )
     by_request_id = {row["request_id"]: row for row in rows}
@@ -138,17 +148,13 @@ def _audit_calls(scope) -> list[dict]:
                 "trajectory": scope.trajectory,
                 "request_id": value.get("request_id") or path.stem,
                 "created_at": value.get("finished_at"),
-                "tool": value.get("tool") or "wiki",
+                "tool": "wiki-query",
                 "operation_family": "wiki_receipt",
-                "success": value.get("status") in {"completed", "reused"},
+                "success": _status_success(value.get("status")),
                 "success_basis": "wiki_receipt_status",
-                "exit_code": None,
                 "duration_seconds": value.get("total_latency_ms") / 1000.0
                 if type(value.get("total_latency_ms")) in {int, float}
                 else None,
-                "gateway_record_id": None,
-                "session_id": None,
-                "episode": None,
                 "status": value.get("status"),
                 "cache_hit": value.get("cache_hit") is True,
             }
@@ -158,51 +164,18 @@ def _audit_calls(scope) -> list[dict]:
                 duration_seconds=receipt["duration_seconds"],
                 status=receipt["status"],
                 cache_hit=receipt["cache_hit"],
+                success=receipt["success"],
+                success_basis="wiki_receipt_status",
             )
         else:
             rows.append(receipt)
     return rows
 
 
-def _session_calls(scope) -> list[dict]:
-    snapshot = load_snapshot(scope)
-    rows = []
-    for session in snapshot.sessions:
-        pending = {}
-        for event in session.events:
-            if not isinstance(event, dict):
-                continue
-            if event.get("kind") == "tool_call":
-                text = str(event.get("content") or "")
-                match = KIND_PATTERN.search(text)
-                tool = match.group(1) if match else str(event.get("tool_name") or "unknown")
-                row = {
-                    "scope": scope.label,
-                    "trajectory": scope.trajectory,
-                    "session_id": session.session_id,
-                    "episode": session.episode,
-                    "tool_id": event.get("tool_id"),
-                    "tool": tool,
-                    "sequence": event.get("sequence"),
-                    "success": None,
-                    "success_basis": "unavailable",
-                }
-                rows.append(row)
-                if row["tool_id"]:
-                    pending[row["tool_id"]] = row
-            elif event.get("kind") == "tool_result" and event.get("tool_id") in pending:
-                success, basis = _structured_success(event.get("content"))
-                pending[event["tool_id"]]["success"] = success
-                pending[event["tool_id"]]["success_basis"] = basis
-    return rows
-
-
 def snapshot(workspace: Path) -> dict:
     calls = []
-    attributed = []
     for scope in discover_scopes(workspace):
         calls.extend(_audit_calls(scope))
-        attributed.extend(_session_calls(scope))
     grouped = defaultdict(list)
     for row in calls:
         grouped[row["tool"]].append(row)
@@ -223,17 +196,11 @@ def snapshot(workspace: Path) -> dict:
             }
         )
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
         "summary": summary,
         "calls": calls,
-        "session_attribution": attributed,
-        "attribution_note": (
-            "Audit receipts contain authoritative outcomes but not Session/Episode IDs. "
-            "Session transcripts contain attribution but cannot be safely joined to every audit receipt on current main. "
-            "Session success is reported only when the tool result carries a structured status; otherwise it is null."
-        ),
     }
 
 
@@ -250,8 +217,6 @@ def render(value: dict) -> str:
                   row["duration_samples"]]
                  for row in value["summary"]],
             ),
-            "",
-            value["attribution_note"],
         ]
     )
 

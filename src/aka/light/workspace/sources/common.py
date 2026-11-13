@@ -25,7 +25,7 @@ PROTECTED = {"atrex_bench", "torch", "cutlass", "cuda", "triton", "site", "sitec
              "usercustomize", "importlib", "packaging", "json", "subprocess", "os", "sys"}
 # Controller/public inputs and runtime state are not Candidate source files.
 WORKSPACE_ONLY = {"tools", "skills", "scratch", "memory", "input", "profiles", "eval", "plans",
-    "directions", "experiments", "records",
+    "directions", "experiments", "records", "research-library",
     "reference", "reference-projects", "references", "gpu-wiki", "atrex-bench", "verification_artifacts",
     "README.md", "CLAUDE.md", "WORKSPACE.md", "PROGRESS.md", "frontier.json", "agent_problem.json", "reference.py", "input.py",
     "shapes.json", "metadata.json", "roofline.json", "valid.py", "definition.json", "workload.jsonl",
@@ -67,7 +67,7 @@ class Layout:
     auxiliary_metadata: tuple[str, ...] = ()
 
     def owns(self, name: str) -> bool:
-        return name == SELECTION or name in self.candidate_metadata
+        return name in self.candidate_metadata
 
     def diagnostic_route(self, kind: str) -> str:
         if self.typed_only:

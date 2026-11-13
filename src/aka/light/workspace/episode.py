@@ -1,4 +1,4 @@
-"""Persistent Episode drafts with an isolated Agent-local Git repository."""
+"""Persistent Agent workspace projected across Episode audit segments."""
 
 from __future__ import annotations
 
@@ -6,18 +6,18 @@ import hashlib
 import json
 import os
 import stat
-import subprocess
 import tempfile
+import uuid
 from pathlib import Path
 
+from aka.legacy.task.persistence import durable_unlink, durable_write_json
 from aka.light.agent.home import open_private_directory
-from aka.legacy.task.persistence import durable_write_json
 from aka.light.agent.session_tail import read_regular_bytes
 from aka.light.workspace.sources import (
-    snapshot as source_snapshot,
     install as install_source,
-    policy_at,
     instructions as source_instructions,
+    policy_at,
+    snapshot as source_snapshot,
 )
 
 EPISODE_WORKSPACE_ENV = "ATREX_EPISODE_WORKSPACE"
@@ -72,15 +72,14 @@ def bounded_tree_entries(root: Path):
 
 
 class EpisodeWorkspace:
-    def __init__(self, worktree: Path, directory: Path, *, is_ppu: bool = False,
+    def __init__(self, source_workspace: Path, directory: Path, *, is_ppu: bool = False,
                  research_records: bool = True, research_modules=("directions", "experiments"), plugin_registry=None,
-                 inherit_state: bool = True, adaptive_root: Path | None = None,
-                 episode: int | None = None, workspace_policy: str = "",
+                 workspace_policy: str = "",
                  persistent_root: Path | None = None):
         if plugin_registry is None:
             from aka.light.runtime.catalog import PluginRegistry
             plugin_registry = PluginRegistry()
-        self.worktree = worktree
+        self.source_workspace = source_workspace
         self.persistent = persistent_root is not None
         # ``directory`` remains Episode-scoped evidence storage.  With the
         # default inheritance policy the Agent repository itself is instead
@@ -90,73 +89,116 @@ class EpisodeWorkspace:
             if persistent_root is not None
             else directory / "workspace"
         )
-        self.state_path = (
-            self.root.parent / "agent-workspace-state.json"
-            if persistent_root is not None
-            else directory / "state.json"
-        )
+        self.private_root = self.root.parent if self.persistent else directory
+        # A persistent Agent repository is its own recovery authority. Its
+        # lineage state is written independently by SupervisorRuntime; workspace
+        # preparation must not add a second mutable state document beside it.
+        self.state_path = None if self.persistent else directory / "state.json"
         self.is_ppu = is_ppu
         self.research_records = research_records
         self.research_modules = tuple(research_modules)
         self.plugin_registry = plugin_registry
-        self.inherit_state = inherit_state
         if not isinstance(workspace_policy, str):
             raise TypeError("workspace_policy must be text")
         self.workspace_policy = workspace_policy
-        self.adaptive_root = adaptive_root
-        from aka.light.workspace.adaptive import AdaptiveState, reserved_paths
+        from aka.light.workspace.managed_assets import reserved_paths
         self.reserved_paths = reserved_paths(plugin_registry)
-        self.adaptive = (AdaptiveState(adaptive_root, episode, self.reserved_paths)
-                         if adaptive_root is not None else None)
         from aka.light.workspace.agent_git import AgentGit
-        git_state_root = adaptive_root or self.state_path.parent
-        self.agent_git = AgentGit(self.root, git_state_root / "agent-git.bundle")
+        # The real trajectory repository is the recovery authority. Light no
+        # longer snapshots it into a per-Episode bundle.
+        self.agent_git = AgentGit(self.root)
+
+    def _retire_memory_tree(self) -> None:
+        """Move the retired Agent-visible memory tree into private storage."""
+        root = self.root / "memory"
+        try:
+            mode = root.stat(follow_symlinks=False).st_mode
+        except FileNotFoundError:
+            return
+        if not stat.S_ISDIR(mode) or root.is_symlink():
+            raise ValueError("Agent memory path must be a real directory")
+        backup = (
+            self.private_root
+            / "retired-agent-memory"
+            / uuid.uuid4().hex
+            / "memory"
+        )
+        with open_private_directory(self.root) as source, open_private_directory(
+            backup.parent
+        ) as destination:
+            os.rename("memory", backup.name, src_dir_fd=source, dst_dir_fd=destination)
+
+    def _retire_workspace_state(self) -> None:
+        """Delete the superseded workspace checkpoint after Git is durable."""
+        if not self.persistent:
+            return
+        legacy = self.private_root / "agent-workspace-state.json"
+        try:
+            metadata = legacy.lstat()
+        except FileNotFoundError:
+            return
+        if not stat.S_ISREG(metadata.st_mode) or legacy.is_symlink():
+            raise ValueError(
+                "Legacy Agent workspace state must be a regular non-symlink file"
+            )
+        durable_unlink(legacy)
 
     def prepare(self) -> Path:
         from aka.light.workspace.files import publish
-        fresh = not self.state_path.exists()
-        state = {} if fresh else json.loads(_read(self.state_path))
         persistent = self.persistent
+        fresh = (
+            not (self.root / ".git").is_dir()
+            if persistent
+            else not self.state_path.exists()
+        )
+        state = (
+            {}
+            if fresh or self.state_path is None
+            else json.loads(_read(self.state_path))
+        )
         workspace_mode = "persistent" if persistent else "episode"
-        if not fresh and state.get("workspace_mode", workspace_mode) != workspace_mode:
+        if (
+            not persistent
+            and not fresh
+            and state.get("workspace_mode", workspace_mode) != workspace_mode
+        ):
             raise ValueError("Cannot change Agent workspace persistence while resuming")
-        if not fresh and state.get("research_records", True) != self.research_records:
+        if (
+            not persistent
+            and not fresh
+            and state.get("research_records", True) != self.research_records
+        ):
             raise ValueError("Cannot change research_records for an existing Episode draft")
-        if not fresh and tuple(state.get("research_modules", ("directions", "experiments"))) != self.research_modules:
+        if (
+            not persistent
+            and not fresh
+            and tuple(
+                state.get("research_modules", ("directions", "experiments"))
+            )
+            != self.research_modules
+        ):
             raise ValueError("Cannot change research_modules for an existing Episode draft")
-        if "inherit_state" in state and state["inherit_state"] != self.inherit_state:
-            raise ValueError("Cannot change inherit_state while resuming an existing Episode")
         with open_private_directory(self.root):
             pass
-        if fresh and self.adaptive is not None:
-            # Pin the seed before copying. A restart during preparation must not
-            # choose a newer snapshot or overlay it on a half-materialized tree.
-            seed_path = self.state_path.parent / "adaptive-seed.json"
-            try:
-                seed = json.loads(_read(seed_path))
-                if seed["inherit_state"] != self.inherit_state:
-                    raise ValueError("Cannot change inherit_state during draft preparation")
-            except FileNotFoundError:
-                seed = {"inherit_state": self.inherit_state,
-                        "snapshot": self.adaptive.previous() if self.inherit_state else None}
-                durable_write_json(seed_path, seed)
-            # These are incomplete initialization leftovers, not a running draft.
-            # Move them out of the Agent view rather than deleting user data.
-            import uuid
-            for tree in ("skills", "tools"):
-                with open_private_directory(self.root) as parent:
-                    try:
-                        os.stat(tree, dir_fd=parent, follow_symlinks=False)
-                    except FileNotFoundError:
-                        continue
-                    backup = self.state_path.parent / "preparation-backups" / uuid.uuid4().hex
-                    with open_private_directory(backup) as target:
-                        os.rename(tree, tree, src_dir_fd=parent, dst_dir_fd=target)
-            if seed["snapshot"] is not None:
-                self.adaptive.restore(self.root, seed["snapshot"])
-            state["adaptive_seed"] = seed["snapshot"]
-        controller_policy = policy_at(self.worktree, committed=True)
-        source = source_snapshot(self.worktree, policy=controller_policy)
+        # Rebind a missing private source contract before decoding historical
+        # commits; the contract itself never enters Agent Git.
+        from aka.light.workspace.sources.private_state import (
+            bind as bind_source_state,
+            read as read_source_state,
+        )
+
+        source_state = read_source_state(self.source_workspace)
+        if source_state is None:
+            agent_source_state = read_source_state(self.root)
+            if agent_source_state is not None:
+                file_system, contract = agent_source_state
+                bind_source_state(
+                    self.source_workspace,
+                    file_system=file_system,
+                    contract=contract,
+                )
+        source_policy = policy_at(self.source_workspace, committed=True)
+        source = source_snapshot(self.source_workspace, policy=source_policy)
         digest = hashlib.sha256(source).hexdigest()
         # An Episode-scoped view follows the controller source exactly. A
         # trajectory-persistent repository is initialized only once and then
@@ -165,12 +207,12 @@ class EpisodeWorkspace:
         contract_changed = False
         if persistent and not fresh:
             try:
-                contract_changed = policy_at(self.root) != controller_policy
+                contract_changed = policy_at(self.root) != source_policy
             except (OSError, ValueError):
                 contract_changed = True
         if contract_changed:
             raise ValueError(
-                "Persistent Agent workspace source contract differs from the controller; "
+                "Persistent Agent workspace source contract differs from the Campaign; "
                 "start a new Campaign instead of replacing trajectory history"
             )
         if fresh or (not persistent and digest != state.get("kernel_digest")):
@@ -178,90 +220,60 @@ class EpisodeWorkspace:
         for name in PUBLIC_FILES:
             # Manifest bytes belong to the draft/snapshot, not immutable public inputs.
             from aka.light.workspace.sources import layout_at
-            if layout_at(self.worktree, committed=True).owns(name) or layout_at(self.root).owns(name):
+            if layout_at(self.source_workspace, committed=True).owns(name) or layout_at(self.root).owns(name):
                 continue
             if name == "CLAUDE.md":
-                # Instructions follow the running controller, not an old V0's
-                # retired Setup/Fast workflow. Do not rewrite the committed V0.
+                # Instructions follow the running Campaign, not an old V0's
+                # retired Setup/Fast workflow.
                 content = _claude_instructions(self.workspace_policy)
                 publish(self.root, name, content)
                 continue
             try:
-                content = _read(self.worktree / name)
+                content = _read(self.source_workspace / name)
             except FileNotFoundError:
                 continue
             publish(self.root, name, content)
-        # Establish Agent history before projecting controller-authored memory,
-        # so every Git identity in that projection can be translated into the
-        # local/peer Agent namespace.
+        # Establish the trajectory-local Agent history before Runtime binds the
+        # workspace.  Historical controller memory is deliberately not copied:
+        # Git, PROGRESS.md, research projections and Gateway Records are the
+        # only durable Agent-facing optimization state.
+        self._retire_memory_tree()
         self.agent_git.prepare()
-        with open_private_directory(self.root / "memory"):
-            pass
-        for path in (self.worktree / "memory").glob("v*.json"):
-            if path.stem[1:].isascii() and path.stem[1:].isdigit():
-                content = _read(path)
-                try:
-                    value = json.loads(content)
-                except (UnicodeError, json.JSONDecodeError):
-                    value = None
-                if isinstance(value, dict):
-                    from aka.light.workspace.agent_git import GIT_COMMIT_ID
-                    from aka.light.workspace.sources import from_git
-
-                    def project_commit_ids(item, key=""):
-                        if isinstance(item, dict):
-                            return {
-                                name: project_commit_ids(child, name)
-                                for name, child in item.items()
-                            }
-                        if isinstance(item, list):
-                            return [project_commit_ids(child, key) for child in item]
-                        if (
-                            isinstance(item, str)
-                            and "commit" in key
-                            and GIT_COMMIT_ID.fullmatch(item) is not None
-                        ):
-                            if self.agent_git.commit_reachable(item):
-                                return item
-                            try:
-                                source_at_commit = from_git(self.worktree, item)
-                            except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-                                return None
-                            return self.agent_git.find_kernel_commit(source_at_commit)
-                        return item
-
-                    content = (
-                        json.dumps(
-                            project_commit_ids(value),
-                            indent=2,
-                            ensure_ascii=False,
-                            allow_nan=False,
-                        )
-                        + "\n"
-                    ).encode()
-                publish(self.root, f"memory/{path.name}", content)
+        self._retire_workspace_state()
         for name in DIAGNOSTIC_TREES:
             with open_private_directory(self.root / name):
                 pass
             if fresh:
-                for relative, content in bounded_tree_entries(self.worktree / name):
+                for relative, content in bounded_tree_entries(self.source_workspace / name):
                     publish(self.root, f"{name}/{relative}", content)
-        # These are controller-created asset links, never copied from Agent files.
+        # These are Supervisor-created asset links, never candidate source.
         # Do not install the evaluator or copy .git / control checkpoints.
-        plugin_snapshot = self.plugin_registry.snapshot()
         # Refresh only reserved assets; custom Skills/tools survive Session resumes.
         self.prepare_session()
-        durable_write_json(self.state_path, dict(state, kernel_digest=digest,
-                                               controller_kernel_digest=digest,
-                                               workspace_mode=workspace_mode,
-                                               research_records=self.research_records,
-                                               research_modules=list(self.research_modules),
-                                               inherit_state=self.inherit_state,
-                                               runtime_plugins=plugin_snapshot))
+        if self.state_path is not None:
+            durable_write_json(
+                self.state_path,
+                dict(
+                    state,
+                    kernel_digest=digest,
+                    controller_kernel_digest=digest,
+                    workspace_mode=workspace_mode,
+                    research_records=self.research_records,
+                    research_modules=list(self.research_modules),
+                    runtime_plugins=self.plugin_registry.snapshot(),
+                ),
+            )
         return self.root
 
     def prepare_session(self) -> tuple[str, ...]:
         """Restore managed clients/Skills and refresh discovery, never user files."""
+        # The Campaign Library is projected as ordinary files so native and
+        # Bubblewrap profiles share one layout.  Bubblewrap overlays this
+        # stable directory read-only; the Supervisor can still refresh its
+        # contents from outside the namespace without restarting the Session.
+        if self.research_modules:
+            with open_private_directory(self.root / "research-library"):
+                pass
         # Releases before the persistent-Session design copied finalized prior
         # Episode conversations into a derived input subtree. That view is no
         # longer an Agent input: one native conversation continues across
@@ -275,7 +287,7 @@ class EpisodeWorkspace:
             if not stat.S_ISDIR(input_mode):
                 raise ValueError("Managed workspace input path must be a directory")
             with tempfile.TemporaryDirectory(
-                prefix="retired-history-projection-", dir=self.state_path.parent
+                prefix="retired-history-projection-", dir=self.private_root
             ) as temporary:
                 with open_private_directory(input_root) as source, open_private_directory(
                     Path(temporary)
@@ -289,37 +301,40 @@ class EpisodeWorkspace:
                         )
                     except FileNotFoundError:
                         pass
-        from aka.light.workspace.assets import link_runtime, link_custom_skills
-        from aka.light.workspace.adaptive import ensure_readmes
+        from aka.light.workspace.assets import link_custom_skills, link_runtime
+        from aka.light.workspace.managed_assets import ensure_readmes
         link_runtime(self.root, is_ppu=self.is_ppu, research_records=self.research_records,
                      research_modules=self.research_modules,
                      plugin_registry=self.plugin_registry)
         ensure_readmes(self.root)
         link_custom_skills(self.root, self.reserved_paths)
         persistent = self.persistent
-        policy = ("This trajectory uses one stable Agent repository across Episodes. Kernel WIP, "
-                  "local Git branches/tags, scratch/, custom skills/ and tools/ remain in place; "
-                  "commit review never rewrites or promotes that history." if persistent else
-                  "Custom skills/ and tools/ are saved after each Session and inherited by the next "
-                  "Episode, regardless of Kernel promotion." if self.inherit_state else
-                  "Cross-Episode inheritance is disabled. Custom skills/ and tools/ are retained "
-                  "during this Episode only; the next Episode starts from packaged defaults.")
+        policy = (
+            "This trajectory uses one stable Agent repository across Episodes. Kernel WIP, "
+            "local Git branches/tags, scratch/, custom skills/ and tools/ remain in place; "
+            "commit review never rewrites or promotes that history."
+        )
         locations = ["root PROGRESS.md", "records/<gateway_record_id>.json"]
         if self.research_modules:
             if "directions" in self.research_modules:
-                locations.append("directions/<status>/<direction_id>.json")
+                locations.append(
+                    "research-library/directions/<direction_id>/vN/direction.json"
+                )
             if "experiments" in self.research_modules:
                 locations.append(
-                    "experiments/<experiment_id>/experiment.json and archived references"
+                    "research-library/experiments/<experiment_id>/vN/experiment.json "
+                    "and its archived references"
                 )
         research_projection = (
             "Runtime projects current research state and per-Shape historical winners into "
             + " and ".join(locations)
-            + ". These read-only files are regenerated from private Runtime state and ignored by "
-              "Kernel Git; change research state only through documented Runtime operations.\n"
+            + ". `research-library/` is a disposable, visibility-filtered copy of the "
+              "Campaign Library. These files are ignored by Kernel Git and regenerated after "
+              "native-mode edits; Bubblewrap mounts the tree read-only. Change research state "
+              "only through documented Runtime operations.\n"
         )
         from aka.light.workspace.files import publish
-        source_policy = policy_at(self.worktree, committed=True)
+        source_policy = policy_at(self.source_workspace, committed=True)
         git_lifetime = (
             "Local Git history persists across Episodes and Epochs. "
             if persistent
@@ -341,8 +356,8 @@ class EpisodeWorkspace:
             "`submit-kernel` requires saved passing full-Evaluate evidence for one exact commit and "
             "applies final-source policy without launching another evaluation, promoting, rolling "
             "back, or changing HEAD. "
-            + git_lifetime + "Imported peers are under "
-            "`refs/atrex/shared/` and their measurement indexes under "
+            + git_lifetime + "Imported peers use remote-tracking refs such as "
+            "`atrex/T2`; their measurement indexes are under "
             "`refs/notes/atrex-measurements`.\n\n"
             "## Runtime projections\n\n" + research_projection +
             "\nSupervisor-private Session archives are retained for audit and token accounting but are "
@@ -350,23 +365,35 @@ class EpisodeWorkspace:
             "Records for durable optimization state.\n"
         ).encode())
         from aka.light.workspace.sources import pinned_paths
-        fixed = pinned_paths(self.worktree)
+        fixed = pinned_paths(self.source_workspace)
         return tuple(name for name in self.reserved_paths if (self.root / name).exists()) + ("WORKSPACE.md", *fixed)
 
     def publish(self) -> None:
         from aka.light.workspace.files import publish
 
-        state = json.loads(_read(self.state_path))
-        state["agent_git"] = self.agent_git.capture()
-        state["agent_git_checkpoint"] = self.agent_git.persist()
-        if self.adaptive is not None:
-            # Checkpoint even when this Session fails or its candidate is rejected.
-            # Do not import/execute these files in the Supervisor.
-            state["adaptive_snapshot"] = self.adaptive.save(self.root)
-            durable_write_json(self.state_path, state)
-        content = source_snapshot(self.root, policy=policy_at(self.worktree, committed=True))
-        install_source(self.worktree, content)
-        for name in DIAGNOSTIC_TREES:
-            for relative, data in bounded_tree_entries(self.root / name):
-                publish(self.worktree, f"{name}/{relative}", data)
-        durable_write_json(self.state_path, dict(state, kernel_digest=hashlib.sha256(content).hexdigest()))
+        state = (
+            json.loads(_read(self.state_path))
+            if self.state_path is not None
+            else None
+        )
+        if state is not None:
+            state["agent_git"] = self.agent_git.capture()
+        content = source_snapshot(
+            self.root, policy=policy_at(self.source_workspace, committed=True)
+        )
+        # New Light uses the persistent Agent repository directly. The copy-back
+        # branch remains only for legacy callers that still provide a separate
+        # source workspace.
+        if self.source_workspace.resolve() != self.root.resolve():
+            install_source(self.source_workspace, content)
+            for name in DIAGNOSTIC_TREES:
+                for relative, data in bounded_tree_entries(self.root / name):
+                    publish(self.source_workspace, f"{name}/{relative}", data)
+        if self.state_path is not None and state is not None:
+            durable_write_json(
+                self.state_path,
+                dict(
+                    state,
+                    kernel_digest=hashlib.sha256(content).hexdigest(),
+                ),
+            )

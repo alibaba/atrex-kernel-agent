@@ -10,6 +10,23 @@ VERDICTS = frozenset({"supported", "partially_supported", "unsupported"})
 CONFIDENCE = frozenset({"high", "medium", "low"})
 MAX_FINDINGS = 6
 
+# Runtime-owned states are intentionally distinct from Reviewer verdicts:
+# ``review_not_requested`` means no Reviewer Session was needed for this draft,
+# while ``review_unavailable`` means Review was requested but both attempts
+# failed.  Keep the legacy spellings readable so an existing Campaign can be
+# resumed without re-projecting ambiguous old labels into the Agent workspace.
+_LEGACY_REVIEW_QUALITY = {
+    "not_reviewed": "review_not_requested",
+    "unreviewed": "review_unavailable",
+}
+
+
+def canonical_review_quality(value: object) -> str | None:
+    """Return the public Review quality, translating pre-rename history."""
+    if not isinstance(value, str):
+        return None
+    return _LEGACY_REVIEW_QUALITY.get(value, value)
+
 
 def _text(value: object, field: str, *, limit: int = 4000) -> str:
     if not isinstance(value, str) or not value.strip() or len(value) > limit:

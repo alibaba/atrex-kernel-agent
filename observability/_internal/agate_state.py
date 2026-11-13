@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Report logical Agate calls, physical jobs, retries, batches and failures."""
+"""Build the durable Agate state consumed by the public call monitor."""
 from __future__ import annotations
 
 import argparse
 from collections import Counter
+from datetime import datetime
 from pathlib import Path
+import re
 import sys
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 if str(REPOSITORY_ROOT) not in sys.path:
     sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from observability.common import (
+from observability._internal.common import (
     add_output_arguments,
     age_seconds,
     discover_scopes,
@@ -28,8 +30,42 @@ from observability.common import (
     observed_at,
     operation_name,
     read_json,
+    runtime_audit_paths,
     search_state,
     table,
+)
+
+
+_SUCCESS_JOB_STATUSES = {"completed", "succeeded"}
+_SUCCESS_CALL_OUTCOMES = {"completed", "completed_not_cacheable"}
+_FAILED_JOB_STATUSES = {"cancelled", "canceled", "error", "failed", "timed_out", "timeout"}
+_PENDING_JOB_STATUSES = {
+    "accepted",
+    "pending",
+    "queued",
+    "running",
+    "submitted",
+    "validation_pending",
+    "waiting",
+}
+_FILTER_STATUSES = {"succeeded", "failed", "pending", "unknown"}
+_RECORD_ID = re.compile(r"gateway-[0-9a-f]{32}")
+_COMPACT_JOB_FIELDS = (
+    "scope",
+    "trajectory",
+    "source",
+    "gateway_record_id",
+    "runtime_request_ids",
+    "operation",
+    "job_id",
+    "checkpoint_phase",
+    "status",
+    "execution_phase",
+    "submission",
+    "retry_count",
+    "timing",
+    "pending_seconds",
+    "error",
 )
 
 
@@ -72,6 +108,50 @@ def _pending_seconds(job: object, checkpoint_updated_at: object) -> float | None
     return age_seconds(checkpoint_updated_at)
 
 
+def _deduplicate_states(rows: list[dict]) -> tuple[list[dict], int]:
+    """Collapse multiple checkpoint references to the same physical Agate Job."""
+    grouped: dict[tuple, list[dict]] = {}
+    order: list[tuple] = []
+    for index, row in enumerate(rows):
+        job_id = job_identifier(row.get("job"))
+        key = ("job", job_id) if job_id else (
+            "checkpoint",
+            row.get("path"),
+            row.get("checkpoint_id"),
+            row.get("submission"),
+            index,
+        )
+        if key not in grouped:
+            order.append(key)
+            grouped[key] = []
+        grouped[key].append(row)
+
+    unique = []
+    for key in order:
+        references = grouped[key]
+        selected = max(
+            references,
+            key=lambda row: (
+                type(row.get("submission")) is int and row.get("submission", 0) > 0,
+                str(row.get("phase") or "") == "terminal",
+                str(row.get("checkpoint_updated_at") or ""),
+            ),
+        )
+        selected = dict(selected)
+        selected["checkpoint_references"] = [
+            {
+                "checkpoint_id": row.get("checkpoint_id"),
+                "checkpoint_path": row.get("checkpoint_path"),
+                "submission": row.get("submission"),
+                "phase": row.get("phase"),
+                "path": row.get("path"),
+            }
+            for row in references
+        ]
+        unique.append(selected)
+    return unique, len(rows)
+
+
 def _physical_job(scope, state: dict, *, source: str, record_id: str | None,
                   operation: str, response: object = None) -> dict:
     job = state["job"]
@@ -87,6 +167,7 @@ def _physical_job(scope, state: dict, *, source: str, record_id: str | None,
         "trajectory": scope.trajectory,
         "source": source,
         "gateway_record_id": record_id,
+        "runtime_request_ids": state.get("runtime_request_ids", []),
         "checkpoint_id": state.get("checkpoint_id"),
         "operation": operation,
         "job_id": job_identifier(job),
@@ -95,7 +176,9 @@ def _physical_job(scope, state: dict, *, source: str, record_id: str | None,
         "raw_status": raw_status,
         "execution_phase": job.get("execution_phase") if isinstance(job, dict) else None,
         "submission": state["submission"],
+        "checkpoint_updated_at": state.get("checkpoint_updated_at"),
         "retry_count": _retry_count(state["retries"]),
+        "checkpoint_references": state.get("checkpoint_references", []),
         "timing": _timing(job),
         "pending_seconds": None if terminal else _pending_seconds(
             job, state.get("checkpoint_updated_at")
@@ -142,17 +225,33 @@ def snapshot(workspace: Path) -> dict:
     task_markers = []
     audit_duplicates = 0
     audit_running = 0
+    current_checkpoint_references = 0
+    submission_references = 0
+    scanned_measurement_roots: set[Path] = set()
     for scope in discover_scopes(workspace):
-        for marker in sorted((scope.measurement_root / "tasks").glob("*.json")):
-            value = read_json(marker, default={})
-            if isinstance(value, dict):
-                task_markers.append({"scope": scope.label, "task_digest": marker.stem, **value})
+        measurement_root = scope.measurement_root.resolve()
+        if measurement_root not in scanned_measurement_roots:
+            scanned_measurement_roots.add(measurement_root)
+            for marker in sorted((measurement_root / "tasks").glob("*.json")):
+                value = read_json(marker, default={})
+                if isinstance(value, dict):
+                    task_markers.append({
+                        "scope": "campaign",
+                        "task_digest": marker.stem,
+                        **value,
+                    })
         for row in iter_records(scope, include_incomplete=True):
             record = row.get("record", {})
             request = row.get("request", {})
             response = record.get("response") if isinstance(record, dict) else None
-            jobs = job_state_rows(row["directory"])
-            attempts = job_attempt_rows(row["directory"])
+            jobs, raw_job_count = _deduplicate_states(
+                job_state_rows(row["directory"])
+            )
+            attempts, raw_attempt_count = _deduplicate_states(
+                job_attempt_rows(row["directory"])
+            )
+            current_checkpoint_references += raw_job_count
+            submission_references += raw_attempt_count
             errors = []
             retries = 0
             for state in jobs:
@@ -198,7 +297,9 @@ def snapshot(workspace: Path) -> dict:
                 "cacheable": cacheable,
                 "outcome": outcome,
                 "current_checkpoint_job_count": len(jobs),
+                "current_checkpoint_reference_count": raw_job_count,
                 "submission_attempt_count": len(attempts),
+                "submission_reference_count": raw_attempt_count,
                 "historical_retry_attempt_count": max(0, len(attempts) - len(jobs)),
                 "retry_count": retries,
                 "error": primary_error,
@@ -206,7 +307,11 @@ def snapshot(workspace: Path) -> dict:
             }
             calls.append(call)
         trusted_root = scope.audit_root / "trusted-jobs"
-        for state in job_state_rows(trusted_root):
+        trusted_jobs, trusted_job_references = _deduplicate_states(
+            job_state_rows(trusted_root)
+        )
+        current_checkpoint_references += trusted_job_references
+        for state in trusted_jobs:
             identity = state.get("identity") if isinstance(state.get("identity"), dict) else {}
             physical_jobs.append(_physical_job(
                 scope,
@@ -215,13 +320,17 @@ def snapshot(workspace: Path) -> dict:
                 record_id=None,
                 operation=operation_name({"operation": identity.get("kind")}),
             ))
-        for state in job_attempt_rows(trusted_root):
+        trusted_attempts, trusted_attempt_references = _deduplicate_states(
+            job_attempt_rows(trusted_root)
+        )
+        submission_references += trusted_attempt_references
+        for state in trusted_attempts:
             identity = state.get("identity") if isinstance(state.get("identity"), dict) else {}
             submission_attempts.append(_physical_job(
                 scope, state, source="trusted", record_id=None,
                 operation=operation_name({"operation": identity.get("kind")}),
             ))
-        for audit in sorted(scope.audit_root.glob("request-*.json")):
+        for audit in runtime_audit_paths(scope):
             value = read_json(audit, default={})
             if not isinstance(value, dict):
                 continue
@@ -257,8 +366,8 @@ def snapshot(workspace: Path) -> dict:
             pause = runtime["pause_agent_during_requests"]
     running_markers = [row for row in task_markers if row.get("status") in {"running", "validation_pending"}]
     pending_jobs = [row for row in physical_jobs if row["pending_seconds"] is not None]
-    return {
-        "schema_version": 2,
+    result = {
+        "schema_version": 3,
         "observed_at": observed_at(),
         "campaign_workspace": str(Path(workspace).expanduser().resolve()),
         "summary": {
@@ -269,7 +378,9 @@ def snapshot(workspace: Path) -> dict:
             "timeout_counts": dict(sorted(timeout_counts.items())),
             "logical_call_count": len(calls),
             "current_checkpoint_job_count": len(physical_jobs),
+            "current_checkpoint_reference_count": current_checkpoint_references,
             "submission_attempt_count": len(submission_attempts),
+            "submission_reference_count": submission_references,
             "historical_retry_attempt_count": sum(
                 call["historical_retry_attempt_count"] for call in calls
             ),
@@ -277,32 +388,201 @@ def snapshot(workspace: Path) -> dict:
             "duplicate_cache_hits": audit_duplicates,
             "same_request_running": audit_running,
         },
-        "agent_paused_during_requests": pause,
-        "availability": {
-            "retry_backoff_seconds": (
-                "actual sleep intervals are not durably persisted by current main; "
-                "retry_count is available"
-            ),
-            "agent_paused_during_requests": (
-                "reported only when the persisted search binding includes this setting"
-            ),
-        },
         "running_task_markers": running_markers,
         "pending_jobs": pending_jobs,
-        "runtime_concurrency": {
-            "unresolved_running_records": len(running_markers),
-            "active_request_locks": None,
-            "slot_limit": None,
-            "waiting_queue_depth": None,
-            "availability": (
-                "live locks, slot limits and queue state are process-local and are not durably persisted; "
-                "running task markers report unresolved Records, not lock ownership"
-            ),
-        },
         "calls": calls,
         "current_jobs": physical_jobs,
         "submission_attempts": submission_attempts,
     }
+    if pause is not None:
+        result["agent_paused_during_requests"] = pause
+    return result
+
+
+def _job_has_issue(row: object) -> bool:
+    return _job_status(row) != "succeeded"
+
+
+def _job_status(row: object) -> str:
+    if not isinstance(row, dict):
+        return "unknown"
+    if isinstance(row.get("error"), dict):
+        return "failed"
+    if row.get("pending_seconds") is not None:
+        return "pending"
+    status = str(row.get("status") or "").casefold()
+    if status in _SUCCESS_JOB_STATUSES:
+        return "succeeded"
+    if status in _FAILED_JOB_STATUSES:
+        return "failed"
+    if status in _PENDING_JOB_STATUSES:
+        return "pending"
+    return "unknown"
+
+
+def _call_has_issue(row: object) -> bool:
+    return _call_status(row) != "succeeded"
+
+
+def _call_status(row: object) -> str:
+    if not isinstance(row, dict):
+        return "unknown"
+    if isinstance(row.get("error"), dict) or row.get("outcome") == "failed":
+        return "failed"
+    if row.get("complete") is not True or row.get("outcome") == "running_or_interrupted":
+        return "pending"
+    if row.get("outcome") in _SUCCESS_CALL_OUTCOMES:
+        return "succeeded"
+    return "unknown"
+
+
+def _compact_job(row: dict) -> dict:
+    return {field: row.get(field) for field in _COMPACT_JOB_FIELDS}
+
+
+def _created_at_key(row: dict) -> tuple[float, str]:
+    value = row.get("created_at")
+    if isinstance(value, str) and value:
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            return parsed.timestamp(), str(row.get("gateway_record_id") or "")
+        except ValueError:
+            pass
+    return float("-inf"), str(row.get("gateway_record_id") or "")
+
+
+def project_details(
+    value: dict,
+    *,
+    jobs: str = "issues",
+    gateway_record_ids: tuple[str, ...] = (),
+    last: int | None = None,
+    statuses: tuple[str, ...] = (),
+) -> dict:
+    """Project a bounded default view while retaining explicit full-detail modes."""
+    if jobs not in {"issues", "all", "none"}:
+        raise ValueError("jobs must be one of: issues, all, none")
+    if last is not None and (type(last) is not int or last <= 0):
+        raise ValueError("--last must be a positive integer")
+
+    selected_statuses = tuple(dict.fromkeys(statuses))
+    invalid_statuses = set(selected_statuses) - _FILTER_STATUSES
+    if invalid_statuses:
+        raise ValueError(
+            "--status must be one of: succeeded, failed, pending, unknown"
+        )
+
+    record_ids = tuple(dict.fromkeys(gateway_record_ids))
+    for record_id in record_ids:
+        if _RECORD_ID.fullmatch(record_id) is None:
+            raise ValueError("--gateway-record-id must be a complete gateway- ID")
+
+    all_calls = list(value.get("calls") or [])
+    all_current = list(value.get("current_jobs") or [])
+    all_attempts = list(value.get("submission_attempts") or [])
+    all_pending = list(value.get("pending_jobs") or [])
+
+    explicit_filter = bool(record_ids or last is not None or selected_statuses)
+    if record_ids:
+        selected = set(record_ids)
+        calls = [row for row in all_calls if row.get("gateway_record_id") in selected]
+        current = [row for row in all_current if row.get("gateway_record_id") in selected]
+        attempts = [row for row in all_attempts if row.get("gateway_record_id") in selected]
+        pending = [row for row in all_pending if row.get("gateway_record_id") in selected]
+        selection = "gateway_records"
+    else:
+        calls = all_calls
+        current = all_current
+        attempts = all_attempts
+        pending = all_pending
+
+    if selected_statuses:
+        wanted = set(selected_statuses)
+        current = [row for row in current if _job_status(row) in wanted]
+        attempts = [row for row in attempts if _job_status(row) in wanted]
+        pending = [row for row in pending if _job_status(row) in wanted]
+        matching_record_ids = {
+            row.get("gateway_record_id")
+            for row in current + attempts + pending
+            if row.get("gateway_record_id")
+        }
+        calls = [
+            row for row in calls
+            if _call_status(row) in wanted
+            or row.get("gateway_record_id") in matching_record_ids
+        ]
+
+    if last is not None:
+        calls = sorted(calls, key=_created_at_key, reverse=True)[:last]
+        recent_record_ids = {
+            row.get("gateway_record_id")
+            for row in calls
+            if row.get("gateway_record_id")
+        }
+        current = [row for row in current if row.get("gateway_record_id") in recent_record_ids]
+        attempts = [row for row in attempts if row.get("gateway_record_id") in recent_record_ids]
+        pending = [row for row in pending if row.get("gateway_record_id") in recent_record_ids]
+
+    if explicit_filter:
+        if jobs != "all" and not record_ids:
+            current = [_compact_job(row) for row in current]
+            attempts = [_compact_job(row) for row in attempts]
+            pending = [_compact_job(row) for row in pending]
+        if record_ids:
+            selection = "gateway_records"
+        elif last is not None and selected_statuses:
+            selection = "recent_statuses"
+        elif last is not None:
+            selection = "recent"
+        else:
+            selection = "statuses"
+    elif jobs == "all":
+        selection = "all"
+    elif jobs == "none":
+        calls = []
+        current = []
+        attempts = []
+        pending = []
+        selection = "none"
+    else:
+        calls = [row for row in all_calls if _call_has_issue(row)]
+        current = [
+            _compact_job(row) for row in all_current if _job_has_issue(row)
+        ]
+        attempts = [
+            _compact_job(row) for row in all_attempts if _job_has_issue(row)
+        ]
+        pending = [_compact_job(row) for row in all_pending]
+        selection = "issues"
+
+    projected = dict(value)
+    projected["calls"] = calls
+    projected["current_jobs"] = current
+    projected["submission_attempts"] = attempts
+    projected["pending_jobs"] = pending
+    projected["detail_selection"] = {
+        "mode": selection,
+        "gateway_record_ids": list(record_ids),
+        "last": last,
+        "statuses": list(selected_statuses),
+        "summary_scope": "campaign",
+        "returned_counts": {
+            "logical_calls": len(calls),
+            "current_jobs": len(current),
+            "submission_attempts": len(attempts),
+        },
+        "omitted_counts": {
+            "logical_calls": len(all_calls) - len(calls),
+            "current_jobs": len(all_current) - len(current),
+            "submission_attempts": len(all_attempts) - len(attempts),
+        },
+        "full_detail_hint": (
+            "Use --jobs all for full rows, --last N for recent logical calls, "
+            "--status for Job outcomes, or --gateway-record-id gateway-... for "
+            "one logical call."
+        ),
+    }
+    return projected
 
 
 def render(value: dict) -> str:
@@ -341,13 +621,55 @@ def render(value: dict) -> str:
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("workspace", type=Path)
+    parser.add_argument(
+        "--jobs",
+        choices=("issues", "all", "none"),
+        default="issues",
+        help=(
+            "physical Job detail: compact pending/failed details (issues, default), "
+            "every Job and logical call (all), or summary only (none)"
+        ),
+    )
+    parser.add_argument(
+        "--gateway-record-id",
+        action="append",
+        default=[],
+        help=(
+            "expand all captured Job details for this Gateway Record; repeatable and "
+            "takes precedence over --jobs"
+        ),
+    )
+    parser.add_argument(
+        "--last",
+        type=int,
+        help=(
+            "show the newest N matching logical Gateway calls by created_at and "
+            "their associated physical Jobs"
+        ),
+    )
+    parser.add_argument(
+        "--status",
+        action="append",
+        choices=tuple(sorted(_FILTER_STATUSES)),
+        default=[],
+        help=(
+            "filter physical Job outcomes; repeat for a union of succeeded, failed, "
+            "pending, or unknown"
+        ),
+    )
     add_output_arguments(parser)
     return parser.parse_args(argv)
 
 
 def _main(argv=None) -> int:
     options = parse_args(argv)
-    value = snapshot(options.workspace)
+    value = project_details(
+        snapshot(options.workspace),
+        jobs=options.jobs,
+        gateway_record_ids=tuple(options.gateway_record_id),
+        last=options.last,
+        statuses=tuple(options.status),
+    )
     emit(value, as_json=options.json, compact=options.compact, text=render(value))
     return 0
 

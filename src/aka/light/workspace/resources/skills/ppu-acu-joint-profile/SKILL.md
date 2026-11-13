@@ -24,9 +24,7 @@ for the current decision, or when clean results expose a new ambiguity. Timeline
 a kernel-internal timing question, never a required per-round validation step.
 
 Across long-horizon Episodes, prefer the hash-bound artifacts retained under trajectory-local
-`scratch/` and any Experiment that archives or cites them. When optional memory generation is
-enabled, `memory/vN.json.profile_evidence.accepted_ppu_diagnostics` is an additional compact index;
-it is not guaranteed to exist and does not replace the artifacts. Compare every recorded identity
+`scratch/` and any Experiment that archives or cites them. Compare every recorded identity
 and `invalidation_conditions` entry with the current clean Kernel before reuse. A prior reference
 identifies the conclusion, but does not make it valid after specialization, workload, device,
 topology, or pipeline changes.

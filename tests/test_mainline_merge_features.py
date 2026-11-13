@@ -2,6 +2,7 @@ import json
 import sys
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,11 +11,13 @@ from aka.light.evaluation import ssh_native, ssh_worker
 from aka.light.experiment import records
 from aka.light.agent.session_capture import SessionCapture
 from aka.light.agent.session_usage import estimate_usage_from_conversation
-from aka.light.runtime.paths import supervisor_campaign_root
+from aka.light.runtime.paths import supervisor_campaign_root, supervisor_submission_root
 from aka.light.workflow.token_checkpoints import capture_token_checkpoint
+from aka.light.workflow.bootstrap import Campaign
+from aka.light.runtime.server import SupervisorRuntime
 from aka.legacy.acceptance.review import _validate_production_review
 from aka.legacy.agent import dsh
-from observability.light_token_time import snapshot as token_time_snapshot
+from observability._internal.token_usage import snapshot as token_time_snapshot
 
 
 def _jsonl(*events):
@@ -541,6 +544,128 @@ def test_runtime_derives_final_source_verdict_from_reviewer_facts():
     assert fast["verdict"] == "allow"
     assert strict["verdict"] == "reject"
     assert any("torch_aten" in error for error in strict_errors)
+
+
+def test_submission_policy_feedback_preserves_observed_implementation_facts(
+    monkeypatch, tmp_path
+):
+    campaign = Campaign.__new__(Campaign)
+    campaign.__dict__["source_checks_enabled"] = True
+
+    monkeypatch.setattr(
+        "aka.light.workspace.sources.install",
+        lambda workspace, source: None,
+    )
+
+    def review(_workspace, *, require_gluon, review_record_sink):
+        assert require_gluon is False
+        review_record_sink({
+            "dsl_policy": "open",
+            "framework": None,
+            "required_phase": "open_dsl",
+            "review": {
+                "framework": {
+                    "technologies": ["triton", "torch_aten"],
+                    "evaluator_supported": True,
+                    "configured_framework_used": False,
+                    "required_phase_used": False,
+                    "unexpected_core_technologies": [],
+                }
+            },
+        })
+        return []
+
+    campaign._production_kernel_violations = review
+    result = campaign.production_policy_feedback(tmp_path, b"candidate")
+
+    assert result["violations"] == []
+    assert result["implementation_review"] == {
+        "availability": "available",
+        "technologies": ["triton", "torch_aten"],
+        "dsl_policy": "open",
+        "configured_dsl": None,
+        "required_phase": "open_dsl",
+        "evaluator_supported": True,
+        "configured_dsl_used": False,
+        "required_phase_used": False,
+        "unexpected_core_technologies": [],
+    }
+
+
+def test_submit_kernel_review_keeps_implementation_facts_private_result(
+    monkeypatch, tmp_path
+):
+    commit_id = "a" * 40
+    runtime = SupervisorRuntime.__new__(SupervisorRuntime)
+    runtime.production_review_required = True
+    runtime.submission_specify_dsl = False
+    runtime.config = SimpleNamespace(optimization_mode="fast")
+    runtime.measurements = object()
+    runtime.production_policy_validator = lambda *_args, **_kwargs: {
+        "violations": [],
+        "implementation_review": {
+            "availability": "available",
+            "technologies": ["triton"],
+            "dsl_policy": "open",
+        },
+    }
+    monkeypatch.setattr(
+        "aka.light.workspace.sources.from_git",
+        lambda _workspace, _commit: b"candidate",
+    )
+    monkeypatch.setattr(
+        "aka.light.runtime.server.kernel_full_evaluation_evidence",
+        lambda _store, _commit: {"status": "passed"},
+    )
+    agent_git = SimpleNamespace(
+        workspace=tmp_path,
+        commit_reachable=lambda value: value == commit_id,
+    )
+    binding = SimpleNamespace(
+        service=SimpleNamespace(git_workspace=tmp_path),
+        require_gluon=False,
+    )
+
+    result = runtime._review_submitted_kernel(
+        SimpleNamespace(), binding, agent_git, commit_id
+    )
+
+    assert result["accepted"] is True
+    assert result["implementation_review"] == {
+        "availability": "available",
+        "technologies": ["triton"],
+        "dsl_policy": "open",
+    }
+
+
+def test_final_source_review_is_attached_to_submission(tmp_path):
+    submission_id = "submission-" + "a" * 32
+    conversation = tmp_path / "conversation.jsonl"
+    token_usage = tmp_path / "token-usage.json"
+    conversation.write_text('{"type":"session_end"}\n', encoding="utf-8")
+    token_usage.write_text(
+        json.dumps({"total": {"total_tokens": 42}}) + "\n",
+        encoding="utf-8",
+    )
+
+    errors = Campaign._persist_production_review_record(
+        tmp_path,
+        submission_id,
+        {
+            "review_execution": "executed",
+            "accepted": True,
+            "session_id": "review-session",
+        },
+        conversation=conversation,
+        token_usage=token_usage,
+    )
+
+    assert errors == []
+    root = supervisor_submission_root(tmp_path) / submission_id / "review"
+    assert json.loads((root / "result.json").read_text())["accepted"] is True
+    assert (root / "conversation.jsonl").read_text() == '{"type":"session_end"}\n'
+    usage = json.loads((root / "token-usage.json").read_text())
+    assert usage["total"]["total_tokens"] == 42
 
 
 def test_reviewer_cannot_supply_policy_decision_or_verdict():

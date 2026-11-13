@@ -12,8 +12,15 @@ commit review; the Agent owns optimization objectives, plans, and interpretation
 Start with `PROGRESS.md`. Open `frontier.json` only for the complete accepted-submission frontier, then only relevant
 Direction, Experiment, and `records/<gateway_record_id>.json` files. Projections are read-only.
 Gateway Records are measurement authority; all analysis is fallible.
+`research-library/` is a read-only, visibility-filtered copy of the versioned Campaign Library. Local identities remain writable
+only through Runtime; peer identities are always read-only. Synchronous pooled search freezes peer
+revisions at an Epoch watermark, while asynchronous pooled search projects the latest peer revision
+immediately.
 Read or query `records/<gateway_record_id>.json` directly with ordinary file operations. Select only
 the fields or bounded text needed; do not print an entire Record or long stdout/stderr into the Session.
+Records observed by this trajectory remain local by default. A lineage sees Records cited by the
+Direction/Experiment revisions currently visible in its own projection, plus passing standard full
+Evaluates. Accepted submissions and winners therefore include their complete Evaluate evidence.
 
 ## Research loop
 
@@ -27,26 +34,27 @@ the fields or bounded text needed; do not print an entire Record or long stdout/
 - Direction lifecycle is `proposed --start--> in_progress`. Only `in_progress` may be completed,
   abandoned, deferred, or blocked. Direction records an optimization objective, not a single
   supported/refuted hypothesis; concrete falsifiable work and outcomes belong in Experiments.
-- `propose` and revisions made while a Direction remains proposed are local, unreviewed drafts.
-  `start` runs the admission Review; active revisions and closures are reviewed again. Only reviewed,
-  eligible Direction state may support terminal conclusions or peer publication.
+- `propose` and revisions made while a Direction remains proposed use `review_not_requested`. `start`
+  runs the admission Review; active revisions and closures are reviewed again. Every archived state
+  is published to peers with its actual review quality; only eligible evidence may support research
+  conclusions.
 - Record decisive work as an Experiment with `name`, concrete `intent`, and bounded
   `interpretation`. Records and archived references are independent optional evidence. Keep measured
   facts in Records. A note without a Record is not promotion evidence. Revise only
   `local_writable` Experiments; extend `peer_read_only` evidence with a new local Experiment.
-- Use local Git for candidate history. Imported peer history is available under `refs/atrex/shared/<trajectory>/<epoch>/head`; inspect it with `git log`/`git diff`, or continue it with `git switch -c <branch> <ref>`. Commit or restore local work before switching.
+- Use local Git for candidate history. Imported peer history is available through remote-tracking refs such as `atrex/T2`; inspect it with `git log`/`git diff`, or continue it with `git switch -c <branch> atrex/T2`. Runtime moves the ref at its configured publication boundary without changing your HEAD. Commit or restore local work before switching.
 - Continue bounded probe/edit/measurement/revert-or-keep cycles while the selected path has a
   concrete high-value step. A supported Experiment does not complete its Direction; compare the
   remaining strategy branches after every Experiment. Close a Direction only when the optimization
   program is genuinely completed or exhausted, strategically deferred, concretely blocked, or
   reasonably abandoned.
 - Runtime returns the full Review once with the mutation result. `archive_status` reports storage,
-  `claim_review_quality` reports `not_reviewed`, reviewer availability, or scientific support, and
-  `evidence_eligible` controls terminal research conclusions and peer publication.
+  `claim_review_quality` reports `review_not_requested`, `review_unavailable`, or scientific support, and
+  `evidence_eligible` controls whether the record may support a research conclusion, not visibility.
   `runtime_action` is workflow guidance; `scientific_next_check` is the evidence follow-up. Only projected
   `claim_review_quality`, `scope_safe_interpretation`, and `scientific_next_check` remain Agent-visible afterward; full receipts and reviewer
-  conversations are Supervisor-private. Partial or unreviewed claims remain trajectory-local and
-  cannot support terminal research conclusions or peer publication.
+  conversations are Supervisor-private. Partial or `review_unavailable` claims are shared for context and their
+  cited Records follow claim visibility, but they still cannot support research conclusions.
 
 Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the
 current mode. It must already have a passing standard full Evaluate with complete per-Shape

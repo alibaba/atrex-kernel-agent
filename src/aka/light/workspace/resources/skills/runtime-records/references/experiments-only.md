@@ -1,8 +1,9 @@
 # Experiment-only requests
 
 The Experiment module is enabled and the Direction module is disabled. Runtime maintains
-`PROGRESS.md`, `experiments/<experiment_id>/experiment.json`, and flat
-`records/<gateway_record_id>.json`. Read these generated files directly; do not edit them.
+`PROGRESS.md`, immutable `research-library/experiments/<experiment_id>/vN/experiment.json`
+versions, and flat `records/<gateway_record_id>.json`. The greatest visible `vN` is current. Read
+these generated files directly; do not edit them.
 
 ## Record an Experiment
 
@@ -26,7 +27,7 @@ not restate them as interpretation.
 
 To correct or extend an existing local Experiment, submit the same request with its projected
 `experiment_id`. Runtime keeps the stable ID, increments `revision`, reviews the revised claim, and
-replaces only the Agent-visible latest projection. Omitted `gateway_record_ids`, `references`, and
+writes the next Agent-visible immutable version. Omitted `gateway_record_ids`, `references`, and
 Wiki attribution are preserved; explicit empty arrays clear the corresponding optional evidence.
 The Direction association cannot change. Shared peer Experiments are read-only, while every local
 submission and Review remains in the private Supervisor audit history.
@@ -44,7 +45,7 @@ When GPU Wiki knowledge materially affects the work, optional attribution uses
 ## Adopt an exact measured Kernel
 
 Imported peer source history is available under refs such as
-`refs/atrex/shared/T2/e0001/head`. Keep or commit local work before switching, inspect with
+`atrex/T2`. Keep or commit local work before switching, inspect with
 `git log`/`git diff`, and use `git switch -c <branch> <ref>` to continue a peer commit. A Git checkout
 alone is not correctness or performance evidence; evaluate the resulting clean HEAD.
 

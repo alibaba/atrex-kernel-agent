@@ -20,7 +20,6 @@ MANIFEST_NAME = "trace-retention-manifest.json"
 MANIFEST_SCHEMA = "atrex-trace-retention-manifest-v1"
 TERMINAL_STATUSES = {"completed", "interrupted", "failed"}
 MEMORY_RE = re.compile(r"v[0-9]+\.json")
-LONG_MEMORY_RE = re.compile(r"long_horizon_e[0-9]+\.json")
 PROFILE_RE = re.compile(r"v[0-9]+(?:[_-].+)?")
 ROOT_FILES = ("definition.json", "workload.jsonl")
 PROFILE_FILES = (
@@ -70,16 +69,9 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
     for relative in evidence_paths(workspace):
         add(workspace / relative, "candidate-source")
 
-    memory = workspace / "memory"
     for path in (workspace / ".atrex_versions").glob("v*.json"):
         if MEMORY_RE.fullmatch(path.name):
             add(path, "controller-version-facts")
-    if memory.is_dir():
-        for path in memory.glob("*.json"):
-            if MEMORY_RE.fullmatch(path.name):
-                add(path, "canonical-memory")
-            elif LONG_MEMORY_RE.fullmatch(path.name):
-                add(path, "long-horizon-outcome")
 
     runtime = workspace / ".atrex_long_horizon"
     add(runtime / "state.json", "long-horizon-state")

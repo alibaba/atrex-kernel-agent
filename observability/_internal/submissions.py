@@ -7,7 +7,7 @@ from pathlib import Path
 import sys
 from typing import Any
 
-REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
@@ -15,8 +15,10 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
 
 from aka.light.evaluation.provider import result_from_response  # noqa: E402
 from aka.light.experiment.store import KERNEL_ID, RECORD_ID  # noqa: E402
-from observability.common import (  # noqa: E402
-    Scope, discover_scopes, existing_store, finite_positive, iter_records, read_json,
+from aka.light.runtime.paths import supervisor_submission_root  # noqa: E402
+from aka.light.workflow.submissions import submissions as stored_submissions  # noqa: E402
+from observability._internal.common import (  # noqa: E402
+    Scope, discover_scopes, existing_store, finite_positive, iter_records,
 )
 
 
@@ -78,6 +80,7 @@ def full_eval_rows(scope: Scope) -> list[dict[str, Any]]:
             continue
         rows.append({
             "scope": scope.label, "trajectory": scope.trajectory,
+            "created_at": record.get("created_at"),
             "latency_us_geomean": latency,
             "latency_us_arith_mean": finite_positive(result.get("latency_us_arith_mean")),
             "kernel_commit_id": commit_id,
@@ -91,39 +94,47 @@ def full_eval_rows(scope: Scope) -> list[dict[str, Any]]:
 
 
 def submission_rows(scope: Scope) -> list[dict[str, Any]]:
-    """Return every submit-kernel audit entry from private Runtime Journals."""
+    """Return every central submit-kernel audit entry visible to this scope."""
     rows: list[dict[str, Any]] = []
-    for path in sorted((scope.audit_root / "journals" / "episodes").glob("e*/journal.json")):
-        journal = read_json(path, default={})
-        if not isinstance(journal, dict):
-            continue
-        episode = journal.get("episode")
-        if type(episode) is not int:
-            try:
-                episode = int(path.parent.name[1:])
-            except ValueError:
-                episode = None
-        submissions = journal.get("kernel_submissions")
-        if not isinstance(submissions, list):
-            continue
-        for index, submission in enumerate(submissions, start=1):
-            if not isinstance(submission, dict):
-                continue
-            evidence = submission.get("evaluation_evidence")
-            review = submission.get("review")
-            diagnostics = submission.get("diagnostics")
-            rows.append({
-                "scope": scope.label, "trajectory": scope.trajectory, "episode": episode,
-                "submission_index": index, "submission_id": submission.get("submission_id"),
-                "submitted_at": submission.get("submitted_at"),
-                "kernel_commit_id": submission.get("kernel_commit_id"),
-                "accepted": submission.get("accepted") is True,
-                "review": review if isinstance(review, dict) else {},
-                "diagnostics": list(diagnostics) if isinstance(diagnostics, list) else [],
-                "evaluation_evidence": evidence if isinstance(evidence, dict) else {},
-                "token_checkpoint": submission.get("token_checkpoint"),
-                "journal_path": str(path),
-            })
+    # A pooled Campaign's top-level discovery scope and its lineage scopes see
+    # the same central store. Read it only through lineage scopes to avoid
+    # duplicate rows; serial Campaigns have no lineage directory and read all.
+    if scope.trajectory is None and (scope.campaign_root / "lineages").is_dir():
+        return rows
+    lineage = f"T{scope.trajectory}" if scope.trajectory is not None else None
+    root = supervisor_submission_root(scope.workspace)
+    for index, submission in enumerate(
+        stored_submissions(root, lineage=lineage), start=1
+    ):
+        evidence = submission.get("evaluation_evidence")
+        review = submission.get("review")
+        implementation_review = submission.get("implementation_review")
+        diagnostics = submission.get("diagnostics")
+        rows.append({
+            "scope": scope.label,
+            "trajectory": scope.trajectory,
+            "episode": submission.get("episode"),
+            "submission_index": index,
+            "submission_id": submission.get("submission_id"),
+            "submitted_at": submission.get("submitted_at"),
+            "kernel_commit_id": submission.get("kernel_commit_id"),
+            "accepted": submission.get("accepted") is True,
+            "review": review if isinstance(review, dict) else {},
+            "implementation_review": (
+                implementation_review
+                if isinstance(implementation_review, dict)
+                else {"availability": "unavailable"}
+            ),
+            "diagnostics": list(diagnostics) if isinstance(diagnostics, list) else [],
+            "evaluation_evidence": evidence if isinstance(evidence, dict) else {},
+            "token_checkpoint": submission.get("token_checkpoint"),
+            "submission_path": str(
+                root / str(submission["submission_id"]) / "submission.json"
+            ),
+            "review_path": str(
+                root / str(submission["submission_id"]) / "review" / "result.json"
+            ),
+        })
     return rows
 
 

@@ -14,13 +14,16 @@ from aka.light.workflow.telemetry import render_episode_brief
 
 RUNTIME_DIR = ".atrex_long_horizon"
 VERIFY_DIR = "verification_artifacts/.atrex_long_horizon_verify"
-LIVE_MEMORY_FILE = "memory/live.json"
 
 
 class CampaignStore:
     def __init__(self, workspace: Path):
         self.workspace = workspace.resolve()
-        self.root = self.workspace / RUNTIME_DIR
+        from aka.light.runtime.paths import supervisor_campaign_root
+
+        # Segment state is Supervisor-private.  It must not appear in the
+        # Agent repository or rely on Git ignore rules for isolation.
+        self.root = supervisor_campaign_root(self.workspace) / "segments"
         self.root.mkdir(parents=True, exist_ok=True)
         self.ensure_excluded(self.workspace)
 
@@ -52,7 +55,6 @@ class CampaignStore:
             f"/{RUNTIME_DIR}/",
             f"/{VERIFY_DIR}/",
             f"/{main_adapter.STALL_STATE_FILE}",
-            f"/{LIVE_MEMORY_FILE}",
             *wiki_trace_rules,
             # Episode evidence is archived by the supervisor and must never
             # become part of the candidate commit.
@@ -75,11 +77,6 @@ class CampaignStore:
     @property
     def active_path(self) -> Path:
         return self.root / "active_episode.json"
-
-    @property
-    def live_memory_path(self) -> Path:
-        """Uncommitted, best-effort progress for the currently active episode."""
-        return self.workspace / LIVE_MEMORY_FILE
 
     def episode_dir(self, episode: int) -> Path:
         path = self.root / "episodes" / f"e{episode:04d}"

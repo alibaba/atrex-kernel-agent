@@ -1,9 +1,8 @@
-"""Controller v1+ facts, independent of optional Agent memory summaries.
+"""Controller v1+ facts, independent of Agent-visible summary files.
 
 These Git-tracked facts retain atomic Kernel/version promotion and recovery when
-memory generation is disabled. V0 evaluator facts are Supervisor-private; they
-must not create a metadata-only source commit. Existing workspace records remain
-readable through the baseline migration adapter.
+V0 evaluator facts are Supervisor-private; they must not create a metadata-only
+source commit.
 """
 from pathlib import Path
 import math
@@ -18,27 +17,21 @@ FACT_FIELDS = frozenset({
 })
 
 
-def version_record_path(workspace: Path, version: int, *, prefer_summary: bool = False) -> Path:
+def version_record_path(workspace: Path, version: int) -> Path:
     if isinstance(version, bool) or not isinstance(version, int) or version < 0:
         raise ValueError("Version must be a non-negative integer")
-    private = workspace / STATE_DIRECTORY / f"v{version}.json"
-    memory = workspace / "memory" / f"v{version}.json"
-    if prefer_summary and memory.exists():
-        return memory
-    return private if private.exists() or not memory.exists() else memory
+    return workspace / STATE_DIRECTORY / f"v{version}.json"
 
 
-def save_version_record(workspace: Path, version: int, record: dict, *, generate_memory: bool = False) -> Path:
+def save_version_record(workspace: Path, version: int, record: dict) -> Path:
     if version == 0:
-        raise ValueError("V0 facts belong to Supervisor-private baseline storage")
+        raise ValueError("V0 facts belong to the Campaign Measurement Store")
     if record.get("version") != f"v{version}":
         raise ValueError("Version record identity does not match")
     version_record_path(workspace, version)  # Validate before constructing paths.
     record = objective_score_report(workspace, version, record)
     path = workspace / STATE_DIRECTORY / f"v{version}.json"
     durable_write_json(path, {key: value for key, value in record.items() if key in FACT_FIELDS})
-    if generate_memory:
-        durable_write_json(workspace / "memory" / f"v{version}.json", record)
     return path
 
 
@@ -73,11 +66,7 @@ def objective_score_report(workspace: Path, version: int, record: dict) -> dict:
     return dict(record, performance=performance)
 
 
-def version_commit_paths(workspace: Path, version: int, *, generate_memory: bool) -> list[str]:
+def version_commit_paths(workspace: Path, version: int) -> list[str]:
     if version == 0:
         raise ValueError("V0 facts are not committed to the candidate repository")
-    paths = [str(version_record_path(workspace, version).relative_to(workspace))]
-    summary = f"memory/v{version}.json"
-    if generate_memory and summary not in paths and (workspace / summary).exists():
-        paths.append(summary)
-    return paths
+    return [str(version_record_path(workspace, version).relative_to(workspace))]

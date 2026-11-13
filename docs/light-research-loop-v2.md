@@ -87,26 +87,28 @@ Experiment 是对一个或多个 Measurement Record 的语义标注，不重复�
 为了避免每次恢复都通过多轮工具调用才能拼回工程上下文，Runtime 将当前可见历史自动投影为普通文件：
 
 ```text
-directions/<status>/<direction_id>.json
-experiments/<experiment_id>/experiment.json
+research-library/directions/<direction_id>/vN/direction.json
+research-library/experiments/<experiment_id>/vN/experiment.json
 records/<gateway_record_id>.json
 PROGRESS.md
 ```
 
-Direction 文件按当前状态存放在 `proposed/`、`in_progress/`、`deferred/`、`blocked/`、
-`completed/` 或 `abandoned/` 子目录；状态变化时 Runtime 移除旧路径并投影到新路径。
-文件包含完整的决策字段、生命周期、当前 plan 与队列位置。
-`experiment.json` 只包含研究语义与 Gateway Record 引用；根目录 `records/` 平铺当前可见的全部
+Direction 的未启动草稿使用可更新的 `v0`，首次 `start` Review 写入不可变 `v1`，后续受审查
+状态依次写入 `v2`、`v3`；Experiment 首次提交即 Review，因此从不可变 `v1` 开始。编号最大的
+可见 `vN` 是当前版本，对应 JSON 同时保留该版的精简 Review 结论。Direction 文件包含完整的决策字段、生命周期与
+当前 plan。Experiment 的 `experiment.json` 只包含研究语义与 Gateway Record 引用；根目录 `records/` 平铺当前可见的全部
 标准化公开结果，不再在各 Experiment 下复制一份。它不包含私有请求、输入哈希或兼容执行流。
 Record 中的 `kernel_commit_id` 是 Git commit ID，因此精确源码由同一 trajectory 仓库或已导入
 的同伴历史提供。
 
-这些文件只是 Runtime 私有 Journal、Research Store、Measurement Store 和 Git 的派生视图：
+其中 `research-library/` 是 Campaign 唯一 Library 的可见性过滤副本；Measurement 与 Git
+仍由各自权威存储提供：
 
 - Episode 启动、恢复与 Epoch 历史导入时完整重建；
 - Direction/Experiment/队列变更后原子刷新相关 JSON；
 - Agent 可以用普通文件工具检索，也可以随 `command` 上传到远端诊断环境；
-- Agent 不得直接修改，Runtime 不会把文件内容读回为权威状态；
+- Agent 不得直接修改；Bubblewrap 将其覆盖为只读挂载，native 模式下的修改会在下一次
+  Runtime 刷新时被 Campaign Library 覆盖；
 - `PROGRESS.md`、`directions/` 和 `experiments/` 被 Kernel Git 与源码快照排除；
 - Direction/Experiment 不再提供重复的 list/load 工具；Gateway Record 直接读取根目录
   `records/`，Kernel 源码直接通过本地或导入的共享 Git 历史读取。
@@ -194,7 +196,7 @@ Direction 是研究意图的基本单位，不重复记录测量结果。
 
 ```yaml
 direction_id: direction_...
-proposed_by: T2
+owner_lineage: T2
 access: local_writable | peer_read_only
 local_rank: 1       # 仅本地可写 Direction
 shared_rank: 2      # 仅同伴只读 Direction
@@ -222,7 +224,7 @@ Direction 关闭时只记录生命周期结论与可选的支撑 Experiment，�
 
 ### 所有权
 
-每条 trajectory 可以拥有多个 active Direction，但必须维护一个明确的 focus；最近启动或优先级调整的 active Direction 成为默认 focus。不同 trajectory 可以同时拥有不同 Direction。每个 Direction 的 Agent 可见投影包含不可变的 `proposed_by: Tn`，说明最初由哪条轨迹提出；`in_progress(T2)`/`owner` 只说明当前由谁执行，二者不能混用。Agent 不需要填写这些字段，它们由 Runtime 从可信搜索坐标生成。
+每条 trajectory 可以拥有多个 active Direction，但必须维护一个明确的 focus；最近启动或优先级调整的 active Direction 成为默认 focus。不同 trajectory 可以同时拥有不同 Direction。Direction 与 Experiment 的 Agent 可见投影统一使用不可变的 `owner_lineage: Tn` 表示最初创建者；`in_progress(T2)`/`owner` 只说明当前由谁执行，二者不能混用。Agent 不需要填写这些字段，它们由 Runtime 从可信搜索坐标生成。
 
 所有权是一种持久 lease：
 
@@ -252,8 +254,9 @@ references:
 Runtime 验证每个 `gateway_record_id`；对应的标准化公开结果平铺在根目录 `records/`。
 操作类型、正确性、性能、故障和 Kernel commit 身份只保留在这些不可变 Record 中；源码变化
 通过 Git 比较相应 commit，不再在 Experiment 里保存第二份摘要。Runtime 同时验证
-`references` 中的工作区文件或目录，将其复制进私有归档，并把字段改写为
-`experiments/<experiment_id>/references/...`。原文件后续变化不会影响该 Experiment 的材料。
+`references` 中的工作区文件或目录，将每个 revision 唯一归档到 Campaign Research
+Library 对应的 `vN/references/`，并把 Agent 可见字段改写为该版本下的路径。各 lineage
+按可见性复制同一中央版本；原文件后续变化不会影响该 Experiment 的材料。
 `intent` 和 `interpretation` 是 Agent 的可修正判断，与测量事实和支撑材料分目录展示。
 `gateway_record_ids` 与 `references` 是互相独立的可选数组，均可省略或为空；只有非空
 `references` 才创建归档。没有测量 Record 的 Experiment 只能作为研究笔记，不能单独支撑
@@ -306,7 +309,7 @@ work                         当前 trajectory 工作分支
 refs/tags/atrex/incumbent    当前 official incumbent
 refs/tags/atrex/global-best  所有可见 trajectory 中最快的正确 Kernel
 refs/tags/atrex/lineage-best 当前 trajectory 历史最佳正确 Kernel
-refs/atrex/shared/T2/e0004/head  Epoch 边界导入的同伴密封源码历史
+refs/remotes/atrex/T2           发布边界导入的同伴 HEAD
 ```
 
 Runtime 生成的 commit message 包含 Kernel commit ID、源码摘要、来源 trajectory 和 Epoch。这些 refs 在 trajectory 准备或恢复时由 Runtime Artifact 重建。Agent 可以自由创建、移动或删除自己的 branch/tag；已有 Measurement Record 仍由私有密封源码保证可审计。
@@ -392,16 +395,15 @@ impl/**
 接收方将历史导入独立命名空间：
 
 ```text
-refs/atrex/shared/T2/e0004/head
-refs/atrex/shared/T2/e0004/base
+refs/remotes/atrex/T2
 ```
 
 Agent 可以直接：
 
 ```text
-git log --graph --oneline refs/atrex/shared/T2/e0004/head
-git diff work refs/atrex/shared/T2/e0004/head
-git switch -c inspect-t2 refs/atrex/shared/T2/e0004/head
+git log --graph --oneline atrex/T2
+git diff work atrex/T2
+git switch -c inspect-t2 atrex/T2
 git cherry-pick <imported-peer-commit>
 ```
 
@@ -435,7 +437,7 @@ measurement_status: unmeasured
 Agent 可以使用：
 
 ```text
-git log --show-notes=atrex-measurements refs/atrex/shared/T2/e0004/head
+git log --show-notes=atrex-measurements atrex/T2
 git notes --ref=atrex-measurements show <commit>
 ```
 
@@ -586,7 +588,7 @@ Light 默认启动三条持久 island，每条 island 每个 Epoch 运行一个 
 - `synchronous`（默认）保留严格 Epoch barrier，所有 trajectory 的本轮 Episode 都终态后才密封共享；
 - `asynchronous` 取消全局准入 barrier。每条 trajectory 内部仍串行，某条 trajectory 终态后立即形成累计 publication，并可直接开始下一 Episode。调度使用 round-robin，避免并发槽位少于 trajectory 数量时快岛长期饿死未启动的岛。
 
-两种模式都只共享通过 Review 的 Direction/Experiment、聚合后的只读共享池顺序、完成的 Measurement Record、被引用的 Kernel Artifact、密封且经过源码范围过滤的 Git 历史，以及 accepted submission 的全局 Pareto frontier。显式标为 `partially_supported` 或 `unreviewed` 的 Direction/Experiment 保持 trajectory 私有，直到修订后通过 Review。每条 trajectory 的本地工作队列与优先级仍独立，不会被 publication 覆盖。不共享实时草稿、scratch、conversation 或未验证分析。异步 publication 按终态 Episode 边界过滤 Research event 和评测引用，不能读取仍在运行的同伴 Episode。共享历史中的未测量 commit 只作为工程过程，不作为证据。
+两种模式都会共享中央目录中的全部 Direction/Experiment revision，并保留其真实 Review 质量；质量只决定证据资格，不决定 claim 或附件可见性。每条 lineage 的 Gateway Record 投影单独计算：本地 Record、该 lineage 当前可见 Direction/Experiment revision 引用的 Record，以及通过的标准 full Evaluate；accepted submission/winner 的完整 Evaluate 因而自动可见。Agent 不能任意发布其他本地 Record。聚合后的只读共享池顺序、密封且经过源码范围过滤的 Git 历史和 accepted submission frontier 仍按既定同步点发布。每条 trajectory 的本地工作队列与优先级独立，不会被 publication 覆盖；不共享 scratch、conversation 或其他本地测量。同步模式按该 lineage 的 Epoch watermark 投影同伴 revision，异步模式按其实时可见 revision 集合投影；共享历史中的未测量 commit 只作为工程过程，不作为证据。
 
 `search.role_specialization` 决定是否向三条 trajectory 注入不同职责，新搜索默认关闭。
 关闭时三条 trajectory 收到相同的通用 island 指令；调度、共享、lineage、Git 和 Session

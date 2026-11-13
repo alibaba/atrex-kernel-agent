@@ -8,12 +8,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from aka.contracts.workspace import CandidateHandle
 from aka.light.evaluation.hardware import hardware_vendor
 from aka.light.workspace.sources import from_git as source_from_git
 
 import aka.light.workflow.context as main_adapter
-from aka.light.workspace.git import (git_head, git_text, working_changes)
+from aka.light.workspace.git import git_head, git_text
 from aka.light.workflow.models import SupervisorState
 from aka.light.workflow.session import LongSessionRunner
 from aka.light.workflow.store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
@@ -58,6 +57,16 @@ def _render(template: str, values: dict[str, object]) -> str:
 
 
 
+@dataclass(frozen=True)
+class SegmentBinding:
+    """One audit segment over the persistent Agent repository."""
+
+    episode: int
+    base_commit: str
+    branch: str
+    path: Path
+
+
 @dataclass
 class LongHorizonCampaign:
     base_campaign: main_adapter.Campaign
@@ -65,7 +74,6 @@ class LongHorizonCampaign:
     episode_limit: int = 0
     token_budget: int = 0
     session_runner: LongSessionRunner | None = None
-    worktree_root: Path | None = None
 
 
     @property
@@ -121,21 +129,20 @@ class LongHorizonCampaign:
         self,
         *,
         episode: int,
-        worktree: CandidateHandle,
+        segment: SegmentBinding,
         agent_workspace: Path | None = None,
         episode_mode: str = "episode",
     ) -> str:
         directives = main_adapter.episode_directives(self.base_campaign)
-        comparison_base_commit = worktree.base_commit
+        comparison_base_commit = segment.base_commit
         measurement_context = None
         if agent_workspace is not None:
-            # Controller and Agent repositories deliberately have different
-            # histories.  Only the Agent-visible commit is useful in the
-            # Prompt: it can be inspected, diffed, checked out, and supplied to
-            # exploratory ABBA from the repository mounted in the Session.
+            # Every commit exposed to the Agent belongs to this persistent
+            # trajectory repository, so it can be inspected, diffed, checked
+            # out, and supplied to Runtime directly.
             measurement_context = self.base_campaign.acceptance_measurement_context(
                 agent_workspace,
-                source_from_git(worktree.path, worktree.base_commit),
+                source_from_git(segment.path, segment.base_commit),
             )
             comparison_base_commit = measurement_context["baseline_kernel_id"]
         research_modules = set(self.base_campaign.research_modules)
@@ -178,8 +185,9 @@ class LongHorizonCampaign:
                     "Additional-island role: preserve an independent line of evidence-backed exploration.",
                 )
             template = (
-                f"Search location: Epoch {coordinate['epoch']}, Trajectory {coordinate['trajectory']}, "
-                f"Episode {coordinate['episode']}. This persistent island keeps its working tree, Git history, "
+                f"Your trajectory: T{coordinate['trajectory']}. Search location: Epoch "
+                f"{coordinate['epoch']}, Episode {coordinate['episode']}. This persistent island "
+                "keeps its working tree, Git history, "
                 + (
                     "lineage best, active Directions and major-redesign WIP across Epochs. "
                     if "directions" in research_modules
@@ -210,7 +218,7 @@ class LongHorizonCampaign:
                     if episode_mode == "goal" else ""
                 ),
                 "BASE_COMMIT": comparison_base_commit,
-                "WORKSPACE": agent_workspace or worktree.path,
+                "WORKSPACE": agent_workspace or segment.path,
                 "ARCH": self.base_campaign.arch or "<authoritative runtime architecture>",
                 "DSL_CONTEXT": self.base_campaign.dsl_context,
                 "NOTES": self.base_campaign.notes,
@@ -234,15 +242,15 @@ class LongHorizonCampaign:
 
 
     def _copy_runtime_artifacts(
-        self, worktree: CandidateHandle, episode_dir: Path
+        self, segment: SegmentBinding, episode_dir: Path
     ) -> None:
-        source = worktree.path / RUNTIME_DIR
+        source = segment.path / RUNTIME_DIR
         if source.is_dir():
             destination = episode_dir / "episode_runtime"
             if destination.exists():
                 shutil.rmtree(destination)
             shutil.copytree(source, destination)
-        verification = worktree.path / VERIFY_DIR
+        verification = segment.path / VERIFY_DIR
         if verification.is_dir():
             destination = episode_dir / "verification_runtime"
             if destination.exists():
@@ -258,7 +266,7 @@ class LongHorizonCampaign:
         store: CampaignStore,
         state: SupervisorState,
         active: dict[str, Any],
-        worktree: CandidateHandle,
+        segment: SegmentBinding,
         *,
         status: str,
         agent_workspace: Path,
@@ -276,7 +284,7 @@ class LongHorizonCampaign:
         Episode boundary records provider/session telemetry only; it does not
         nominate a candidate or create a second Supervisor Kernel identity.
         """
-        episode = worktree.episode
+        episode = segment.episode
         state.episodes = max(state.episodes, episode)
         candidate_commit = git_text(
             agent_workspace, "rev-parse", "HEAD", check=False
@@ -306,11 +314,11 @@ class LongHorizonCampaign:
         )
         telemetry_path = store.archive_telemetry(episode, telemetry)
         attempt["telemetry"] = {
-            "summary": str(telemetry_path.relative_to(store.workspace)),
+            "summary": str(telemetry_path),
             "measurement": telemetry["measurement"],
             "reason_codes": telemetry["reason_codes"],
         }
-        self._copy_runtime_artifacts(worktree, store.episode_dir(episode))
+        self._copy_runtime_artifacts(segment, store.episode_dir(episode))
         store.archive_attempt(episode, attempt)
         state.attempts.append(attempt)
         if session_id:
@@ -319,7 +327,6 @@ class LongHorizonCampaign:
                 self.base_campaign, "agent_cli", "claude"
             )
         store.save_state(state)
-        self.base_campaign.candidate_workspace.remove(worktree, self.workspace)
         store.clear_active()
         print(
             f"[long-horizon] episode={episode} status={status} "
@@ -331,48 +338,41 @@ class LongHorizonCampaign:
         self,
         store: CampaignStore,
         state: SupervisorState,
-    ) -> tuple[CandidateHandle, dict[str, Any]] | None:
+    ) -> tuple[SegmentBinding, dict[str, Any]] | None:
         """Resume an interrupted audit segment without terminal-handoff state."""
         active = store.load_active()
         if active is None:
             return None
         episode = int(active.get("episode", 0) or 0)
-        base_commit = str(active.get("base_commit", ""))
-        branch = str(active.get("episode_branch", ""))
-        value = active.get("worktree")
-        path = (
-            Path(value).resolve()
-            if isinstance(value, str) and value.strip()
-            else None
+        base_commit = str(active.get("starting_commit_id", ""))
+        if episode <= 0 or not base_commit or not (self.workspace / ".git").is_dir():
+            raise RuntimeError(
+                "Active Episode checkpoint cannot be resumed because its persistent "
+                "Agent repository identity is incomplete"
+            )
+        try:
+            source_from_git(self.workspace, base_commit)
+        except (OSError, ValueError, RuntimeError) as error:
+            raise RuntimeError(
+                "Active Episode starting commit is no longer reachable from Agent Git"
+            ) from error
+        branch = git_text(
+            self.workspace,
+            "symbolic-ref",
+            "--quiet",
+            "--short",
+            "HEAD",
+            check=False,
+        ) or "work"
+        handle = SegmentBinding(episode, base_commit, branch, self.workspace)
+        active["phase"] = "exploring"
+        active["restart_count"] = int(active.get("restart_count", 0) or 0) + 1
+        store.save_active(active)
+        print(
+            f"[long-horizon] resuming interrupted episode={episode} in persistent Agent workspace",
+            flush=True,
         )
-        if episode > 0 and base_commit and branch and path is not None and path.is_dir():
-            handle = self.base_campaign.candidate_workspace.restore_handle(
-                episode, base_commit, branch, path
-            )
-            active["phase"] = "exploring"
-            active["restart_count"] = int(active.get("restart_count", 0) or 0) + 1
-            store.save_active(active)
-            print(
-                f"[long-horizon] resuming interrupted episode={episode} in {path}",
-                flush=True,
-            )
-            return handle, active
-
-        # The persistent Agent repository and MeasurementStore remain intact;
-        # only the disposable controller segment is unavailable.
-        if episode > 0:
-            state.episodes = max(state.episodes, episode)
-            state.interrupted += 1
-            attempt = {
-                "episode": episode,
-                "status": "interrupted",
-                "violation": "controller audit segment was unavailable during recovery",
-            }
-            state.attempts.append(attempt)
-            store.archive_attempt(episode, attempt)
-            store.save_state(state)
-        store.clear_active()
-        return None
+        return handle, active
 
 
 
@@ -407,11 +407,11 @@ class LongHorizonCampaign:
                 break
             resumed = recovered_episode is not None
             if recovered_episode is not None:
-                worktree, active = recovered_episode
+                segment, active = recovered_episode
                 recovered_episode = None
-                episode = worktree.episode
+                episode = segment.episode
                 memory_version = int(active["memory_version"])
-                base_commit = worktree.base_commit
+                base_commit = segment.base_commit
                 episode_mode = self._episode_mode(state, active)
             else:
                 episode = state.episodes + 1
@@ -421,57 +421,54 @@ class LongHorizonCampaign:
             if resumed:
                 active.setdefault("mode", episode_mode)
                 if active.get("resumed_from_phase") == "preparing":
-                    self.base_campaign.candidate_workspace.reset_scratch(worktree)
                     main_adapter.link_episode_runtime(
-                        self.base_campaign, worktree.path
+                        self.base_campaign, segment.path
                     )
             else:
                 memory_version = episode
                 base_commit = git_head(self.workspace)
-                worktree = self.base_campaign.candidate_workspace.plan(
-                    self.workspace, episode, base_commit, root=self.worktree_root
+                if not base_commit:
+                    raise RuntimeError("Persistent Agent workspace has no Git HEAD")
+                branch = git_text(
+                    self.workspace,
+                    "symbolic-ref",
+                    "--quiet",
+                    "--short",
+                    "HEAD",
+                    check=False,
+                ) or "work"
+                segment = SegmentBinding(
+                    episode, base_commit, branch, self.workspace
                 )
                 active = {
                     "episode": episode,
                     "memory_version": memory_version,
-                    "base_commit": base_commit,
-                    "episode_branch": worktree.branch,
-                    "worktree": str(worktree.path),
+                    "starting_commit_id": base_commit,
                     "mode": episode_mode,
                     "phase": "preparing",
                 }
                 store.save_active(active)
-                self.base_campaign.candidate_workspace.materialize(worktree, self.workspace)
-                self.base_campaign.candidate_workspace.reset_scratch(worktree)
                 active.update(
                     {
-                        "episode_branch": worktree.branch,
-                        "worktree": str(worktree.path),
                         "phase": "exploring",
                     }
                 )
                 store.save_active(active)
-                main_adapter.link_episode_runtime(self.base_campaign, worktree.path)
-                unexpected = working_changes(worktree.path)
-                if unexpected:
-                    raise RuntimeError(
-                        "runtime linking dirtied the episode boundary: "
-                        + ", ".join(unexpected)
-                    )
+                main_adapter.link_episode_runtime(self.base_campaign, segment.path)
             # The Agent receives one persistent Git repository. Runtime Journal
             # stores measurements, research records and submit-kernel receipts;
             # ending this segment requires no handoff or Supervisor Git seal.
             session_capture_root = store.episode_dir(episode) / "sessions"
             agent_workspace = self.base_campaign.register_runtime_episode(
-                worktree.path, episode=episode, memory_version=memory_version,
-                base_commit=base_commit, branch=worktree.branch,
+                segment.path, episode=episode, memory_version=memory_version,
+                base_commit=base_commit, branch=segment.branch,
                 baseline_kernel_commit_id=None,
                 require_gluon=False,
                 session_capture_root=session_capture_root,
             )
             prompt = self._prompt(
                 episode=episode,
-                worktree=worktree,
+                segment=segment,
                 agent_workspace=agent_workspace,
                 episode_mode=episode_mode,
             )
@@ -548,7 +545,7 @@ class LongHorizonCampaign:
                 store,
                 state,
                 active,
-                worktree,
+                segment,
                 status=status,
                 violation=violation,
                 agent_workspace=agent_workspace,

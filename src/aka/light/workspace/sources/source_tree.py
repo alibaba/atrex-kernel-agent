@@ -133,7 +133,8 @@ def collect(workspace, policy, *, validate=True):
     return validate_files(files, policy) if validate else files
 
 def instructions(policy):
-    return ("\n## Kernel source tree\nEditable kernel.py and optional impl/ form one Kernel. "
+    return ("\n## Kernel source tree\nEditable source: `kernel.py` plus optional `impl/`. "
+            "Together they form one Kernel. "
             "You may keep the complete implementation in kernel.py or create, edit and delete "
             "helper, host, CUDA and header sources below impl/. "
             "Keep probes and temporary build outputs in scratch/; use custom tools/ or skills/ "
@@ -357,16 +358,16 @@ class SourceTree:
                               if name.startswith(prefix) and source_name(name[len(prefix):])}, policy)
     def editable(self, policy, name):return editable(policy, name)
     def instructions(self, policy):return instructions(policy)
-    def metadata(self, policy):return {POLICY:(json.dumps(policy, sort_keys=True)+'\n').encode()}
+    def metadata(self, policy):return {}
     def obsolete(self, workspace, policy):return set(collect(workspace, policy, validate=False))
     def install(self, workspace, files, policy):
-        for name,data in {**files, **self.metadata(policy)}.items():publish(workspace,name,data)
+        for name,data in files.items():publish(workspace,name,data)
     def execution_source(self, files, policy, archive):
         if policy['package_root'] != '.':raise ValueError("Eval archives require package_root='.'; no Dev fallback")
         requirements=tuple(v['distribution']+v.get('version','') for v in policy['runtime_requirements'])
         return ExecutionSource({'archive':archive,'entry_point':'kernel.py'},
                                {archive:{k:v.decode() for k,v in files.items()}},requirements)
-    def declared_paths(self, workspace, policy):return set(collect(workspace,policy))|{POLICY}
+    def declared_paths(self, workspace, policy):return set(collect(workspace,policy))
     def evidence_paths(self, workspace, policy):return self.declared_paths(workspace,policy)
 
     def typed_limitation(self, workspace, policy):return None

@@ -45,7 +45,6 @@ OWNED = {
     "tools/sandbox.py": "runtime/client/sandbox.py",
     "tools/plugin.py": "runtime/client/plugin.py",
     "tools/session_shell_guard.sh": "agent/session_shell_guard.sh",
-    "tools/memory_manager.py": "workflow/memory.py",
     "reference/sol_seed.py": "workflow/sol_seed.py",
     "reference/sol_finalize.py": "workflow/sol_finalize.py",
 }

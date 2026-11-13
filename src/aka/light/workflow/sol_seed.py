@@ -215,8 +215,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise SystemExit("existing V0 is not the SOL reference wrapper")
             print(f"[sol_seed] reusing V0 source {source_commit}: {ws}")
             return 0
-    for sub in ("memory", "scratch"):
-        (ws / sub).mkdir(parents=True, exist_ok=True)
+    (ws / "scratch").mkdir(parents=True, exist_ok=True)
 
     # 1) ground truth, verbatim
     for f in GROUND_TRUTH:
@@ -246,11 +245,12 @@ def main(argv: list[str] | None = None) -> int:
     (ws / "README.md").write_text(_readme(args.name, defn, args.framework, args.platform, n_wl), encoding="utf-8")
     (ws / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
 
-    # 5) V0 baseline metrics (real evaluator). The candidate repository never
-    # receives the resulting measurement file.
+    # 5) V0 reference metrics (real evaluator). The completed response is
+    # sealed into the Campaign Measurement Store after its source commit exists.
     from aka.light.workspace.baseline import read_baseline_record
     pre_existing_v0 = read_baseline_record(ws) is not None and args.skip_bench_if_v0_exists
     v0_result = None
+    v0_process = None
     if pre_existing_v0:
         print("[sol_seed] skipping V0 bench — private evidence already exists; "
               "ground-truth files refreshed in-place.", file=sys.stderr)
@@ -269,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
         else:
             from aka.light.workflow.session_io import _test_result_from_stdout
             v0_result = _test_result_from_stdout(r.stdout)
+            v0_process = r
 
     # 6) Git source commit. Keep memory out of this commit so its stable SHA can
     # be recorded without an impossible self-referential amend loop.
@@ -291,16 +292,26 @@ def main(argv: list[str] | None = None) -> int:
     subprocess.run(["git", "add", *source_paths], cwd=str(ws), check=True)
     subprocess.run(["git", "commit", "-m", "V0: baseline (SOL reference wrapper)"], cwd=str(ws), check=True,
                    stdout=subprocess.DEVNULL)
-    # 7) Record measurement metadata privately. Git remains at the source commit.
+    # 7) Record V0 as an ordinary immutable Gateway Measurement. Git remains at
+    # the source commit and no separate baseline directory is created.
     if v0_result is not None:
         h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ws), capture_output=True, text=True).stdout.strip()
-        from aka.light.workflow.session_io import _local_test_record
-        from aka.light.workspace.baseline import write_baseline_record
-        from aka.light.workspace.versions import objective_score_report
-        mem = _local_test_record(ws, "v0", v0_result)
-        mem["git_commit_hash"] = h
-        mem.setdefault("optimization", {})["action_category"] = "baseline"
-        write_baseline_record(ws, objective_score_report(ws, 0, mem))
+        from aka.light.experiment.store import DuplicateTask
+        from aka.light.workspace.baseline import baseline_measurement_spec
+
+        store, request, kernels = baseline_measurement_spec(ws, h)
+        try:
+            with store.reserve(request, kernels) as task:
+                task.finish(
+                    {
+                        "exit_code": v0_process.returncode,
+                        "stdout": v0_process.stdout,
+                        "stderr": v0_process.stderr,
+                    },
+                    cacheable=True,
+                )
+        except DuplicateTask:
+            pass
 
     print(f"[sol_seed] workspace ready: {ws}")
     return 0

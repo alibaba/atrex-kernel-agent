@@ -9,118 +9,82 @@ from pathlib import Path
 from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
-if str(REPOSITORY_ROOT) not in sys.path:
-    sys.path.insert(0, str(REPOSITORY_ROOT))
+SOURCE_ROOT = REPOSITORY_ROOT / "src"
+for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
+    if str(entry) not in sys.path:
+        sys.path.insert(0, str(entry))
 
 from aka.light.experiment.store import RECORD_ID  # noqa: E402
-from observability.common import (  # noqa: E402
+from observability._internal.common import (  # noqa: E402
     add_output_arguments,
     discover_scopes,
     emit,
     job_attempt_rows,
-    job_error_details,
-    job_identifier,
     main_error,
     observed_at,
-    operation_name,
-    normalized_job_status,
-    read_json,
     table,
 )
-
-
-def _shape_ids(identity: object) -> list[str] | None:
-    if not isinstance(identity, dict):
-        return None
-    direct = identity.get("shape_ids")
-    if isinstance(direct, list):
-        return [str(item) for item in direct]
-    payload = identity.get("payload")
-    if isinstance(payload, dict):
-        for owner in (payload, payload.get("options"), payload.get("overrides")):
-            if isinstance(owner, dict) and isinstance(owner.get("shape_ids"), list):
-                return [str(item) for item in owner["shape_ids"]]
-    return None
-
-
-def _backend_job_ids(job: object) -> list[str]:
-    if not isinstance(job, dict):
-        return []
-    values = []
-    for owner in (job, job.get("result")):
-        if not isinstance(owner, dict):
-            continue
-        raw = owner.get("backend_job_ids")
-        if isinstance(raw, list):
-            values.extend(str(item) for item in raw if isinstance(item, str) and item)
-    return list(dict.fromkeys(values))
+from observability._internal.gateway_record import gateway_record_locations  # noqa: E402
 
 
 def snapshot(workspace: Path, record_id: str) -> dict[str, Any]:
     if RECORD_ID.fullmatch(record_id) is None:
         raise ValueError("--gateway-record-id must be a complete gateway- ID")
+    raw_locations = gateway_record_locations(
+        workspace,
+        record_id,
+        discover=discover_scopes,
+        attempt_reader=job_attempt_rows,
+    )
     locations = []
     attempts = []
-    for scope in discover_scopes(workspace):
-        directory = scope.measurement_root / "records" / record_id
-        if not directory.is_dir():
-            continue
-        record = read_json(directory / "record.json", default={})
-        request = read_json(directory / "request.json", default={})
-        operation = operation_name(
-            record if isinstance(record, dict) and record else request
-        )
-        rows = job_attempt_rows(directory)
+    for location in raw_locations:
+        rows = location["attempts"]
         locations.append(
             {
-                "scope": scope.label,
-                "trajectory": scope.trajectory,
-                "workspace": str(scope.workspace),
-                "record_directory": str(directory),
-                "operation": operation,
-                "complete": (directory / "record.json").is_file(),
+                "scope": location["scope_name"],
+                "trajectory": location["trajectory"],
+                "workspace": location["workspace"],
+                "record_directory": location["record_directory"],
+                "operation": location["operation"],
+                "complete": location["complete"],
+                "runtime_request_id": location["runtime_request_id"],
                 "submission_attempt_count": len(rows),
             }
         )
-        for state in rows:
-            job = state["job"]
-            status = normalized_job_status(state)
-            identity = state.get("identity")
-            reused = (
-                state["submission"] == 0
-                and isinstance(identity, dict)
-                and bool(identity.get("batch_checkpoint"))
-            )
+        for row in rows:
             attempts.append(
                 {
-                    "scope": scope.label,
-                    "trajectory": scope.trajectory,
-                    "operation": operation,
-                    "checkpoint_path": state["checkpoint_path"],
-                    "checkpoint_id": state["checkpoint_id"],
-                    "submission": state["submission"],
-                    "checkpoint_phase": state["phase"],
-                    "job_id": job_identifier(job),
-                    "raw_status": (
-                        job.get("status") if isinstance(job, dict) else None
-                    ),
-                    "status": status,
-                    "reused": reused,
-                    "shape_ids": _shape_ids(identity),
-                    "backend_job_ids": _backend_job_ids(job),
-                    "retry_counters": state["retries"],
-                    "error": job_error_details(job),
-                    "snapshot_path": state["path"],
+                    "scope": location["scope_name"],
+                    "trajectory": location["trajectory"],
+                    "operation": location["operation"],
+                    **{
+                        key: row[key]
+                        for key in (
+                            "checkpoint_path",
+                            "checkpoint_id",
+                            "submission",
+                            "checkpoint_phase",
+                            "runtime_request_ids",
+                            "agate_job_id",
+                            "raw_status",
+                            "status",
+                            "reused",
+                            "shape_ids",
+                            "backend_agate_job_ids",
+                            "retry_counters",
+                            "error",
+                            "snapshot_path",
+                        )
+                    },
                 }
             )
     if not locations:
         raise ValueError("Gateway Record is not available in this Campaign")
     status_counts = Counter(row["status"] for row in attempts)
-    physical_ids = {
-        item
-        for row in attempts
-        for item in [row["job_id"], *row["backend_job_ids"]]
-        if item
+    agate_job_ids = {row["agate_job_id"] for row in attempts if row["agate_job_id"]}
+    backend_agate_job_ids = {
+        item for row in attempts for item in row["backend_agate_job_ids"]
     }
     return {
         "schema_version": 1,
@@ -130,7 +94,8 @@ def snapshot(workspace: Path, record_id: str) -> dict[str, Any]:
         "summary": {
             "record_location_count": len(locations),
             "submission_attempt_count": len(attempts),
-            "physical_job_id_count": len(physical_ids),
+            "agate_job_id_count": len(agate_job_ids),
+            "backend_agate_job_id_count": len(backend_agate_job_ids),
             "reused_attempt_count": sum(row["reused"] for row in attempts),
             "status_counts": dict(sorted(status_counts.items())),
         },
@@ -145,7 +110,8 @@ def render(value: dict[str, Any]) -> str:
         f"Gateway Record: {value['gateway_record_id']}",
         (
             f"Attempts: {summary['submission_attempt_count']}  "
-            f"Physical Job IDs: {summary['physical_job_id_count']}  "
+            f"Agate Job IDs: {summary['agate_job_id_count']}  "
+            f"Backend IDs: {summary['backend_agate_job_id_count']}  "
             f"Status: {summary['status_counts']}"
         ),
         "",
@@ -165,7 +131,7 @@ def render(value: dict[str, Any]) -> str:
                     row["scope"],
                     row["checkpoint_path"],
                     row["submission"],
-                    row["job_id"],
+                    row["agate_job_id"],
                     row["status"],
                     row["reused"],
                     (row["error"] or {}).get("reason"),

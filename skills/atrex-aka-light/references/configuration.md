@@ -127,7 +127,6 @@ Composition patches are JSON files passed before `--`. A module entry supplies t
         "startup": true,
         "numerical_validation": false,
         "goal_episodes": false,
-        "generate_memory": false,
         "output_limit_recovery_retries": 5,
         "episode_timeout_seconds": null,
         "search": {

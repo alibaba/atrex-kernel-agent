@@ -23,8 +23,8 @@ the Session. A receipt with stream output includes `stdout_location` and/or `std
 | --- | --- | --- |
 | `gateway-…` | One saved measurement operation | Measured evidence, result reader, direct report citation when the Experiment module is disabled |
 | full Git commit ID | Exact committed Kernel source; exposed as `kernel_commit_id` | Source reader, measurement index, peer Git history |
-| `direction_…` | Optimization objective and lifecycle | `PROGRESS.md`, `directions/<status>/*.json`, Direction updates |
-| `experiment_…` | Concrete test and interpretation tied to measurement IDs | `experiments/<experiment_id>/experiment.json`, closure and report |
+| `direction_…` | Optimization objective and lifecycle | `PROGRESS.md`, `research-library/directions/<direction_id>/vN/direction.json`, Direction updates |
+| `experiment_…` | Concrete test and interpretation tied to measurement IDs | `research-library/experiments/<experiment_id>/vN/experiment.json`, closure and report |
 
 Agate Job IDs cannot replace these IDs.
 

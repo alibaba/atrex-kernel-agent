@@ -1,6 +1,7 @@
 # AKA workspace file systems
 
-Use the file system pinned in `.atrex_file_system.json`. New tasks default to
+Use the candidate layout described in `WORKSPACE.md`. Runtime pins the actual file system
+and source contract in Supervisor-private Campaign state. New tasks default to
 `source_tree`; framework selection does not switch the file system.
 
 ## Source directory (default)

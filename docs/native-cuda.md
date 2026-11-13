@@ -74,14 +74,16 @@ Changing one format belongs in its implementation file.
 
 When `file_system` is omitted, new tasks use `source_tree`, including CUDA tasks.
 Without import configuration, the file system keeps the SourceProvider's initial editable
-`kernel.py` and creates `impl/__init__.py`; the Agent may keep a single-file implementation or
-edit/add/delete helpers, host code, CUDA and headers below `impl/`. No import manifest is needed.
+`kernel.py`; optional `impl/` is created only when the Agent needs additional files. The Agent may
+keep a single-file implementation or edit/add/delete helpers, host code, CUDA and headers below
+`impl/`. No import manifest is needed.
 Source trees use native Atrex-Bench Eval. Select `single_file` only for retained compatibility
 contracts that cannot submit a source tree, or `cuda_manifest` to use Agate-generated CUDA
 bindings. Existing campaigns retain their format and must resume with that explicit selection if
 it differs from the new default.
-The selected implementation is pinned in `.atrex_file_system.json` after the
-framework baseline. A resumed task must match it. A missing or invalid file fails
+The selected implementation and its complete contract are pinned once in the top-level
+`campaign.json`; trajectories do not copy a detached `source/` state directory. A resumed task
+must match this Campaign-wide binding. A missing or invalid file fails
 within that implementation; execution never retries through another file system.
 Historical workspaces without a selector are recognized on import. The V0 Python
 reference is an evaluator-owned bootstrap input, before the selected V1 candidate.

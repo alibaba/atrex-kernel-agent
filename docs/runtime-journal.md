@@ -1,9 +1,14 @@
 # Runtime research records and Kernel submission
 
-Light keeps one trajectory-persistent Agent Git repository. Runtime Journal stores immutable
-measurement references, optional Direction/Experiment research records, and `submit-kernel`
-receipts. Ending a Session creates an audit-segment boundary only; there is no Episode handoff
-report and no terminal promotion transaction.
+Light keeps one trajectory-persistent Agent Git repository. There is no durable Episode Journal.
+Direction/Experiment revisions live in the Campaign Research Store and versioned Research Library;
+every `submit-kernel` decision is an immutable Campaign-level `submissions/` record. Ending a
+Session updates the lineage `state.json` audit boundary only; there is no handoff report or
+terminal promotion transaction.
+
+Research validation reads the central Research Store directly through an in-memory snapshot.
+Current Light creates no temporary or persistent `research-transaction.json`, does not inspect
+legacy `.atrex_long_horizon/journal.json`, and does not migrate either format.
 
 ## Agent operations
 
@@ -16,7 +21,8 @@ report and no terminal promotion transaction.
 
 Direction and Experiment modules can be enabled independently. Measurements are always recorded
 under `records/`. Runtime projects enabled research state into `PROGRESS.md`,
-`directions/<status>/`, `experiments/`, `records/`, and `frontier.json`.
+`research-library/directions/<direction_id>/vN/`,
+`research-library/experiments/<experiment_id>/vN/`, `records/`, and `frontier.json`.
 
 ## Exact-commit submission
 
@@ -43,8 +49,8 @@ Acceptance requires all of the following:
 6. final source/DSL/dependency policy passes when applicable.
 
 Submission launches no Evaluate or ABBA, changes no Git ref, performs no rollback or promotion,
-and does not end the Session. Rejected submissions return actionable diagnostics and remain in the
-private audit log.
+and does not end the Session. Rejected submissions return actionable diagnostics and remain in
+`submissions/` alongside accepted decisions.
 
 ## Authority and persistence
 
@@ -58,4 +64,4 @@ projection, and peer sharing. Unsubmitted measurements remain available as resea
 do not become winners.
 
 For exact Direction and Experiment schemas, see the packaged
-[`runtime-records` Journal reference](../src/aka/light/workspace/resources/skills/runtime-records/references/journal.md).
+[`runtime-records` operation reference](../src/aka/light/workspace/resources/skills/runtime-records/references/journal.md).

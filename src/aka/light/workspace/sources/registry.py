@@ -34,6 +34,15 @@ def resolve(workspace, *, revision=None):
     # an untrusted candidate component makes every temporary workspace fail
     # before the selected provider can be read.
     workspace = Path(workspace).resolve()
+    from .private_state import read as read_private_state
+
+    private = read_private_state(workspace)
+    if private is not None:
+        name, contract = private
+        system = select(name)
+        system.validate_policy(contract)
+        return system, contract
+
     def get(name):
         if revision is not None:
             p=subprocess.run(['git','show',f'{revision}:{name}'],cwd=workspace,capture_output=True)

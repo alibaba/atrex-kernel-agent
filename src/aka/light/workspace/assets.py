@@ -107,7 +107,7 @@ def _archive_skill_entry(workspace: Path, path: Path) -> None:
 
 def link_custom_skills(workspace: Path, reserved: tuple[str, ...]) -> None:
     """Expose custom Skills to CLI discovery without copying or following user links."""
-    from aka.light.workspace.adaptive import custom_entries, is_reserved, MAX_ENTRIES
+    from aka.light.workspace.managed_assets import custom_entries, is_reserved, MAX_ENTRIES
     from aka.light.agent.home import open_private_directory
     # The bounded no-follow scan also validates custom tools before Session start.
     names = {Path(relative).parts[1] for relative, data, _ in custom_entries(workspace, reserved)

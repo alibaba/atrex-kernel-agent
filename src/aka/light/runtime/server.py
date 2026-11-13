@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import argparse
+import hashlib
 import logging
 import math
 import os
@@ -44,9 +45,16 @@ from aka.light.workspace.files import (
     relative_path,
     snapshot,
 )
-from aka.light.experiment.store import ABBA_BATCH_ROOT_ENV, BATCH_ROOT_ENV, JOB_ROOT_ENV, TaskRunning
+from aka.light.experiment.store import (
+    ABBA_BATCH_ROOT_ENV,
+    BATCH_ROOT_ENV,
+    JOB_ROOT_ENV,
+    RUNTIME_REQUEST_ID_ENV,
+    TaskRunning,
+    private_write,
+)
 from aka.light.experiment.records import task_conflict_response
-from aka.light.workflow.journal_service import SupervisorJournalService, journal_lock
+from aka.light.workflow.journal_service import SupervisorJournalService
 from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError, error_response
 from aka.light.runtime.request_feedback import augment_error
 from aka.light.runtime.plugin_output import (
@@ -63,7 +71,11 @@ from aka.light.runtime.errors import (
     ResultPublicationError,
 )
 from aka.light.execution.retry import InfrastructureUnavailable
-from aka.light.runtime.paths import supervisor_campaign_root
+from aka.light.runtime.paths import (
+    supervisor_campaign_root,
+    supervisor_research_catalog_root,
+    supervisor_submission_root,
+)
 from aka.light.wiki.config import WikiConfig
 from aka.light.wiki.service import WikiService
 
@@ -104,9 +116,9 @@ def _journal_evidence_hint(modules: tuple[str, ...] | list[str]) -> str:
     enabled = set(modules)
     locations = ["PROGRESS.md"]
     if "directions" in enabled:
-        locations.append("directions/<status>/*.json")
+        locations.append("research-library/directions/<direction_id>/vN/direction.json")
     if "experiments" in enabled:
-        locations.append("experiments/*/experiment.json")
+        locations.append("research-library/experiments/<experiment_id>/vN/experiment.json")
     locations.append("records/<gateway_record_id>.json")
     if enabled:
         return "Read " + ", ".join(locations) + " for visible IDs and evidence. "
@@ -342,7 +354,7 @@ def scrub_environment(environment: dict[str, str]) -> dict[str, str]:
     return {key: value for key, value in environment.items() if
             not key.startswith(("AGATE_", "ATREX_SANDBOX_", "ATREX_WIKI_", "GPU_WIKI_", "ATREX_GPU_WIKI_"))
             and key not in {OWNER_ENV, URL_ENV, TOKEN_ENV, "ATREX_AKA_RUNTIME_CONNECTION_FILE", JOB_ROOT_ENV, BATCH_ROOT_ENV,
-                            ABBA_BATCH_ROOT_ENV,
+                            ABBA_BATCH_ROOT_ENV, RUNTIME_REQUEST_ID_ENV,
                             "ATREX_AKA_MEASUREMENT_REPETITIONS",
                             "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_BENCH_RUNTIME_ROOT",
                             "ATREX_AKA_IDENTITY_KEY", TERMINAL_VALIDATION_ENV}}
@@ -368,11 +380,17 @@ class RuntimeConfig:
     optimization_mode: str = "fast"
     workspace_policy: str = ""
     workspace: Path | None = None
+    # Pooled trajectories share the Campaign-owned Measurement Store. Journal,
+    # Research, Session, and Runtime-audit state lives in lineage namespaces
+    # within the same Campaign-private tree, not in trajectory-owned stores.
+    # Serial campaigns leave this unset and use the same Campaign layout.
+    measurement_root: Path | None = None
     # None preserves the Gateway execution + remote queue grace + cleanup budget.
     request_timeout: float | None = None
     queue_timeout: float = 60
     measurement_repetitions: int = 1
     pause_agent_during_requests: bool = True
+    research_synchronization: str = "independent"
     wiki_enabled: bool = True
     wiki_options: WikiConfig = field(default_factory=WikiConfig)
     # Selected aka.contracts.wiki.WikiProvider; None selects the built-in local store.
@@ -383,6 +401,16 @@ class RuntimeConfig:
             raise TypeError("Runtime workspace_policy must be text")
         if type(self.pause_agent_during_requests) is not bool:
             raise TypeError("Runtime pause_agent_during_requests must be a boolean")
+        if self.research_synchronization not in {
+            "independent", "synchronous", "asynchronous"
+        }:
+            raise ValueError(
+                "Runtime research_synchronization must be independent, synchronous, or asynchronous"
+            )
+        if self.measurement_root is not None and not isinstance(
+            self.measurement_root, Path
+        ):
+            raise TypeError("Runtime measurement_root must be a pathlib.Path")
         if type(self.evaluation_step_timeout) is not int or self.evaluation_step_timeout <= 0:
             raise ValueError("Runtime evaluation_step_timeout must be a positive integer")
         if type(self.shape_batch_size) is not int or self.shape_batch_size <= 0:
@@ -456,8 +484,8 @@ class _Handler(BaseHTTPRequestHandler):
         self.connection.settimeout(10)
 
     def reply(self, status, result, *, retry_after: int | None = None, execution_exit_code: int | None = None):
+        owner = self.server.owner
         if status >= 400:
-            owner = self.server.owner
             result = augment_error(
                 result, route=self.path, request=getattr(self, "decoded_request", None),
                 research_records=owner.journal_factory.research_records,
@@ -472,6 +500,24 @@ class _Handler(BaseHTTPRequestHandler):
                                str(owner.config.private_reference_dir or ""), owner.config.url,
                                str(owner.config.atrex_bench_root or "")),
                 private_values=(*credential_values(owner.environment), getattr(self, "bearer", "")))
+        if getattr(self, "audit_active", False):
+            try:
+                owner.audit_request_finished(
+                    self.request_id,
+                    http_status=status,
+                    result=result,
+                    execution_exit_code=execution_exit_code,
+                    duration_seconds=max(
+                        0.0,
+                        time.monotonic()
+                        - getattr(self, "audit_started_monotonic", time.monotonic()),
+                    ),
+                )
+            except (OSError, ValueError, TypeError):
+                logging.getLogger(__name__).exception(
+                    "Failed to finalize Runtime request audit %s", self.request_id
+                )
+            self.audit_active = False
         payload = json.dumps(result, ensure_ascii=False, allow_nan=False).encode()
         self.close_connection = True
         try:
@@ -500,6 +546,8 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         owner = self.server.owner
         self.request_id = uuid.uuid4().hex
+        self.audit_active = False
+        self.audit_started_monotonic = time.monotonic()
         # Gateway jobs own their remote deadlines/retry policy. Keeping the
         # local HTTP request alive prevents the Agent from escaping a still
         # running Runtime call and starting unrelated work.
@@ -521,6 +569,14 @@ class _Handler(BaseHTTPRequestHandler):
             self.reply(404, failure("Unknown endpoint"))
             return
         try:
+            owner.audit_request_started(self.request_id, route=self.path)
+        except (OSError, ValueError, TypeError):
+            logging.getLogger(__name__).exception(
+                "Failed to start Runtime request audit %s", self.request_id
+            )
+        else:
+            self.audit_active = True
+        try:
             with _validating_request():
                 if self.headers.get("Transfer-Encoding"):
                     raise ValueError("Transfer-Encoding is unsupported; supply Content-Length")
@@ -532,6 +588,15 @@ class _Handler(BaseHTTPRequestHandler):
                 if not isinstance(request, dict):
                     raise ValueError("Request must be a JSON object")
                 self.decoded_request = request
+                if self.audit_active:
+                    try:
+                        owner.audit_request_details(
+                            self.request_id, route=self.path, request=request
+                        )
+                    except (OSError, ValueError, TypeError):
+                        logging.getLogger(__name__).exception(
+                            "Failed to bind Runtime request audit %s", self.request_id
+                        )
                 if (
                     self.path == "/v1/journal/execute"
                     and request.get("operation") == "kernel_submit"
@@ -729,6 +794,9 @@ class SupervisorRuntime:
         self.owner_id = secrets.token_urlsafe(32)
         self.lock = threading.RLock()
         self.capabilities: dict[str, Capability] = {}
+        # In-memory Episode bindings route Runtime requests to the persistent
+        # Agent repository.  They are not durable Journals; authoritative
+        # state lives in ResearchStore, SubmissionStore and MeasurementStore.
         self.journals: dict[Path, JournalBinding] = {}
         self.closed = False
         self.slots = threading.BoundedSemaphore(16)
@@ -741,7 +809,72 @@ class SupervisorRuntime:
             from aka.light.agent.home import open_private_directory
             with open_private_directory(self.audit_root):
                 pass
-        self.experiments = services.experiments.open((self.audit_root or self.root) / "measurements")
+            repository = ROOT.parents[2]
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=repository,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            dirty = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=repository,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+                check=False,
+            )
+            from aka.light.runtime.paths import (
+                record_campaign_runtime_configuration,
+            )
+
+            record_campaign_runtime_configuration(
+                workspace,
+                {
+                    "schema_version": 1,
+                    "recorded_at": datetime.now(timezone.utc).isoformat(),
+                    "hardware": config.hardware,
+                    "optimization_mode": config.optimization_mode,
+                    "gateway_profile": config.profile or None,
+                    "evaluation_timeout_seconds": config.timeout,
+                    "evaluation_step_timeout_seconds": config.evaluation_step_timeout,
+                    "shape_batch_size": config.shape_batch_size,
+                    "gpu_clock_mhz": config.gpu_clock_mhz,
+                    "measurement_repetitions": config.measurement_repetitions,
+                    "request_timeout_seconds": config.request_timeout,
+                    "queue_timeout_seconds": config.queue_timeout,
+                    "pause_agent_during_requests": config.pause_agent_during_requests,
+                    "wiki_enabled": config.wiki_enabled,
+                    "transport": "ssh" if config.ssh else "agate_sdk",
+                    "workspace_policy_sha256": hashlib.sha256(
+                        config.workspace_policy.encode()
+                    ).hexdigest(),
+                    "source_checkout": {
+                        "git_commit_id": revision.stdout.strip()
+                        if revision.returncode == 0
+                        else None,
+                        "tracked_files_dirty": bool(dirty.stdout.strip())
+                        if dirty.returncode == 0
+                        else None,
+                    },
+                },
+            )
+        from aka.light.runtime.paths import supervisor_measurement_root
+        self.measurement_root = (
+            config.measurement_root.expanduser().resolve()
+            if config.measurement_root is not None
+            else (
+                supervisor_measurement_root(config.workspace)
+                if config.workspace is not None
+                else self.root / "measurements"
+            )
+        )
+        from aka.light.agent.home import open_private_directory
+        with open_private_directory(self.measurement_root):
+            pass
+        self.experiments = services.experiments.open(self.measurement_root)
         self.measurements = self.experiments.store
         from aka.light.research import ResearchStore
         self.research = ResearchStore((self.audit_root or self.root) / "research")
@@ -768,11 +901,6 @@ class SupervisorRuntime:
     @property
     def url(self) -> str:
         return f"http://127.0.0.1:{self.server.server_address[1]}"
-
-    @property
-    def journals_root(self) -> Path:
-        """Private Journal collection, sibling to the Campaign's Measurement Store."""
-        return (self.audit_root or self.root) / "journals"
 
     @property
     def request_timeout_seconds(self) -> float:
@@ -812,13 +940,38 @@ class SupervisorRuntime:
         if capability and capability.session_control:
             capability.session_control.kill()
 
-    def episode_journal_path(self, episode: int) -> Path:
-        """Controller-only location, shared by registration and read-only recovery."""
-        # Controller segment numbers are non-negative; zero may identify the
-        # first audit segment in a fresh persistent trajectory.
-        if type(episode) is not int or episode < 0:
-            raise ValueError("Invalid controller Episode number")
-        return self.journals_root / "episodes" / f"e{episode:08d}" / "journal.json"
+    def _write_lineage_state(
+        self,
+        *,
+        episode: int,
+        branch: str,
+        base_commit: str,
+        base_kernel_commit_id: str | None,
+        agent_head_commit_id: str | None,
+        tool_modules: tuple[str, ...],
+        segment_status: str,
+        origin: Mapping[str, object] | None,
+    ) -> None:
+        """Checkpoint the current audit segment without an Episode Journal."""
+        root = self.audit_root or self.root
+        path = root / "state.json"
+        trajectory = (origin or {}).get("trajectory", 1)
+        if type(trajectory) is not int or trajectory <= 0:
+            trajectory = 1
+        from aka.light.workflow.search import merge_lineage_state
+
+        merge_lineage_state(
+            path,
+            trajectory,
+            current_episode=episode,
+            episode_branch=branch,
+            base_commit=base_commit,
+            base_kernel_commit_id=base_kernel_commit_id,
+            agent_head_commit_id=agent_head_commit_id,
+            tool_modules=list(tool_modules),
+            segment_status=segment_status,
+            updated_at=datetime.now(timezone.utc).isoformat(),
+        )
 
 
     def baseline_kernel_commit(self, workspace: Path) -> str:
@@ -846,7 +999,7 @@ class SupervisorRuntime:
                          require_gluon: bool = False,
                          session_capture_root: Path | None = None,
                          origin: Mapping[str, object] | None = None):
-        """Trusted controller binding, never populated from an Agent request or file."""
+        """Bind one audit segment to the trusted persistent Agent repository."""
         workspace = workspace.resolve(strict=True)
         if (type(episode) is not int or episode < 0 or type(memory_version) is not int
                 or memory_version < 1 or not isinstance(branch, str) or not branch
@@ -859,41 +1012,59 @@ class SupervisorRuntime:
                         baseline_kernel_commit_id,
                     ) is None
                 )):
-            raise ValueError("Invalid controller Episode identity")
-        path = self.episode_journal_path(episode)
-        evidence = path.parent
-        self.journal_factory.initialize(path, episode=episode, base_commit=base_commit,
-                                        branch=branch, memory_version=memory_version)
+            raise ValueError("Invalid persistent Agent Episode identity")
+        lineage_root = self.audit_root or self.root
+        trajectory = (origin or {}).get("trajectory", 1)
+        if type(trajectory) is not int or trajectory <= 0:
+            trajectory = 1
+        lineage = f"T{trajectory}"
+        submissions_root = supervisor_submission_root(workspace)
+        evidence = (
+            supervisor_research_catalog_root(workspace)
+            / "reviews"
+            / lineage
+            / f"e{episode:08d}"
+        )
+        # Import pre-centralization submit audit once.  Historical Journal files
+        # remain inert source evidence and are never recreated or updated.
+        from aka.light.workflow.submissions import migrate_legacy_journals
+
+        migrate_legacy_journals(
+            lineage_root / "journals",
+            submissions_root,
+            lineage=lineage,
+        )
         with self.lock:
             if self.closed:
                 raise RuntimeError("Supervisor Runtime is closed")
             existing = self.journals.get(workspace)
             if existing is not None:
-                if existing.service.path != path:
-                    raise RuntimeError("Workspace already belongs to another Runtime Journal")
-                if (existing.view is not None) != managed_agent_workspace:
-                    raise RuntimeError("Cannot change Agent workspace ownership during an Episode")
-                if existing.require_gluon != require_gluon:
-                    raise RuntimeError("Cannot change the final DSL phase during an Episode")
-                return existing.view.prepare() if existing.view else workspace
+                if existing.service.episode == episode:
+                    if (existing.view is not None) != managed_agent_workspace:
+                        raise RuntimeError("Cannot change Agent workspace ownership during an Episode")
+                    if existing.require_gluon != require_gluon:
+                        raise RuntimeError("Cannot change the final DSL phase during an Episode")
+                    return existing.view.prepare() if existing.view else workspace
+                if any(
+                    capability.workspace == workspace
+                    for capability in self.capabilities.values()
+                ):
+                    raise RuntimeError(
+                        "Cannot advance the persistent Agent workspace while its prior "
+                        "Episode Session is still active"
+                    )
+                self.journals.pop(workspace, None)
             view = None
             agent_workspace = workspace
             registered_baseline_kernel_commit_id = None
             if managed_agent_workspace:
                 from aka.light.evaluation.hardware import hardware_vendor
-                persistent_root = (
-                    (self.audit_root or self.root) / "agent-workspace"
-                    if self.workspace_provider is None
-                    or getattr(self.workspace_provider, "inherit_state", True)
-                    else None
-                )
+                persistent_root = (self.audit_root or self.root) / "agent-workspace"
                 view = (self.workspace_provider.open_draft if self.workspace_provider else EpisodeWorkspace)(workspace, evidence / "agent",
                                         is_ppu=hardware_vendor(self.config.hardware) == "ppu",
                                         research_records=self.journal_factory.research_records,
                                         research_modules=self.journal_factory.tool_modules,
                                         plugin_registry=self.plugins,
-                                        adaptive_root=(self.audit_root or self.root) / "adaptive-state",
-                                        episode=episode,
                                         workspace_policy=self.config.workspace_policy,
                                         persistent_root=persistent_root)
                 agent_workspace = view.prepare()
@@ -913,23 +1084,24 @@ class SupervisorRuntime:
                     ):
                         raise RuntimeError(
                             "Registered Agent baseline is not reachable or does not match "
-                            "the private Controller baseline"
+                            "the Episode starting commit"
                         )
                 else:
-                    # Initial workspace registration can discover an already
-                    # existing exact commit. Never manufacture an
-                    # Episode-boundary commit or expose the private Controller
-                    # commit as a Kernel identity.
-                    registered_baseline_kernel_commit_id = (
-                        view.agent_git.find_kernel_commit(incumbent_source)
-                    )
+                    # ``base_commit`` is already an Agent-owned identity. Do
+                    # not substitute an older commit with identical source in
+                    # the direct Light layout. The fallback is retained only
+                    # for legacy callers that still pass a separate source
+                    # repository while migrating an older Campaign.
+                    if view.agent_git.commit_reachable(base_commit):
+                        registered_baseline_kernel_commit_id = base_commit
+                    elif workspace != view.root:
+                        registered_baseline_kernel_commit_id = (
+                            view.agent_git.find_kernel_commit(incumbent_source)
+                        )
                     if registered_baseline_kernel_commit_id is None:
                         raise RuntimeError(
-                            "No Agent-visible Git commit matches the Episode incumbent"
+                            "Episode starting commit is not reachable from Agent Git"
                         )
-                self.journal_factory.bind_base_kernel(
-                    path, registered_baseline_kernel_commit_id
-                )
                 self.measurements.kernel(
                     incumbent_source, registered_baseline_kernel_commit_id
                 )
@@ -939,11 +1111,19 @@ class SupervisorRuntime:
             else:
                 # Legacy single-repository mode uses the same public/private
                 # identity, but keeps the mapping explicit for projections.
-                self.journal_factory.bind_base_kernel(path, base_commit)
+                registered_baseline_kernel_commit_id = base_commit
             binding = JournalBinding(self.journal_factory.open(
                 workspace=agent_workspace, git_workspace=workspace,
-                campaign_root=self.journals_root, evidence_root=evidence,
-                research_root=(self.audit_root or self.root) / "research",
+                campaign_root=lineage_root / "research", evidence_root=evidence,
+                measurement_root=self.measurement_root,
+                submissions_root=submissions_root,
+                episode=episode,
+                base_commit=base_commit,
+                base_kernel_id=registered_baseline_kernel_commit_id,
+                episode_branch=branch,
+                tool_modules=self.journal_factory.tool_modules,
+                research_root=lineage_root / "research",
+                research_synchronization=self.config.research_synchronization,
                 session_capture_root=session_capture_root,
                 origin=origin,
                 claim_reviewer=getattr(self, "research_claim_reviewer", None),
@@ -954,7 +1134,7 @@ class SupervisorRuntime:
             binding.service.publish_research_files()
             with self.lock:
                 previous = self.journals.get(agent_workspace)
-                if previous is not None and previous.service.path != path:
+                if previous is not None and previous.service.episode != episode:
                     if any(
                         capability.workspace == agent_workspace
                         for capability in self.capabilities.values()
@@ -966,6 +1146,18 @@ class SupervisorRuntime:
                     self.journals.pop(agent_workspace, None)
                 self.journals[workspace] = binding
                 self.journals[agent_workspace] = binding
+            self._write_lineage_state(
+                episode=episode,
+                branch=branch,
+                base_commit=base_commit,
+                base_kernel_commit_id=registered_baseline_kernel_commit_id,
+                agent_head_commit_id=(
+                    view.agent_git.head() if view is not None else base_commit
+                ),
+                tool_modules=tuple(self.journal_factory.tool_modules),
+                segment_status="active",
+                origin=origin,
+            )
             return agent_workspace
 
     @contextmanager
@@ -987,22 +1179,24 @@ class SupervisorRuntime:
         values.update({URL_ENV: self.url, TOKEN_ENV: token})
         if capability.journal and capability.journal.view:
             from aka.light.workspace.episode import EPISODE_WORKSPACE_ENV
-            from aka.light.workspace.adaptive import PROTECTED_PATHS_ENV
+            from aka.light.workspace.managed_assets import PROTECTED_PATHS_ENV
             with capability.journal.lock:
                 values[PROTECTED_PATHS_ENV] = json.dumps(capability.journal.view.prepare_session())
             values[EPISODE_WORKSPACE_ENV] = str(capability.journal.view.root)
             from aka.light.agent.sandbox import git_directory
-            common = git_directory(capability.journal.view.worktree)
+            common = git_directory(capability.journal.view.source_workspace)
             if common is None:
                 raise RuntimeError(
                     "Cannot resolve the managed Episode Git common directory; "
                     "refusing to start an Agent Session without private-path protection. "
-                    "Repair the controller worktree's Git metadata before retrying"
+                    "Repair the persistent Agent repository before retrying"
                 )
-            values["ATREX_EPISODE_PRIVATE_PATHS"] = json.dumps([
-                str(capability.journal.view.worktree), str(self.audit_root or self.root),
-                str(common),
-            ])
+            private_paths = [self.audit_root or self.root]
+            if not common.is_relative_to(capability.journal.view.root):
+                private_paths.append(common)
+            values["ATREX_EPISODE_PRIVATE_PATHS"] = json.dumps(
+                [str(path) for path in private_paths]
+            )
             values["GIT_CEILING_DIRECTORIES"] = str(capability.journal.view.root.parent)
         # Preparation can fail or race with shutdown; grant authority only after
         # every required private path is known, without holding the lock over Git.
@@ -1019,6 +1213,19 @@ class SupervisorRuntime:
                     primary = sys.exception()
                     try:
                         capability.journal.view.publish()
+                        service = capability.journal.service
+                        self._write_lineage_state(
+                            episode=service.episode,
+                            branch=service.episode_branch,
+                            base_commit=service.base_commit,
+                            base_kernel_commit_id=service.base_kernel_id,
+                            agent_head_commit_id=(
+                                capability.journal.view.agent_git.head()
+                            ),
+                            tool_modules=service.tool_modules,
+                            segment_status="idle",
+                            origin=service.origin,
+                        )
                     except Exception as error:
                         if primary is not None:
                             primary.add_note(f"Episode draft publication failed: {error}")
@@ -1074,13 +1281,13 @@ class SupervisorRuntime:
                         terminal_validation: bool = False,
                         kernel_ids: Mapping[str, str] | None = None,
                         journal_workspace: Path | None = None) -> dict:
-        """Controller-only execution/reuse; no Session, draft publication or HTTP switch.
+        """Supervisor-only execution/reuse; no Session or HTTP transport switch.
 
         ``workspace`` is the exact staged source tree executed by the request.  A
-        trusted controller request may separately name the registered Episode
+        trusted Supervisor request may separately name the registered Episode
         workspace that owns Agent Git and its Journal. Keeping those authorities
         separate lets Runtime resolve reachable comparison commits without copying
-        them into controller Git.
+        them into a second Git repository.
         """
         execution_workspace = workspace.resolve(strict=True)
         journal_workspace = (
@@ -1176,7 +1383,7 @@ class SupervisorRuntime:
                         )
                     if parsed is not None and parsed.kind != "env":
                         from aka.light.workspace.sources import freeze_for_execution, stage_frozen, layout_at
-                        authority = (capability.journal.view.worktree if capability.journal and capability.journal.view
+                        authority = (capability.journal.view.source_workspace if capability.journal and capability.journal.view
                                      else self.config.workspace or capability.workspace)
                         frozen_source = freeze_for_execution(authority, capability.workspace, candidate_source)
                         snapshot(
@@ -1196,7 +1403,7 @@ class SupervisorRuntime:
                                     code="baseline_commit_unavailable",
                                     next_action=(
                                         "Run ABBA from an active optimization Episode and pass a full "
-                                        "commit shown by local Git or refs/atrex/shared/."
+                                        "commit shown by local Git or a peer ref such as atrex/T2."
                                     ),
                                 )
                             baseline_commit = parsed.baseline_commit
@@ -1212,7 +1419,7 @@ class SupervisorRuntime:
                                     baseline_kernel_commit_id=baseline_commit,
                                     next_action=(
                                         "Use a complete commit from git log, the current lineage, or "
-                                        "refs/atrex/shared/<trajectory>/<epoch>/head."
+                                        "a peer remote-tracking ref such as atrex/T2."
                                     ),
                                 )
                             from aka.light.workspace.sources import Artifact, from_git
@@ -1253,7 +1460,7 @@ class SupervisorRuntime:
                                 if layout_at(staged).owns(name):
                                     continue
                                 try:
-                                    content = read_input(capability.journal.view.worktree, name)
+                                    content = read_input(capability.journal.view.source_workspace, name)
                                 except FileNotFoundError:
                                     continue
                                 publish(staged, name, content)
@@ -1274,10 +1481,7 @@ class SupervisorRuntime:
                                     git = (
                                         capability.journal.view.agent_git
                                         if capability.journal and capability.journal.view
-                                        else AgentGit(
-                                            capability.workspace,
-                                            (self.audit_root or self.root) / "agent-git.bundle",
-                                        )
+                                        else AgentGit(capability.workspace)
                                     )
                                     try:
                                         kernel_id = git.kernel_commit(source)
@@ -1300,10 +1504,10 @@ class SupervisorRuntime:
                                         )
                                 kernel_ids["candidate"] = kernel_id
                                 if not prepare_identity_only:
-                                    kernel = self.measurements.kernel(source, kernel_id)
-                                    publish(capability.journal.view.worktree,
-                                            ".atrex_long_horizon/policy_review_request.json",
-                                            json.dumps({"schema_version": 1, "kernel_id": kernel["kernel_id"]}).encode())
+                                    self.measurements.kernel(source, kernel_id)
+                                    # The immutable Kernel archive is the
+                                    # authoritative review input. Do not write
+                                    # Supervisor request metadata into Agent Git.
                     (staged / ".orchestrator_mode.json").write_text(json.dumps({
                         "mode": self.config.optimization_mode,
                         "evaluator_shape_visibility": (
@@ -1399,6 +1603,7 @@ class SupervisorRuntime:
                     reuse_correctness=reuse_correctness,
                 )
                 if capability.journal is not None:
+                    reused_record_id = None
                     try:
                         agent_result = result.get("agent_result")
                         if isinstance(agent_result, Mapping):
@@ -1408,9 +1613,12 @@ class SupervisorRuntime:
                             if isinstance(agent_result, Mapping)
                             else None
                         )
+                        if result.get("reused") is True and isinstance(record_id, str):
+                            reused_record_id = record_id
                         if (
                             isinstance(record_id, str)
                             and result.get("reused") is not True
+                            and isinstance(agent_result, Mapping)
                         ):
                             record = self.measurements.read(record_id)
                             capability.journal.service.record_passing_full_evaluate_checkpoint(
@@ -1426,7 +1634,18 @@ class SupervisorRuntime:
                                 else frozenset()
                             ),
                         )
-                    except (OSError, ValueError, RuntimeStateError):
+                    except (OSError, ValueError, RuntimeStateError) as error:
+                        if isinstance(reused_record_id, str):
+                            raise RuntimeStateError(
+                                "The exact cached Gateway Record was found, but its "
+                                "lineage projection could not be published.",
+                                code="cached_record_projection_failed",
+                                next_action=(
+                                    "Retry the same Runtime request after Supervisor "
+                                    "storage recovers. The cached result will be reused; "
+                                    "do not change the Kernel or submit a replacement job."
+                                ),
+                            ) from error
                         # The immutable measurement has already completed. A
                         # projection failure must not turn it into an unknown
                         # GPU outcome; registration or the next mutation heals
@@ -1467,29 +1686,26 @@ class SupervisorRuntime:
             if not self._live(capability):
                 raise SessionRevokedError()
             try:
-                with journal_lock(binding.service.path):
-                    agent_git = None
-                    if request.get("operation") == "kernel_submit":
-                        from aka.light.workspace.agent_git import AgentGit
-                        agent_git = (
-                            binding.view.agent_git
-                            if binding.view is not None
-                            else AgentGit(
-                                binding.service.workspace,
-                                (self.audit_root or self.root) / "agent-git.bundle",
-                            )
-                        )
-                    value = binding.service.execute(
-                        request,
-                        review_kernel=(
-                            lambda commit_id: self._review_submitted_kernel(
-                                capability,
-                                binding,
-                                agent_git,
-                                commit_id,
-                            )
-                        ) if agent_git is not None and request.get("operation") == "kernel_submit" else None,
+                agent_git = None
+                if request.get("operation") == "kernel_submit":
+                    from aka.light.workspace.agent_git import AgentGit
+                    agent_git = (
+                        binding.view.agent_git
+                        if binding.view is not None
+                        else AgentGit(binding.service.workspace)
                     )
+                value = binding.service.execute(
+                    request,
+                    review_kernel=(
+                        lambda commit_id, submission_id: self._review_submitted_kernel(
+                            capability,
+                            binding,
+                            agent_git,
+                            commit_id,
+                            submission_id,
+                        )
+                    ) if agent_git is not None and request.get("operation") == "kernel_submit" else None,
+                )
             except (AgentRequestError, RuntimeStateError):
                 raise
             except ValueError as error:
@@ -1506,7 +1722,14 @@ class SupervisorRuntime:
         finally:
             binding.lock.release()
 
-    def _review_submitted_kernel(self, capability, binding, agent_git, commit_id: str) -> dict:
+    def _review_submitted_kernel(
+        self,
+        capability,
+        binding,
+        agent_git,
+        commit_id: str,
+        submission_id: str | None = None,
+    ) -> dict:
         """Review one exact Agent commit and its saved full-Evaluate evidence."""
         from aka.light.workspace.sources import from_git
 
@@ -1530,13 +1753,33 @@ class SupervisorRuntime:
         policy_validator = getattr(self, "production_policy_validator", None)
         production_applicable = bool(getattr(self, "production_review_required", False))
         violations: list[str] = []
+        implementation_review: dict[str, object] = {
+            "availability": "not_applicable",
+        }
         if production_applicable and policy_validator is not None:
-            violations = list(policy_validator(
+            policy_result = policy_validator(
                 binding.service.git_workspace,
                 source,
                 parent=capability,
                 require_gluon=binding.require_gluon,
-            ))
+                submission_id=submission_id,
+            )
+            if isinstance(policy_result, Mapping):
+                raw_violations = policy_result.get("violations", [])
+                violations = (
+                    list(raw_violations)
+                    if isinstance(raw_violations, (list, tuple))
+                    else ["production policy validator returned invalid violations"]
+                )
+                raw_review = policy_result.get("implementation_review")
+                implementation_review = (
+                    dict(raw_review)
+                    if isinstance(raw_review, Mapping)
+                    else {"availability": "unavailable"}
+                )
+            else:
+                violations = list(policy_result)
+                implementation_review = {"availability": "unavailable"}
         review = {"source_contract": "pass"}
         if production_applicable:
             from aka.light.acceptance.policy_modes import review_fields
@@ -1561,34 +1804,193 @@ class SupervisorRuntime:
                 and evaluation_evidence.get("status") == "passed"
             ),
             "review": review,
+            "implementation_review": implementation_review,
             "diagnostics": violations,
             "evaluation_evidence": evaluation_evidence,
         }
 
     def audit_process(self, capability, kind, argv, process, record_id=None):
         if self.audit_root:
-            audited_argv = list(argv)
-            if kind == "gateway":
-                audited_argv = []
+            request_id = capability.request_id or uuid.uuid4().hex
+            path = self._request_audit_path(request_id)
+            existing = self._read_request_audit(path)
+            now = datetime.now(timezone.utc).isoformat()
+            lifecycle_owned = bool(existing)
+            existing.update({
+                "schema_version": 2,
+                "request_id": request_id,
+                "created_at": existing.get("started_at", existing.get("created_at", now)),
+                "started_at": existing.get("started_at", existing.get("created_at", now)),
+                "updated_at": now,
+                "operation": kind,
+                "argv": self._audited_argv(kind, argv),
+                "exit_code": process.returncode,
+                "stdout": process.stdout,
+                "stderr": process.stderr,
+                "gateway_record_id": record_id or existing.get("gateway_record_id"),
+                "capture_limits": {
+                    "stdout_bytes": 4 * 1024 * 1024,
+                    "stderr_bytes": 128 * 1024,
+                },
+            })
+            if not lifecycle_owned:
+                existing.update({
+                    "state": "succeeded" if process.returncode == 0 else "failed",
+                    "finished_at": now,
+                })
+            self._publish_request_audit(path, existing)
+
+    @staticmethod
+    def _audited_argv(kind: str, argv) -> list[str]:
+        audited = [str(value) for value in argv]
+        if kind != "gateway":
+            return audited
+        result = []
+        redact_next = False
+        for value in audited:
+            if redact_next:
+                result.append("<redacted>")
                 redact_next = False
-                for value in argv:
-                    if redact_next:
-                        audited_argv.append("<redacted>")
-                        redact_next = False
-                        continue
-                    option = value.split("=", 1)[0]
-                    if option in {"--env", "--ssh-init", "--url"}:
-                        audited_argv.append(option + "=<redacted>" if "=" in value else option)
-                        redact_next = "=" not in value
-                    else:
-                        audited_argv.append(value)
-            publish(self.audit_root, f"request-{capability.request_id or uuid.uuid4().hex}.json", json.dumps({
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "operation": kind, "argv": audited_argv, "exit_code": process.returncode,
-                "stdout": process.stdout, "stderr": process.stderr,
-                "gateway_record_id": record_id,
-                "capture_limits": {"stdout_bytes": 4 * 1024 * 1024, "stderr_bytes": 128 * 1024},
-            }, ensure_ascii=False).encode())
+                continue
+            option = value.split("=", 1)[0]
+            if option in {"--env", "--ssh-init", "--url"}:
+                result.append(option + "=<redacted>" if "=" in value else option)
+                redact_next = "=" not in value
+            else:
+                result.append(value)
+        return result
+
+    @staticmethod
+    def _read_request_audit(path: Path) -> dict:
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (FileNotFoundError, OSError, ValueError):
+            return {}
+        return value if isinstance(value, dict) else {}
+
+    @staticmethod
+    def _publish_request_audit(path: Path, value: dict) -> None:
+        publish(
+            path.parent,
+            path.name,
+            (json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n").encode(),
+        )
+
+    def _request_audit_path(self, request_id: str, route: str | None = None) -> Path:
+        if not self.audit_root:
+            return self.root / "runtime-audit" / "requests" / f"request-{request_id}.json"
+        runtime_audit = self.audit_root / "runtime-audit"
+        if route == "/v1/plugins/execute":
+            return runtime_audit / "plugin-calls" / f"request-{request_id}.json"
+        if route is None:
+            for collection in ("requests", "plugin-calls"):
+                candidate = runtime_audit / collection / f"request-{request_id}.json"
+                if candidate.is_file():
+                    return candidate
+        return runtime_audit / "requests" / f"request-{request_id}.json"
+
+    def audit_request_started(self, request_id: str, *, route: str) -> None:
+        if not self.audit_root:
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        self._publish_request_audit(
+            self._request_audit_path(request_id, route),
+            {
+                "schema_version": 2,
+                "request_id": request_id,
+                "route": route,
+                "state": "running",
+                "created_at": now,
+                "started_at": now,
+                "updated_at": now,
+            },
+        )
+
+    def audit_request_details(self, request_id: str, *, route: str, request: dict) -> None:
+        if not self.audit_root:
+            return
+        path = self._request_audit_path(request_id, route)
+        value = self._read_request_audit(path)
+        operation = {
+            "/v1/gateway/execute": "gateway",
+            "/v1/wiki/query": "wiki",
+            "/v1/journal/execute": "journal",
+            "/v1/plugins/execute": "plugin",
+        }.get(route, "unknown")
+        argv = request.get("argv") if isinstance(request.get("argv"), list) else []
+        if operation == "gateway":
+            audited_argv = self._audited_argv(operation, argv)
+        else:
+            audited_argv = []
+        tool = None
+        if operation == "gateway":
+            for index, item in enumerate(audited_argv):
+                if item == "--kind" and index + 1 < len(audited_argv):
+                    tool = audited_argv[index + 1]
+                    break
+                if item.startswith("--kind="):
+                    tool = item.split("=", 1)[1]
+                    break
+        elif operation == "wiki":
+            tool = request.get("tool") or "wiki-query"
+        elif operation == "journal":
+            tool = request.get("operation")
+        elif operation == "plugin":
+            tool = request.get("tool")
+        value.update({
+            "route": route,
+            "operation": operation,
+            "tool": tool or operation,
+            "argv": audited_argv,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        })
+        self._publish_request_audit(path, value)
+
+    def audit_request_finished(
+        self,
+        request_id: str,
+        *,
+        http_status: int,
+        result: object,
+        execution_exit_code: int | None,
+        duration_seconds: float,
+    ) -> None:
+        if not self.audit_root:
+            return
+        path = self._request_audit_path(request_id)
+        value = self._read_request_audit(path)
+        now = datetime.now(timezone.utc).isoformat()
+        response = result if isinstance(result, dict) else {}
+        response_status = str(response.get("status") or response.get("outcome") or "").casefold()
+        pending = response_status in {
+            "accepted", "pending", "queued", "running", "submitted", "waiting",
+        }
+        failed = http_status >= 400 or (
+            type(execution_exit_code) is int and execution_exit_code != 0
+        )
+        error = {
+            key: response.get(key)
+            for key in ("code", "reason", "error_class", "message", "outcome", "phase")
+            if response.get(key) is not None
+        }
+        gateway_record_id = response.get("gateway_record_id")
+        if not isinstance(gateway_record_id, str):
+            details = response.get("details")
+            gateway_record_id = (
+                details.get("gateway_record_id") if isinstance(details, dict) else None
+            )
+        value.update({
+            "state": "failed" if failed else "pending" if pending else "succeeded",
+            "updated_at": now,
+            "finished_at": now,
+            "duration_seconds": duration_seconds,
+            "http_status": http_status,
+            "execution_exit_code": execution_exit_code,
+            "error": error or None,
+        })
+        if isinstance(gateway_record_id, str) and gateway_record_id:
+            value["gateway_record_id"] = gateway_record_id
+        self._publish_request_audit(path, value)
 
     def execute_plugin(self, capability: Capability, request: dict) -> dict:
         with _validating_request():

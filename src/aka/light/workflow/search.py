@@ -11,7 +11,7 @@ trajectory back.
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 import fcntl
 import json
 import os
@@ -20,6 +20,10 @@ from pathlib import Path
 from aka.light.agent.home import open_private_directory
 from aka.legacy.task.persistence import durable_write_json
 from aka.light.agent.session_tail import read_regular_bytes
+
+
+COORDINATOR_STATE = "coordinator.json"
+COORDINATOR_LOCK = "coordinator.lock"
 
 
 @dataclass(frozen=True)
@@ -61,15 +65,118 @@ def read_state(path: Path) -> dict:
     return value
 
 
+def publication_root(root: Path, publication: int) -> Path:
+    if type(publication) is not int or publication < 1:
+        raise ValueError("Search publication sequence must be a positive integer")
+    return root / "publications" / f"p{publication:08d}"
+
+
+def publication_path(root: Path, publication: int) -> Path:
+    return publication_root(root, publication) / "publication.json"
+
+
+def publication_source_root(
+    root: Path,
+    publication: int,
+    trajectory: int,
+) -> Path:
+    if type(trajectory) is not int or trajectory < 1:
+        raise ValueError("Search trajectory must be a positive integer")
+    return publication_root(root, publication) / "sources" / f"t{trajectory:04d}"
+
+
+def publication_import_path(
+    root: Path,
+    publication: int,
+    trajectory: int,
+) -> Path:
+    if type(trajectory) is not int or trajectory < 1:
+        raise ValueError("Search trajectory must be a positive integer")
+    return publication_root(root, publication) / "imports" / f"t{trajectory:04d}.json"
+
+
+def lineage_state_path(root: Path, trajectory: int) -> Path:
+    if type(trajectory) is not int or trajectory < 1:
+        raise ValueError("Search trajectory must be a positive integer")
+    return root / "lineages" / f"t{trajectory:04d}" / "state.json"
+
+
+def merge_lineage_state(
+    path: Path,
+    trajectory: int,
+    **changes: object,
+) -> dict:
+    """Merge scheduler/runtime facts into one lineage-owned checkpoint."""
+    if type(trajectory) is not int or trajectory < 1:
+        raise ValueError("Search trajectory must be a positive integer")
+    try:
+        value = read_state(path)
+    except FileNotFoundError:
+        value = {}
+    if value.get("trajectory") not in {None, trajectory} or value.get("lineage") not in {
+        None,
+        f"T{trajectory}",
+    }:
+        raise RuntimeError("Lineage checkpoint identity changed during recovery")
+    value.update(
+        schema_version=1,
+        lineage=f"T{trajectory}",
+        trajectory=trajectory,
+    )
+    value.update(changes)
+    durable_write_json(path, value)
+    return value
+
+
+def update_publication(
+    root: Path,
+    publication: int,
+    synchronization: str,
+    **components: object,
+) -> dict:
+    """Atomically add immutable components to one publication record."""
+    if synchronization not in {"synchronous", "asynchronous"}:
+        raise ValueError("Search publication synchronization is invalid")
+    path = publication_path(root, publication)
+    try:
+        value = read_state(path)
+    except FileNotFoundError:
+        value = {
+            "schema_version": 1,
+            "publication": publication,
+            "synchronization": synchronization,
+        }
+    if (
+        value.get("schema_version") != 1
+        or value.get("publication") != publication
+        or value.get("synchronization") != synchronization
+    ):
+        raise RuntimeError("Search publication identity changed during recovery")
+    allowed = {"watermark", "sources", "evidence", "scheduler"}
+    unknown = set(components) - allowed
+    if unknown:
+        raise ValueError(
+            "Unknown Search publication components: " + ", ".join(sorted(unknown))
+        )
+    for name, component in components.items():
+        if name in value and value[name] != component:
+            raise RuntimeError(
+                f"Search publication {name} changed during recovery"
+            )
+        value[name] = component
+    durable_write_json(path, value)
+    return value
+
+
 class PooledSearch:
     """Durable scheduling and peer-evidence publication for Agent trajectories."""
 
-    SCHEMA_VERSION = 4
+    SCHEMA_VERSION = 5
 
     def __init__(self, root: Path, options: SearchOptions, driver, *, token_budget=0):
         self.root, self.options, self.driver = root, options, driver
         self.token_budget = token_budget
-        self.path = root / "state.json"
+        self.path = root / COORDINATOR_STATE
 
     def _save(self, state):
         durable_write_json(self.path, state)
@@ -77,7 +184,10 @@ class PooledSearch:
     def run(self) -> str:
         with open_private_directory(self.root) as directory:
             fd = os.open(
-                "lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory
+                COORDINATOR_LOCK,
+                os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                0o600,
+                dir_fd=directory,
             )
             try:
                 try:
@@ -90,51 +200,76 @@ class PooledSearch:
             finally:
                 os.close(fd)
 
-    def _new_lineages(self):
-        return {
-            str(trajectory): {
+    def _lineage(self, trajectory: int) -> dict:
+        path = lineage_state_path(self.root, trajectory)
+        try:
+            value = read_state(path)
+        except FileNotFoundError:
+            return {
+                "schema_version": 1,
+                "lineage": f"T{trajectory}",
+                "trajectory": trajectory,
                 "agent_head_commit_id": None,
                 "session_id": None,
                 "completed_episodes": 0,
                 "lineage_winner": None,
             }
-            for trajectory in range(1, self.options.trajectories + 1)
-        }
+        if value.get("trajectory") not in {None, trajectory} or value.get(
+            "lineage"
+        ) not in {None, f"T{trajectory}"}:
+            raise ValueError("Search lineage checkpoint has an invalid identity")
+        value.setdefault("agent_head_commit_id", None)
+        value.setdefault("session_id", None)
+        value.setdefault("completed_episodes", 0)
+        value.setdefault("lineage_winner", None)
+        return value
+
+    def _save_lineage(self, trajectory: int, lineage: dict) -> None:
+        merge_lineage_state(
+            lineage_state_path(self.root, trajectory),
+            trajectory,
+            **{
+                name: lineage.get(name)
+                for name in (
+                    "agent_head_commit_id",
+                    "session_id",
+                    "completed_episodes",
+                    "lineage_winner",
+                )
+            },
+        )
+
+    def _ensure_lineages(self) -> None:
+        for trajectory in range(1, self.options.trajectories + 1):
+            self._save_lineage(trajectory, self._lineage(trajectory))
 
     def _run(self):
-        binding = self.driver.identity()
         try:
             state = read_state(self.path)
         except FileNotFoundError:
             bootstrap = self.driver.bootstrap()
             state = {
                 "schema_version": self.SCHEMA_VERSION,
-                "options": asdict(self.options),
-                "binding": binding,
-                "token_budget": self.token_budget,
-                "bootstrap": bootstrap,
-                "lineages": self._new_lineages(),
                 "epoch": 1,
                 "active": None,
                 "completed_epochs": 0,
                 "global_best": None,
             }
             self._save(state)
+        else:
+            bootstrap = None
         if state.get("schema_version") != self.SCHEMA_VERSION:
             raise ValueError(
                 "This checkpoint predates persistent submitted-winner sharing; "
                 "start a new pooled Campaign with the current search contract"
             )
-        if (
-            state.get("options") != asdict(self.options)
-            or state.get("binding") != binding
-            or state.get("token_budget") != self.token_budget
-        ):
-            raise ValueError(
-                "Search configuration or Campaign contract changed; resume with the "
-                "original configuration"
-            )
-        self.driver.initialize(state["bootstrap"], self.options.trajectories)
+        # campaign.json already freezes the launch composition and V0 identity;
+        # coordinator.json contains only mutable scheduler state. Reconstruct
+        # the bootstrap view from those Campaign authorities on recovery.
+        if bootstrap is None:
+            bootstrap = self.driver.bootstrap()
+        self.driver.initialize(bootstrap, self.options.trajectories)
+        self._ensure_lineages()
         if self.options.synchronization == "asynchronous":
             return self._run_asynchronous(state)
         return self._run_synchronous(state)
@@ -184,7 +319,8 @@ class PooledSearch:
                 self.driver.seal_epoch(epoch, active["jobs"])
 
             for job in active["jobs"]:
-                lineage = state["lineages"][str(job["trajectory"])]
+                trajectory = job["trajectory"]
+                lineage = self._lineage(trajectory)
                 lineage["completed_episodes"] = max(
                     lineage["completed_episodes"], job["episode"]
                 )
@@ -197,11 +333,17 @@ class PooledSearch:
                 observed = job["result"].get("best_submitted_evaluation")
                 if isinstance(observed, dict):
                     lineage["lineage_winner"] = observed
+                self._save_lineage(trajectory, lineage)
 
             self._refresh_observed_winners(state)
 
             summary = dict(active, phase="completed", tokens=self.driver.tokens())
-            durable_write_json(self.root / "epochs" / f"e{epoch:08d}.json", summary)
+            update_publication(
+                self.root,
+                epoch,
+                "synchronous",
+                scheduler=summary,
+            )
             state.update(completed_epochs=epoch, epoch=epoch + 1, active=None)
             self._save(state)
             print(
@@ -214,12 +356,12 @@ class PooledSearch:
     def _budget_reached(self):
         return self.token_budget > 0 and self.driver.tokens() >= self.token_budget
 
-    @staticmethod
-    def _refresh_observed_winners(state):
+    def _refresh_observed_winners(self, state):
         """Update observational winners without changing search execution."""
         candidates = [
             dict(item, trajectory=int(trajectory))
-            for trajectory, lineage in state["lineages"].items()
+            for trajectory in range(1, self.options.trajectories + 1)
+            for lineage in (self._lineage(trajectory),)
             if isinstance(item := lineage.get("lineage_winner"), dict)
         ]
         candidates = [
@@ -275,7 +417,7 @@ class PooledSearch:
                         self._finalize_asynchronous(state, trajectory, job)
 
                 complete = all(
-                    state["lineages"][str(trajectory)].get("completed_episodes") == total
+                    self._lineage(trajectory).get("completed_episodes") == total
                     for trajectory in range(1, self.options.trajectories + 1)
                 )
                 if complete and not running:
@@ -294,7 +436,7 @@ class PooledSearch:
                     key = str(trajectory)
                     if trajectory in running.values():
                         continue
-                    lineage = state["lineages"][key]
+                    lineage = self._lineage(trajectory)
                     completed = lineage.get("completed_episodes")
                     if type(completed) is not int or not 0 <= completed <= total:
                         raise ValueError(
@@ -374,7 +516,7 @@ class PooledSearch:
     def _finalize_asynchronous(self, state, trajectory, job):
         asynchronous = state["asynchronous"]
         key = str(trajectory)
-        lineage = state["lineages"][key]
+        lineage = self._lineage(trajectory)
         if job["status"] == "completed":
             result = job.get("result")
             if not isinstance(result, dict):
@@ -383,9 +525,7 @@ class PooledSearch:
             if type(publication) is not int or publication < 1:
                 raise ValueError("Asynchronous publication sequence is invalid")
             terminal_episodes = {
-                str(number): state["lineages"][str(number)].get(
-                    "completed_episodes", 0
-                )
+                str(number): self._lineage(number).get("completed_episodes", 0)
                 for number in range(1, self.options.trajectories + 1)
             }
             terminal_episodes[key] = job["episode"]
@@ -413,17 +553,17 @@ class PooledSearch:
         seal = getattr(self.driver, "seal_publication", self.driver.seal_epoch)
         seal(publication, terminal_jobs)
         summary = {
-            "schema_version": 2,
-            "synchronization": "asynchronous",
-            "publication": publication,
             "trajectory": trajectory,
             "episode": job["episode"],
             "epoch": job["epoch"],
             "result": job["result"],
             "tokens": self.driver.tokens(),
         }
-        durable_write_json(
-            self.root / "async-publications" / f"p{publication:08d}.json", summary
+        update_publication(
+            self.root,
+            publication,
+            "asynchronous",
+            scheduler=summary,
         )
 
         lineage["completed_episodes"] = job["episode"]
@@ -436,6 +576,7 @@ class PooledSearch:
         observed = job["result"].get("best_submitted_evaluation")
         if isinstance(observed, dict):
             lineage["lineage_winner"] = observed
+        self._save_lineage(trajectory, lineage)
         self._refresh_observed_winners(state)
         asynchronous.update(
             latest_publication=publication,
@@ -444,7 +585,7 @@ class PooledSearch:
         asynchronous["jobs"][key] = None
 
         completed = [
-            state["lineages"][str(number)]["completed_episodes"]
+            self._lineage(number)["completed_episodes"]
             for number in range(1, self.options.trajectories + 1)
         ]
         common = min(completed) // self.options.episodes_per_trajectory
