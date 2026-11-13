@@ -144,7 +144,7 @@ class RecordedMeasurements:
             known = valid = False
         passed = selected.gate == "PASS" and valid if selected is not None and known and settled else None
         feedback = {}
-        if record.kind == "command" and record.phase == "complete":
+        if record.kind == "command" and record.phase == "complete" and operation != "same_allocation_abba":
             from aka.evaluation.tool_results import canonical_result, with_execution_error
             receipt = experiment.command_result(record.ref)
             operation_name = "evaluate" if operation == "run" else operation
@@ -166,11 +166,14 @@ class RecordedMeasurements:
             result["failure"] = asdict(selected.failure)
         if operation == "same_allocation_abba" and selected is not None:
             from aka.evaluation.native_abba import recorded_comparison
-            try:
-                result.update(recorded_comparison(selected, identities))
-            except ValueError as error:
+            if selected.gate in {"PASS", "FAIL"}:
+                try:
+                    result.update(recorded_comparison(selected, identities))
+                except ValueError as error:
+                    known = False
+                    result["error"] = result.get("error") or str(error)
+            else:
                 known = False
-                result["error"] = str(error)
             result.update(complete=bool(known and settled), correct=passed if known else None,
                           all_pass=passed if known else None)
         binding = self.kernel(source) if source is not None else {}

@@ -278,17 +278,31 @@ def parse_native_abba(job: dict, repeats: int, shapes: list[str]) -> dict:
                 ("candidate", "B", 1), ("baseline", "A", 1)]
     runs = []
     for block_index, block in enumerate(blocks):
+        passed = block.get("passed") if isinstance(block, dict) else None
+        verdict = passed.get("abba") if isinstance(passed, dict) else None
+        if not isinstance(verdict, dict) or verdict.get("status") not in ("passed", "failed"):
+            raise ValueError("Native ABBA SDK did not provide a completed comparison verdict")
+        if verdict.get("reason") == "ABBA runs reported different GPU/runtime environments":
+            raise ValueError("Native ABBA SDK rejected comparison: GPU/runtime environments differ")
+        if verdict["status"] == "passed" and block.get("error") is not None:
+            raise ValueError("Native ABBA SDK accepted a comparison with an error")
         rows = (block.get("abba") or {}).get("runs") if isinstance(block, dict) else None
         if not isinstance(rows, list) or len(rows) != 4:
             raise ValueError("Native ABBA block lacks four runs")
+        block_runs = []
         for index, (row, (revision, label, repeat)) in enumerate(zip(rows, expected)):
             if (not isinstance(row, dict) or any(type(row.get(key)) is not type(value) or row.get(key) != value
                     for key, value in {"index": index, "revision": revision, "label": label, "repeat": repeat}.items())
                     or not isinstance(row.get("result"), dict)):
                 raise ValueError("Native ABBA run order or evaluator evidence differs from the request")
-            runs.append({"revision": "incumbent" if revision == "baseline" else "candidate",
+            block_runs.append({"revision": "incumbent" if revision == "baseline" else "candidate",
                          "repeat": block_index * 2 + repeat, "exit_code": 0,
                          "result": summarize(row["result"], shapes)})
+        # A completed candidate rejection remains a FAIL. Successful run rows
+        # cannot override an SDK-level comparison rejection.
+        if verdict["status"] == "failed" and all(row["result"]["all_pass"] for row in block_runs):
+            raise ValueError("Native ABBA SDK rejected a comparison with passing run rows")
+        runs.extend(block_runs)
     return {"schema_version": 1, "transport": "agate_native_eval_abba", "runs": runs, "error": None}
 
 

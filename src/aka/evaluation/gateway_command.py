@@ -472,10 +472,15 @@ class GatewayCommandEvaluator:
             from .native_abba import parse_native_abba, interpret_payloads
             request = json.loads(command.submission)["request"]
             shapes = list(request["reference"]["shapes"])
-            payloads = [parse_native_abba(_job_response(result.stdout) or {}, request["abba"]["repeats"] * 2,
-                list(measurement.batches[index % context["batch_count"]]) if measurement is not None else shapes)
-                for index, result in enumerate(results)]
-            verification = interpret_payloads(payloads, shapes, request["abba"]["repeats"] * 2, context["repetitions"])
+            try:
+                payloads = [parse_native_abba(_job_response(result.stdout) or {}, request["abba"]["repeats"] * 2,
+                    list(measurement.batches[index % context["batch_count"]]) if measurement is not None else shapes)
+                    for index, result in enumerate(results)]
+                verification = interpret_payloads(payloads, shapes, request["abba"]["repeats"] * 2, context["repetitions"])
+            except ValueError as error:
+                # A rejected SDK comparison is an explicit Evaluation outcome,
+                # not an unhandled host exception or a missing GPU result.
+                verification = VerificationResult("ERROR", None, None, None, error=str(error))
             verification.measurements = tuple(self.diagnose_step(prepared, index, result) for index, result in enumerate(results))
             content = json.dumps(verification.as_dict(), ensure_ascii=False, allow_nan=False).encode()
             return CommandEvaluation(results[-1], verification,
