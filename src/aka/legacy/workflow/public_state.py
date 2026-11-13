@@ -18,7 +18,7 @@ def _lock_path(workspace):
 
 
 @contextmanager
-def campaign_lease(workspace, *, writer=False):
+def campaign_lease(workspace, *, writer=False, legacy_state=True):
     path = _lock_path(workspace)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open('a+b') as handle:
@@ -29,7 +29,7 @@ def campaign_lease(workspace, *, writer=False):
         body_error = None
         writer_started = False
         try:
-            if writer:
+            if writer and legacy_state:
                 root = Path(workspace) / '.atrex_long_horizon'
                 root.mkdir(parents=True, exist_ok=True)
                 identity = root / 'public-identity.json'
@@ -46,7 +46,7 @@ def campaign_lease(workspace, *, writer=False):
             raise
         finally:
             try:
-                if writer and writer_started:
+                if writer and legacy_state and writer_started:
                     try:
                         (root / 'writer-state.json').write_text(json.dumps({'state':'stopped'})+'\n')
                     except OSError:

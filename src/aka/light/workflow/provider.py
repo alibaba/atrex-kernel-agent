@@ -47,6 +47,8 @@ class WorkflowOptions:
 
 
 class LightWorkflow:
+    private_campaign_state = True
+
     def __init__(self, agent, problem, source, candidate, tool_runtime,
                  *, workflow_observer=None, options=WorkflowOptions()):
         if not getattr(agent, "supports_tool_runtime", False):
