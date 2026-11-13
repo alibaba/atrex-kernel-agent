@@ -7,6 +7,7 @@ from .metadata import distributed_evaluation_world_size as _distributed_evaluati
 from aka.task.problem.inputs import validate_performance_baseline
 from .measurement_policy import DEFAULT_BENCH_ITERS, runner_overrides
 FP4_MAX_REL_L2 = 0.2
+DEFAULT_DEPENDENCY_POLICY = "freeze_installed"
 
 from aka.execution.command_syntax import option_value as _option_value
 
@@ -203,7 +204,7 @@ def prepare_request(
         # Record the Gateway default in the frozen request so qualification and
         # reuse use the same dependency policy as execution. Explicit controls
         # still take precedence; historical requests without a policy stay unknown.
-        "deps_mode": _option_value(command, "--deps-mode", "freeze_installed"),
+        "deps_mode": _option_value(command, "--deps-mode", DEFAULT_DEPENDENCY_POLICY),
     }
     correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(
         reference.get("metadata")

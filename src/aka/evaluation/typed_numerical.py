@@ -10,7 +10,7 @@ from aka.contracts.workspace import RevisionContent
 from aka.contracts.measurement import MeasurementPoint, MeasurementAssessment, MeasurementDiagnostic
 from .drivers import numerical_inputs
 from .source_archives import prepare_source, source_parameters
-from .gateway_request import prepare_request
+from .gateway_request import DEFAULT_DEPENDENCY_POLICY, prepare_request
 from .transport_results import _shape_batch_reference
 from .measurement import gateway_identity
 
@@ -62,6 +62,9 @@ def prepare_typed(request, configuration, suite, shapes, schedule, trusted, limi
                     measurement_environment=configuration.environment)
                 payload['candidate'] = descriptor
                 payload['mode'] = 'correctness_only'
+                # Supplemental probes are independent requests, not parent CLI
+                # replays. Freeze their existing default before deriving identity.
+                payload['deps_mode'] = DEFAULT_DEPENDENCY_POLICY
                 payload['options'].update(num_correctness_cases=1, correctness_max_rel_l2=limit)
                 files = {name: data.decode() for name, data in _shape_batch_reference(payload['reference']).items()}
                 step = CommandSpec(request.workspace, command, timeout=configuration.timeout, operation='run',
