@@ -12,7 +12,7 @@ from aka.evaluation.tool_results import result_from_response
 from aka.workflow.light.host.workspace import read_input, publish
 from aka.workflow.light.orchestration.episode_workspace import PUBLIC_FILES
 from aka.workflow.light.orchestration.infrastructure_retry import InfrastructureUnavailable
-from aka.workflow.light.support.errors import GatewayExecutionUnavailable, RequestDispatchTimeout
+from aka.workflow.light.support.errors import RequestDispatchTimeout
 
 from .models import VerificationResult
 from .verifier import GatewayABBAValidator, score_verification_payload, verification_schedule
@@ -130,7 +130,7 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
             return scored
         except InfrastructureUnavailable:
             raise
-        except (GatewayExecutionUnavailable, RequestDispatchTimeout) as error:
+        except RequestDispatchTimeout as error:
             raise InfrastructureUnavailable(str(error)) from error
         except ExperimentRecordError as error:
             raise InfrastructureUnavailable(str(error)) from error

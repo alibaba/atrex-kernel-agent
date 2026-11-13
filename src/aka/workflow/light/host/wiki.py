@@ -16,7 +16,7 @@ import threading
 import time
 import uuid
 
-from aka.workflow.light.support.errors import GatewayExecutionUnavailable, SessionRevokedError
+from aka.workflow.light.support.errors import SessionRevokedError
 from aka.workflow.light.host.errors import RuntimeStateError, AgentRequestError
 from aka.resources.publication import publish
 from aka.core.filesystem import open_private_directory
@@ -217,12 +217,9 @@ class WikiService:
                     process = owner.run_executor(
                         [sys.executable, "-m", "aka.resources.wiki.worker", str(staged / "wiki-request.json")],
                         staged, environment, capability, deadline=deadline)
-                except GatewayExecutionUnavailable as error:
-                    if not live():
-                        raise SessionRevokedError("Session revoked") from error
-                    record["status"] = "timed_out" if time.monotonic() >= deadline else "execution_failed"
-                    raise WikiUnavailable("wiki_query_timeout" if record["status"] == "timed_out" else "wiki_unavailable",
-                                          "Wiki query did not complete within its execution limits.") from error
+                except WikiUnavailable:
+                    record["status"] = "timed_out"
+                    raise
                 finally:
                     self.slots.release()
                     self._timing(staged, record)
@@ -302,11 +299,14 @@ class WikiService:
                 try:
                     result = self.provider.invoke(call)
                 except WikiProviderError as error:
+                    if not live():
+                        raise SessionRevokedError("Session revoked") from error
                     # Provider codes are diagnostics, never receipt lifecycle states.
                     message = str(redact_error(error.message))[:2000]
                     next_action = str(redact_error(error.next_action))[:2000]
                     record.update(
-                        status="provider_error", provider_error_code=error.code[:128],
+                        status="timed_out" if error.code == "wiki_query_timeout" else "provider_error",
+                        provider_error_code=error.code[:128],
                         provider_error_message=message,
                     )
                     public_error = WikiProviderError(
@@ -314,12 +314,9 @@ class WikiService:
                         repairable=error.repairable, next_action=next_action,
                     )
                     raise _provider_failure(public_error) from error
-                except GatewayExecutionUnavailable as error:
-                    if not live():
-                        raise SessionRevokedError("Session revoked") from error
-                    record["status"] = "timed_out" if time.monotonic() >= deadline else "execution_failed"
-                    raise WikiUnavailable("wiki_query_timeout" if record["status"] == "timed_out" else "wiki_unavailable",
-                                          "Wiki query did not complete within its execution limits.") from error
+                except WikiUnavailable:
+                    record["status"] = "timed_out"
+                    raise
                 finally:
                     self.slots.release()
                 if not live():

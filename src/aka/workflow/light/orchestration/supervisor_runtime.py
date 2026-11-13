@@ -38,11 +38,11 @@ from .constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER, SOL_HARNESS
 from .episode_workspace import EpisodeWorkspace
 from aka.workflow.light.candidate_gate import CandidateValidation, CandidateGate
 from aka.workflow.light.support.errors import (
-    RequestValidationError, RequestDispatchTimeout, GatewayExecutionUnavailable, SessionRevokedError,
+    RequestValidationError, RequestDispatchTimeout, SessionRevokedError,
 )
 from aka.workflow.light.support.paths import supervisor_campaign_root
 from aka.resources.wiki.config import WikiConfig
-from aka.workflow.light.host.wiki import WikiService
+from aka.workflow.light.host.wiki import WikiService, WikiUnavailable
 
 OWNER_ENV = "ATREX_AKA_RUNTIME_OWNER"
 URL_ENV = "ATREX_AKA_RUNTIME_URL"
@@ -526,6 +526,10 @@ class SupervisorRuntime:
                     "No GPU job was submitted by this Wiki request.")) from error
         finally:
             self.slots.release()
+        if result.transport_status == "timed_out":
+            if not self._live(capability):
+                raise SessionRevokedError("Session revoked")
+            raise WikiUnavailable("wiki_query_timeout", "Wiki query did not complete within its execution limits.")
         process = subprocess.CompletedProcess(command,
             result.returncode if result.returncode is not None else 2, result.stdout, result.stderr)
         process.execution_result = result
