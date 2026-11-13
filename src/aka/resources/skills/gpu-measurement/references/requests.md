@@ -217,10 +217,23 @@ Inspect the outer `status`, nested `result`, and available diagnostics together.
 exit code alone cannot distinguish correctness from transport or a successful historical read.
 Do not infer unavailable counters or missing measurements as zero.
 
+`result.qualification = {"status": "unknown", "reasons": [...]}` means the recorded
+evidence cannot establish a qualified verdict; `result.correct` is null. Preserve the
+Record ID and use the reason codes to distinguish the next action. Missing environment
+identity or an unknown dependency policy requires operator reconciliation. Unsettled
+measurement/evaluation evidence requires reading the original record when available.
+`source-binding-missing` or `measurement-identity-mismatch` requires the operator to
+reconcile the recorded source or measurement binding. `native-abba-incomplete` and
+`evaluation-error` require inspecting `result.error` and `result.failure` for the actual
+rejection. Follow the Runtime's supplied recovery guidance; qualification alone does
+not authorize a new GPU job, changed request identity or candidate repair. A definite
+PASS or FAIL follows the applicable evaluator policy without unknown qualification.
+
 | Response | Next action |
 | --- | --- |
 | Full Evaluate completed, `result.correct: true` | Compare the measured latency and per-Shape changes with your expected effect. Keep, refine or restore based on evidence; promotion still belongs to the Supervisor. |
 | Evaluate completed, `result.correct: false` | Inspect correctness diagnostics and opaque Shape/case/output identifiers. Repair the candidate; do not call it a Gateway outage or use its timings as a valid speedup. |
+| `result.correct: null`, `result.qualification.status: unknown` | Read the qualification reasons and the saved error/failure. Treat this as unqualified evidence, not a numerical candidate failure; follow the reason-specific actions above. |
 | Dev/Check/Profile/Disassemble failure | Read `result.error` and available `stdout`/`stderr` or diagnostic fields. Compiler/import/file errors require source or declared-input repair. A successful Dev probe is not automatically a passing Evaluate. |
 | Request rejected with `issues`, `request_schema`, `recovery` or `error.next_action` | Correct the named field/path or evidence reference. Follow the supplied operation-specific guidance, not guessed flags or IDs. |
 | `duplicate_gateway_task` | Read the previous Record ID supplied by the error. Do not relabel the version or change source merely to bypass deduplication. |

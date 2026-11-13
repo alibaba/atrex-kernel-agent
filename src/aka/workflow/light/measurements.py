@@ -94,25 +94,7 @@ class RecordedMeasurements:
             and measurement.comparability == "comparable" for measurement in measurements) and len({
                 measurement.environment_identity for measurement in measurements}) == 1
         valid = known and all(measurement.validity == "valid" for measurement in measurements)
-        qualification = []
-        if not known:
-            if not identities:
-                qualification.append("measurement-identity-missing")
-            if len(measurements) != len(identities):
-                qualification.append("measurement-evidence-unsettled")
-            for measurement in measurements:
-                if not measurement.environment_identity:
-                    qualification.append("environment-identity-missing")
-                if measurement.identity.dependency_policy == "unknown":
-                    qualification.append("dependency-policy-unknown")
-                if measurement.completeness != "complete":
-                    qualification.append("measurement-incomplete")
-                if measurement.validity == "unknown":
-                    qualification.append("measurement-validity-unknown")
-            if len({item.environment_identity for item in measurements}) > 1:
-                qualification.append("environment-identity-mismatch")
-            if not qualification:
-                qualification.append("measurement-not-comparable")
+        trusted_legacy = False
         modes = {identity.parameters.get("mode") for identity in identities}
         mode = next(iter(modes)) if len(modes) == 1 else None
         operation = (record.steps[0].operation if record.steps else str(record.request.get("operation", "dev")))
@@ -131,6 +113,7 @@ class RecordedMeasurements:
             from aka.evaluation.sol_evidence import matches_task
             # Old projections alone cannot establish which evaluator actually ran.
             trusted = all(matches_task(identity, self.evaluation_input) for identity in identities)
+            trusted_legacy = trusted
             known = (trusted and settled and selected is not None and selected.gate in {"PASS", "FAIL"}
                 and not selected.error and len(measurements) == len(identities)
                 and all(measurement.validity == "invalid" or
@@ -141,6 +124,8 @@ class RecordedMeasurements:
         if any(measurement.identity.digest != identity.digest for measurement, identity in zip(measurements, identities)):
             known = valid = False
         if source is None:
+            known = valid = False
+        if selected is not None and selected.gate not in {"PASS", "FAIL"}:
             known = valid = False
         passed = selected.gate == "PASS" and valid if selected is not None and known and settled else None
         feedback = {}
@@ -157,13 +142,9 @@ class RecordedMeasurements:
                   "latency_us_by_shape": dict(selected.candidate_latency_us_by_shape) if selected is not None else {},
                   "latency_us_geomean": selected.candidate_latency_us if selected is not None else None,
                   "performance_score": selected.candidate_performance_score if selected is not None else None}
-        if qualification:
-            result["qualification"] = {"status": "unknown", "reasons": list(dict.fromkeys(qualification))}
-            result["diagnostics"] = [*result.get("diagnostics", ()),
-                *({"category": "qualification", "code": code}
-                  for code in dict.fromkeys(qualification))]
         if selected is not None and selected.failure is not None:
             result["failure"] = asdict(selected.failure)
+        native_incomplete = False
         if operation == "same_allocation_abba" and selected is not None:
             from aka.evaluation.native_abba import recorded_comparison
             if selected.gate in {"PASS", "FAIL"}:
@@ -171,11 +152,57 @@ class RecordedMeasurements:
                     result.update(recorded_comparison(selected, identities))
                 except ValueError as error:
                     known = False
+                    native_incomplete = True
                     result["error"] = result.get("error") or str(error)
             else:
                 known = False
+                native_incomplete = True
             result.update(complete=bool(known and settled), correct=passed if known else None,
                           all_pass=passed if known else None)
+        # Explain the final applicable verdict, after legacy policy and source /
+        # native-comparison checks. A decisive invalid assessment need not be complete.
+        if not known or operation in {"run", "same_allocation_abba"} and result["correct"] is None:
+            qualification = []
+            if not identities:
+                qualification.append("measurement-identity-missing")
+            if len(measurements) != len(identities):
+                latest = {attempt.task_id: attempt for attempt in record.attempts}
+                mismatched = any(step.measurement_identity is not None
+                    and (attempt := latest.get(step.task_id)) is not None
+                    and attempt.assessment is not None
+                    and attempt.assessment.identity.digest != step.measurement_identity.digest
+                    for step in record.steps)
+                qualification.append("measurement-identity-mismatch" if mismatched else "measurement-evidence-unsettled")
+            for measurement in measurements:
+                if measurement.validity != "invalid" and measurement.completeness != "complete":
+                    qualification.append("measurement-incomplete")
+                if measurement.validity == "unknown":
+                    qualification.append("measurement-validity-unknown")
+                if not trusted_legacy and measurement.comparability != "comparable":
+                    if not measurement.environment_identity:
+                        qualification.append("environment-identity-missing")
+                    if measurement.identity.dependency_policy == "unknown":
+                        qualification.append("dependency-policy-unknown")
+                    if measurement.environment_identity and measurement.identity.dependency_policy != "unknown":
+                        qualification.append("measurement-not-comparable")
+            if not trusted_legacy and len({item.environment_identity for item in measurements}) > 1:
+                qualification.append("environment-identity-mismatch")
+            if any(identity.method == "legacy-sol/eval" for identity in identities) and not trusted_legacy:
+                qualification.append("legacy-evaluator-untrusted")
+            if source is None:
+                qualification.append("source-binding-missing")
+            if not settled or selected is None:
+                qualification.append("evaluation-unsettled")
+            elif native_incomplete:
+                qualification.append("native-abba-incomplete")
+            elif selected.gate == "ERROR":
+                qualification.append("evaluation-error")
+            reasons = list(dict.fromkeys(qualification)) or ["measurement-not-comparable"]
+            result["qualification"] = {"status": "unknown", "reasons": reasons}
+            diagnostics = result.get("diagnostics", ())
+            generated = [{"category": "qualification", "code": code} for code in reasons]
+            result["diagnostics"] = [*diagnostics,
+                *(item for item in generated if item not in diagnostics)]
         binding = self.kernel(source) if source is not None else {}
         attempts = [attempt for attempt in record.attempts if attempt.result is not None]
         exit_code = attempts[-1].result.returncode if attempts else None
@@ -312,7 +339,7 @@ class SharedMeasurements(RecordedMeasurements):
                 agent["result"]["qualification"] = evidence["result"]["qualification"]
                 agent["result"]["diagnostics"] = [*agent["result"].get("diagnostics", ()),
                     *(item for item in evidence["result"].get("diagnostics", ())
-                      if item.get("category") == "qualification")]
+                      if item.get("category") == "qualification" and item not in agent["result"].get("diagnostics", ()))]
             if evidence["result"]["correct"] is None:
                 agent["result"]["correctness"] = None
         return {**response, "agent_result": agent}
