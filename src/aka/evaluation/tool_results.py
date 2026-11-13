@@ -7,7 +7,7 @@ import math
 import statistics
 
 from aka.evaluation.correctness_summary import correctness_summary, finite_number
-from .response_policy import known_gateway_error, execution_error
+from .response_policy import INFORMATION_CATEGORIES, known_gateway_error, execution_error
 
 PREFIXES = {
     "evaluate": "[test_kernel] RESULT_JSON=",
@@ -25,7 +25,7 @@ MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 def with_execution_error(response: dict, receipt) -> dict:
     """Project an explicit failed receipt before a consumer looks for numeric output."""
     information = [{"category": item.category, "code": item.code, "details": dict(item.details)}
-                   for item in receipt.diagnostics if item.category in {"recovery", "observation", "budget"}
+                   for item in receipt.diagnostics if item.category in INFORMATION_CATEGORIES
                    and item.code not in {"replay-forbidden", "retained-instruction"}]
     for item in information:
         if item["category"] == "recovery" and item["code"] == "gateway-policy":

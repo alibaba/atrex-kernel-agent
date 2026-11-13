@@ -3,7 +3,7 @@ from dataclasses import replace
 import json
 from pathlib import Path
 from aka.contracts.execution import CommandSpec, ExecutionFile, UnsupportedExecution
-from aka.contracts.evaluation import PreparedEvaluation, StepEvaluation, MeasurementArtifact, CommandEvaluation, VerificationResult, EpisodeEvaluationContent
+from aka.contracts.evaluation import PreparedEvaluation, StepEvaluation, MeasurementArtifact, CommandEvaluation, VerificationResult, EpisodeEvaluationContent, EvaluationFailure
 from aka.execution.command_syntax import requested_operation, is_test_kernel_command
 from .transport_results import TEST_RESULT_PREFIX
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
@@ -480,7 +480,9 @@ class GatewayCommandEvaluator:
             except ValueError as error:
                 # A rejected SDK comparison is an explicit Evaluation outcome,
                 # not an unhandled host exception or a missing GPU result.
-                verification = VerificationResult("ERROR", None, None, None, error=str(error))
+                verification = VerificationResult("ERROR", None, None, None, error=str(error),
+                    failure=EvaluationFailure("incomplete", "native-abba-incomplete",
+                        "Native ABBA evidence is incomplete; candidate invalidity is not established"))
             verification.measurements = tuple(self.diagnose_step(prepared, index, result) for index, result in enumerate(results))
             content = json.dumps(verification.as_dict(), ensure_ascii=False, allow_nan=False).encode()
             return CommandEvaluation(results[-1], verification,
