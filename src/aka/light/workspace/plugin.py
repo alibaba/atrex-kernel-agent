@@ -5,7 +5,7 @@ provide = ("candidate",)
 identity_packages = ("aka.light.workspace", "aka.legacy.task", "aka.legacy.execution", "aka.legacy.workflow")
 Config = {
     "type": "object",
-    "properties": {"inherit_state": {"const": True}},
+    "properties": {"inherit_state": {"type": "boolean", "enum": [True]}},
     "additionalProperties": False,
 }
 Defaults = {"inherit_state": True}
