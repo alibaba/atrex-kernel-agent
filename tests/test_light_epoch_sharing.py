@@ -357,6 +357,46 @@ def test_managed_campaign_freezes_source_before_writing_manifest(monkeypatch, tm
     )
 
 
+def test_managed_campaign_native_setup_uses_private_evaluator_harness(
+    monkeypatch, tmp_path
+):
+    workspace = tmp_path / "agent-workspace"
+    initialized = []
+    installed = []
+    setup = []
+    campaign = object.__new__(ManagedCampaign)
+    campaign.request = SimpleNamespace(workspace=workspace)
+    campaign.problem = SimpleNamespace(
+        initial_source=SimpleNamespace(kind="native"),
+        agent=SimpleNamespace(files=("definition.json",)),
+        evaluation=SimpleNamespace(
+            directory=tmp_path / "atrex-bench", private_reference_dir=None
+        ),
+    )
+    campaign._prepared_initial_content = object()
+    campaign._selected_initial_source = b"packed-source"
+    campaign.candidate_workspace = SimpleNamespace(
+        initialize_at=lambda target, content: initialized.append((target, content)),
+        install_files=lambda target, files: installed.append((target, files)),
+    )
+    campaign._ensure_agent_problem = lambda: None
+    campaign._link_runtime = lambda: None
+    campaign._setup_baseline_native = (
+        lambda directory, generalized: setup.append((directory, generalized))
+    )
+    monkeypatch.setattr(
+        "aka.light.workspace.sources.Artifact",
+        lambda _source: SimpleNamespace(install=lambda *_args, **_kwargs: None),
+    )
+
+    campaign.setup_baseline()
+
+    assert initialized == [(workspace, campaign._prepared_initial_content)]
+    assert installed == [(workspace, ("definition.json",))]
+    assert setup == [(tmp_path / "atrex-bench", False)]
+    assert not (workspace / "test_kernel.py").exists()
+
+
 def test_campaign_v0_identity_points_to_the_measurement_store_archive(tmp_path):
     root = initialize_campaign_root(
         tmp_path / "campaign",

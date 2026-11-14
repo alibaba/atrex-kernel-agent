@@ -267,6 +267,5 @@ class ManagedCampaign(Campaign):
         self.candidate_workspace.install_files(self.workspace, self.problem.agent.files)
         self._ensure_agent_problem()
         self._link_runtime()
-        self._install_native_evaluator()
         self._setup_baseline_native(self.problem.evaluation.directory,
                                    generalized=self.private_reference_dir is not None)
