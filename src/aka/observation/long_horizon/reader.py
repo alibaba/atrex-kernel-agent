@@ -1,18 +1,18 @@
-"""Project durable optimizer records without importing the optimizer or writing files."""
+"""Project only Workflow public snapshots and their declared output content."""
 from __future__ import annotations
 
-import hashlib
-import json
+from collections.abc import Mapping
+from copy import deepcopy
 import math
 import re
-from datetime import datetime, timezone
 from pathlib import Path
 from threading import RLock
 
 from aka.contracts.observation import OBSERVATION_VERSION, Campaign, Campaigns, Episode
+from aka.contracts.workflow_export import WorkflowSnapshotReader
 from .artifacts import SCOPE as ARTIFACT_SCOPE, capture_artifacts
+from .portable import PortableWorkflowReader
 
-RUNTIME = ".atrex_long_horizon"
 PHASES = ("profile", "research", "planning", "implementation", "correctness", "benchmark", "recording")
 PHASE_LABELS = {"profile": "Profiling", "research": "Research", "planning": "Planning",
                 "implementation": "Implementation", "correctness": "Correctness",
@@ -35,7 +35,7 @@ SCOPE = "Settled Episode Agent usage. Excludes setup, V1, independent reviewers 
 
 
 def obj(value):
-    return value if isinstance(value, dict) else {}
+    return value if isinstance(value, Mapping) else {}
 
 
 def string(value):
@@ -55,7 +55,7 @@ def display_name(name, framework):
 
 
 def sequence(value):
-    return value if isinstance(value, list) else []
+    return value if isinstance(value, (list, tuple)) else []
 
 
 def integer(value):
@@ -71,17 +71,6 @@ def version(value):
 
 def positive(value):
     return (value if type(value) in (int, float) and math.isfinite(value) and value > 0 else None)
-
-
-def stamp(value):
-    try:
-        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
-    except (ValueError, OverflowError):
-        return 0.0
-
-
-def iso(value):
-    return datetime.fromtimestamp(value, timezone.utc).isoformat() if value else None
 
 
 def usage(value):
@@ -106,298 +95,135 @@ def experiment(value):
     return result
 
 
-def outcome_status(attempt):
-    if attempt.get("accepted") is True:
+def episode_tokens(fact):
+    value = obj(fact.usage)
+    return {"total": integer(value.get("total")), "control_tokens": integer(value.get("control_tokens")),
+            "raw_control_tokens": integer(value.get("raw_control_tokens")),
+            "measurement": value.get("measurement", "unavailable"),
+            "terminal_usage": usage(value.get("terminal_usage")),
+            "attribution_measurement": value.get("attribution_measurement", "unavailable"),
+            "reason_codes": list(sequence(value.get("reason_codes")))}
+
+
+def outcome_status(fact):
+    if fact.accepted:
         return "accepted"
-    return "rejected" if attempt.get("status") == "candidate_ready" else attempt.get("status")
-
-
-def episode_tokens(attempt, telemetry):
-    phases = obj(telemetry.get("phase_tokens"))
-    terminal = usage(phases.get("terminal_usage"))
-    reasons = sorted({str(r) for r in sequence(telemetry.get("reason_codes"))
-                      + sequence(phases.get("reason_codes"))
-                      + sequence(obj(attempt.get("telemetry")).get("reason_codes"))})
-    control = integer(telemetry.get("control_tokens"))
-    if control is None:
-        control = integer(attempt.get("tokens"))
-    total = terminal["total_tokens"]
-    measurement = terminal["measurement"] if total is not None else "unavailable"
-    if total is not None and control is not None and total != control:
-        reasons = sorted(set(reasons) | {"control_token_total_mismatch"})
-    if ({"same_session_resume_usage_semantics_unqualified", "control_token_total_mismatch"}
-            & set(reasons)) and measurement == "exact":
-        measurement = "partial"
-    if total == 0 and measurement != "exact" and "structured_usage_unavailable" in reasons:
-        total, measurement = None, "unavailable"
-    if total is None and control:
-        # Legacy control totals remain useful, but cannot certify structured usage.
-        total, measurement = control, "partial"
-        reasons = sorted(set(reasons) | {"structured_usage_unavailable"})
-    displayed_control = control if control or total is not None else None
-    return {"total": total, "control_tokens": displayed_control, "raw_control_tokens": control,
-            "measurement": measurement, "terminal_usage": terminal,
-            "attribution_measurement": phases.get("measurement", "unavailable"),
-            "reason_codes": reasons}
+    return "rejected" if fact.status == "candidate_ready" else fact.status
 
 
 class WorkspaceReader:
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, workflow_reader: WorkflowSnapshotReader | None = None):
         self.workspace = Path(workspace).resolve()
+        self.workflow_reader = workflow_reader or PortableWorkflowReader()
         self._paths = {}
-        self._cache = {}
+        self._snapshots = {}
         self._previous_progress = {}
         self._artifact_contents = {}
-        # ThreadingHTTPServer can request list and detail concurrently.
         self._lock = RLock()
 
     def _discover(self):
-        root = self.workspace
-        if (root.name.startswith("kernel_opt_") or (root / RUNTIME).is_dir()
-                or (root / "memory").is_dir() or (root / "framework_baseline.json").is_file()):
-            paths = [root]
-        else:
-            paths = sorted(p for p in root.iterdir() if p.name.startswith("kernel_opt_")
-                           and p.is_dir() and not p.is_symlink())
-        self._paths = {hashlib.sha256(str(p).encode()).hexdigest()[:16]: p for p in paths}
+        references = self.workflow_reader.discover(self.workspace)
+        if any(not re.fullmatch(r'[A-Za-z0-9_-]+', ref.id) for ref in references):
+            raise ValueError('invalid public observation campaign identity')
+        if len({ref.id for ref in references}) != len(references):
+            raise ValueError('duplicate public observation campaign identity')
+        self._paths = {ref.id: ref for ref in references}
 
-    def _read(self, path, issues, label, *, schema=None):
-        previous = self._cache.get(path)
+    def _read(self, identifier):
+        ref = self._paths[identifier]
         try:
-            stat = path.stat()
-            signature = (stat.st_mtime_ns, stat.st_size)
-            if previous and previous[0] == signature:
-                value = previous[1]
-            else:
-                def invalid_constant(value):
-                    raise ValueError(f"non-finite JSON number: {value}")
-                value = json.loads(path.read_text(encoding="utf-8"), parse_constant=invalid_constant)
-                if not isinstance(value, dict):
-                    raise ValueError("expected a JSON object")
-                self._cache[path] = (signature, value)
-        except FileNotFoundError:
-            self._cache.pop(path, None)
-            return {}
-        except (OSError, UnicodeError, ValueError) as exc:
-            issues.append({"file": label, "code": "record_updating" if previous else "record_invalid",
-                           "detail": str(exc)})
-            value = previous[1] if previous else {}
-        # Existing unversioned records use the verified legacy shape. A declared
-        # future schema must never be interpreted as that shape, even from cache.
-        actual = value.get("schema_version", schema)
-        if type(actual) is not type(schema) or actual != schema:
-            issues.append({"file": label, "code": "unsupported_schema_version",
-                           "expected": schema, "actual": actual})
-            return {}
-        return value
+            facts = self.workflow_reader.read(ref.workspace)
+            if facts.campaign.id != identifier:
+                raise ValueError("public Workflow campaign identity changed")
+        except (OSError, ValueError):
+            previous = self._snapshots.get(identifier)
+            if previous is None:
+                raise
+            return previous, [{"file": "public-snapshot", "code": "record_updating"}]
+        self._snapshots[identifier] = facts
+        return facts, []
 
-    def _mtime(self, path):
-        cached = self._cache.get(path)
-        return cached[0][0] / 1e9 if cached else 0.0
-
-    def _records(self, path, state, issues):
-        records = {a["episode"]: a for a in sequence(state.get("attempts"))
-                   if isinstance(a, dict) and integer(a.get("episode"))}
-        for source in sorted((path / RUNTIME / "episodes").glob("e*/attempt.json")):
-            match = re.fullmatch(r"e([0-9]+)", source.parent.name)
-            if match is None:
-                continue
-            value = self._read(source, issues, str(source.relative_to(path)))
-            if not value:
-                continue
-            if value.get("episode") != int(match[1]):
-                issues.append({"file": str(source.relative_to(path)), "code": "episode_identity_mismatch"})
-                continue
-            records[int(match[1])] = value
-        return records
-
-    def _telemetry(self, path, number, attempt, issues):
-        relative = f"{RUNTIME}/episodes/e{number:04d}/telemetry.summary.json"
-        value = self._read(path / relative, issues, relative,
-                           schema="atrex_long_horizon_episode_telemetry_v1")
-        if value and (value.get("episode") != number or
-                      version(value.get("version")) != version(attempt.get("version"))):
-            issues.append({"file": relative, "code": "telemetry_identity_mismatch"})
-            return {}
-        return value
-
-    def _history(self, path, baseline, records, issues):
-        accepted = {version(a.get("version")): a for a in records.values() if a.get("accepted") is True}
+    def _history(self, facts, issues):
         history, incumbent, prior_key, series = [], None, None, 0
-        curve_available = True
-        versions = []
-        for source in (path / "memory").glob("v*.json"):
-            n = version(source.stem)
-            if n is not None:
-                versions.append((n, source))
-        for n, source in sorted(versions):
-            memory = self._read(source, issues, f"memory/v{n}.json")
-            if not memory or version(memory.get("version")) != n:
-                if n in accepted:
-                    curve_available, prior_key = False, None
-                if memory:
-                    issues.append({"file": f"memory/v{n}.json", "code": "version_identity_mismatch"})
-                continue
-            perf = obj(memory.get("performance"))
-            shapes = obj(perf.get("latency_us_by_shape"))
-            expected = integer(perf.get("expected_shape_count"))
-            # Observation v2 requires an explicit producer completeness claim;
-            # historical records with no status remain visible but uncertified.
-            complete = (perf.get("measurement_status") == "complete"
-                        and all(positive(v) is not None for v in shapes.values())
-                        and (bool(shapes) or perf.get("performance_objective") != "shape_speedup_arithmetic_mean")
-                        and (expected is None or len(shapes) == expected))
-            valid = (complete and obj(memory.get("correctness")).get("status") == "PASS"
-                     and obj(memory.get("quality_gate")).get("result") == "PASS")
-            is_baseline = n == 0 or n == version(baseline.get("version"))
-            promotion = accepted.get(n)
-            verification = obj(obj(promotion).get("verification"))
-            valid_promotion = (promotion is not None and verification.get("gate") == "PASS"
-                               and not verification.get("error")
-                               and perf.get("measurement_subject") in (None, "candidate")
-                               and (not memory.get("git_commit_hash") or not promotion.get("candidate_commit")
-                                    or memory["git_commit_hash"] == promotion["candidate_commit"]))
-            promoted = False
-            recorded_objective = perf.get("performance_objective")
-            if valid and (is_baseline or valid_promotion):
-                objective = perf.get("performance_objective")
-                if objective == "shape_speedup_arithmetic_mean":
-                    value = positive(perf.get("performance_score")) or positive(perf.get("speedup_vs_ref_mean"))
-                    unit = "×"
+        declared_incumbent = None
+        available = True
+        for candidate in facts.candidates:
+            measured = candidate.result
+            baseline = candidate.version == 0
+            valid = measured.state == "pass" and measured.complete and candidate.promoted
+            if valid:
+                if measured.objective == "shape_speedup_arithmetic_mean":
+                    value = positive(measured.score) or positive(measured.metrics.get("speedup_vs_ref_mean"))
+                    objective, unit = measured.objective, "×"
                 else:
-                    value = positive(perf.get("latency_us_geomean")) or positive(perf.get("latency_us"))
-                    objective, unit = "latency_us_geomean", "μs"
+                    value, objective, unit = positive(measured.latency_us), "latency_us_geomean", "μs"
                 if value is not None:
-                    key = (recorded_objective or objective, tuple(sorted(shapes)), perf.get("device_identity"),
-                           baseline.get("platform"), baseline.get("arch"))
+                    key = (measured.objective or objective, measured.expected_case_ids,
+                           candidate.comparability or ('unqualified', candidate.version))
                     if key != prior_key:
                         series += 1
                     prior_key = key
-                    incumbent = {"version": n, "value": value, "unit": unit,
-                                 "label": "Mean speedup across shapes" if unit == "×" else "Geometric mean latency",
-                                 "objective": objective, "series": series,
-                                 "source": f"memory/v{n}.json", "revision": memory.get("git_commit_hash")}
-                    curve_available = True
-                    promoted = not is_baseline
-            missing_promotion = promotion is not None and not promoted and not is_baseline
-            if missing_promotion:
-                issues.append({"file": f"memory/v{n}.json", "code": "promotion_measurement_unavailable"})
-                # Keep the last certified incumbent in the headline, leave a gap in the curve.
-                prior_key = None
-                curve_available = False
-            history.append({"version": n, "promoted": promoted,
-                            "episode": obj(promotion).get("episode"),
-                            "incumbent": dict(incumbent) if incumbent and curve_available else None})
-        return {"latest_version": history[-1]["version"] if history else None,
-                "incumbent": incumbent, "history": history}
+                    incumbent = {"version": candidate.version, "value": value, "unit": unit,
+                        "label": "Mean speedup across shapes" if unit == "×" else "Geometric mean latency",
+                        "objective": objective, "series": series, "source": f"candidate:v{candidate.version}",
+                        "revision": candidate.revision}
+                    available = True
+                    if candidate == facts.incumbent:
+                        declared_incumbent = dict(incumbent)
+            missing = candidate.promoted and not valid and not baseline
+            if missing:
+                issues.append({"file": f"candidate:v{candidate.version}", "code": "promotion_measurement_unavailable"})
+                prior_key, available = None, False
+            history.append({"version": candidate.version, "promoted": bool(valid and not baseline),
+                            "episode": candidate.episode,
+                            "incumbent": dict(incumbent) if incumbent and available else None})
+        return {"latest_version": facts.candidates[-1].version if facts.candidates else None,
+                "incumbent": declared_incumbent, "history": history}
 
     def _snapshot(self, identifier):
-        path = self._paths[identifier]
-        issues = []
-        def read(relative):
-            return self._read(path / relative, issues, relative)
-        state = read(f"{RUNTIME}/state.json")
-        active = read(f"{RUNTIME}/active_episode.json")
-        live = self._read(path / "memory/live.json", issues, "memory/live.json",
-                          schema="atrex_long_horizon_live_v1")
-        baseline = self._read(path / "framework_baseline.json", issues, "framework_baseline.json", schema=1)
-        manifest = self._read(path / "trace-retention-manifest.json", issues, "trace-retention-manifest.json",
-                              schema="atrex-trace-retention-manifest-v1")
-        crash_path = f"{RUNTIME}/framework_baseline/progress.json"
-        crash = self._read(path / crash_path, issues, crash_path, schema="atrex_framework_baseline_crash_v1")
-        records = self._records(path, state, issues)
-        if integer(state.get("episodes")) is not None and max(records, default=0) > state["episodes"]:
-            issues.append({"file": f"{RUNTIME}/state.json", "code": "record_updating"})
-        rows = []
-        for number, attempt in sorted(records.items()):
-            telemetry = self._telemetry(path, number, attempt, issues)
-            rows.append({"episode": number, "version": version(attempt.get("version")),
-                         "mode": attempt.get("mode"), "status": outcome_status(attempt),
-                         "accepted": attempt.get("accepted") is True,
-                         "summary": attempt.get("summary"), "violation": attempt.get("violation"),
-                         "verification_gate": obj(attempt.get("verification")).get("gate"),
-                         "tokens": episode_tokens(attempt, telemetry)})
-
-        associated = (not active or not live or (active.get("episode") == live.get("episode")
-                      and version(active.get("memory_version")) == version(live.get("version"))))
-        if not associated:
-            issues.append({"file": "memory/live.json", "code": "active_live_identity_mismatch"})
-        matched_live = live if associated else {}
-        phase = string(active.get("phase")) or string(matched_live.get("phase")) or "waiting"
-        episode = active.get("episode", matched_live.get("episode"))
-        settled = episode in records or matched_live.get("phase") == "recorded"
-        progress = {"phase": "recorded" if settled else phase, "episode": episode,
-                    "version": version(active.get("memory_version", matched_live.get("version"))),
-                    "mode": active.get("mode") or obj(records.get(episode)).get("mode"),
-                    "experiment_count": integer(matched_live.get("experiment_count")),
-                    "latest_experiment": experiment(matched_live.get("latest_experiment")),
-                    "updated_at": iso(max(stamp(matched_live.get("updated_at")),
-                                          self._mtime(path / RUNTIME / "active_episode.json"))),
-                    "record_updating": not associated,
-                    "pending_tokens": bool(episode and not settled and
-                                           (phase in {"preparing", "exploring"} or phase not in PROGRESS_STAGES))}
-        if not associated and identifier in self._previous_progress:
-            progress = {**self._previous_progress[identifier], "record_updating": True}
-        elif associated:
-            self._previous_progress[identifier] = progress.copy()
-
-        observed_time = max(stamp(live.get("updated_at")), self._mtime(path / RUNTIME / "active_episode.json"),
-                            self._mtime(path / RUNTIME / "state.json"))
-        terminal_time = stamp(manifest.get("generated_at"))
-        stale_terminal = bool(manifest and observed_time > terminal_time)
-        if stale_terminal:
-            issues.append({"file": "trace-retention-manifest.json", "code": "older_terminal_record"})
-        progress["last_terminal"] = {"status": manifest.get("status"), "updated_at": manifest.get("generated_at"),
-                                     "stale": stale_terminal}
-        if not active and not live and crash.get("status") == "interrupted":
-            progress["phase"] = "v1_interrupted"
-        if not active and not stale_terminal and manifest.get("status") in {"completed", "failed", "interrupted"}:
-            progress["phase"] = manifest["status"]
-
+        facts, issues = self._read(identifier)
+        issues += [{"file": "public-warning", "code": row["code"]} for row in facts.warnings]
+        value = facts.progress
+        progress = {"phase": value.phase, "episode": value.episode, "version": value.version,
+                    "mode": value.mode, "experiment_count": value.experiment_count,
+                    "latest_experiment": experiment(value.latest_experiment), "updated_at": value.updated_at,
+                    "record_updating": value.record_updating or bool(issues and issues[0]["code"] == "record_updating"),
+                    "pending_tokens": value.pending_tokens,
+                    "last_terminal": {"status": value.last_terminal.get("status"),
+                        "updated_at": value.last_terminal.get("updated_at"), "stale": value.last_terminal.get("stale", False)}}
+        if progress["record_updating"] and identifier in self._previous_progress:
+            progress = {**deepcopy(self._previous_progress[identifier]), "record_updating": True}
+        elif not progress["record_updating"]:
+            self._previous_progress[identifier] = deepcopy(progress)
         phase_label, stage_id = PROGRESS_STAGES.get(progress["phase"], (label(progress["phase"]), progress["phase"]))
         progress.update(phase_label=phase_label, stage_id=stage_id)
         stages = [dict(stage) for stage in STAGES]
         if stage_id and not any(stage["id"] == stage_id for stage in stages):
             stages.append({"id": stage_id, "label": phase_label})
-
-        raw_tokens = integer(state.get("tokens"))
-        unavailable = any(r["tokens"]["measurement"] == "unavailable" for r in rows)
-        observed_sum = sum(r["tokens"]["raw_control_tokens"] or 0 for r in rows)
-        reasons = sorted({reason for r in rows for reason in r["tokens"]["reason_codes"]})
-        if unavailable:
-            reasons = sorted(set(reasons) | {"episode_usage_unavailable"})
-        if raw_tokens is not None and observed_sum != raw_tokens:
-            reasons = sorted(set(reasons) | {"control_usage_not_fully_archived"})
-        if raw_tokens is None:
-            measurement = "unavailable"
-        elif unavailable or any(r["tokens"]["measurement"] != "exact" for r in rows) or observed_sum != raw_tokens:
-            measurement = "partial" if raw_tokens else "unavailable"
-        else:
-            measurement = "exact"
-        total = None if measurement == "unavailable" else raw_tokens
-        canonical = self._history(path, baseline, records, issues)
-        hardware = obj(manifest.get("hardware"))
-        memory_time = max((self._mtime(source) for source in self._cache if source.parent == path / "memory"), default=0)
-        framework = string(baseline.get("framework")) or string(hardware.get("framework"))
-        snapshot = {"observation_version": OBSERVATION_VERSION,
-                "id": identifier, "name": path.name, "display_name": display_name(path.name, framework),
-                "workspace": str(path), "stages": stages,
-                "artifact_scope": ARTIFACT_SCOPE,
-                "framework": framework, "platform": baseline.get("platform") or hardware.get("platform"),
-                "arch": baseline.get("arch") or hardware.get("arch"),
-                "updated_at": iso(max(observed_time, terminal_time, stamp(baseline.get("recorded_at")), memory_time)),
-                "progress": progress, "canonical": canonical,
-                "counts": {key: integer(state.get(key)) for key in ("episodes", "accepted", "rejected")},
-                "tokens": {"total": total, "control_total": raw_tokens, "measurement": measurement,
-                           "receipt_count": len(obj(state.get("usage_receipts"))), "reason_codes": reasons,
-                           "pending": progress["pending_tokens"], "scope": SCOPE},
-                "episodes": rows, "issues": issues}
-        descriptions, contents = capture_artifacts(path, snapshot)
-        snapshot['artifacts'] = descriptions
+        token_summary = facts.token_summary
+        measurement = token_summary.get("measurement", "unavailable")
+        tokens = {"total": integer(token_summary.get("total")) if measurement != "unavailable" else None,
+                  "control_total": integer(token_summary.get("control_total")), "measurement": measurement,
+                  "receipt_count": integer(token_summary.get("receipt_count")),
+                  "reason_codes": list(sequence(token_summary.get("reason_codes"))),
+                  "pending": progress["pending_tokens"], "scope": token_summary.get("scope", SCOPE)}
+        rows = [{"episode": row.episode, "version": row.version, "mode": row.mode,
+                 "status": outcome_status(row), "accepted": row.accepted, "summary": row.summary,
+                 "violation": row.violation, "verification_gate": row.gate, "tokens": episode_tokens(row)}
+                for row in facts.episodes]
+        snapshot = {"observation_version": OBSERVATION_VERSION, "id": identifier,
+                    "name": facts.campaign.name, "display_name": display_name(facts.campaign.name, facts.framework),
+                    "workspace": str(self._paths[identifier].workspace), "stages": stages,
+                    "artifact_scope": ARTIFACT_SCOPE, "framework": facts.framework or None,
+                    "platform": facts.hardware.get("platform"), "arch": facts.hardware.get("arch"),
+                    "updated_at": value.updated_at, "progress": progress, "canonical": self._history(facts, issues),
+                    "counts": {key: integer(facts.counts.get(key)) for key in ("episodes", "accepted", "rejected")},
+                    "tokens": tokens, "episodes": rows, "issues": issues}
+        descriptions, contents = capture_artifacts(facts, snapshot)
+        snapshot["artifacts"] = descriptions
         cache = self._artifact_contents.setdefault(identifier, {})
         cache.update(contents)
-        # Keep a bounded set of recent detached downloads per campaign.
-        while len(cache) > 128 or sum(len(value) for value in cache.values()) > 64 * 1024 * 1024:
+        while len(cache) > 128 or sum(len(content) for content in cache.values()) > 64 * 1024 * 1024:
             oldest = next(iter(cache))
             if oldest in contents:
                 break
@@ -411,13 +237,13 @@ class WorkspaceReader:
             for identifier in self._paths:
                 value = self._snapshot(identifier)
                 campaigns.append({key: value[key] for key in
-                                  ("id", "name", "display_name", "framework", "platform", "updated_at", "progress", "tokens", "counts")})
-            known = [c["tokens"]["total"] for c in campaigns if c["tokens"]["total"] is not None]
-            partial = len(known) != len(campaigns) or any(c["tokens"]["measurement"] != "exact" for c in campaigns)
+                    ("id", "name", "display_name", "framework", "platform", "updated_at", "progress", "tokens", "counts")})
+            known = [row["tokens"]["total"] for row in campaigns if row["tokens"]["total"] is not None]
+            partial = len(known) != len(campaigns) or any(row["tokens"]["measurement"] != "exact" for row in campaigns)
             return {"observation_version": OBSERVATION_VERSION, "campaigns": campaigns,
-                    "empty_message": "No campaigns yet. Waiting for kernel_opt_* workspaces in the observed directory.",
+                    "empty_message": "No public campaigns yet. Waiting for Workflow snapshots.",
                     "tokens": {"total": sum(known) if known else None,
-                    "measurement": "partial" if partial else "exact", "scope": SCOPE}}
+                               "measurement": "partial" if partial else "exact", "scope": SCOPE}}
 
     def campaign(self, identifier: str) -> Campaign:
         with self._lock:
@@ -428,58 +254,26 @@ class WorkspaceReader:
         with self._lock:
             try:
                 return self._artifact_contents[identifier][artifact_id]
-            except KeyError as exc:
-                raise KeyError(artifact_id) from exc
+            except KeyError as error:
+                raise KeyError(artifact_id) from error
 
     def episode(self, identifier: str, number: int) -> Episode:
         with self._lock:
             self._discover()
-            path = self._paths[identifier]
             snapshot = self._snapshot(identifier)
-            issues = []
-            state = self._read(path / RUNTIME / "state.json", issues, f"{RUNTIME}/state.json")
-            records = self._records(path, state, issues)
-            attempt = records.get(number)
-            active = self._read(path / RUNTIME / "active_episode.json", issues, f"{RUNTIME}/active_episode.json")
-            if attempt is None and active.get("episode") != number:
+            facts = self._snapshots[identifier]
+            fact = next((row for row in facts.episodes if row.episode == number), None)
+            if fact is None:
                 raise KeyError(number)
-            attempt = attempt or {"episode": number, "version": active.get("memory_version"), "mode": active.get("mode")}
-            telemetry = self._telemetry(path, number, attempt, issues)
-            relative = f"{RUNTIME}/episodes/e{number:04d}/episode_runtime/journal.json"
-            journal = self._read(path / relative, issues, relative, schema=1)
-            worktree = string(active.get("worktree"))
-            if not journal and active.get("episode") == number and worktree:
-                # Resolve only the supervisor-registered active worktree, never an HTTP path.
-                journal = self._read(Path(worktree) / RUNTIME / "journal.json", issues,
-                                     "active_worktree/journal.json", schema=1)
-            if journal and (journal.get("episode") != number or
-                            (journal.get("memory_version") is not None and
-                             version(journal["memory_version"]) != version(attempt.get("version"))) or
-                            (active.get("episode") == number and any(
-                                active.get(key) and journal.get(key) != active[key]
-                                for key in ("base_commit", "episode_branch")))):
-                issues.append({"file": relative, "code": "journal_identity_mismatch"})
-                journal = {}
-            phases = obj(telemetry.get("phase_tokens"))
-            phase_values = obj(phases.get("phases"))
-            keys = dict.fromkeys((*PHASES, *phase_values))
+            phases = {row["phase"]: row for row in fact.phases}
+            keys = dict.fromkeys((*PHASES, *phases))
             rows = [{"phase": key, "label": PHASE_LABELS.get(key, label(key)),
-                     "usage": usage(obj(phase_values.get(key)).get("usage"))}
-                    for key in keys]
-            rows += [{"phase": key, "label": PHASE_LABELS[key], "usage": usage(phases.get(key))}
-                     for key in ("orchestration", "unattributed")]
-            verification = obj(attempt.get("verification"))
-            summary = {key: verification.get(key) for key in
-                       ("gate", "candidate_latency_us", "incumbent_latency_us", "improvement_pct", "error")}
-            return {"observation_version": OBSERVATION_VERSION,
-                    "episode": number, "version": version(attempt.get("version")), "mode": attempt.get("mode"),
-                    "status": outcome_status(attempt) or "observed_active", "accepted": attempt.get("accepted"),
-                    "summary": attempt.get("summary") or obj(journal.get("outcome")).get("summary"),
-                    "violation": attempt.get("violation"), "verification": summary,
-                    "tokens": episode_tokens(attempt, telemetry), "phases": rows,
-                    "experiments": [experiment(e) for e in sequence(journal.get("experiments"))],
-                    "latest_experiment": snapshot["progress"]["latest_experiment"] if active.get("episode") == number else None,
-                    "detail_available": bool(journal), "issues": snapshot["issues"] + issues,
-                    "evidence": [f"{RUNTIME}/episodes/e{number:04d}/attempt.json",
-                                 f"{RUNTIME}/episodes/e{number:04d}/telemetry.summary.json",
-                                 relative] if number in records else ["memory/live.json"]}
+                     "usage": usage(obj(phases.get(key)).get("usage"))} for key in keys]
+            return {"observation_version": OBSERVATION_VERSION, "episode": fact.episode,
+                    "version": fact.version, "mode": fact.mode, "status": outcome_status(fact),
+                    "accepted": fact.accepted, "summary": fact.summary, "violation": fact.violation,
+                    "verification": dict(fact.verification), "tokens": episode_tokens(fact), "phases": rows,
+                    "experiments": [experiment(row) for row in fact.experiments],
+                    "latest_experiment": snapshot["progress"]["latest_experiment"] if facts.progress.episode == number else None,
+                    "detail_available": fact.detail_available, "issues": snapshot["issues"],
+                    "evidence": [artifact.id for artifact in facts.artifacts if artifact.filename.startswith(f"episodes/e{number:04d}/")]}

@@ -1,7 +1,9 @@
 # Documentation
 
 New optimization launches use **Light**. Start with the Quick Start, then read the architecture
-and module options for the selected workflow. Historical release notes and validation reports
+and module options for the selected workflow. The current CLI uses `--problem` and `--workspace-base` without an optimizer `--` separator.
+[Installed startup](application-plugin-migration.md) documents the migration boundary.
+Historical release notes and validation reports
 describe the versions and environments identified in those documents.
 
 ## Start and configure
@@ -21,11 +23,11 @@ describe the versions and environments identified in those documents.
 
 | Guide | Scope |
 | --- | --- |
-| [Tool Runtime](supervisor-runtime.md) | HTTP authority, GPU/Wiki tools, public results and deadlines |
+| [Tool Runtime](supervisor-runtime.md) | Agent-scoped tool authority, GPU/Wiki tools, public results and deadlines |
 | [Measurement records](measurement-records.md) | Source/task identity, deduplication, result queries and GPU recovery |
 | [Runtime Journal](runtime-journal.md) | Default report-only workflow and optional research annotations |
 | [Handoff and promotion](supervisor-promotion.md) | Source sealing, acceptance, ABBA, promotion-audit repair |
-| [Session observability](session-observability.md) | Capture configuration, transcripts, usage and failure boundaries |
+| [Session observability](session-observability.md) | Shared Agent observations, current configuration and historical capture |
 | [Core plugin framework](plugin-framework.md) | Composition, service contracts, lifecycle and ownership |
 | [Local plugins](plugins.md) | Skill/tool extensions and distinct Light/Legacy invocation paths |
 | [GPU Wiki](../gpu-wiki/README.md) | Current structured stores and standalone knowledge interfaces |

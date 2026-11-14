@@ -1,12 +1,12 @@
 # Run AKA through profile-selected startup
 
-AKA uses the installed `aka optimize` command. It converts the retained optimization arguments once,
+AKA uses the installed `aka optimize` command. It converts the public request fields once,
 then uses a launch profile to select Workflow through Bootstrap and Core. Evaluation, Execution,
 Resources and recovery run from their installed owning modules.
 
 For fresh `aka optimize` and `aka workflow` launches, the default profile is now `light`.
 It requires the matching `atrex-aka-light` distribution and selects native (not Bubblewrap)
-Agent execution with capture and managed Light services. Use `--profile light-sandbox`
+Agent execution and managed Light Workflow services. Use `--profile light-sandbox`
 for isolation, or `--profile workflow` for the previous Legacy behavior. Missing Light is
 an actionable startup error, not an implicit Legacy fallback. `aka run` remains explicit.
 Continuations use their saved selection regardless of this new-launch default; do not
@@ -18,19 +18,19 @@ Use Python 3.10 or later, install the matching distributions as described below,
 checkout resources available:
 
 ```sh
-aka optimize --repo-root "$PWD" -- --help
-aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton \
-  --agent-cli codex --workspace /path/to/runs
+aka optimize --repo-root "$PWD" --help
+aka optimize --repo-root "$PWD" \
+  --problem /path/to/problem --platform '<gpu_arch>' --framework Triton \
+  --agent-cli codex --workspace-base /path/to/runs
 ```
 
-`--op-dir` selects the problem. It accepts the current native Atrex-Bench layout
+`--problem` selects the problem. It accepts the current native Atrex-Bench layout
 (`reference.py`, `input.py`, `shapes.json`, within its owning Bench checkout) or SOL
 layout (`definition.json`, `reference.py`, `workload.jsonl`). See [problem
 preparation](quickstart.md) for the complete requirements. The AKA checkout path and the
 problem path are separate inputs.
 
-The installed parser accepts retained optimization arguments after the mandatory `--`
+The installed parser accepts launch and request options together, without a `--`
 separator. Their workflow applicability is profile-specific: Light uses unified Episodes,
 not Legacy Fast/Full stages. Light's source-tree and ABBA path requires native
 Atrex-Bench through Agate or [SSH](ssh-backend.md); select the [Legacy workflow](legacy-workflow.md)
@@ -50,7 +50,7 @@ python -m pip install --force-reinstall /tmp/aka-dist/*.whl
 
 The installed packages require a **matching resource checkout** for declared external resources.
 Keep the packages and checkout from the same source
-revision; the `0.1.0` package version alone does not identify a source revision or repository release.
+revision; the `0.2.0` package version alone does not identify a source revision or repository release.
 Launch reconstruction checks the recorded implementation and explicitly declared resource
 identities. Normal startup does not initialize every submodule; initialize only selected resource
 submodules before exporting a checkout without Git metadata.
@@ -60,22 +60,24 @@ The command can run from any working directory:
 ```sh
 aka --help
 aka optimize --help
-aka optimize --repo-root /path/to/aka -- --help
-aka optimize --repo-root /path/to/aka -- \
-  --op-dir /path/to/problem --platform '<gpu_arch>' --framework Triton \
-  --agent-cli codex --workspace /path/to/runs
+aka optimize --repo-root /path/to/aka --help
+aka optimize --repo-root /path/to/aka \
+  --problem /path/to/problem --platform '<gpu_arch>' --framework Triton \
+  --agent-cli codex --workspace-base /path/to/runs
 ```
 
-`python -m aka` accepts the same commands. The mandatory `--` separates framework
-options from the original application's arguments. `--repo-root` identifies the matching
-AKA resource checkout; runtime code comes from the installed packages. It does not change
-the working directory. `--op-dir` after the separator selects the problem. Without `--workspace`,
-the original current-directory workspace default applies.
+`python -m aka` accepts the same commands and requires installed command metadata.
+`--repo-root` identifies matching resource files; executable code comes from installed
+packages. It does not change the working directory. `--problem` selects the task input;
+`--workspace-base` selects its campaign parent (default: the current directory).
 
-Framework options are `--repo-root`, `--profile`, repeatable `--patch`, optional
-`--execution-profile`, and repeatable `--execution-patch`. Relative paths resolve from
-the caller's working directory. Framework flags do
-not replace similarly named optimization flags, which belong after `--`.
+Launch options are `--repo-root`, `--profile` and repeatable `--patch`. Public request
+fields such as `--platform` and `--framework` go in the same argument list. `--settings`
+and `--runtime` accept JSON objects using the dataclass field names. Alternatively,
+`--workflow-request` accepts a serialized `WorkflowLaunch` JSON **string**, not a path;
+it cannot be mixed with new-request fields. Execution composition is selected through
+profiles/patches, not removed optimizer `--execution-profile`/`--execution-patch` flags.
+Only generic `aka run` and direct `aka execution` retain their respective `--` separator.
 
 Core owns the neutral command dispatcher. Bootstrap contributes `run`, and Optimization
 contributes `optimize`, via the `aka.commands` package entry-point group. Help lists
@@ -168,21 +170,18 @@ checkout. Generic `aka run` does not add business checkouts to `sys.path`:
 
 ```python
 from pathlib import Path
-from aka.legacy.compat.host import run_application
-from aka.contracts.application import ApplicationRequest
+from aka.bootstrap.workflow_cli import main
 
-exit_code = run_application(ApplicationRequest(Path("/path/to/aka"), ("--help",)), profile="workflow")
+exit_code = main(["--repo-root", "/path/to/aka", "--profile", "workflow",
+                  "--problem", "/path/to/problem", "--platform", "H20",
+                  "--framework", "Triton", "--workspace-base", "/path/to/runs"])
 ```
 
-`argv=None` preserves the original `sys.argv[1:]` behavior; an explicit sequence is
-copied without adding options. The request does not change cwd, environment, stdio or
-signal ownership. Normal return, application failure, `SystemExit` and interrupts all
-dispose the owned Core composition. Local disposal does not cancel detached or remote
-jobs. Registered effects are cleaned up; arbitrary plugin side effects cannot be undone
-automatically.
+This is the same public-request parser as the installed optimizer. `main(None)` reads
+`sys.argv[1:]`; passing a list supplies explicit arguments. Bootstrap owns composition
+disposal on return or error. Disposal does not itself cancel detached or remote jobs.
 
-The compatibility adapter converts retained optimization arguments into a typed Workflow request
-exactly once. Core freezes defaults/interpolation before setup.
+Core freezes defaults/interpolation before setup.
 Bootstrap captures the target, tokens, effective composition and identity of Core,
 Bootstrap, Contracts, plugins and declared resources. Post-setup verification rejects
 changes outside the frozen composition, including dynamic `Context.plugin()` children
@@ -230,46 +229,34 @@ aka run --resume -- startup-argument
 `--resume` and `--profile` are mutually exclusive. Resume accepts no `--patch` or `--var`
 overrides. `run_profile()` and `aka run --profile ...` reject inherited selection keys
 instead of silently ignoring the explicit profile; use resume, or clear both keys to
-start from a profile. The historical optimizer entrypoint still detects recorded
-selections automatically and retains its checkout and selected-launcher checks.
+start from a profile. The optimizer detects recorded selections automatically and requires the recorded
+`--workflow-request`; profile and patch overrides are rejected.
 
 These variables carry startup composition, not campaign progress or saved business
 arguments. Pass the arguments needed by the selected target; that target owns workspace
 recovery. Generic resume does not provision a legacy checkout or install internal
 adapters. Internal optimizer recovery continues through its recorded internal launcher.
 
-### Legacy recovery records
+### Recovery compatibility
 
-Framework children receive `AKA_LAUNCH_SELECTION` and `AKA_LAUNCH_DIGEST` through
-`Invocation.environment`. Recorded environment values are applied to children; values of
-`None` remove the corresponding keys. The legacy adapter persists `launch-selection.json` for delayed recovery. Current schema 4 `restart.json` contains
-`launch_environment` referencing this durable file and its digest. The monitor restores
-the recorded values instead of inheriting unrelated launch selection variables. Missing
-or changed selection, tokens, implementations or resources fail before setup. Core
-identity locks remain opt-in and separate from business locks and recovery state.
+Resume requires the recorded public request, retained resources and matching implementation
+identities. Changing package versions, workflows or resource contents is not an implicit
+migration. Use a fresh workspace for an incompatible upgrade; retain the matching old
+installation if an old campaign must finish.
 
-An existing main schema 3 recovery record without `launch_environment` or any
-`launch-selection.json` uses the historical built-in Legacy profile, not the current Light launch default. Custom profiles,
-patches, variables, tokens and supplied continuation selections are rejected.
-All original resolved-configuration and state-path checks still apply. Only the
-recovery owner may persist the selection and upgrade the record to schema 4,
-after those checks pass; a non-owner cannot perform this upgrade. Schema 4 and
-records with launch-selection evidence never fall back to the default when their
-selection is missing, corrupt or mismatched. Schema 3 retains main's environment
-recovery semantics; historical environment values that were never recorded are
-not reconstructed. Broader restart-format redesign is deferred.
+The common Experiment retry ledger requires
+`schema_version=2`; base-era ledgers are
+rejected, and no automatic migration is provided. This restriction concerns continuation
+of old in-flight recoveries, not creation of new experiments. It is separate from the
+common infrastructure retry default: transient failures proven to precede submission permit
+two extra attempts after 5/10 seconds, within a 120-second recovery admission window.
+Workflow review-service loops have their own policies.
 
-The owner records a private `launch-migration.json` only after validating the old
-configuration. It contains the exact old/new restart metadata and frozen selection,
-so an interrupted write can be completed by the monitor or the legacy owner on the
-next attempt. Replay verifies the current restart metadata and implementation/resource
-identity before writing, and removes the migration record after committing. Unknown
-or mismatched migration records are refused. A committed schema 4 record with a missing
-selection is never repaired as a legacy migration; a selection surviving missing
-`restart.json` also causes refusal before startup.
-
-Existing tool-plugin locks also record absolute plugin paths and interpreter identity.
-Retain those inputs and do not rewrite locks to bypass identity checks.
+The removed detached monitor and its restart-schema migration protocol are described in
+[the pre-migration guide](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/application-plugin-migration.md#legacy-recovery-records).
+That link preserves the old documentation text, not a runnable interface at that SHA.
+The monitor belongs to the earlier implementation; this installed command set removes it. Existing
+resource locks likewise require their original identities; do not rewrite them to bypass checks.
 
 ## Distribution
 
@@ -277,13 +264,13 @@ Retain those inputs and do not rewrite locks to bypass identity checks.
 | --- | --- | --- |
 | `atrex-aka-framework` | `aka`, neutral dispatcher, `aka.core`, `aka.contracts`, `aka.bootstrap`, generic `aka run` command | 3.10+ |
 | `atrex-aka-legacy` | Shared business providers, explicit Legacy Workflow, `optimize` / `workflow` / `execution` commands | 3.10+ |
-| `atrex-aka-light` | Managed Agent/Workspace/Runtime, evaluation and acceptance, default Light profiles | 3.10+ |
+| `atrex-aka-light` | Light Workflow, orchestration and default Light profiles; common services come from Legacy | 3.10+ |
 | `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |
 | `atrex-aka-observation-long-horizon` | `aka.observation.long_horizon`, workflow-specific observation adapter | 3.10+ |
 
-Framework has no runtime package dependencies. Light depends on `atrex-aka-legacy==0.1.0`.
-Legacy and both dashboard/observation distributions depend on `atrex-aka-framework==0.1.0`; Dashboard's `long-horizon` extra adds
-`atrex-aka-observation-long-horizon==0.1.0`. Neither optional distribution requires
+Framework has no runtime package dependencies. Light depends on `atrex-aka-legacy==0.2.0`.
+Legacy and both dashboard/observation distributions depend on `atrex-aka-framework==0.2.0`; Dashboard's `long-horizon` extra adds
+`atrex-aka-observation-long-horizon==0.2.0`. Neither optional distribution requires
 Legacy. Although the observation adapter imports only Contracts interfaces, its
 installation includes the full Framework distribution, including Core, Bootstrap and
 the CLI. This larger install footprint is a consequence of consolidating the base
@@ -307,7 +294,7 @@ the viewer with the separately packaged long-horizon adapter, without importing 
 optimizer. The optimization profile does not load either plugin. See the
 [dashboard guide](optimization-dashboard.md) for source and installed launch commands.
 
-The compatibility command converts optimization arguments once, then dispatches the
+The native command constructs a public Workflow request once, then dispatches the
 selected installed Workflow through Bootstrap. Execution, Resources, Agent, and Workflow
 already own their packaged implementations and runtime assets; removed checkout scripts
 are not alternative launch interfaces.

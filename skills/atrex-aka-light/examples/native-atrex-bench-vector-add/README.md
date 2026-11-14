@@ -35,16 +35,16 @@ The resulting layout must have both runtime markers above the operator:
 It can then be selected with:
 
 ```bash
-aka optimize --repo-root /path/to/atrex-kernel-agent -- \
-  --op-dir /path/to/atrex-bench/data/native-atrex-bench-vector-add \
+aka optimize --repo-root /path/to/atrex-kernel-agent \
+  --problem /path/to/atrex-bench/data/native-atrex-bench-vector-add \
   --platform L20D \
   --framework Triton \
   --agent-cli claude \
   --optimization-mode leaderboard \
-  --workspace /path/to/vector-add-campaign \
+  --workspace-base /path/to/vector-add-campaign \
   --max-iters 5
 ```
 
-Use the installed revision's `aka optimize --repo-root REPO -- --help` before launch.
+Use the installed revision's `aka optimize --repo-root REPO --help` before launch.
 The example uses the default exposed-Shape flow. A Production run with
 `--no-expose-evaluator-shapes` may generate `agent_problem.json` before setup.

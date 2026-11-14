@@ -19,17 +19,17 @@ Inspect `git status` before syncing code. Preserve user changes. Verify `aka`, P
 
 ## Command shape
 
-Launch options belong before `--`; optimization options belong after it:
+All launch and request options use one parser; pass them without a `--` separator:
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox -- \
-  --op-dir /path/to/atrex-bench/operator \
+  --profile light-sandbox \
+  --problem /path/to/atrex-bench/operator \
   --platform L20D \
   --framework CuteDSL \
   --agent-cli claude \
   --optimization-mode production \
-  --workspace /path/to/campaign-root \
+  --workspace-base /path/to/campaign-root \
   --max-iters 20
 ```
 
@@ -38,12 +38,12 @@ Omit `--profile` for native Light. `--profile light-sandbox` is the Bubblewrap A
 Run the checkout's help before constructing non-trivial commands:
 
 ```bash
-aka optimize --repo-root /path/to/atrex-kernel-agent -- --help
+aka optimize --repo-root /path/to/atrex-kernel-agent --help
 ```
 
-Installed Agate options that Light intentionally exposes appear under their native names in this help. Pass only options shown for the installed version; Light refuses sensitive options and rejects options unsupported by the requested Agate operation.
+Agate-native options belong to the Agent's `tools/sandbox.py` help/schema, not the Workflow launch parser. The installed client supplies safe operation-specific options; authority-bearing values stay Supervisor-owned.
 
-Read [Configuration](configuration.md) for the complete current-main option table, defaults, composition-patch fields and the shared-parser flags that remain Legacy-only.
+Read [Configuration](configuration.md) for public request fields, Execution settings and composition patches.
 
 ## Launch profiles
 
@@ -57,7 +57,7 @@ Read [Configuration](configuration.md) for the complete current-main option tabl
 | `observed` | Legacy Workflow | Native Light Agent | Enabled | Observation upgrade only; not Light Workflow |
 | `sandbox` | Legacy Workflow | Bubblewrap Light Agent | Disabled | Agent isolation only; not Light Workflow |
 
-Only `light` and `light-sandbox` install the managed Light Workspace, private HTTP Tool Runtime, measurement records, Journal service and Light acceptance/promotion path. `observed` and `sandbox` replace only the Agent provider inside Legacy.
+Only `light` and `light-sandbox` install the managed Light Workspace, managed Unix-socket Tool Runtime, shared Experiment records, Journal service and Light acceptance/promotion path. `observed` and `sandbox` replace only the Agent provider inside Legacy.
 
 Bubblewrap profiles require Linux and fail explicitly on macOS. Bubblewrap limits filesystem/process visibility; it is not a network sandbox or separate user account. Native `light` remains cooperative under the same OS user.
 
@@ -116,19 +116,19 @@ The current Light sequence is:
 - `always`: enable the V1 stage in leaderboard mode too;
 - `never`: optimize directly from measured V0.
 
-Current main does not support skipping V0 and going directly to Framework Baseline. A failed V0 stops before V1. Confirm this invariant in `src/aka/light/workflow/bootstrap.py` before describing a newer branch.
+Current main does not support skipping V0 and going directly to Framework Baseline. A failed V0 stops before V1. Confirm this invariant in `src/aka/workflow/light/orchestration/campaign.py` before describing a newer branch.
 
 ## Platform, framework and candidate layout
 
 `--platform` is required and cannot be deduced from the operator directory. It is the logical target product used in Agent instructions, Wiki context, hardware fallback detection and workspace identity. By default it is also the hardware token sent to Agate. Use the exact token accepted by the selected environment.
 
-When the logical product and remote executor alias differ, use `--sandbox-hardware` without changing the logical platform:
+When the logical product and remote executor alias differ, use `--hardware` without changing the logical platform:
 
 ```bash
---platform L20D --sandbox-hardware AGATE_WORKER_ALIAS
+--platform L20D --hardware AGATE_WORKER_ALIAS
 ```
 
-The alias in this example is a placeholder. If Agate accepts `L20D`, omit `--sandbox-hardware`; the CLI automatically uses the `--platform` value. Supply the override only when the configured Agate endpoint exposes a different scheduler token.
+The alias in this example is a placeholder. If Agate accepts `L20D`, omit `--hardware`; the CLI automatically uses the `--platform` value. Supply the override only when the configured Agate endpoint exposes a different scheduler token.
 
 `--platform` is distinct from runtime architecture. AKA normally probes the actual worker and obtains an architecture such as `sm_89`, `sm_100` or `gfx942`. Runtime architecture is authoritative for NVIDIA/AMD vendor selection; the platform name is a fallback. PPU is recognized from product tokens beginning with `PPU` or `ZW` because its borrowed architecture token is ambiguous. Use `--arch` only for an intentional override or when probing fails.
 
@@ -185,7 +185,7 @@ Prefer a background service or declared workload for long runs; do not keep an i
 
 ## Resume
 
-Resume with the same checkout behavior, workspace, composition, framework, source layout, mode, and visibility settings. Light reconciles accepted Agate job IDs, completed batches, an interrupted Framework Baseline, and an interrupted Episode from durable state.
+Resume with the serialized `--workflow-request` recorded for that campaign and its frozen composition. For example, `aka workflow --repo-root REPO --workflow-request "$RECORDED_REQUEST"`. Obtain the exact value from the owning launch receipt; do not reconstruct it from remembered flags. New request fields, a Profile override or new patches are rejected on continuation. Light reconciles accepted Agate job IDs, completed batches, an interrupted Framework Baseline, and an interrupted Episode from durable state.
 
 Do not clear a workspace merely because a process exited. First inspect runtime, Agate, and acceptance status. If the user requests a clean rerun that preserves Bootstrap/V0, identify the exact supported reset boundary for that checkout; do not manually delete arbitrary state directories.
 

@@ -2,6 +2,11 @@
 
 Read this file for live status, diagnosis, metrics, or reproducibility. Use the `observability/` directory from a checkout compatible with the campaign. These scripts are read-only and must not submit, cancel, or mutate Agate work.
 
+Current module campaigns use shared Experiment records and public Agent session
+facts. The readers retain read-only compatibility with upstream v1 measurement
+records. Missing raw Agate responses remain unavailable; recorded execution facts
+are identified separately and are not presented as a raw backend response.
+
 Set paths once:
 
 ```bash
@@ -99,7 +104,11 @@ python3 "$AKA_REPO/observability/export_light_evidence.py" "$CAMPAIGN" \
   --output /path/to/new-evidence-directory
 ```
 
-The output contains the exact source package, physical Agate Job IDs and raw responses, the response Light exposed to the Agent, and a provenance manifest. The output path must not already exist.
+The output contains the exact source package, physical Agate Job IDs, the response
+Light exposed to the Agent, and a provenance manifest. Raw Agate responses are
+included when retained. Shared records may provide only `recorded_execution_facts`;
+`agate_response` then remains null and `evidence_source` identifies the available
+evidence. The output path must not already exist.
 
 Export only source by accepted Git revision or measured identity:
 

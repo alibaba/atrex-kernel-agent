@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-framework"
-version = "0.1.0"
+version = "0.2.0"
 description = "AKA plugin framework, contracts and profile-selected startup"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = ["packaging>=23"]
 
 [project.scripts]
 aka = "aka.cli:main"
@@ -15,13 +15,44 @@ aka = "aka.cli:main"
 [project.entry-points."aka.commands"]
 run = "aka.bootstrap.cli:main"
 
+[project.entry-points."aka.tokens"]
+agent = "aka.agent.plugin:AGENT"
+executor = "aka.execution.assembly:EXECUTOR"
+execution_context = "aka.execution.plugin:EXECUTION_CONTEXT"
+measurement_parallelism = "aka.execution.plugin:MEASUREMENT_PARALLELISM"
+
+problem = "aka.task.problem.plugin:PROBLEM"
+
+source = "aka.task.source.plugin:SOURCE"
+
+candidate = "aka.task.candidate_workspace.plugin:CANDIDATE"
+
+evaluator_factory = "aka.evaluation.plugin:EVALUATOR_FACTORY"
+
+evaluation_defaults = "aka.evaluation.plugin:EVALUATION_DEFAULTS"
+
+experiment_factory = "aka.experiment.plugin:EXPERIMENT_FACTORY"
+experiment_episode_evidence = "aka.contracts.experiment:EXPERIMENT_EPISODE_EVIDENCE"
+evaluation_episode_interpreter = "aka.contracts.evaluation:EVALUATION_EPISODE_INTERPRETER"
+
 [tool.setuptools]
 package-dir = {"" = "src"}
 include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["aka", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*"]
+include = ["aka", "aka.workflow", "aka.core", "aka.core.*", "aka.contracts", "aka.contracts.*", "aka.bootstrap", "aka.bootstrap.*", "aka.execution", "aka.execution.*", "aka.agent", "aka.agent.*", "aka.task", "aka.task.*", "aka.resources", "aka.resources.*", "aka.evaluation", "aka.evaluation.*", "aka.experiment", "aka.experiment.*", "aka.acceptance", "aka.acceptance.*"]
 
 [tool.setuptools.package-data]
+"aka.agent" = ["*", "**/*"]
+"aka.execution" = ["*", "**/*"]
 "aka.core" = ["profiles/*.json"]
+"aka.bootstrap" = ["profiles/*.json", "profiles/bundles/*.json"]
+
+"aka.task" = ["*", "**/*"]
+
+"aka.resources" = ["*", "**/*"]
+
+"aka.evaluation" = ["*", "**/*"]
+
+"aka.experiment" = ["*", "**/*"]

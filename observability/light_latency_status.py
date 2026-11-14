@@ -19,17 +19,19 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 SOURCE_ROOT = REPOSITORY_ROOT / "src"
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
-from aka.legacy.workflow.export import RetainedWorkflowExport  # noqa: E402
-from aka.light.evaluation.provider import result_from_response  # noqa: E402
-from aka.light.experiment.store import (  # noqa: E402
+from aka.workflow.legacy.export import RetainedWorkflowExport  # noqa: E402
+from aka.task.candidate_workspace.provider import GitCandidateWorkspace
+from aka.evaluation.tool_results import result_from_response  # noqa: E402
+from observability.measurement_reader import (  # noqa: E402
     MeasurementStore,
     RECORD_ID,
-    source_identity,
 )
-from aka.light.runtime.paths import supervisor_campaign_root  # noqa: E402
-from aka.light.workflow.search import read_state  # noqa: E402
-from aka.light.workspace.sources import from_git  # noqa: E402
+from aka.workflow.light.support.paths import supervisor_campaign_root  # noqa: E402
+from aka.workflow.light.search import read_state  # noqa: E402
+from aka.task.source.formats import from_git  # noqa: E402
 
 
 def finite_latency(value: object) -> float | None:
@@ -119,12 +121,12 @@ def _accepted_evidence(owner: Path, candidate: dict) -> dict:
         record_id = legacy if isinstance(legacy, str) and RECORD_ID.fullmatch(legacy) else None
     if record_id is None:
         return {**unavailable, "verification_evidence": "gateway_record_id_not_available"}
-    store_root = supervisor_campaign_root(owner) / "measurements"
-    if not (store_root / "identity.key").is_file():
+    if not MeasurementStore.available(owner):
         return {**unavailable, "gateway_record_id": record_id,
                 "verification_evidence": "measurement_store_not_available"}
     try:
-        record = MeasurementStore(store_root).read(record_id)
+        store = MeasurementStore(owner)
+        record = store.read(record_id)
     except (OSError, ValueError, KeyError, TypeError, RecursionError):
         return {**unavailable, "gateway_record_id": record_id,
                 "verification_evidence": "gateway_record_not_readable"}
@@ -132,7 +134,7 @@ def _accepted_evidence(owner: Path, candidate: dict) -> dict:
     identity = identity if isinstance(identity, dict) else {}
     revision = candidate.get("git_commit")
     try:
-        expected = source_identity(from_git(owner, revision))
+        expected = store.source_identity(from_git(owner, revision), kernel_id=identity.get("kernel_id"))
     except (OSError, ValueError, TypeError, subprocess.SubprocessError):
         return {
             **unavailable,
@@ -198,7 +200,7 @@ def accepted_best(workspace: Path, campaign_root: Path) -> dict | None:
         owner = selected.pop("_owner")
         return {**selected, **_accepted_evidence(owner, selected)}
 
-    snapshot = RetainedWorkflowExport().read(workspace)
+    snapshot = RetainedWorkflowExport(candidate_workspace=GitCandidateWorkspace()).read(workspace)
     rows = []
     for candidate in snapshot.candidates:
         latency = finite_latency(candidate.result.latency_us)
@@ -262,7 +264,7 @@ def eligible_full_eval(record: dict) -> dict | None:
         or options.get("evaluation_input_path")
         or options.get("evaluation_shapes_path")
         or options.get("baseline_path")
-        or command[:2] != ["python3", "test_kernel.py"]
+        or (request.get("standard_full_evaluation") is not True and command[:2] != ["python3", "test_kernel.py"])
         or any(
             isinstance(argument, str)
             and (argument == "--shape-id" or argument.startswith("--shape-id="))
@@ -292,8 +294,7 @@ def eligible_full_eval(record: dict) -> dict | None:
 def best_passing_in_store(store: MeasurementStore, owner: Path) -> list[dict]:
     """Return eligible full-Eval observations from one validated store."""
     rows = []
-    for record_path in (store.root / "records").glob("gateway-*/record.json"):
-        record_id = record_path.parent.name
+    for record_id in store.record_ids():
         if RECORD_ID.fullmatch(record_id) is None:
             continue
         try:
@@ -347,9 +348,9 @@ def best_passing_full_eval(workspace: Path, campaign_root: Path) -> dict | None:
     for owner in measurement_workspaces(workspace, campaign_root):
         store_root = supervisor_campaign_root(owner) / "measurements"
         # Avoid initializing a new store from an observability command.
-        if not (store_root / "identity.key").is_file():
+        if not MeasurementStore.available(owner):
             continue
-        rows.extend(best_passing_in_store(MeasurementStore(store_root), owner))
+        rows.extend(best_passing_in_store(MeasurementStore(owner), owner))
     return min(
         rows,
         key=lambda row: (

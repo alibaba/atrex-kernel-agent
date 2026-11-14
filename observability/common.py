@@ -19,14 +19,14 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.legacy.workflow.export import RetainedWorkflowExport  # noqa: E402
-from aka.light.evaluation.provider import result_from_response  # noqa: E402
-from aka.light.experiment.store import (  # noqa: E402
+from aka.workflow.legacy.export import RetainedWorkflowExport  # noqa: E402
+from aka.task.candidate_workspace.provider import GitCandidateWorkspace
+from aka.evaluation.tool_results import result_from_response  # noqa: E402
+from observability.measurement_reader import (  # noqa: E402
     MeasurementStore,
-    RECORD_ID,
 )
-from aka.light.runtime.paths import supervisor_campaign_root  # noqa: E402
-from aka.light.workflow.search import read_state as read_search_state  # noqa: E402
+from aka.workflow.light.support.paths import supervisor_campaign_root  # noqa: E402
+from aka.workflow.light.search import read_state as read_search_state  # noqa: E402
 
 
 TERMINAL_EPISODE_STATUSES = frozenset(
@@ -57,7 +57,7 @@ class Scope:
 
     @property
     def measurement_root(self) -> Path:
-        return supervisor_campaign_root(self.workspace) / "measurements"
+        return MeasurementStore(self.workspace).root if MeasurementStore.available(self.workspace) else supervisor_campaign_root(self.workspace) / "measurements"
 
     @property
     def audit_root(self) -> Path:
@@ -96,21 +96,17 @@ def discover_scopes(workspace: Path) -> list[Scope]:
 
 
 def load_snapshot(scope: Scope):
-    return RetainedWorkflowExport().read(scope.workspace)
+    return RetainedWorkflowExport(candidate_workspace=GitCandidateWorkspace()).read(scope.workspace)
 
 
 def existing_store(scope: Scope) -> MeasurementStore | None:
-    root = scope.measurement_root
-    return MeasurementStore(root) if (root / "identity.key").is_file() else None
+    return MeasurementStore(scope.workspace) if MeasurementStore.available(scope.workspace) else None
 
 
 def iter_record_directories(scope: Scope) -> Iterable[Path]:
-    root = scope.measurement_root / "records"
-    if root.is_dir():
-        yield from sorted(
-            path for path in root.glob("gateway-*")
-            if path.is_dir() and RECORD_ID.fullmatch(path.name)
-        )
+    store = existing_store(scope)
+    if store is not None:
+        yield from (store.record_directory(record_id) for record_id in store.record_ids())
 
 
 def iter_records(scope: Scope, *, include_incomplete: bool = False) -> Iterable[dict[str, Any]]:
@@ -123,15 +119,16 @@ def iter_records(scope: Scope, *, include_incomplete: bool = False) -> Iterable[
             "scope": scope.label,
             "trajectory": scope.trajectory,
             "workspace": str(scope.workspace),
-            "gateway_record_id": directory.name,
+            "gateway_record_id": directory.name if directory.name.startswith("gateway-") else "gateway-" + directory.name,
             "directory": directory,
             "request": request,
             "complete": False,
         }
         if store is not None and (directory / "record.json").is_file():
             try:
-                record = store.read(directory.name)
-            except (OSError, ValueError, KeyError, TypeError, RecursionError) as error:
+                row["execution_record"] = store.execution_record(row["gateway_record_id"])
+                record = store.read(row["gateway_record_id"])
+            except (OSError, ValueError, KeyError, TypeError, RuntimeError, RecursionError) as error:
                 row["read_error"] = str(error)
             else:
                 row.update(record=record, request=record.get("request", request), complete=True)
@@ -269,8 +266,34 @@ def telemetry_documents(scope: Scope) -> list[dict[str, Any]]:
     return rows
 
 
-def job_state_rows(record_directory: Path) -> list[dict[str, Any]]:
+def job_state_rows(record_directory: Path, *, record=None) -> list[dict[str, Any]]:
     rows = []
+    envelope = read_json(record_directory / "record.json", default={})
+    if isinstance(envelope, dict) and envelope.get("format") == "aka-experiment-files/1":
+        if record is None:
+            from aka.contracts.experiment import ExperimentRef, ExperimentRecordError
+            from aka.experiment.file_records import FileExperimentRecords
+            try:
+                ref = ExperimentRef(**envelope["record"]["ref"])
+                reader = FileExperimentRecords(record_directory.parent.parent, ref.run_id, create=False)
+                if reader.root != record_directory.parent:
+                    raise ValueError('record namespace mismatch')
+                record = reader.get(ref).as_dict()
+            except (LookupError, ExperimentRecordError, ValueError, TypeError, KeyError) as error:
+                print(f"measurement-reader: {record_directory.name}: {getattr(error, 'code', 'record_corrupt')}; evidence unavailable", file=sys.stderr)
+                return []
+        for attempt in record.get("attempts", []):
+            result = attempt.get("result") or {}
+            for reference in result.get("job_references", []):
+                facts = result.get("facts", {})
+                job = {"job_id": reference.get("identifier"), "status": result.get("transport_status", "unknown"),
+                       "execution_facts": result.get("facts", {}), "budgets": result.get("budgets", []),
+                       "causes": result.get("causes", []), "source": "recorded_execution_facts"}
+                rows.append({"path": str(record_directory / "record.json"), "checkpoint_id": attempt.get("attempt_id"),
+                             "checkpoint_updated_at": record.get("updated_at"),
+                             "phase": "terminal" if facts.get("disposition") in {"terminal", "not_submitted"} else record.get("phase"),
+                             "submission": {"job_id": job["job_id"]}, "retries": {}, "identity": reference,
+                             "process": {}, "job": job})
     for path in sorted(record_directory.glob("**/jobs/*/state.json")):
         state = read_json(path, default={})
         if not isinstance(state, dict):

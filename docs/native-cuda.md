@@ -6,10 +6,10 @@ The Supervisor leaves CUDA manifest authoring to the Skill instead of seeding
 Python-loader metadata. Episode performance records match the complete candidate
 snapshot, including headers and build settings, without requiring `kernel.py`.
 The installed `atrex-gpu-gateway` Skill owns the format and usage instructions:
-[AKA workspace contract](../src/aka/light/workspace/resources/skills/atrex-gpu-gateway/reference/aka-workspace.md)
-and [Agate manifest v1](../src/aka/light/workspace/resources/skills/atrex-gpu-gateway/reference/eval-manifest.md).
+[AKA workspace contract](../src/aka/execution/skills/atrex-gpu-gateway/reference/aka-workspace.md)
+and [Agate manifest v1](../src/aka/execution/skills/atrex-gpu-gateway/reference/eval-manifest.md).
 
-Use `--sandbox-profile pre` to explicitly select Agate preproduction for integration tests.
+Set `ATREX_SANDBOX_PROFILE=pre` before launching (clear URL/SSH endpoint selectors) to explicitly select Agate preproduction for integration tests.
 This does not change global Agate settings or Diamond.
 
 The Agate Skill ships as an English edition in the AKA package and Agent Skill
@@ -49,13 +49,13 @@ Neither candidate includes Python source.
 
 ## Independent candidate file systems
 
-A task selects one file system through the `candidate` module configuration.
+A task selects one file system through the Light `workflow.file_system` configuration.
 The optimization workflow uses the same `Artifact` interface for every selection;
 it never parses source declarations or chooses source filenames.
 
 ```json
 {"api_version": 1, "patches": [
-  {"id": "candidate", "config": {"file_system": "cuda_manifest"}}
+  {"id": "workflow", "config": {"startup": true, "file_system": "cuda_manifest"}}
 ]}
 ```
 
@@ -65,7 +65,7 @@ it never parses source declarations or chooses source filenames.
 | `source_tree` | `sources/source_tree.py` | Editable `kernel.py` plus optional implementation sources |
 | `cuda_manifest` | `sources/cuda_manifest.py` | CUDA sources, headers and `solution.json` |
 
-The existing `aka.light.workspace.sources` import path is retained as a package.
+Implementations now live in `aka.task.source.formats`; the old import path is removed.
 Each implementation owns initial-source preparation, layout, validation, reads,
 execution packaging, restoration and evidence paths. They do not import or call
 one another. `common.py` defines their interface and shared file operations;
@@ -88,19 +88,11 @@ Historical workspaces without a selector are recognized on import. The V0 Python
 reference is an evaluator-owned bootstrap input, before the selected V1 candidate.
 Explicit controller snapshot restoration remains available for recovery.
 
-Source imports are configured on the same module:
-
-```json
-{"api_version": 1, "patches": [
-  {"id": "candidate", "config": {
-    "file_system": "source_tree",
-    "source_tree": {"manifest": "/path/to/source-manifest.json", "directory": "/path/to/source"}
-  }}
-]}
-```
-
-`workflow.source_tree` remains an input alias for existing configurations. New
-configurations use `candidate.source_tree`; conflicting values are rejected.
+The former `candidate.source_tree` and `workflow.source_tree` composition objects are
+not accepted by the current schemas. Source preparation belongs to Task/Source; use the
+selected source provider's contract rather than copying the old import patch. The old
+format/import design and its validation remain available in
+[the versioned guide](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/native-cuda.md#independent-candidate-file-systems).
 
 ```mermaid
 flowchart LR

@@ -1,0 +1,22 @@
+{
+  "api_version": 1,
+  "bundles": [
+    "aka.workflow.legacy:profiles/compositions/bundles/workflow.json"
+  ],
+  "patches": [
+    {
+      "id": "agent",
+      "remove": true
+    },
+    {
+      "id": "agent",
+      "insert": {
+        "name": "aka.agent.plugin",
+        "required": true,
+        "config": {
+          "sandbox": "none"
+        }
+      }
+    }
+  ]
+}

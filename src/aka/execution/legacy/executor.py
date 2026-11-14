@@ -1,0 +1,211 @@
+"""Main sandbox command construction and owned-process execution.
+
+The launcher retains SSH/gateway transport, staging and remote recovery. This
+module owns argv construction, queue/wall budgets and the host process lifetime;
+it does not interpret evaluator output or classify candidate correctness.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import replace
+from pathlib import Path
+
+from aka.contracts.execution import BackendCapabilities, CommandSpec, JobResult, ResourceIdentity
+from .runtime import ExecutionHooks, SandboxRequest, current_transport_arguments
+from aka.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
+
+
+class LegacyExecutor(GatewayRecoveryMixin):
+    sandbox_cli_options = True
+    sandbox_cli_endpoint_environment = False
+    capabilities = BackendCapabilities(
+        operations=frozenset(("auto", "run", "profile", "dev", "preflight", "check", "disassemble", "same_allocation_abba")), cancellation=True, prepared_requests=True,
+        input_files=True, output_options=True, prepared_inputs=True,
+    )
+    resource_identity = ResourceIdentity("legacy")
+
+    def __init__(self, request=None, hooks=None, configuration=None):
+        self.request = request
+        self.hooks = hooks
+        self.configuration = dict(configuration or {})
+        if request is not None and request.ssh:
+            self.capabilities = replace(type(self).capabilities, source_archives=True, prepared_inputs=False)
+        recovery_policy(self.configuration)
+
+    def bind(self, context):
+        from aka.execution.filesystem_scope import require_scope_backend
+        require_scope_backend(context, self.capabilities)
+        from .runtime import default_binding
+        request, hooks = default_binding(context)
+        return self.bind_sandbox(request, hooks)
+
+    def bind_sandbox(self, request, hooks):
+        if self.configuration.get("url"):
+            request = replace(request, url=self.configuration["url"], profile="", ssh="")
+        elif self.configuration.get("profile"):
+            request = replace(request, profile=self.configuration["profile"], url="", ssh="")
+        return type(self)(request, hooks, configuration=self.configuration)
+
+    def _environment_backend(self):
+        from aka.execution.environment_query import BackendEnvironment
+        from aka.execution.configuration import legacy_settings
+        request = self.request
+        environment = request.environment if request else os.environ.copy()
+        settings = request or legacy_settings(environment)
+        return BackendEnvironment(backend=self.resource_identity.backend, operations=self.capabilities.operations,
+            environment=environment, url=settings.url, profile=settings.profile, ssh=settings.ssh)
+
+    def query_environment(self, query):
+        return self._environment_backend().query(query)
+
+    def check_environment(self, query):
+        return self._environment_backend().check(query)
+
+    def run(self, command: CommandSpec) -> JobResult:
+        from aka.execution.command_transport import prepared_input_workspace
+        self.capabilities.require(command)
+        with prepared_input_workspace(command) as physical:
+            return self._run(physical)
+
+    def _run(self, command: CommandSpec) -> JobResult:
+        self.capabilities.require(command)
+        from aka.execution.gateway.requests import NATIVE_ABBA, prepared_operation
+        if command.operation == NATIVE_ABBA:
+            if command.submission is None:
+                from aka.contracts.execution import UnsupportedExecution
+                raise UnsupportedExecution("same-allocation ABBA requires an immutable prepared request")
+            import json
+            prepared_operation(json.loads(command.submission), command.operation)
+        if self.request is None:
+            from aka.contracts.execution import ExecutionContext
+            return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout,
+                filesystem_access=command.filesystem_access))._run(command)
+        from aka.execution.environment_query import command_query, require_supported
+        support = self._environment_backend().check(command_query(command), discover=False)
+        require_supported(support, require_known=command.operation == NATIVE_ABBA)
+        from aka.execution.gateway.requests import bound_limits
+        def observed(result):
+            if command.on_observation is not None:
+                command.on_observation(replace(result, environment_snapshot=support.environment,
+                    environment_identity=support.environment.identity, environment_support=support))
+        request = replace(self.request, workspace=command.workspace, command=command.command,
+            timeout=command.timeout, environment=bound_limits(command.environment, support), hardware=command.hardware,
+            sync=command.artifacts,
+            gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
+            preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus,
+            on_observation=observed if command.on_observation is not None else None,
+            input_files=command.input_files, output_options=command.output_options, profile_options=command.profile_options)
+        request = replace(request, prepared_inputs=command.prepared_inputs)
+        if request.ssh and command.submission is not None:
+            from aka.execution.gateway.source_archives import prepared_payload
+            request = replace(request, submission=prepared_payload(command, ssh=True))
+        if command.requirements:
+            import json
+            request = replace(request, environment={**request.environment,
+                "AKA_GATEWAY_DEV_DEPENDENCIES": json.dumps(command.requirements)})
+        if not request.ssh:
+            transport = self._job_transport()
+            environment = dict(request.environment)
+            environment.update({key: value for key, value in transport.environment.items() if key.startswith("AGATE_")})
+            import json
+            environment["AKA_EXECUTION_GATEWAY_ROUTE"] = json.dumps({"endpoint": transport.endpoint, "profile": transport.profile})
+            if transport.endpoint:
+                environment["AGATE_URL"] = transport.endpoint
+            environment["AKA_GATEWAY_RECOVERY_RETRY_DELAYS"] = json.dumps(self.configuration.get("recovery_retry_delays", []))
+            environment["AKA_GATEWAY_RECOVERY_RETRY_BUDGET_S"] = str(self.configuration.get("recovery_retry_budget_s", 0))
+            request = replace(request, environment=environment)
+        try:
+            result = self._run_sandbox(request, hooks=self.hooks)
+        except BaseException as error:
+            if isinstance(getattr(error, "execution_outcome", None), JobResult):
+                error.execution_outcome = replace(error.execution_outcome,
+                    environment_snapshot=support.environment,
+                    environment_identity=support.environment.identity, environment_support=support)
+            raise
+        return replace(result, environment_snapshot=support.environment,
+                       environment_identity=support.environment.identity, environment_support=support)
+
+    def _run_sandbox(self, request: SandboxRequest, *, hooks: ExecutionHooks) -> JobResult:
+        workspace = request.workspace
+        hardware = request.hardware
+        profile = request.profile
+        url = request.url
+        timeout = request.timeout
+        command = request.command
+        ssh = request.ssh
+        ssh_init = request.ssh_init
+        health_command = request.health_command
+        sync = request.sync
+        wall_timeout = request.wall_timeout
+        gateway_kind = request.gateway_kind
+        preflight = request.preflight
+        cancel_event = request.cancel_event
+        if sum(bool(value) for value in (ssh, url, profile)) > 1:
+            raise ValueError("ssh, url, and profile sandbox endpoints are mutually exclusive")
+        if not request.launcher or any(not isinstance(item, str) or not item for item in request.launcher):
+            raise ValueError("sandbox launcher must be a non-empty argument vector")
+        cmd = [
+            *request.launcher,
+            "--kind",
+            gateway_kind,
+            "--hardware",
+            hardware,
+            "--workspace",
+            str(workspace),
+            "--timeout",
+            str(timeout),
+        ]
+        if url:
+            cmd += ["--url", url]
+        elif profile:
+            cmd += ["--gateway-profile", profile]
+        elif ssh:
+            cmd += ["--ssh", ssh]
+        if ssh_init:
+            cmd += ["--ssh-init", ssh_init]
+        if health_command:
+            cmd += ["--health-command", health_command]
+        if sync:
+            for path in sync:
+                cmd += ["--sync", path]
+        else:
+            cmd.append("--no-sync")
+        from aka.execution.command_transport import sandbox_options
+        public = CommandSpec(workspace, tuple(command), input_files=request.input_files,
+                             output_options=request.output_options, profile_options=request.profile_options,
+                             operation=gateway_kind)
+        cmd += ["--num-gpus", str(request.num_gpus), *current_transport_arguments(), *sandbox_options(public)]
+        if preflight:
+            cmd.append("--preflight")
+        else:
+            cmd += ["--", *command]
+        environment = dict(request.environment)
+        package_root = str(Path(__file__).resolve().parents[3])
+        environment["PYTHONPATH"] = os.pathsep.join(dict.fromkeys(
+            [package_root, *environment.get("PYTHONPATH", "").split(os.pathsep)]))
+        if wall_timeout is not None:
+            effective_timeout = wall_timeout
+        else:
+            uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
+            grace = 0 if uses_ssh else hooks.queue_wait_grace(environment)
+            from aka.execution.configuration import client_wait_timeout
+            effective_timeout = 2 * timeout if uses_ssh else client_wait_timeout(timeout, grace)
+            if effective_timeout is not None:
+                effective_timeout += 240  # Launcher reports client expiry before watchdog cleanup.
+        from aka.execution.outcomes import run_owned
+        from aka.execution.prepared_inputs import payload as prepared_payload
+        from aka.execution.gateway.requests import wait_budget_records
+        try:
+            result = run_owned(cmd, environment=environment, workspace=workspace,
+                timeout=effective_timeout, resource=self.resource_identity, hardware=hardware,
+                cancel_event=cancel_event, spawn=hooks.spawn, check_environment=hooks.check_environment,
+                input_payload=request.submission, on_observation=request.on_observation,
+                prepared_input_payload=prepared_payload(request.prepared_inputs, request.input_files))
+        except BaseException as error:
+            if isinstance(getattr(error, "execution_outcome", None), JobResult):
+                error.execution_outcome = replace(error.execution_outcome,
+                    budgets=(*error.execution_outcome.budgets,
+                        *wait_budget_records(effective_timeout, scope="local-wait", emit=False)))
+            raise
+        return replace(result, budgets=(*result.budgets,
+            *wait_budget_records(effective_timeout, scope="local-wait", emit=False)))

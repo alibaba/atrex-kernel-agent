@@ -14,15 +14,22 @@ for a campaign spanning different machines or GPU architectures.
 ## Start a campaign
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/atrex-bench/operators/my_operator \
-  --platform MI300X --sandbox-hardware MI300X --framework Triton \
-  --sandbox-ssh gpu-worker --sandbox-ssh-gpu 5 \
-  --sandbox-ssh-runtime-bind /opt/venv \
-  --sandbox-ssh-runtime-bind /opt/rocm \
-  --sandbox-ssh-init 'export PATH=/opt/venv/bin:/opt/rocm/bin:$PATH; export LD_LIBRARY_PATH=/opt/rocm/lib' \
-  --workspace /path/to/runs --max-iters 20
+export ATREX_SANDBOX_SSH=gpu-worker
+export ATREX_SANDBOX_SSH_GPU=5
+export ATREX_SANDBOX_SSH_RUNTIME_BINDS='["/opt/venv", "/opt/rocm"]'
+export ATREX_SANDBOX_SSH_INIT='export PATH=/opt/venv/bin:/opt/rocm/bin:$PATH; export LD_LIBRARY_PATH=/opt/rocm/lib'
+
+aka optimize --repo-root "$PWD" \
+  --problem /path/to/atrex-bench/operators/my_operator \
+  --platform MI300X --hardware MI300X --framework Triton \
+  --workspace-base /path/to/runs --max-iters 20
 ```
+
+The Workflow request parser accepts `--platform` and `--hardware`; SSH transport
+belongs to Execution's environment configuration. The named Light profiles inherit
+the `ATREX_SANDBOX_SSH*` allowlist from the Workflow profile. Use the default
+Legacy Execution provider for SSH; the Gateway provider rejects SSH configuration.
+Clear `ATREX_SANDBOX_URL` and `ATREX_SANDBOX_PROFILE` before selecting SSH.
 
 Use an OpenSSH host or `~/.ssh/config` alias. Authentication must work without
 interactive input. The evaluator checkout is inferred from the operator directory.
@@ -81,7 +88,8 @@ These settings are captured with the selected profile for children and recovery.
 ```mermaid
 flowchart TD
     Agent["Agent tool call"] --> Runtime["Supervisor Runtime: route request and capture identity"]
-    Runtime --> Typed["ssh_transport.run: typed payload and runtime bundle"]
+    Runtime --> Typed["aka.execution.ssh.transport.run: typed payload and runtime bundle"]
+    Runtime --> Env["Env: isolated nonblocking observation; no workload submission"]
     Runtime --> Dev["Dev command and output manifest"]
     Typed --> Upload["_run_ssh_job: resolve binds/devices, mktemp, scp"]
     Dev --> Upload
@@ -89,7 +97,7 @@ flowchart TD
     Lock -->|"wait expires"| Busy["ssh_gpu_busy: retryable; environment unchanged"]
     Lock -->|"yes"| Namespace["Bubblewrap: file, network and process namespaces"]
     Namespace --> Watchdog["Execution watchdog: full job timeout"]
-    Watchdog --> Worker["ssh_worker: Evaluate / ABBA / diagnostics / Env, or Dev runner"]
+    Watchdog --> Worker["aka.evaluation.drivers.ssh_worker: Evaluate / ABBA / diagnostics, or Dev runner"]
     Worker --> Receipt["job.json or Dev output archive"]
     Receipt --> Download["scp download and bounded extraction"]
     Download --> Evidence["Validate receipt; project result and checkpoint evidence"]
@@ -112,14 +120,14 @@ flowchart TD
     Kill --> Cleanup
 ```
 
-`ssh_transport.run` packages the typed request and consumes the worker's
+`aka.execution.ssh.transport.run` packages the typed request and consumes the worker's
 `scratch/job.json`; Dev uses `_run_ssh_job` with its existing command/output
 contract. `_run_ssh_job` owns staging, transfer, the physical-GPU lock and cleanup.
 The host flock process retains the lock through namespace execution, including every
 ABBA block. `_ssh_bwrap_command` constructs the namespace; `_ssh_visibility`
 applies the assigned runtime selector after activation and custom environment.
 
-`ssh_worker` dispatches evaluation and diagnostics using the provisioned runtime.
+`aka.evaluation.drivers.ssh_worker` dispatches evaluation and diagnostics using the provisioned runtime.
 Completed shape batches retain their checkpoints; incomplete receipts and
 transport loss remain infrastructure outcomes. `_run_ssh_health` distinguishes
 contention from a failed readiness probe, so concurrent allocations cannot trigger
@@ -176,13 +184,20 @@ optional commit must match that checkout. Dependencies are never downloaded
 inside the network-isolated worker. Native CUDA remains a CUDA toolchain
 contract; this does not make CUDA source portable to an AMD HIP compiler.
 
+SSH supports typed prepared requests, source archives, explicit input files and
+same-allocation ABBA. It does not transport closed `PreparedExecutionInputs`.
+Light whole-tree diagnostics and private portable Profile paths that need that
+closure raise `UnsupportedExecution` before dispatch. Supervisor conversion of an
+authorized Dev input view is subject to the same restriction; use a supported
+typed request or a backend advertising closed-input transport.
+
 SOL does not provide Light's native ABBA contract; use the Legacy workflow for
 SOL verification. Each SSH allocation owns one GPU; distributed evaluator
 contracts and MIG selection require a separate allocation implementation.
 
-## Validation
-
-Validation evidence and hardware coverage are recorded in the pull request.
-Local smoke checks cover source-tree Evaluate/ABBA, diagnostics, device visibility,
-synchronized Dev outputs, an incorrect candidate, cancellation and timeout handling.
-Test scripts remain local under the repository's ignored `tests/` convention.
+The remote launcher requires `flock` with `--exclusive`, `--wait` and
+`--conflict-exit-code` support. Missing or incompatible launch dependencies stop
+with a capability diagnostic, retaining the original stderr. Lock expiry (exit 75
+before the acquisition marker) is GPU contention; candidate exit 75 after acquisition
+is a command failure. Environment discovery reports SSH network/auth/DNS failures
+as unavailable and remote probe failures as rejected.

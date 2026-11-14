@@ -20,8 +20,8 @@ from observability.export_light_source import (
     export_source,
     locate_gateway_record,
 )
-from aka.light.experiment.store import RECORD_ID  # noqa: E402
-from aka.light.runtime.paths import supervisor_campaign_root  # noqa: E402
+from observability.measurement_reader import RECORD_ID  # noqa: E402
+from aka.workflow.light.support.paths import supervisor_campaign_root  # noqa: E402
 
 
 def _record(workspace: Path, campaign_root: Path, record_id: str):
@@ -58,7 +58,7 @@ def export_evidence(workspace: Path, record_id: str, output: Path) -> dict:
         rows = []
         seen = set()
         for matched_owner, matched_store, _ in locations:
-            directory = matched_store.root / "records" / record_id
+            directory = matched_store.record_directory(record_id)
             for state in job_state_rows(directory):
                 job = state["job"]
                 key = json.dumps(job, sort_keys=True, ensure_ascii=False) if job is not None else state["path"]
@@ -72,7 +72,9 @@ def export_evidence(workspace: Path, record_id: str, output: Path) -> dict:
                         "checkpoint_phase": state["phase"],
                         "submission": state["submission"],
                         "retries": state["retries"],
-                        "agate_response": job,
+                        "evidence_source": "recorded_execution_facts" if isinstance(job, dict) and job.get("source") == "recorded_execution_facts" else "agate_response",
+                        "agate_response": None if isinstance(job, dict) and job.get("source") == "recorded_execution_facts" else job,
+                        "recorded_execution_facts": job if isinstance(job, dict) and job.get("source") == "recorded_execution_facts" else None,
                         "raw_process": state["process"],
                     }
                 )

@@ -18,9 +18,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = {
-    'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/core', 'aka/contracts', 'aka/bootstrap'),
-    'atrex-aka-legacy': ('aka/legacy',),
-    'atrex-aka-light': ('aka/light',),
+    'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/workflow/__init__.py', 'aka/workflow/budgets.py', 'aka/core', 'aka/contracts', 'aka/bootstrap', 'aka/execution', 'aka/agent', 'aka/task', 'aka/resources', 'aka/evaluation', 'aka/experiment', 'aka/acceptance'),
+    'atrex-aka-legacy': ('aka/workflow/legacy',),
+    'atrex-aka-light': ('aka/workflow/light',),
     'atrex-aka-dashboard': ('aka/dashboard',),
     'atrex-aka-observation-long-horizon': ('aka/observation/long_horizon',),
 }
@@ -38,9 +38,16 @@ def owned(distribution: str) -> tuple[Path, ...]:
         # extensionless attachments as well as prompts and Skills; never stage
         # checkout-level tools, resources or generated caches.
         package = 'legacy' if distribution == 'atrex-aka-legacy' else 'light'
-        files = sorted(p for p in (ROOT / 'src' / 'aka' / package).rglob('*')
+        roots = (ROOT / 'src' / 'aka' / 'workflow' / package,)
+        files = sorted(p for root in roots for p in root.rglob('*')
             if p.is_file() and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
             and p.suffix not in {'.pyc', '.pyo'})
+    if distribution == 'atrex-aka-framework':
+        for module in ('execution', 'agent', 'task', 'resources', 'evaluation', 'experiment'):
+            runtime = ROOT / 'src' / 'aka' / module
+            files.extend(p for p in runtime.rglob('*') if p.is_file()
+                and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
+                and p.suffix not in {'.pyc', '.pyo'})
     return tuple(dict.fromkeys(files))
 
 

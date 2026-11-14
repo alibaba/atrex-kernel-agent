@@ -2,7 +2,8 @@
 
 AKA loads the plugins selected by the Resources configuration. The explicit Legacy `workflow`
 profile selects `plugins/gpu-wiki` from the checkout supplied with `--repo-root`. The default
-Light launch enables Wiki; set `tool_runtime.config.wiki` to `false` to disable it. See
+Light profile selects the same catalog. Use Resources selection to change that catalog;
+`workflow.wiki` controls the optional routed Wiki service. See
 [Light configuration](optional-light-modules.md#independent-wiki-execution).
 A custom configuration can select explicit `plugins` paths or a `plugin_dir` catalog; catalog mode
 discovers immediate subdirectories containing `plugin.json`. A plugin may contribute tools, Skills,
@@ -29,7 +30,7 @@ resource export or the AKA Python packages. Select its directory explicitly in t
 Keep this directory available to the campaign. AKA links the selected Skill directory into
 `.agents/skills/micro-analysis`, `.claude/skills/micro-analysis`, and `.qoder/skills/micro-analysis`.
 In a managed Light draft, list the enabled catalog with `python3 tools/plugin.py list`.
-Explicit Legacy campaigns use `python -m aka.legacy.resources.cli list`.
+Explicit Legacy campaigns use `python -m aka.resources.cli list`.
 
 The Skill ID is `micro-analysis.micro-analysis`. Ask the Agent, for example:
 
@@ -57,7 +58,7 @@ see [Wiki providers](optional-light-modules.md#wiki-providers).
 
 ```mermaid
 flowchart TD
-    A[Campaign construction<br/>aka.legacy.workflow.campaign] --> B[Discover selected plugins<br/>aka.legacy.resources.plugins]
+    A[Campaign construction<br/>aka.workflow.legacy.campaign] --> B[Discover selected plugins<br/>aka.resources.plugins]
     B --> C{Manifest and files valid?<br/>resources/plugin_runtime/registry.py}
     C -- no --> C1[Stop: invalid_manifest]
     C -- yes --> D[Resolve tool argv and fingerprint<br/>code, resources, Skills]
@@ -100,7 +101,7 @@ In a managed Light draft:
 python3 tools/plugin.py list
 ```
 
-In an explicit Legacy campaign, use `python -m aka.legacy.resources.cli list`.
+In an explicit Legacy campaign, use `python -m aka.resources.cli list`.
 
 The campaign supplies the plugin-selection environment. Changing into the repository or a campaign
 workspace alone does not select plugins. For standalone discovery from the checkout root, in a shell
@@ -109,7 +110,7 @@ workspace outside the checkout:
 
 ```bash
 aka_plugin_workspace=$(mktemp -d)
-python -m aka.legacy.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" list
+python -m aka.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" list
 ```
 
 This scans the specified catalog rather than resolving a Workflow's configured plugin selection.
@@ -135,12 +136,12 @@ python3 tools/plugin.py call gpu-wiki.query --input wiki_request.json
 ```
 
 Explicit Legacy campaigns use
-`python -m aka.legacy.resources.cli call gpu-wiki.query --input wiki_request.json`.
+`python -m aka.resources.cli call gpu-wiki.query --input wiki_request.json`.
 
 For a standalone call from the checkout root, retain the same catalog and workspace selection:
 
 ```bash
-python -m aka.legacy.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" \
+python -m aka.resources.cli --plugin-dir ./plugins --workspace "$aka_plugin_workspace" \
   call gpu-wiki.query --input wiki_request.json
 ```
 

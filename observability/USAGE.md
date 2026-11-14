@@ -349,6 +349,11 @@ python3 observability/light_agate_status.py "$CAMPAIGN" --json
 | Agent 是否暂停 | `agent_paused_during_requests` |
 | 未完成 Record、锁、槽位和队列 | `running_task_markers`、`runtime_concurrency` |
 
+当前共享记录的未完成状态来自 Experiment lifecycle（只有 `terminal` 终结），
+每个原 Job 的终态由 attempt 的执行事实决定；传输层 `succeeded` 本身不能证明
+远端停止。v1 `tasks/*.json` 只为历史记录提供回退，字段 `source` 区分两者。
+这些记录不证明实时锁所有权或槽位占用。
+
 `calls[].outcome` 可能为：
 
 - `completed`：完整且可缓存；
@@ -467,6 +472,9 @@ Token 使用结构：
 当前主线没有单独的 `reasoning_tokens` 计数；不同 Agent 后端可能将推理计入
 `output_tokens`。脚本不会自行拆分。当前主线也没有持久化精确 Agent active time 和 Agate
 wait time，所以这两项为 `null`；已结束 Session 的墙钟时间仍可读取。
+共享版本优先使用公开 Session 的 Token，按 native Session ID 和 backend 关联
+capture 的 start/finish 时间；缺少时间保持 null，`updated_at` 不用作结束时间。
+同一 Session 的公开记录和 trace 不重复累加 Token，时间来源标记为 `timing_basis`。
 Bootstrap 和 Framework Baseline Session 来自 workspace 同级的 `.atrex-session-traces`，以
 `episode=0` 和相应的 `stage` 返回；它们计入 `totals` 和 `startup_totals`，但不计入
 “每个 Episode／Attempt 平均 Token”，避免把启动成本伪装成优化 Attempt。
@@ -546,8 +554,10 @@ python3 observability/export_light_evidence.py "$CAMPAIGN" \
 `agate-jobs.json` 中每一项包含：
 
 - `job_id`：原始 Agate Job ID；
-- `agate_response`：Agate 原始结构化返回；
-- `raw_process`：执行 Agate CLI 时捕获的 stdout、stderr 和返回码；
+- `evidence_source`：`agate_response` 或 `recorded_execution_facts`；
+- `agate_response`：已保留的 Agate 原始结构化返回；共享记录未保存它时为 null；
+- `recorded_execution_facts`：共享 Experiment 保存的执行事实、预算及原因，不等同于后端原始响应；
+- `raw_process`：已保存的 CLI stdout、stderr 和返回码；未保留时为空；
 - `submission`、`retries`、`checkpoint_phase`：提交与恢复状态。
 
 如果只有 accepted best 的 Git commit，使用：

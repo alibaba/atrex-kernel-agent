@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT))
 if (ROOT / "src").is_dir():
     sys.path.insert(0, str(ROOT / "src"))
 
-import aka.legacy.workflow.journal as journal  # noqa: E402
+import aka.workflow.legacy.journal as journal  # noqa: E402
 
 
 QUERY_ID = "wiki-query-0123456789abcdef0123456789abcdef"
