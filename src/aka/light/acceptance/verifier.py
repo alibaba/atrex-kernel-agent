@@ -87,8 +87,7 @@ def parse_abba_payload(stdout: str) -> dict[str, Any]:
 def _verification_shape_batches(
     workspace: Path, private_reference_dir: Path | None, batch_size: int
 ) -> tuple[list[list[str] | None], list[str]]:
-    harness = workspace / "test_kernel.py"
-    if not harness.is_file() or "--shape-id" not in harness.read_text(encoding="utf-8"):
+    if (workspace / "workload.jsonl").is_file():
         return [None], []
     shapes_path = (private_reference_dir or workspace) / "shapes.json"
     if not shapes_path.is_file():

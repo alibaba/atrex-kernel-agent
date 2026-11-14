@@ -29,7 +29,6 @@ from aka.light.workflow.constants import (
     SANDBOX_FULL_WORKFLOW_PROMPT,
     SANDBOX_SAFETY_BOUNDARY_PROMPT,
     SANDBOX_TOOL,
-    TEST_RESULT_PREFIX,
 )
 from aka.light.execution.recovery import (environment_state_file, raise_if_environment_blocked)
 from aka.light.evaluation.hardware import hardware_vendor
@@ -548,12 +547,13 @@ def check_ssh_environment(
 
 def _test_result_from_stdout(stdout: str) -> dict:
     """Read the structured result emitted by the active sandbox harness."""
+    from aka.light.evaluation.result_json import parse_evaluation_result_line
+
     for line in reversed(stdout.splitlines()):
-        if line.startswith(TEST_RESULT_PREFIX):
-            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
-            if isinstance(result, dict):
-                return result
-    raise RuntimeError("sandbox test output has no structured RESULT_JSON line")
+        result = parse_evaluation_result_line(line)
+        if result is not None:
+            return result
+    raise RuntimeError("sandbox test output has no structured Evaluate result")
 
 
 def _local_test_record(workspace: Path, version: str, result: dict, *, existing: dict | None = None) -> dict:

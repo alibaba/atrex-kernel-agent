@@ -63,7 +63,7 @@ all probes are removed.
 Campaign workspaces expose `skills/` as a local symlink that is not uploaded implicitly. Add
 `--input skills/autonomous-gpu-kernel-timeline/backends/cuda_backend` to a sandbox command that reads
 the header or adapter at runtime. This deliberately selects the sandbox's custom dev-compatible
-transport while preserving evaluator inputs; it does not authorize changing `profile_driver.py`.
+transport while preserving evaluator inputs.
 
 Use the tool's structural verdict as a fact check. Interpret the resulting phases yourself.
 `backends/cuda_backend/test_backend.cu` is the compact runnable example for allocation, launch,

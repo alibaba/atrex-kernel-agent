@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -321,21 +322,34 @@ def wrap_agent_command(
             argv.extend(("--proc", "/proc"))
         _mount(argv, view.root if view else workspace, workspace, writable=True)
         if managed:
-            research_library = workspace / "research-library"
-            if research_library.exists():
-                if (
-                    research_library.is_symlink()
-                    or not research_library.is_dir()
-                    or research_library.resolve(strict=True) != research_library
-                ):
+            for name, directory in (
+                ("research-library", True),
+                ("records", True),
+                ("PROGRESS.md", False),
+            ):
+                projection = workspace / name
+                if not projection.exists():
+                    if name == "research-library":
+                        # Research-disabled Campaigns do not project this tree.
+                        continue
                     raise ValueError(
-                        "Managed research-library mountpoint must be a real directory"
+                        f"Managed Runtime projection is unavailable before sandbox launch: {name}"
                     )
-                # Overlay only the Runtime projection read-only.  The source
-                # remains writable to the trusted Supervisor outside this
-                # namespace, so synchronous/asynchronous refreshes appear in a
-                # long-lived Agent Session without rebuilding Bubblewrap.
-                _mount(argv, research_library, research_library)
+                mode = projection.lstat().st_mode
+                if (
+                    projection.is_symlink()
+                    or (not stat.S_ISDIR(mode) if directory else not stat.S_ISREG(mode))
+                    or projection.resolve(strict=True) != projection
+                ):
+                    kind = "directory" if directory else "file"
+                    raise ValueError(
+                        f"Managed {name} mountpoint must be a real {kind}"
+                    )
+                # Overlay Runtime projections read-only. Their backing paths
+                # remain writable to the trusted Supervisor outside this
+                # namespace. Directories reflect atomic child replacement;
+                # PROGRESS.md keeps a stable inode for live refreshes.
+                _mount(argv, projection, projection)
         _mount(argv, home, home, writable=True)
         if control_root is not None:
             # Hooks receive only their narrow rendezvous directory, never the

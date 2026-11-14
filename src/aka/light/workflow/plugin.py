@@ -58,8 +58,8 @@ def apply(ctx, config):
     ctx.effect(workflow.close, label="close light Workflow and private runtimes")
     ctx.provide(WORKFLOW, workflow)
     if config.get("startup", False):
-        from aka.legacy.workflow.startup import WorkflowStartup
-        ctx.provide("startup", WorkflowStartup(
+        from aka.light.workflow.startup import LightWorkflowStartup
+        ctx.provide("startup", LightWorkflowStartup(
             workflow, configuration=config, observer=ctx.workflow_observer,
             evaluator_factory=ctx.evaluator_factory,
         ))

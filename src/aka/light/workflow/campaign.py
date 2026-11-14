@@ -268,6 +268,5 @@ class ManagedCampaign(Campaign):
         self._ensure_agent_problem()
         self._link_runtime()
         self._install_native_evaluator()
-        self._install_profile_driver()
         self._setup_baseline_native(self.problem.evaluation.directory,
                                    generalized=self.private_reference_dir is not None)

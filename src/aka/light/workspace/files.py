@@ -115,3 +115,52 @@ def publish_if_changed(workspace: Path, relative: str, data: bytes) -> bool:
         return False
     publish(workspace, relative, data)
     return True
+
+
+def publish_pinned_if_changed(workspace: Path, relative: str, data: bytes) -> bool:
+    """Refresh a file without replacing its inode when one already exists.
+
+    Bubblewrap can overlay a single Agent-visible file read-only, but a file bind
+    mount pins the existing inode.  Runtime projections such as ``PROGRESS.md``
+    must therefore retain that inode so Supervisor updates remain visible inside
+    a long-lived Agent namespace.  Missing, linked, or otherwise invalid paths
+    are still healed with the normal atomic publisher before the next sandbox
+    launch; an established regular projection is updated in place.
+    """
+    path = relative_path(relative)
+    try:
+        current = read_regular_bytes(workspace / path, limit=len(data) + 1)
+    except (FileNotFoundError, OSError, ValueError):
+        current = None
+    if current == data:
+        return False
+
+    with open_private_directory(workspace / path.parent) as parent:
+        try:
+            descriptor = os.open(
+                path.name,
+                os.O_WRONLY | os.O_NOFOLLOW,
+                dir_fd=parent,
+            )
+        except OSError:
+            # Creation and recovery from an Agent-created link/special path use
+            # the existing bounded atomic publication path.  Once Bubblewrap is
+            # active the read-only mount prevents either condition from arising.
+            publish(workspace, relative, data)
+            return True
+        try:
+            if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+                os.close(descriptor)
+                descriptor = -1
+                publish(workspace, relative, data)
+                return True
+            os.ftruncate(descriptor, 0)
+            with os.fdopen(descriptor, "wb") as output:
+                descriptor = -1
+                output.write(data)
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            if descriptor >= 0:
+                os.close(descriptor)
+    return True

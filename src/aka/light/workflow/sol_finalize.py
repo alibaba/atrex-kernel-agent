@@ -16,7 +16,7 @@
 """SOL-ExecBench output backend: package the workspace's best kernel into a
 self-contained, directly-submittable SOL `solution.json`.
 
-Normally you don't need to call this: `test_kernel.py` already writes
+Normally you don't need to call this: Runtime Evaluate already writes
 `submission.json` on every PASS, so each committed version has a ready-to-submit
 artifact that was validated by the same run that produced its metrics. This
 script is a stand-alone re-packager (e.g. for the Stop hook / a manual export).
@@ -28,7 +28,7 @@ What it does:
   2. Write it to `--out` (default `<workspace>/submission.json`).
   3. Packaging only by default. Re-validation (`--validate`) is opt-in and
      usually redundant — the committing iteration already validated this exact
-     kernel via `test_kernel.py`.
+     kernel through the private SOL evaluator.
 
 Usage (cwd anywhere):
     python reference/sol_finalize.py --workspace kernel_opt_<name>            # package only
@@ -106,7 +106,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workspace", default=".", help="Workspace dir (default: cwd).")
     ap.add_argument("--out", default="", help="Submission path (default: <workspace>/submission.json).")
     ap.add_argument("--validate", action="store_true",
-                    help="Also re-run the evaluator over all workloads (redundant if this version already passed test_kernel.py).")
+                    help="Also re-run the evaluator over all workloads (redundant after a passing Runtime Evaluate).")
     args = ap.parse_args(argv)
 
     workspace = Path(args.workspace).resolve()
@@ -118,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[sol_finalize] wrote self-contained submission -> {out}")
 
     if not args.validate:
-        print("[sol_finalize] packaged (correctness already verified per-iteration by test_kernel.py; pass --validate to re-check)")
+        print("[sol_finalize] packaged (correctness already verified by Runtime Evaluate; pass --validate to re-check)")
         return 0
     ok = validate(workspace, out)
     print(f"[sol_finalize] {'SUBMITTABLE (all workloads pass)' if ok else 'NOT submittable — fix kernel.py'}")

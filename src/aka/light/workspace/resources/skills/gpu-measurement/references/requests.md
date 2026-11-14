@@ -75,7 +75,7 @@ not a custom probe.
 # Full workload: Atrex-Bench or SOL-ExecBench.
 python3 tools/sandbox.py --kind run --no-sync
 # Optional explicit version label (both evaluators).
-python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --version v2 --no-memory
+python3 tools/sandbox.py --kind run --no-sync --version v2
 # Atrex-Bench only: correctness-only diagnostic, not a full Evaluate.
 python3 tools/sandbox.py --kind run --mode correctness_only --no-sync
 # Generic AB/BA example; use the injected acceptance command for reuse.
@@ -140,8 +140,9 @@ For Atrex-Bench evaluator controls, choose one spelling:
 ```bash
 # Shorthand: no explicit command.
 python3 tools/sandbox.py --kind run --timed-runs 100 --no-sync
-# Explicit command: evaluator controls belong after test_kernel.py.
-python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --timed-runs 100 --no-memory
+# Evaluator controls belong to the Runtime request; its private harness is not
+# part of the Agent workspace.
+python3 tools/sandbox.py --kind run --no-sync --timed-runs 100
 ```
 
 Top-level `--version`, `--shape-id` and `--timed-runs` require

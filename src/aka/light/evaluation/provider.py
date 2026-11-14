@@ -6,8 +6,14 @@ import hashlib
 import math
 import statistics
 from .public_result import PREFIXES, correctness_summary
+from .result_json import parse_evaluation_result_line
 
 def result_from_response(response: dict, operation: str) -> dict | None:
+    if operation == "evaluate":
+        for line in reversed(response["stdout"].splitlines()):
+            if value := parse_evaluation_result_line(line):
+                return value
+        return None
     prefix = PREFIXES.get(operation)
     for line in reversed(response["stdout"].splitlines()):
         if prefix and line.startswith(prefix):

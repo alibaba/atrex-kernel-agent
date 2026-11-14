@@ -16,9 +16,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import PropertyMock, patch
 
+from aka.contracts.content import SourceContent, WorkspaceFile
 from aka.contracts.evaluation import derived_evaluation_timeout
 from aka.contracts.workflow import CampaignRuntimeSettings, WorkflowSettings
-from aka.contracts.workspace import CandidateHandle
 from aka.contracts.workflow_launch import decode_launch
 from aka.legacy.task.problem.layout import agent_visible_operator_files
 from aka.legacy.task.problem.legacy import LegacyProblemProvider
@@ -115,6 +115,7 @@ from aka.light.runtime.server import (
     managed_gateway_argv,
     parse_gateway,
 )
+from aka.light.workspace.provider import ManagedCandidateWorkspace
 from aka.light.runtime.catalog import PluginRegistry
 from aka.light.runtime.plugins import PluginError
 from aka.light.runtime.request_errors import AgentRequestError
@@ -124,7 +125,7 @@ from aka.light.workflow.context import session_execution_policy
 from aka.light.workflow.plugin import Defaults as WORKFLOW_PLUGIN_DEFAULTS
 from aka.light.workflow.provider import WorkflowOptions
 from aka.light.workflow.output_limit import dependency_policy_recovery_prompt
-from aka.light.workflow.episode import LongHorizonCampaign
+from aka.light.workflow.episode import LongHorizonCampaign, SegmentBinding
 from aka.light.workflow.search import SearchOptions
 from aka.light.workflow.session_io import _evaluation_performance_timeout
 from aka.light.workspace.sources import default_tree, install, instructions, pack
@@ -213,6 +214,37 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         )
         self.assertIsNone(result["result"]["error"])
         self.assertNotIn("next_action", result["result"])
+
+    def test_evaluate_projection_uses_direct_json_without_log_wrapper(self):
+        sample = {
+            "all_pass": True,
+            "latency_us_geomean": 4.0,
+            "latency_us_by_shape": {"0": 4.0},
+        }
+        for input_line in (
+            json.dumps(sample),
+            "[test_kernel] RESULT_JSON=" + json.dumps(sample),
+        ):
+            with self.subTest(input_line=input_line[:20]):
+                process = subprocess.CompletedProcess([], 0, input_line + "\n", "")
+                projected = project_response(process, operation="evaluate")
+
+                self.assertNotIn("RESULT_JSON", projected["stdout"])
+                projected_result = json.loads(projected["stdout"])
+                self.assertTrue(projected_result["all_pass"])
+                self.assertEqual(projected_result["latency_us_geomean"], 4.0)
+                self.assertEqual(
+                    projected_result["latency_us_by_shape"], {"0": 4.0}
+                )
+                canonical = canonical_result(
+                    projected,
+                    {
+                        "operation": "evaluate",
+                        "options": {"evaluation_mode": "full"},
+                    },
+                )
+                self.assertEqual(canonical["status"], "completed")
+                self.assertTrue(canonical["result"]["correct"])
 
     def test_unknown_agate_marker_is_preserved_with_universal_redaction(self):
         process = subprocess.CompletedProcess(
@@ -552,10 +584,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 )
                 prompt = LongHorizonCampaign(base)._prompt(
                     episode=1,
-                    worktree=CandidateHandle(
-                        1, "a" * 40, "work", workspace
-                    ),
-                    conversion_pending=False,
+                    segment=SegmentBinding(1, "a" * 40, "work", workspace),
                 )
             self.assertIn(
                 "Your trajectory: T1. Search location: Epoch 1, Episode 1", prompt
@@ -604,10 +633,15 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("smallest decisive measurement", episode)
         self.assertIn("Repeat `probe → candidate → measurement → revert/keep` cycles", episode)
         self.assertNotIn("at most one local Direction `in_progress`", episode)
-        self.assertIn("Use `submit-kernel` for final-source compliance feedback", episode)
-        self.assertIn("Submission sets no performance threshold", episode)
-        self.assertIn("launches no new Evaluate or ABBA", episode)
-        self.assertIn("stop at a natural audit boundary", episode)
+        self.assertIn(
+            "Use `submit-kernel` when you judge an exact commit ready", episode
+        )
+        self.assertNotIn("minimum speedup", episode)
+        submission = (prompt_dir / "runtime_submit.md").read_text(encoding="utf-8")
+        self.assertIn(
+            "reviews whether one evaluated, reachable Agent Git commit", submission
+        )
+        self.assertNotIn("ABBA", submission)
         self.assertNotIn("cross_trajectory_share", episode)
         self.assertNotIn("high-upside Direction", episode)
         self.assertNotIn("selected Direction or optimization path", episode)
@@ -750,7 +784,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                         if line.strip():
                             json.loads(line)
         self.assertNotIn("Report acceptance is a handoff", episode)
-        self.assertIn("A normal stop needs no handoff report", episode)
 
         agent_docs = [
             *prompt_dir.glob("*.md"),
@@ -813,7 +846,10 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         )
         self.assertIn("Direction and Experiment recording are disabled", report_skill)
         self.assertIn("Use `submit-kernel`", report_skill)
-        self.assertIn("Submission verifies the saved evidence", report_skill)
+        self.assertIn(
+            "passing standard full Evaluate with complete per-Shape performance data",
+            report_skill,
+        )
         self.assertIn("No Episode Report is required", report_skill)
         self.assertNotIn("`episode-report`", report_skill)
         self.assertNotIn("smoke-and-exit procedure", report_skill)
@@ -869,8 +905,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 )
                 prompt = LongHorizonCampaign(base)._prompt(
                     episode=1,
-                    worktree=CandidateHandle(1, "a" * 40, "work", workspace),
-                    conversion_pending=False,
+                    segment=SegmentBinding(1, "a" * 40, "work", workspace),
                 )
                 self.assertNotIn("{{", prompt)
                 self.assertEqual(prompt.count("## Workflow"), 1)
@@ -904,13 +939,12 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             )
             prompt = LongHorizonCampaign(base)._prompt(
                 episode=1,
-                worktree=CandidateHandle(1, "a" * 40, "work", workspace),
-                conversion_pending=False,
+                segment=SegmentBinding(1, "a" * 40, "work", workspace),
             )
         self.assertIn("Your trajectory: T2. Search location: Epoch 1, Episode 1", prompt)
         self.assertNotIn("T2 role:", prompt)
 
-    def test_optional_conversion_and_ppu_prompt_fragments_render_completely(self):
+    def test_ppu_prompt_fragment_renders_without_retired_conversion_stage(self):
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             base = SimpleNamespace(
@@ -930,13 +964,12 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             )
             prompt = LongHorizonCampaign(base)._prompt(
                 episode=2,
-                worktree=CandidateHandle(2, "a" * 40, "work", workspace),
-                conversion_pending=True,
+                segment=SegmentBinding(2, "a" * 40, "work", workspace),
             )
         self.assertNotIn("{{", prompt)
-        self.assertIn("## Required conversion", prompt)
+        self.assertNotIn("## Required conversion", prompt)
         self.assertIn("## PPU diagnostics", prompt)
-        self.assertIn("within 5%", prompt)
+        self.assertIn("skills/ppu-acu-joint-profile/SKILL.md", prompt)
 
     def test_plugin_prompt_fragments_reject_unresolved_placeholders(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -962,7 +995,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
 
     def test_optional_dsl_settings_and_cli_normalization(self):
         settings = WorkflowSettings(platform="L20D", framework="Cuda")
-        self.assertTrue(settings.specify_dsl)
+        self.assertFalse(settings.specify_dsl)
         self.assertTrue(settings.expose_evaluator_shapes)
         self.assertEqual(settings.framework_baseline, "auto")
         with self.assertRaises(TypeError):
@@ -982,8 +1015,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                     str(Path.cwd()),
                     "--platform",
                     "L20D",
-                    "--framework",
-                    "Cuda",
                     "--no-specify-dsl",
                 ]
             )
@@ -1001,8 +1032,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                     str(Path.cwd()),
                     "--platform",
                     "L20D",
-                    "--framework",
-                    "Cuda",
                     "--no-expose-evaluator-shapes",
                 ]
             )
@@ -1027,6 +1056,8 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                         "L20D",
                         "--framework",
                         "Cuda",
+                        "--optimization-mode",
+                        "ultra",
                         "--agent-reference-dir",
                         str(nvidia),
                         str(cuda_guides),
@@ -1925,51 +1956,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             "infra",
         )
 
-    def test_episode_report_candidate_eval_is_terminal_validation(self):
-        runtime = SupervisorRuntime.__new__(SupervisorRuntime)
-        runtime.config = SimpleNamespace(
-            atrex_bench_root=Path("/private/atrex-bench"),
-            optimization_mode="production",
-        )
-        runtime.numerical_validator = None
-        policy_calls = []
-        runtime.production_policy_validator = lambda workspace, source, **options: (
-            policy_calls.append((workspace, source, options)) or []
-        )
-        runtime.measurements = SimpleNamespace(read=lambda _: {})
-        runtime.journal_factory = SimpleNamespace(
-            research_records=False,
-            experiments_enabled=False,
-        )
-        runtime._live = lambda _: True
-        captured = {}
-
-        def validate_candidate(context, source):
-            context.measure(["--kind", "run"], source, True)
-            self.assertEqual(context.production_policy(source), [])
-            return {"status": "ok"}
-
-        runtime.acceptance = SimpleNamespace(validate_candidate=validate_candidate)
-        runtime.execute = lambda *args, **kwargs: captured.update(kwargs) or {
-            "exit_code": 0, "stdout": "", "stderr": "",
-        }
-        capability = SimpleNamespace(
-            journal=SimpleNamespace(
-                service=SimpleNamespace(git_workspace=Path("/candidate")),
-                require_gluon=True,
-            )
-        )
-        self.assertEqual(
-            runtime._validate_candidate_correctness(capability, b"candidate"),
-            {"status": "ok"},
-        )
-        self.assertIs(captured["terminal_validation"], True)
-        self.assertEqual(policy_calls[0][0], Path("/candidate"))
-        self.assertEqual(policy_calls[0][1], b"candidate")
-        self.assertIs(policy_calls[0][2]["parent"], capability)
-        self.assertIs(policy_calls[0][2]["require_gluon"], True)
-
-    def test_production_review_rejection_is_returned_by_episode_report(self):
+    def test_production_review_rejection_is_returned_by_submit_kernel(self):
         source = b"candidate"
         numerical_calls = []
         context = CandidateValidation(
@@ -2013,7 +2000,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             "candidate_production_policy_failed",
         )
         self.assertIn("PyTorch performs", response["error"]["violations"][0])
-        self.assertIn("resubmit episode-report", response["error"]["next_action"])
+        self.assertIn("use submit-kernel", response["error"]["next_action"])
         self.assertEqual(numerical_calls, [True])
         self.assertEqual(response["checks"]["correctness"]["status"], "passed")
         self.assertEqual(response["checks"]["production_review"]["status"], "failed")
@@ -2378,6 +2365,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             (workspace / "tools").mkdir()
             (workspace / "scratch/probe.py").write_text("print('probe')\n")
             (workspace / "tools/helper.py").write_text("VALUE = 1\n")
+            (workspace / "kernel.py").write_text("def kernel(): pass\n")
             (workspace / "README.md").write_text("# task\n")
             (workspace / "private.json").write_text("{}\n")
             (workspace / COMMAND_WORKSPACE_MANIFEST).write_text(json.dumps([
@@ -2437,12 +2425,14 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         dev = gateway_schema("dev", parser)["command"]
         command = gateway_schema("command", parser)["command"]
 
-        self.assertIn("test_kernel.py", run)
+        self.assertIn("private evaluator", run)
+        self.assertNotIn("test_kernel.py", run)
         self.assertNotIn("profile_driver.py", run)
-        self.assertIn("profile_driver.py", profile)
+        self.assertIn("profiles the current Kernel", profile)
+        self.assertNotIn("profile_driver.py", profile)
         self.assertNotIn("test_kernel.py", profile)
-        self.assertIn("through stateless Dev", dev)
-        self.assertIn("For a custom probe", dev)
+        self.assertIn("Stateless Dev", dev)
+        self.assertIn("custom probe", dev)
         self.assertIn("not official Evaluate evidence", dev)
         self.assertIn("--input", dev)
         self.assertIn("Required argv", command)
@@ -2453,6 +2443,50 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             parse_gateway(["--kind", "command", "--", "true"]).command,
             ["--", "true"],
         )
+
+    def test_agent_workspace_publishes_no_private_evaluator_or_profile_harness(self):
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = (Path(directory) / "agent-workspace").resolve()
+            ManagedCandidateWorkspace().initialize_at(
+                workspace,
+                SourceContent(
+                    (WorkspaceFile("kernel.py", text="def run():\n    return None\n"),)
+                ),
+            )
+
+            self.assertFalse((workspace / "test_kernel.py").exists())
+            self.assertFalse((workspace / "profile_driver.py").exists())
+            request, frozen = measurement_inputs(
+                build_parser().parse_args(["--kind", "profile"]),
+                workspace,
+                {},
+                identity_key=b"private-profile-harness-test",
+            )
+            self.assertEqual(
+                request["options"]["command"], ["python3", "profile_driver.py"]
+            )
+            self.assertNotIn("profile_driver.py", frozen)
+
+            from aka.light.evaluation.gateway import (
+                _make_input_bundle,
+                _runtime_evaluator_inputs,
+            )
+            private = _runtime_evaluator_inputs(workspace)
+            encoded, _, _ = _make_input_bundle(
+                workspace,
+                16 * 1024 * 1024,
+                frozenset({"test_kernel.py"}),
+                private,
+            )
+            with tarfile.open(
+                fileobj=io.BytesIO(base64.b64decode(encoded)), mode="r:gz"
+            ) as archive:
+                member = archive.extractfile("test_kernel.py")
+                self.assertIsNotNone(member)
+                self.assertEqual(
+                    member.read(), private["test_kernel.py"].read_bytes()
+                )
+            self.assertFalse((workspace / "test_kernel.py").exists())
 
     def test_direction_only_schema_hides_experiment_association_fields(self):
         from aka.light.runtime.request_feedback import journal_schema
@@ -2487,18 +2521,6 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("an automatic terminal ABBA", prompt)
         self.assertIn("final-source review required by `submit-kernel`", prompt)
         self.assertNotIn("run this exact command", prompt)
-
-    def test_supervisor_state_migrates_promoted_agent_kernel_identity(self):
-        from aka.light.workflow.models import SupervisorState
-
-        promoted = "a" * 40
-        state = SupervisorState.from_dict({
-            "attempts": [
-                {"accepted": False, "candidate_kernel_commit_id": "b" * 40},
-                {"accepted": True, "candidate_kernel_commit_id": promoted},
-            ],
-        })
-        self.assertEqual(state.incumbent_kernel_commit_id, promoted)
 
     def test_dependency_recovery_preserves_sourceprovider_and_mode_contracts(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -3074,7 +3096,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             ["python", "test_kernel.py"],
             0,
-            "[test_kernel] RESULT_JSON=" + json.dumps(result) + "\n",
+            json.dumps(result) + "\n",
             "large compatibility warning\n" * 1000,
         )
         stdout = io.StringIO()
@@ -3108,7 +3130,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         completed = subprocess.CompletedProcess(
             ["python", "test_kernel.py"],
             1,
-            "[test_kernel] RESULT_JSON=" + json.dumps(result) + "\n",
+            json.dumps(result) + "\n",
             "",
         )
         stdout = io.StringIO()

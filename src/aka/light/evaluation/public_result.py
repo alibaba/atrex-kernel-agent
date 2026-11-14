@@ -7,9 +7,13 @@ import math
 import statistics
 
 from aka.light.evaluation.response_policy import known_gateway_error
+from aka.light.evaluation.result_json import (
+    LEGACY_TEST_RESULT_PREFIX,
+    parse_evaluation_result_line,
+)
 
 PREFIXES = {
-    "evaluate": "[test_kernel] RESULT_JSON=",
+    "evaluate": LEGACY_TEST_RESULT_PREFIX,
     "same_allocation_abba": "[sandbox] ABBA_JSON=",
     "profile": "[sandbox] PROFILE_JSON=",
     "check": "[sandbox] CHECK_JSON=",
@@ -323,6 +327,11 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
     prefix = PREFIXES.get(operation)
     sample, errors, notes = None, [], []
     for line in response.get("stdout", "").splitlines():
+        if operation == "evaluate":
+            direct = parse_evaluation_result_line(line)
+            if direct is not None:
+                sample = direct
+                continue
         marker = next((p for p in (*ERROR_PREFIXES, prefix) if p and line.startswith(p)), None)
         if marker:
             try:

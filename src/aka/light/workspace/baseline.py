@@ -65,7 +65,7 @@ def baseline_measurement_spec(
     artifact = Artifact(source)
     identity = store.kernel(source, commit)
     options: dict[str, object] = {
-        "command": ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+        "command": ["runtime-private-evaluator", "--version", "v0"],
         "evaluation_mode": "full",
         "evaluation_policy": {"mode": "full"},
     }
@@ -285,9 +285,7 @@ def ensure_baseline_gateway_record(
     result = _baseline_result(record)
     response = {
         "exit_code": 0 if result.get("all_pass") is True else 1,
-        "stdout": "[test_kernel] RESULT_JSON=" + json.dumps(
-            result, ensure_ascii=False, allow_nan=False
-        ) + "\n",
+        "stdout": json.dumps(result, ensure_ascii=False, allow_nan=False) + "\n",
         "stderr": (
             "[supervisor] backend_job_ids="
             + ",".join(

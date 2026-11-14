@@ -28,45 +28,71 @@ IGNORED = (
     "profile_driver.py", "*.jsonl",
 )
 
-TRACKED_IGNORED = (
-    "__pycache__/",
-    "*.pyc",
-    "*.ncu-rep",
-    "profiles/*/att/*.att",
-    "profiles/*/att/*.out",
-    "profiles/*/att/*.pftrace",
-    "profiles/*/att/*.otf2",
-    "/scratch",
-    "/tools",
-    "/skills",
-    "/research-library",
-    "/reference",
-    "/reference-projects",
-    "/references",
-    "/gpu-wiki",
-    "/.claude",
-    "/.qoder",
-    "/.agents",
-    "/.orchestrator_mode.json",
-    "/.orchestrator_state.json",
-    "/.atrex_long_horizon/",
-    "/verification_artifacts/.atrex_long_horizon_verify/",
-    "/atrex-bench",
+TRACKED_GITIGNORE = (
+    "# Agent Git tracks only the Kernel source tree.",
+    "/*",
+    "!/.gitignore",
+    "!/kernel.py",
+    "!/impl/",
+    "!/impl/**",
 )
 
 
-def gitignore_contents() -> str:
-    """Return the stable tracked ignore policy installed at workspace creation."""
-    return (
-        "# Runtime-managed Agent repository exclusions\n"
-        + "\n".join(TRACKED_IGNORED)
-        + "\n"
-    )
+def _gitignore_for_candidate_paths(paths: list[str]) -> str:
+    """Ignore the workspace except the exact selected candidate source paths."""
+    normalized = sorted({path.strip("/") for path in paths if path.strip("/")})
+    if all(path == "kernel.py" or path.startswith("impl/") for path in normalized):
+        return "\n".join(TRACKED_GITIGNORE) + "\n"
+
+    tree: dict[str, dict] = {}
+    for path in normalized:
+        node = tree
+        for part in Path(path).parts:
+            node = node.setdefault(part, {})
+
+    lines = [TRACKED_GITIGNORE[0], "/*", "!/.gitignore"]
+
+    def emit(node: dict[str, dict], parent: tuple[str, ...] = ()) -> None:
+        for name, children in sorted(node.items()):
+            parts = (*parent, name)
+            absolute = "/" + "/".join(parts)
+            if children:
+                lines.extend((f"!{absolute}/", f"{absolute}/*"))
+                emit(children, parts)
+            else:
+                lines.append(f"!{absolute}")
+
+    emit(tree)
+    return "\n".join(lines) + "\n"
+
+
+def gitignore_contents(candidate_paths: list[str] | None = None) -> str:
+    """Return the tracked policy; source-tree workspaces use the fixed contract."""
+    return _gitignore_for_candidate_paths(candidate_paths or ["kernel.py"])
 
 
 def initialize_gitignore(workspace: Path) -> None:
     """Install the tracked ignore policy before the initial Kernel commit."""
-    (workspace / ".gitignore").write_text(gitignore_contents(), encoding="utf-8")
+    try:
+        from aka.light.workspace.sources import commit_paths
+
+        candidate_paths = commit_paths(workspace, normalize=False)
+    except (OSError, UnicodeError, ValueError):
+        candidate_paths = ["kernel.py"]
+    (workspace / ".gitignore").write_text(
+        gitignore_contents(candidate_paths), encoding="utf-8"
+    )
+
+
+def kernel_git_paths(workspace: Path) -> list[str]:
+    """Return the only paths Runtime may put in the initial Agent commit."""
+    paths = [".gitignore", "kernel.py"]
+    implementation = workspace / "impl"
+    if implementation.is_dir() and any(
+        path.is_file() for path in implementation.rglob("*")
+    ):
+        paths.append("impl")
+    return paths
 
 _RESUME_REMOTE_PREFIX = "refs/remotes/atrex-resume/heads/"
 _RESUME_BRANCH_PREFIX = "refs/atrex/resume-branch/"

@@ -61,30 +61,12 @@ cp "$KERNEL_DEMO" "$WORKSPACE/kernel.py"
 
 # Step 4: Create .gitignore
 cat > "$WORKSPACE/.gitignore" << 'EOF'
-# Runtime-managed Agent repository exclusions
-__pycache__/
-*.pyc
-*.ncu-rep
-profiles/*/att/*.att
-profiles/*/att/*.out
-profiles/*/att/*.pftrace
-profiles/*/att/*.otf2
-/scratch
-/tools
-/skills
-/research-library
-/reference
-/reference-projects
-/references
-/gpu-wiki
-/.claude
-/.qoder
-/.agents
-/.orchestrator_mode.json
-/.orchestrator_state.json
-/.atrex_long_horizon/
-/verification_artifacts/.atrex_long_horizon_verify/
-/atrex-bench
+# Agent Git tracks only the Kernel source tree.
+/*
+!/.gitignore
+!/kernel.py
+!/impl/
+!/impl/**
 EOF
 
 # Step 5: Deploy the orchestrator's Agent behavior constraints.

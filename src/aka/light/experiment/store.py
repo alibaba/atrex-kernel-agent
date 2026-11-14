@@ -361,16 +361,23 @@ class MeasurementStore:
                         # record intact, but do not use it as a permanent verdict.
                         return None
                 from aka.light.evaluation.evaluation_failures import embedded_device_failure
+                from aka.light.evaluation.result_json import parse_evaluation_result_line
                 negative = False
                 for line in record["response"].get("stdout", "").splitlines():
-                    for prefix in ("[test_kernel] RESULT_JSON=", "[sandbox] ABBA_JSON="):
-                        if line.startswith(prefix):
-                            result = json.loads(line[len(prefix):])
-                            if not isinstance(result, dict):
-                                return None
-                            if embedded_device_failure({"status": "succeeded", "result": result}):
-                                return None
-                            negative = negative or result.get("all_pass", result.get("correct")) is False
+                    result = parse_evaluation_result_line(line)
+                    if result is not None:
+                        if embedded_device_failure({"status": "succeeded", "result": result}):
+                            return None
+                        negative = negative or result.get("all_pass", result.get("correct")) is False
+                        continue
+                    prefix = "[sandbox] ABBA_JSON="
+                    if line.startswith(prefix):
+                        result = json.loads(line[len(prefix):])
+                        if not isinstance(result, dict):
+                            return None
+                        if embedded_device_failure({"status": "succeeded", "result": result}):
+                            return None
+                        negative = negative or result.get("all_pass", result.get("correct")) is False
                 if negative:
                     # Old projections could hide the device error. Inspect sealed
                     # terminal jobs only for failed Eval/ABBA records, not all history.

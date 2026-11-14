@@ -217,6 +217,11 @@ class EpisodeWorkspace:
             )
         if fresh or (not persistent and digest != state.get("kernel_digest")):
             install_source(self.root, source, bind=True)
+        # Current Light keeps evaluator code exclusively in ephemeral Runtime
+        # staging. Remove a retired or accidentally projected copy after source
+        # materialization and before the Agent sees the workspace.
+        from aka.light.workspace.sources.common import remove_files
+        remove_files(self.root, ("test_kernel.py",))
         for name in PUBLIC_FILES:
             # Manifest bytes belong to the draft/snapshot, not immutable public inputs.
             from aka.light.workspace.sources import layout_at
@@ -274,6 +279,25 @@ class EpisodeWorkspace:
         if self.research_modules:
             with open_private_directory(self.root / "research-library"):
                 pass
+        # These Runtime projections are mounted read-only in Bubblewrap.  Create
+        # stable mountpoints before the long-lived Agent namespace starts; the
+        # trusted Supervisor continues to refresh their backing files outside it.
+        with open_private_directory(self.root / "records"):
+            pass
+        progress = self.root / "PROGRESS.md"
+        try:
+            progress_mode = progress.lstat().st_mode
+        except FileNotFoundError:
+            from aka.light.workspace.files import publish
+
+            publish(
+                self.root,
+                "PROGRESS.md",
+                b"# Current state\n\nRuntime has not published a measurement summary yet.\n",
+            )
+        else:
+            if progress.is_symlink() or not stat.S_ISREG(progress_mode):
+                raise ValueError("Managed PROGRESS.md must be a regular non-symlink file")
         # Releases before the persistent-Session design copied finalized prior
         # Episode conversations into a derived input subtree. That view is no
         # longer an Agent input: one native conversation continues across
@@ -328,9 +352,9 @@ class EpisodeWorkspace:
         research_projection = (
             "Runtime projects current research state and per-Shape historical winners into "
             + " and ".join(locations)
-            + ". `research-library/` is a disposable, visibility-filtered copy of the "
-              "Campaign Library. These files are ignored by Kernel Git and regenerated after "
-              "native-mode edits; Bubblewrap mounts the tree read-only. Change research state "
+            + ". `PROGRESS.md`, `records/`, and `research-library/` are disposable Runtime "
+              "projections. These files are ignored by Kernel Git and regenerated after "
+              "native-mode edits; Bubblewrap mounts them read-only. Change research state "
               "only through documented Runtime operations.\n"
         )
         from aka.light.workspace.files import publish

@@ -64,6 +64,7 @@ from aka.light.workspace.files import (
     MAX_FILE_BYTES,
     publish,
     publish_if_changed,
+    publish_pinned_if_changed,
     relative_path,
 )
 from aka.light.agent.session_tail import read_regular_bytes
@@ -4364,9 +4365,9 @@ class SupervisorJournalService:
 
         The Research Store, Submission Store, Measurement Store, and Git remain
         authoritative. PROGRESS.md and these JSON files are normal-file projections for
-        search, remote ``command`` probes, and long-running engineering work;
-        Agent edits are never read back as Runtime state and are overwritten on
-        the next refresh.
+        search, remote ``command`` probes, and long-running engineering work. Bubblewrap
+        exposes PROGRESS.md and records/ read-only; native-mode edits are never read back
+        as Runtime state and are overwritten on the next refresh.
         """
         self._project_research_catalog()
         self._refresh_research_state()
@@ -4505,7 +4506,7 @@ class SupervisorJournalService:
             ),
         }
         board = _git_reachable_projection(board, commit_reachable)
-        publish_if_changed(
+        publish_pinned_if_changed(
             self.workspace,
             "PROGRESS.md",
             _progress_markdown(board, modules=modules),

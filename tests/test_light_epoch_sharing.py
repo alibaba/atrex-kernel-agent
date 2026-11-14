@@ -16,10 +16,15 @@ from aka.contracts.content import SourceContent, WorkspaceFile
 from aka.contracts.problem import InitialSource
 from aka.contracts.workflow import CampaignRequest, ProblemSource, WorkflowSettings
 from aka.contracts.workspace import CandidateHandle
-from aka.light.agent.home import SESSION_HOME_ROOT_ENV, prepare_agent_environment
+from aka.light.agent.home import (
+    HOST_HOME_ENV,
+    PREPARED_ENV,
+    SESSION_HOME_ROOT_ENV,
+    prepare_agent_environment,
+)
 from aka.light.agent.runtime.model import AgentRunRequest as RuntimeAgentRunRequest
 from aka.light.agent.runtime.runtime import build_agent_runtime
-from aka.light.agent.sandbox import sandbox_executable
+from aka.light.agent.sandbox import sandbox_executable, wrap_agent_command
 from aka.light.experiment.frontier import (
     kernel_full_evaluation_evidence,
     kernel_pareto_frontier,
@@ -63,6 +68,7 @@ from aka.light.workflow.journal_service import (
     update_direction,
 )
 from aka.light.workflow.journal import JournalFactory
+from aka.light.workflow.lease import campaign_writer_lease
 from aka.light.workflow.models import SupervisorState
 from aka.light.workflow.bootstrap import Campaign
 from aka.light.workflow.campaign import ManagedCampaign
@@ -85,13 +91,14 @@ from aka.light.workflow.search_driver import (
     _aggregate_direction_queue,
 )
 from aka.light.workflow.session import LongSessionRunner
+from aka.light.workflow.startup import LightWorkflowStartup
 from aka.light.workspace.agent_git import (
     AgentGit,
     DirtyKernelWorktree,
 )
 from aka.light.workspace.auxiliary import AuxiliaryWorkspace
-from aka.light.workspace.episode import EpisodeWorkspace
-from aka.light.workspace.files import publish_if_changed
+from aka.light.workspace.episode import EPISODE_WORKSPACE_ENV, EpisodeWorkspace
+from aka.light.workspace.files import publish_if_changed, publish_pinned_if_changed
 from aka.light.workspace.provider import ManagedCandidateWorkspace
 from aka.light.workspace.shared_history import (
     export_publication,
@@ -594,7 +601,7 @@ def test_v0_is_recorded_once_in_campaign_measurements_without_baseline_store(
     calls = []
 
     def execute_v0(*_args, **kwargs):
-        calls.append(kwargs)
+        calls.append((_args, kwargs))
         state = kwargs["job_root"] / "jobs" / "ev_v0" / "state.json"
         state.parent.mkdir(parents=True)
         state.write_text(
@@ -603,7 +610,7 @@ def test_v0_is_recorded_once_in_campaign_measurements_without_baseline_store(
         return subprocess.CompletedProcess(
             ["python", "test_kernel.py"],
             0,
-            "[test_kernel] RESULT_JSON=" + json.dumps(result) + "\n",
+            json.dumps(result) + "\n",
             "",
         )
 
@@ -628,8 +635,9 @@ def test_v0_is_recorded_once_in_campaign_measurements_without_baseline_store(
     Campaign._finalize_v0_measurement(campaign, measured, commit)
     assert measured == result
     assert len(calls) == 1
-    assert calls[0]["terminal_validation"] is True
-    assert calls[0]["job_root"].is_relative_to(
+    assert calls[0][0][5] == []
+    assert calls[0][1]["terminal_validation"] is True
+    assert calls[0][1]["job_root"].is_relative_to(
         campaign_root / "measurements" / "records"
     )
     assert not (campaign_root / "baseline").exists()
@@ -699,7 +707,7 @@ def test_rejected_v0_remains_a_failed_measurement_not_a_baseline_file(
         lambda *_args, **_kwargs: subprocess.CompletedProcess(
             ["python", "test_kernel.py"],
             1,
-            "[test_kernel] RESULT_JSON=" + json.dumps(failed) + "\n",
+            json.dumps(failed) + "\n",
             "",
         ),
     )
@@ -933,7 +941,7 @@ def _passing_full_measurement(
     }
     response = {
         "exit_code": 0,
-        "stdout": "[test_kernel] RESULT_JSON=" + json.dumps(sample) + "\n",
+        "stdout": json.dumps(sample) + "\n",
         "stderr": "",
     }
     with store.reserve(request, {"candidate": identity}) as task:
@@ -3674,11 +3682,23 @@ def test_runtime_install_does_not_mutate_tracked_gitignore(tmp_path):
     link_runtime(workspace, research_records=False, research_modules=())
     assert not (workspace / "tools/record.py").exists()
     ignores = (workspace / ".gitignore").read_text(encoding="utf-8").splitlines()
-    assert "/.atrex_long_horizon/" in ignores
-    assert "/verification_artifacts/.atrex_long_horizon_verify/" in ignores
-    assert "/memory/live.json" not in ignores
+    assert ignores == [
+        "# Agent Git tracks only the Kernel source tree.",
+        "/*",
+        "!/.gitignore",
+        "!/kernel.py",
+        "!/impl/",
+        "!/impl/**",
+    ]
     repository = AgentGit(workspace, tmp_path / "agent.bundle")
     repository.prepare()
+    assert subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines() == [".gitignore", "kernel.py"]
     before = (workspace / ".gitignore").read_bytes()
     before_head = repository.head()
 
@@ -3761,6 +3781,62 @@ def test_agent_git_keeps_single_file_auxiliary_metadata_private(tmp_path):
     )
     assert "solution.json" in exclude
     assert "!/solution.json" not in exclude
+
+
+def test_light_sol_v0_commits_only_kernel_source_and_gitignore(tmp_path):
+    workspace = tmp_path / "workspace"
+    content = SourceContent(
+        (
+            WorkspaceFile(
+                "kernel.py", text="def run(x, out):\n    out[:] = x\n"
+            ),
+            WorkspaceFile(
+                "solution.json",
+                text=json.dumps({"sources": [{"path": "kernel.py"}]}) + "\n",
+            ),
+        )
+    )
+    problem_files = (
+        WorkspaceFile("definition.json", text="{}\n"),
+        WorkspaceFile("reference.py", text="def run(x):\n    return x\n"),
+        WorkspaceFile("workload.jsonl", text="{}\n"),
+    )
+
+    commit = ManagedCandidateWorkspace().prepare_sol(
+        workspace, content, problem_files=problem_files
+    )
+
+    assert subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", commit],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines() == [".gitignore", "kernel.py"]
+    assert (workspace / "solution.json").is_file()
+    assert (workspace / "definition.json").is_file()
+    assert not (workspace / "test_kernel.py").exists()
+    from aka.light.evaluation.gateway import build_parser, measurement_inputs
+    from aka.light.evaluation.private_harness import SOL_EVALUATOR_HARNESS
+
+    request, inputs = measurement_inputs(
+        build_parser().parse_args(["--kind", "run", "--no-sync"]),
+        workspace,
+        {},
+        identity_key=b"sol-private-harness-test",
+    )
+    assert request["inputs"]["test_kernel.py"] == hashlib.sha256(
+        SOL_EVALUATOR_HARNESS.read_bytes()
+    ).hexdigest()
+    assert inputs["test_kernel.py"] == SOL_EVALUATOR_HARNESS.read_bytes()
+    assert not (workspace / "test_kernel.py").exists()
+    assert subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout == ""
 
 
 def test_agent_git_reincludes_cuda_manifest_candidate_metadata(tmp_path):
@@ -3856,6 +3932,69 @@ def test_publish_if_changed_skips_identical_projection_and_heals_changes(tmp_pat
     assert (workspace / "records/value.json").stat().st_mtime_ns == first
     assert publish_if_changed(workspace, "records/value.json", b"two") is True
     assert (workspace / "records/value.json").read_bytes() == b"two"
+
+
+def test_publish_pinned_if_changed_preserves_live_projection_inode(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    progress = workspace / "PROGRESS.md"
+
+    assert publish_pinned_if_changed(workspace, "PROGRESS.md", b"one\n") is True
+    inode = progress.stat().st_ino
+    assert publish_pinned_if_changed(workspace, "PROGRESS.md", b"two\n") is True
+
+    assert progress.stat().st_ino == inode
+    assert progress.read_bytes() == b"two\n"
+    assert publish_pinned_if_changed(workspace, "PROGRESS.md", b"two\n") is False
+
+
+@pytest.mark.parametrize("research_enabled", [False, True])
+def test_bwrap_overlays_all_managed_runtime_projections_read_only(
+    tmp_path, monkeypatch, research_enabled
+):
+    workspace = tmp_path / "workspace"
+    home = tmp_path / "session-home"
+    host_home = tmp_path / "operator-home"
+    research_library = workspace / "research-library"
+    records = workspace / "records"
+    progress = workspace / "PROGRESS.md"
+    for path in (workspace, home, host_home, records):
+        path.mkdir(parents=True, exist_ok=True)
+    if research_enabled:
+        research_library.mkdir()
+    progress.write_text("# Current state\n", encoding="utf-8")
+    monkeypatch.setattr(
+        "aka.light.agent.sandbox.sandbox_executable",
+        lambda _environment: "/usr/bin/bwrap",
+    )
+
+    launch, view = wrap_agent_command(
+        ["/usr/bin/true"],
+        workspace,
+        {
+            PREPARED_ENV: str(home),
+            HOST_HOME_ENV: str(host_home),
+            EPISODE_WORKSPACE_ENV: str(workspace),
+            "ATREX_EPISODE_PRIVATE_PATHS": "[]",
+            "ATREX_AGENT_SANDBOX": "bwrap",
+            "ATREX_AKA_RUNTIME_URL": "http://127.0.0.1:1",
+            "PATH": "/usr/bin:/bin",
+        },
+    )
+    try:
+        assert view is None
+        mounts = [
+            launch.command[index : index + 3]
+            for index in range(len(launch.command) - 2)
+        ]
+        assert ["--bind", str(workspace), str(workspace)] in mounts
+        expected = (records, progress) + ((research_library,) if research_enabled else ())
+        for projection in expected:
+            assert ["--ro-bind", str(projection), str(projection)] in mounts
+        if not research_enabled:
+            assert ["--ro-bind", str(research_library), str(research_library)] not in mounts
+    finally:
+        launch.close()
 
 
 def test_existing_trajectory_session_resumes_on_first_invocation(tmp_path):
@@ -5596,8 +5735,10 @@ def test_agent_git_kernel_discovery_skips_arbitrary_non_kernel_commits(tmp_path)
         "This engineering checkpoint is intentionally not a Kernel snapshot.\n",
         encoding="utf-8",
     )
+    # The tracked policy intentionally ignores non-Kernel workspace files. Force
+    # one historical malformed commit to exercise discovery's defensive path.
     subprocess.run(
-        ["git", "add", "design-notes.txt"], cwd=workspace, check=True
+        ["git", "add", "-f", "design-notes.txt"], cwd=workspace, check=True
     )
     subprocess.run(
         ["git", "commit", "-q", "-m", "checkpoint incomplete redesign"],
@@ -6547,3 +6688,48 @@ def test_pooled_search_rejects_pre_submitted_winner_checkpoint(tmp_path):
 
     with pytest.raises(ValueError, match="predates persistent submitted-winner sharing"):
         PooledSearch(root, options, Driver()).run()
+
+
+def test_light_writer_lease_does_not_initialize_campaign_workspace(tmp_path):
+    workspace = tmp_path / "campaign"
+
+    with campaign_writer_lease(workspace):
+        assert not workspace.exists()
+        with pytest.raises(
+            ValueError, match="AKA Light Campaign already has an active writer"
+        ), campaign_writer_lease(workspace):
+            pass
+
+    assert not workspace.exists()
+    assert not (workspace / ".atrex_long_horizon").exists()
+
+
+def test_light_startup_runs_without_legacy_campaign_state(tmp_path):
+    calls = []
+    campaign = SimpleNamespace(
+        execution=SimpleNamespace(uses_ssh=False),
+        prepare=lambda *, recovery_ready=None: calls.append(
+            ("prepare", recovery_ready)
+        ),
+        run=lambda: calls.append(("run", None)),
+    )
+    workflow = SimpleNamespace(_campaign=lambda request, problem: campaign)
+    request = CampaignRequest(
+        problem=ProblemSource(tmp_path / "problem"),
+        workspace=tmp_path / "campaign",
+        name="light-startup",
+        settings=WorkflowSettings(
+            platform="L20N",
+            framework="CUDA",
+            optimization_mode="ultra",
+        ),
+    )
+
+    result = LightWorkflowStartup(workflow)._run_campaign(
+        request, SimpleNamespace()
+    )
+
+    assert result == 0
+    assert calls == [("prepare", None), ("run", None)]
+    assert not request.workspace.exists()
+    assert not (request.workspace / ".atrex_long_horizon").exists()

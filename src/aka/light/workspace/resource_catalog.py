@@ -15,7 +15,9 @@ SHARED = {
     "tools/ncu_classification.py": "execution/profiling/nvidia/ncu_classification.py",
     "tools/compute_utilization.py": "execution/profiling/common/compute_utilization.py",
     "tools/extract_asm.py": "execution/profiling/amd/extract_asm.py",
-    "reference/test_kernel.py": "task/problem/sol_harness.py",
+    # Evaluator code is a private Runtime asset.  It must never be enumerated
+    # under the Agent-facing reference/ tree.
+    "private/sol_harness.py": "task/problem/sol_harness.py",
     "reference/v_iteration.schema.json": "workflow/resources/v_iteration.schema.json",
     "prompts/generalize_agent_problem.md": "task/problem/prompts/generalize_agent_problem.md",
     "tools/extract_ttgir.py": "execution/profiling/common/extract_ttgir.py",

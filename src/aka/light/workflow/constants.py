@@ -7,7 +7,10 @@ from __future__ import annotations
 
 from pathlib import Path
 from aka.legacy.evaluation.resources import profile_driver_script
-from aka.legacy.task.problem.resources import native_harness_script
+from aka.light.evaluation.private_harness import (
+    NATIVE_EVALUATOR_HARNESS as ATREX_BENCH_HARNESS,
+    SOL_EVALUATOR_HARNESS as SOL_HARNESS,
+)
 from aka.legacy.acceptance.review import (
     DEPENDENCY_REVIEW_SCHEMA_VERSION as DEPENDENCY_REVIEW_SCHEMA_VERSION,
 )
@@ -24,8 +27,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 PROMPTS_DIR = Path(__file__).resolve().parent / "prompts"
 WORKSPACE_INIT = resource("reference/workspace_init.sh")
 SOL_SEED = resource("reference/sol_seed.py")
-ATREX_BENCH_HARNESS = native_harness_script()
-SOL_HARNESS = resource("reference/test_kernel.py")
 PROFILE_DRIVER = profile_driver_script()
 SANDBOX_TOOL = REPO_ROOT / "evaluation" / "gateway.py"
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
@@ -45,7 +46,6 @@ DEFAULT_PROBLEM_GENERATION_TIMEOUT_S = 1_800
 ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 IMMUTABLE_BASELINE_PATHS = (
     "WORKSPACE.md",
-    "test_kernel.py",
     "config.json",
     "reference.py",
     "input.py",
@@ -56,11 +56,7 @@ IMMUTABLE_BASELINE_PATHS = (
     "workload.jsonl",
     "definition.json",
     "valid.py",
-    # The profiling entry lives outside kernel.py so no candidate rewrite can silently
-    # remove the ability to profile; it is ground truth like the evaluator harness.
-    "profile_driver.py",
 )
-TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
 NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda", "TileLang")
 AMD_FRAMEWORKS = ("Triton", "FlyDSL", "TileLang")

@@ -118,13 +118,7 @@ class WorkflowStartup:
 
     def _run_campaign(self, request, problem):
         from .public_state import campaign_lease
-        with campaign_lease(
-            request.workspace,
-            writer=True,
-            legacy_state=not bool(
-                getattr(self._workflow, "private_campaign_state", False)
-            ),
-        ):
+        with campaign_lease(request.workspace, writer=True):
             return self._run_campaign_with_lease(request, problem)
 
     def _run_campaign_with_lease(self, request, problem):

@@ -21,16 +21,13 @@ from aka.light.workspace.resource_catalog import resource
 
 from aka.light.workflow.constants import (
     AGENT_PROBLEM_GENERATION_PROMPT,
-    ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
     DEFAULT_VERIFY_REPEATS,
     DEPENDENCY_REVIEW_PROMPT,
     RESEARCH_CLAIM_REVIEW_PROMPT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
     DEFAULT_PROBLEM_GENERATION_TIMEOUT_S,
-    PROFILE_DRIVER,
     SOL_SEED,
-    TEST_RESULT_PREFIX,
     WORKSPACE_INIT,
 )
 from aka.light.execution.recovery import (
@@ -971,12 +968,12 @@ class Campaign:
         return ""
 
     def _generalized_contract_commit_problem(self) -> str:
-        """Require the public problem to be part of the immutable V0 history."""
+        """Keep the public evaluator contract outside Kernel-only Agent Git."""
         if self.private_reference_dir is None:
             return ""
         head = git_head(self.workspace)
-        if head and not git_path_blob(self.workspace, head, AGENT_PROBLEM_FILENAME):
-            return "agent_problem.json is not tracked by the V0 baseline commit"
+        if head and git_path_blob(self.workspace, head, AGENT_PROBLEM_FILENAME):
+            return "agent_problem.json must not be tracked by the V0 Kernel commit"
         return ""
 
     def _assert_generalized_inputs_are_private(self) -> None:
@@ -1530,37 +1527,6 @@ class Campaign:
             )
         raise ValueError("A canonical Atrex-Bench or SOL evaluator is required")
 
-    def _install_native_evaluator(self) -> None:
-        """Seed the immutable adapter used only by native Atrex-Bench shape campaigns."""
-        if not self.atrex_bench_root:
-            return
-        if not ATREX_BENCH_HARNESS.is_file():
-            raise FileNotFoundError(f"missing {ATREX_BENCH_HARNESS}")
-        shutil.copy2(ATREX_BENCH_HARNESS, self.workspace / "test_kernel.py")
-
-    def _install_profile_driver(self) -> None:
-        """Seed the immutable external profiling entry for every campaign layout.
-
-        Both profiler wrappers run ``python <file>``, so profiling needs a runnable script.
-        Keeping it out of ``kernel.py`` means a session that rewrites ``run()``/``Model``
-        cannot silently destroy profiling: an in-kernel ``__main__`` block would vanish with
-        the rewrite and the profiler would still exit 0 having captured nothing.
-        """
-        if not PROFILE_DRIVER.is_file():
-            raise FileNotFoundError(f"missing {PROFILE_DRIVER}")
-        shutil.copy2(PROFILE_DRIVER, self.workspace / "profile_driver.py")
-        # Stage it when a repository already exists so the baseline commit tracks it without
-        # depending on how the setup session stages files; restoring an immutable path needs
-        # a blob in the root commit.
-        if (self.workspace / ".git").exists():
-            subprocess.run(
-                ["git", "add", "profile_driver.py"],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
     def _sandbox_directive(self) -> str:
         return sandbox_directive(
             self.sandbox_hardware,
@@ -1605,17 +1571,7 @@ class Campaign:
             if source.is_file():
                 shutil.copy2(source, self.workspace / name)
         self._ensure_agent_problem()
-        if generalized:
-            # Seed the immutable public contract into the eventual V0 commit even when the
-            # baseline agent stages only its own implementation files.
-            subprocess.run(
-                ["git", "add", AGENT_PROBLEM_FILENAME],
-                cwd=str(self.workspace),
-                check=True,
-            )
         self._link_runtime()
-        self._install_native_evaluator()
-        self._install_profile_driver()
         # A native Atrex-Bench V0 is already materialized as the verbatim reference
         # wrapper.  Its evaluator and memory schemas are also supervisor-owned, so an
         # Agent session adds no implementation value here.  Commit the sources, run the
@@ -1698,7 +1654,12 @@ class Campaign:
             )
 
         def structured_payload(prefixes: tuple[str, ...]) -> tuple[str, dict] | None:
+            from aka.light.evaluation.result_json import parse_evaluation_result_line
+
             for line in reversed((test.stdout or "").splitlines()):
+                result = parse_evaluation_result_line(line)
+                if result is not None:
+                    return "evaluate", result
                 for prefix in prefixes:
                     if not line.startswith(prefix):
                         continue
@@ -1711,12 +1672,12 @@ class Campaign:
             return None
 
         structured = structured_payload(
-            (TEST_RESULT_PREFIX, GATEWAY_ERROR_PREFIX, SOURCE_ERROR_PREFIX)
+            (GATEWAY_ERROR_PREFIX, SOURCE_ERROR_PREFIX)
         )
         summary: dict[str, object] = {"exit_code": test.returncode}
         if structured is not None:
             prefix, payload = structured
-            if prefix == TEST_RESULT_PREFIX:
+            if prefix == "evaluate":
                 all_pass = payload.get("all_pass")
                 summary["status"] = (
                     "passed" if test.returncode == 0 and all_pass is True else "failed"
@@ -1806,7 +1767,7 @@ class Campaign:
                     self.sandbox_profile,
                     self.sandbox_url,
                     self.sandbox_timeout,
-                    ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
+                    [],
                     ssh=self.sandbox_ssh,
                     ssh_init=self.sandbox_ssh_init,
                     health_command=self.sandbox_health_command,
@@ -1916,24 +1877,11 @@ class Campaign:
         (self.workspace / "README.md").write_text(
             self._native_v0_readme(generalized=generalized), encoding="utf-8"
         )
-        source_paths = [
-            ".gitignore",
-            "CLAUDE.md",
-            "README.md",
-            "kernel.py",
-            "test_kernel.py",
-            "profile_driver.py",
-            *agent_visible_operator_files(op_dir, generalized=generalized),
-        ]
-        from aka.light.workspace.sources import snapshot as source_snapshot, read
-        source_paths += list(read(self.workspace).materialized_files)
-        source_paths = list(
-            dict.fromkeys(
-                path for path in source_paths if (self.workspace / path).is_file()
-            )
-        )
+        from aka.light.workspace.sources import commit_paths
+        from aka.light.workspace.sources import snapshot as source_snapshot
+        source_paths = [".gitignore", *commit_paths(self.workspace)]
         subprocess.run(
-            ["git", "add", *source_paths], cwd=str(self.workspace), check=True
+            ["git", "add", "--", *source_paths], cwd=str(self.workspace), check=True
         )
         if (
             subprocess.run(
@@ -1993,9 +1941,6 @@ class Campaign:
             self.framework,
             "--platform",
             self.platform,
-            # The local step only materializes sources and git state.  GPU
-            # correctness/performance is run below in the remote sandbox.
-            "--no-bench",
         ]
         subprocess.run(cmd, check=True)
         self._link_runtime()

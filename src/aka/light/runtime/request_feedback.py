@@ -265,17 +265,16 @@ def gateway_schema(kind, parser):
     command_contract = {
         "run": (
             "Optional argv after --; without it Runtime executes the trusted "
-            "python3 test_kernel.py evaluator."
+            "private evaluator."
         ),
         "profile": (
-            "Optional argv after --; without it Runtime executes the trusted "
-            "python3 profile_driver.py entry point."
+            "Optional argv after --; without it Runtime profiles the current Kernel "
+            "using the standard campaign input."
         ),
         "dev": (
-            "Optional argv after --; without it Runtime runs python3 test_kernel.py --no-memory "
-            "through stateless Dev, which is not official Evaluate evidence. For a custom probe, "
-            "provide explicit argv, declare every extra workspace input with --input, and request "
-            "returned files with --sync."
+            "Required custom probe argv after --. Stateless Dev is not official Evaluate "
+            "evidence; declare every extra workspace input with --input and request returned "
+            "files with --sync."
         ),
         "command": (
             "Required argv after --; uploads a bounded Agent-visible workspace engineering "

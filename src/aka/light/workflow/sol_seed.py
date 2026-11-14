@@ -20,23 +20,21 @@ The op dir is the *ground truth*: `definition.json`, `reference.py`,
 The V0 baseline is a correct, immediately-submittable SOL solution: a
 destination-passing-style `run()` in `kernel.py` that wraps the reference logic.
 Every workload's shapes, dtypes, input generation and per-workload tolerances
-come straight from the SOL files, so a PASS in this workspace == a submittable
-solution (validated by the same `sol-execbench` evaluator via `test_kernel.py`).
+come straight from the SOL files. The Supervisor measures V0 afterward through
+the Runtime-private SOL evaluator.
 
 Produces (under `kernel_opt_<name>/`):
     definition.json, reference.py, workload.jsonl   # ground truth (verbatim)
     config.json         # pinned seed/warmup/iterations/benchmark_reference
     kernel.py           # V0: self-contained DPS wrapper around the reference
     solution.json       # SOL solution (sources reference kernel.py by path)
-    test_kernel.py      # the immutable SOL harness (copied from reference/)
-    profile_driver.py   # the immutable external profiling entry (copied from reference/)
     CLAUDE.md           # agent constraints (copied from reference/)
     README.md, .gitignore
     # V0 metrics are stored under the Supervisor-private runtime root.
 
 Usage:
     python reference/sol_seed.py --op-dir <sol-op-dir> --name <name> \
-        [--framework pytorch] [--platform B200] [--no-bench]
+        [--framework pytorch] [--platform B200]
 """
 
 from __future__ import annotations
@@ -50,7 +48,6 @@ from pathlib import Path
 
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-from aka.legacy.evaluation.resources import profile_driver_script
 
 from aka.light.workspace.agent_git import gitignore_contents
 from aka.light.workspace.resource_catalog import resource
@@ -89,9 +86,8 @@ def _build_kernel(defn: dict) -> str:
     return header
 
 
-# Profiling is driven by the external `profile_driver.py` seeded next to kernel.py.
-# It is deliberately NOT injected into kernel.py: ncu/rocprofv3 run `python <file>`, and an
-# in-kernel `__main__` block is silently lost the first time a session rewrites run().
+# Profiling is driven by a trusted harness that Runtime injects only into the
+# transient remote request workspace. It is not part of the Agent source tree.
 
 
 def _render_kernel(defn: dict, reference_src: str) -> str:
@@ -161,11 +157,6 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--workspace", default="", help="Explicit workspace path (default: ./kernel_opt_<name>).")
     ap.add_argument("--framework", default="pytorch", help="Target framework the loop should migrate to.")
     ap.add_argument("--platform", default="LOCAL", help="Target hardware token, e.g. B200 (default: LOCAL).")
-    ap.add_argument("--no-bench", action="store_true", help="Skip the V0 test_kernel.py bench.")
-    ap.add_argument("--skip-bench-if-v0-exists", action="store_true",
-                    help="If private V0 evidence already exists (e.g. from recovery), "
-                         "skip the V0 bench step entirely. Used to unblock the optimizer "
-                         "for ops whose torch reference is too slow to bench within a reasonable budget.")
     args = ap.parse_args(argv)
 
     op = Path(args.op_dir).resolve()
@@ -175,7 +166,10 @@ def main(argv: list[str] | None = None) -> int:
     defn = json.loads((op / "definition.json").read_text(encoding="utf-8"))
 
     ws = Path(args.workspace).resolve() if args.workspace else (Path.cwd() / f"kernel_opt_{args.name}")
-    if args.no_bench and (ws / ".git").exists():
+    # Retire the old Agent-visible evaluator before either reuse or creation.
+    # Runtime injects the trusted harness only into an ephemeral request tree.
+    (ws / "test_kernel.py").unlink(missing_ok=True)
+    if (ws / ".git").exists():
         history = subprocess.run(
             ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
             cwd=str(ws), capture_output=True, text=True,
@@ -189,10 +183,7 @@ def main(argv: list[str] | None = None) -> int:
                 ["git", "diff", "--cached", "--quiet"], cwd=str(ws),
             ).returncode != 0:
                 raise SystemExit("refusing to reseed V0 with staged changes")
-            for name in (
-                *GROUND_TRUTH, "config.json", "kernel.py", "solution.json",
-                "test_kernel.py", "profile_driver.py",
-            ):
+            for name in (".gitignore", "kernel.py"):
                 original = subprocess.run(
                     ["git", "show", f"{source_commit}:{name}"],
                     cwd=str(ws), capture_output=True, check=True,
@@ -233,11 +224,7 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(_solution_json(defn, args.name, args.framework, args.platform), indent=2) + "\n", encoding="utf-8"
     )
 
-    # 4) harness + constraints + docs (copied from reference/)
-    (ws / "test_kernel.py").write_text(resource("reference/test_kernel.py").read_text(encoding="utf-8"), encoding="utf-8")
-    (ws / "profile_driver.py").write_text(
-        profile_driver_script().read_text(encoding="utf-8"), encoding="utf-8"
-    )
+    # 4) Agent constraints and docs. The evaluator harness is Runtime-private.
     claude = SCRIPT_DIR / "CLAUDE.md"
     if claude.exists():
         (ws / "CLAUDE.md").write_text(claude.read_text(encoding="utf-8"), encoding="utf-8")
@@ -245,74 +232,17 @@ def main(argv: list[str] | None = None) -> int:
     (ws / "README.md").write_text(_readme(args.name, defn, args.framework, args.platform, n_wl), encoding="utf-8")
     (ws / ".gitignore").write_text(GITIGNORE, encoding="utf-8")
 
-    # 5) V0 reference metrics (real evaluator). The completed response is
-    # sealed into the Campaign Measurement Store after its source commit exists.
-    from aka.light.workspace.baseline import read_baseline_record
-    pre_existing_v0 = read_baseline_record(ws) is not None and args.skip_bench_if_v0_exists
-    v0_result = None
-    v0_process = None
-    if pre_existing_v0:
-        print("[sol_seed] skipping V0 bench — private evidence already exists; "
-              "ground-truth files refreshed in-place.", file=sys.stderr)
-    elif not args.no_bench:
-        r = subprocess.run(
-            [sys.executable, str(ws / "test_kernel.py"), "--version", "v0", "--no-memory"],
-            cwd=str(ws), capture_output=True, text=True,
-        )
-        if r.stdout:
-            print(r.stdout, end="" if r.stdout.endswith("\n") else "\n")
-        if r.stderr:
-            print(r.stderr, end="" if r.stderr.endswith("\n") else "\n", file=sys.stderr)
-        if r.returncode != 0:
-            print("[sol_seed] WARNING: V0 baseline did not pass all workloads — check solution.json / reference.",
-                  file=sys.stderr)
-        else:
-            from aka.light.workflow.session_io import _test_result_from_stdout
-            v0_result = _test_result_from_stdout(r.stdout)
-            v0_process = r
-
-    # 6) Git source commit. Keep memory out of this commit so its stable SHA can
-    # be recorded without an impossible self-referential amend loop.
+    # 5) Git source commit. V0 evidence is produced later through Runtime, so its
+    # private harness and result never enter this repository.
     if not (ws / ".git").exists():
         subprocess.run(["git", "init"], cwd=str(ws), check=True, stdout=subprocess.DEVNULL)
         subprocess.run(["git", "config", "user.email", "gpu-kernel-optimizer@local"], cwd=str(ws), check=True)
         subprocess.run(["git", "config", "user.name", "GPU Kernel Optimizer"], cwd=str(ws), check=True)
-    source_paths = [
-        *GROUND_TRUTH,
-        "config.json",
-        "kernel.py",
-        "solution.json",
-        "test_kernel.py",
-        "profile_driver.py",
-        "README.md",
-        ".gitignore",
-    ]
-    if (ws / "CLAUDE.md").is_file():
-        source_paths.append("CLAUDE.md")
-    subprocess.run(["git", "add", *source_paths], cwd=str(ws), check=True)
+    from aka.light.workspace.agent_git import kernel_git_paths
+    source_paths = kernel_git_paths(ws)
+    subprocess.run(["git", "add", "--", *source_paths], cwd=str(ws), check=True)
     subprocess.run(["git", "commit", "-m", "V0: baseline (SOL reference wrapper)"], cwd=str(ws), check=True,
                    stdout=subprocess.DEVNULL)
-    # 7) Record V0 as an ordinary immutable Gateway Measurement. Git remains at
-    # the source commit and no separate baseline directory is created.
-    if v0_result is not None:
-        h = subprocess.run(["git", "rev-parse", "HEAD"], cwd=str(ws), capture_output=True, text=True).stdout.strip()
-        from aka.light.experiment.store import DuplicateTask
-        from aka.light.workspace.baseline import baseline_measurement_spec
-
-        store, request, kernels = baseline_measurement_spec(ws, h)
-        try:
-            with store.reserve(request, kernels) as task:
-                task.finish(
-                    {
-                        "exit_code": v0_process.returncode,
-                        "stdout": v0_process.stdout,
-                        "stderr": v0_process.stderr,
-                    },
-                    cacheable=True,
-                )
-        except DuplicateTask:
-            pass
-
     print(f"[sol_seed] workspace ready: {ws}")
     return 0
 

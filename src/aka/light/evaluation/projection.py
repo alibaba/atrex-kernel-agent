@@ -10,6 +10,10 @@ from aka.light.runtime.request_errors import error_response
 from aka.light.execution.gateway_jobs import submission_rejection
 from aka.light.evaluation.evaluation_feedback import project_feedback, merge_feedback, bound_feedback
 from aka.light.evaluation.public_result import correctness_summary
+from aka.light.evaluation.result_json import (
+    LEGACY_TEST_RESULT_PREFIX,
+    parse_evaluation_result_line,
+)
 from aka.light.evaluation.response_policy import (
     KNOWN_GATEWAY_ERROR_CLASSES,
     known_gateway_error,
@@ -1029,7 +1033,7 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
     hide_shapes = generalized and not wiki and not public_dev
     projected = []
     formatters = {
-        "[test_kernel] RESULT_JSON=": evaluation,
+        LEGACY_TEST_RESULT_PREFIX: evaluation,
         "[sandbox] PROFILE_JSON=": lambda value: profile_result(
             value, generalized=generalized
         ),
@@ -1046,6 +1050,22 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
     }
     json_marker = re.compile(r"^(\[[^\]\r\n]+\]\s+[A-Za-z0-9_]+_JSON=)")
     for line in stdout.splitlines():
+        direct_evaluation = (
+            parse_evaluation_result_line(line)
+            if operation in {"evaluate", "run", "dev"}
+            else None
+        )
+        if direct_evaluation is not None:
+            value = evaluation(direct_evaluation)
+            value = redact_diagnostics(
+                value,
+                private_paths=private_paths,
+                private_values=private_values,
+            )
+            if hide_shapes:
+                value = redact_hidden_shapes(value)
+            projected.append(json.dumps(value, ensure_ascii=False))
+            continue
         prefix = next(
             (candidate for candidate in formatters if line.startswith(candidate)),
             None,
@@ -1068,7 +1088,12 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                 )
                 if hide_shapes:
                     value = redact_hidden_shapes(value)
-                projected.append(prefix + json.dumps(value, ensure_ascii=False))
+                encoded = json.dumps(value, ensure_ascii=False)
+                projected.append(
+                    encoded
+                    if prefix == LEGACY_TEST_RESULT_PREFIX
+                    else prefix + encoded
+                )
             except (ValueError, TypeError, RecursionError, OverflowError):
                 line = redact_diagnostics(
                     line,

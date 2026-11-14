@@ -26,13 +26,12 @@ invocation is stateless; callers must not rely on remote filesystem persistence.
 
 Examples::
 
-    python tools/sandbox.py --kind run --hardware REMOTE_GPU --no-sync -- python test_kernel.py --no-memory
+    python tools/sandbox.py --kind run --hardware REMOTE_GPU --no-sync
     python tools/sandbox.py --kind profile --hardware REMOTE_GPU --sync profiles/v1 -- \
         bash tools/profile_nvidia.sh profile_driver.py --output-dir profiles/v1 --source
     python tools/sandbox.py --kind profile --hardware REMOTE_ACCELERATOR --gateway-profile pre --sync profiles/v1 -- \
         bash tools/profile_kernel.sh profile_driver.py --output-dir profiles/v1
-    python tools/sandbox.py --kind run --hardware H20 --ssh gpu-host --no-sync -- \
-        python test_kernel.py --no-memory
+    python tools/sandbox.py --kind run --hardware H20 --ssh gpu-host --no-sync
 
 ``ATREX_SANDBOX_GPU``, ``ATREX_SANDBOX_PROFILE``, ``ATREX_SANDBOX_URL``,
 ``ATREX_SANDBOX_SSH_GPU``, and ``ATREX_SANDBOX_TIMEOUT`` provide defaults for
@@ -170,6 +169,10 @@ from aka.light.evaluation.evaluation_feedback import (
     optimizer_result_with_feedback as _optimizer_result_from_eval,
     merge_results_with_feedback as _merge_optimizer_results,
 )
+from aka.light.evaluation.result_json import (
+    evaluation_result_json,
+    parse_evaluation_result_line,
+)
 
 DEFAULT_SYNC_PATHS = ("profiles",)
 COMMAND_SYNC_PATHS = ("scratch",)
@@ -305,7 +308,6 @@ NVIDIA_PROFILE_TOOL_INPUT_PATHS = frozenset(
 )
 AMD_PROFILE_TOOL_INPUT_PATHS = frozenset({"tools/profile_kernel.sh"})
 OUTPUT_PATH_FLAGS = frozenset({"-o", "--output", "--output-dir"})
-TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 PROFILE_RESULT_PREFIX = "[sandbox] PROFILE_JSON="
 DIAGNOSTIC_KINDS = frozenset({"check", "disassemble"})
@@ -975,6 +977,13 @@ def _private_evaluator_inputs(workspace: Path, *, environment=None) -> dict[str,
         if path.is_file():
             inputs[filename] = path
     return inputs
+
+
+def _runtime_evaluator_inputs(workspace: Path) -> dict[str, Path]:
+    """Return private execution assets that never live in the Agent workspace."""
+    from aka.light.evaluation.private_harness import evaluator_harness
+
+    return {"test_kernel.py": evaluator_harness(workspace)}
 
 
 def shape_id_sort_key(shape_id: str) -> tuple[int, object]:
@@ -1745,7 +1754,7 @@ def build_parser(parser_class=argparse.ArgumentParser) -> argparse.ArgumentParse
         choices=("auto", "run", "profile", "dev", "command", "check", "disassemble", "env"),
         default="auto",
         help=(
-            "Gateway interface to use. auto routes test_kernel.py to run, profiler "
+            "Gateway interface to use. auto routes the private evaluator to run, profiler "
             "wrappers to profile, and other commands to dev (default: auto). Typed "
             "jobs fall back to dev only when their source contract is unsupported. "
             "command uploads a bounded engineering projection of the Agent workspace and returns scratch/."
@@ -3071,19 +3080,14 @@ def _record_episode_evaluation(
 
 
 def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> None:
-    """Record the last ordinary RESULT_JSON emitted by a dev evaluator command."""
+    """Record the last structured result emitted by a dev evaluator command."""
     for line in reversed(stdout.splitlines()):
-        if not line.startswith(TEST_RESULT_PREFIX):
-            continue
-        try:
-            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
-        except json.JSONDecodeError:
-            return
-        if isinstance(result, dict):
+        result = parse_evaluation_result_line(line)
+        if result is not None:
             _record_episode_evaluation(
                 workspace, result, gateway_kind=gateway_kind
             )
-        return
+            return
 
 
 def _positive_number(value: object) -> float | None:
@@ -3148,23 +3152,13 @@ def _hydrate_result_lines(workspace: Path, stdout: str) -> str:
     """Return ordinary dev evaluator output with the shared score contract."""
     normalized: list[str] = []
     for line in stdout.splitlines():
-        if not line.startswith(TEST_RESULT_PREFIX):
-            normalized.append(line)
-            continue
-        try:
-            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
-        except json.JSONDecodeError:
-            normalized.append(line)
-            continue
-        if not isinstance(result, dict):
+        result = parse_evaluation_result_line(line)
+        if result is None:
             normalized.append(line)
             continue
         normalized.append(
-            TEST_RESULT_PREFIX
-            + json.dumps(
-                _with_workspace_performance_score(workspace, result),
-                ensure_ascii=False,
-                allow_nan=False,
+            evaluation_result_json(
+                _with_workspace_performance_score(workspace, result)
             )
         )
     return "\n".join(normalized)
@@ -3292,9 +3286,7 @@ def validate_evaluation_options(args: argparse.Namespace) -> None:
     if args.command not in ([], ["--"]):
         raise ValueError(
             f"Top-level {names} cannot be combined with an explicit command. "
-            "Omit the command to use the evaluator shorthand, or move these options "
-            "after test_kernel.py in the explicit command, e.g. "
-            "--kind run -- python3 test_kernel.py --timed-runs 100 --no-memory. "
+            "Omit the command and use the Runtime evaluator shorthand. "
             "Do not specify evaluator controls in both places."
         )
 
@@ -3666,9 +3658,7 @@ def _run_typed_gateway(
             gateway_kind=kind,
             job_id=",".join(str(job.get("job_id")) for job in jobs),
         )
-        print(
-            TEST_RESULT_PREFIX + json.dumps(result, ensure_ascii=False, allow_nan=False)
-        )
+        print(evaluation_result_json(result))
         return 0 if result["all_pass"] else 1
 
     profile_job = dict(jobs[0], result=dict(jobs[0]["result"], shape_id=request["shape_id"]))
@@ -3832,10 +3822,11 @@ def _main(argv: list[str] | None = None) -> int:
         raise SystemExit(f"sandbox: workspace not found: {workspace}")
     if _is_unsafe_target_command(args.command):
         raise SystemExit(
-            "sandbox: evaluator and profile targets require a direct command after --, "
-            "such as python3 test_kernel.py, python3 profile_driver.py, or "
+            "sandbox: private evaluator and profile targets cannot be wrapped in "
+            "env, timeout, or shell -c. Use --kind run without an evaluator path, or "
+            "a direct profile command such as python3 profile_driver.py or "
             "bash tools/profile_nvidia.sh profile_driver.py; do not wrap them in "
-            "env, timeout, or shell -c"
+            "another command"
         )
 
     gateway_kind = _requested_gateway_kind(args.kind, args.command)
@@ -3962,7 +3953,16 @@ def _main(argv: list[str] | None = None) -> int:
             raise SystemExit(f"sandbox: {exc}") from exc
     try:
         injected_inputs = (
-            _private_evaluator_inputs(workspace) if evaluator_command else {}
+            {
+                **_private_evaluator_inputs(workspace),
+                **(
+                    _runtime_evaluator_inputs(workspace)
+                    if _is_test_kernel_command(args.command)
+                    else {}
+                ),
+            }
+            if evaluator_command
+            else {}
         )
         injected_payloads: dict[str, bytes] = {}
         if profile_command and _is_generalized_workspace(workspace):
@@ -4282,8 +4282,10 @@ def _main(argv: list[str] | None = None) -> int:
                     # and remote exit code because one receipt is malformed.
                     continue
                 projected.append(line)
-            elif not hide_evaluator_details or line.startswith(
-                (TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX)
+            elif (
+                not hide_evaluator_details
+                or line.startswith(ABBA_RESULT_PREFIX)
+                or parse_evaluation_result_line(line) is not None
             ):
                 projected.append(line)
         command_stdout = "\n".join(projected)
@@ -4350,10 +4352,15 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
                  "definition.json", "workload.jsonl", "solution.json", "config.json"):
         if (workspace / name).is_file():
             selected.add(name)
+    trusted_inputs = (
+        _runtime_evaluator_inputs(workspace)
+        if _is_test_kernel_command(command)
+        else {}
+    )
     files = {}
     for name in sorted(selected):
-        path = private.get(name, workspace / name)
-        trusted_resource = False
+        path = trusted_inputs.get(name, private.get(name, workspace / name))
+        trusted_resource = name in trusted_inputs
         if not path.is_file() and name.startswith("tools/"):
             # Full-workspace Command materializes safe Runtime-owned tools that
             # are intentionally not copied into the staged Agent snapshot. Bind
