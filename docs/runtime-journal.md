@@ -7,8 +7,8 @@ Session updates the lineage `state.json` audit boundary only; there is no handof
 terminal promotion transaction.
 
 Research validation reads the central Research Store directly through an in-memory snapshot.
-Current Light creates no temporary or persistent `research-transaction.json`, does not inspect
-legacy `.atrex_long_horizon/journal.json`, and does not migrate either format.
+Current Light creates no temporary or persistent `research-transaction.json`; Campaign and
+Episode state exists only in the Supervisor-private Campaign directory.
 
 ## Agent operations
 

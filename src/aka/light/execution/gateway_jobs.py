@@ -14,6 +14,7 @@ import sys
 import time
 import tarfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
 from aka.light.experiment.store import (
@@ -465,6 +466,7 @@ def execute_job(
     max_device_retries: int | None = None,
     device_retry_delay: float | None = None,
     max_wait_retries: int = 1,
+    capture_phase_observations: bool = False,
 ) -> subprocess.CompletedProcess:
     """Persist each submission and return a bounded collection timeout.
 
@@ -515,6 +517,11 @@ def execute_job(
         for value in state.get("runtime_request_ids", [])
         if isinstance(value, str) and value
     ]
+    phase_observations = [
+        dict(value)
+        for value in state.get("phase_observations", [])
+        if isinstance(value, dict)
+    ]
     current_runtime_request_id = os.environ.get(RUNTIME_REQUEST_ID_ENV)
     if current_runtime_request_id and current_runtime_request_id not in runtime_request_ids:
         runtime_request_ids.append(current_runtime_request_id)
@@ -528,6 +535,8 @@ def execute_job(
             value["runtime_request_ids"] = runtime_request_ids
         if idempotent_submission:
             value["idempotency_key"] = wire_key
+        if phase_observations:
+            value["phase_observations"] = phase_observations
         if process is not None:
             value["process"] = {"returncode": process.returncode, "stdout": process.stdout, "stderr": process.stderr}
         if directory:
@@ -535,6 +544,64 @@ def execute_job(
             if process is not None:
                 private_write(directory / f"submission-{submission:04d}-{phase}.json", value)
         return value
+
+    def observe_job(job: object) -> None:
+        """Persist bounded Agate phase facts without copying job result data."""
+        nonlocal state, phase_observations
+        if not capture_phase_observations or not isinstance(job, dict):
+            return
+        job_id = job.get("job_id")
+        status = job.get("status")
+        execution_phase = job.get("execution_phase")
+        if not isinstance(job_id, str) or not job_id or not isinstance(status, str):
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        signature = (job_id, status, execution_phase)
+        previous = phase_observations[-1] if phase_observations else None
+        previous_signature = (
+            previous.get("job_id"),
+            previous.get("status"),
+            previous.get("execution_phase"),
+        ) if isinstance(previous, dict) else None
+        changed = False
+        if previous_signature == signature:
+            # The first observation already determines this phase boundary.
+            # Fill formerly absent server facts once, but do not rewrite the
+            # checkpoint on every two-second SDK poll.
+            if previous.get("agate_updated_at") is None and job.get("updated_at") is not None:
+                previous["agate_updated_at"] = job["updated_at"]
+                changed = True
+            elapsed = job.get("phase_elapsed_ms")
+            if (
+                previous.get("phase_elapsed_ms") is None
+                and type(elapsed) in {int, float}
+                and elapsed >= 0
+            ):
+                previous["phase_elapsed_ms"] = elapsed
+                changed = True
+        else:
+            observation = {
+                "job_id": job_id,
+                "status": status,
+                "execution_phase": (
+                    execution_phase if isinstance(execution_phase, str) else None
+                ),
+                "first_observed_at": now,
+            }
+            if job.get("updated_at") is not None:
+                observation["agate_updated_at"] = job["updated_at"]
+            elapsed = job.get("phase_elapsed_ms")
+            if type(elapsed) in {int, float} and elapsed >= 0:
+                observation["phase_elapsed_ms"] = elapsed
+            phase_observations.append(observation)
+            # A physical submission has only a small number of status/phase
+            # transitions. Keep a defensive bound for independently evolving
+            # Agate execution phases.
+            phase_observations = phase_observations[-128:]
+            changed = True
+        if directory and changed:
+            state = {**state, "phase_observations": phase_observations}
+            private_write(directory / "state.json", state)
 
     def saved_job_id() -> str | None:
         data = state.get("process")
@@ -618,6 +685,7 @@ def execute_job(
                 process = subprocess.CompletedProcess([], data["returncode"], data["stdout"], data["stderr"])
             else:
                 submission += 1
+                phase_observations = []
                 save("submitting")
                 try:
                     process = submit(wire_key) if idempotent_submission else submit()
@@ -660,10 +728,13 @@ def execute_job(
                 recovery_probe = probe_saved_job
                 probe_saved_job = False
                 try:
+                    poll_options = {"recovery_probe": recovery_probe}
+                    if capture_phase_observations:
+                        poll_options["observation_callback"] = observe_job
                     process = poll(
                         process,
                         max(1, int(deadline - time.monotonic())),
-                        recovery_probe=recovery_probe,
+                        **poll_options,
                     )
                 except AcceptedJobMissing as error:
                     if retry_wait(previous_job_id=error.job_id):

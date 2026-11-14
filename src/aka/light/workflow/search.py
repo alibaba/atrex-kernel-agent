@@ -11,7 +11,7 @@ trajectory back.
 from __future__ import annotations
 
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 import fcntl
 import json
 import os
@@ -179,6 +179,12 @@ class PooledSearch:
         self.path = root / COORDINATOR_STATE
 
     def _save(self, state):
+        # coordinator.json is the authoritative scheduler checkpoint.  Keep the
+        # immutable launch options beside its mutable progress so read-only
+        # observability does not need to infer the Campaign configuration from
+        # whichever jobs happen to be active at the time of inspection.
+        state["options"] = asdict(self.options)
+        state["token_budget"] = self.token_budget
         durable_write_json(self.path, state)
 
     def run(self) -> str:

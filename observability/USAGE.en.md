@@ -22,7 +22,10 @@ The commands discover serial Campaign state and pooled-search trajectories such 
 Pooled search has one Campaign-private state tree. Lineage-specific Research, Sessions,
 and Runtime audits are namespaced below `lineages/tNNNN/`; immutable Gateway Records are stored
 once in the Campaign Measurement Store. Observability attributes central Records to their
-originating lineage from Runtime audits instead of counting shared evidence as local copies.
+originating lineage from Runtime audits instead of counting shared evidence as local copies. When
+a peer lineage reuses a central Record, its original `runtime_request_id` is resolved across all
+Campaign audit namespaces; the consumer needs only its own audit that references the Record and
+does not duplicate the creator's audit.
 
 - Six status/query commands are read-only. They never submit, retry, cancel, or mutate Runtime or
   Agate work.
@@ -135,13 +138,26 @@ Infrastructure, transport, and queue failures are not candidate correctness fail
 | Field | Exact definition |
 |---|---|
 | Runtime `duration_seconds` | Runtime request receipt-to-terminal end-to-end time |
-| Agate `queue_seconds` | Agate `created_at → started_at`; queue time only |
-| Agate `execution_seconds` | Agate `started_at → finished_at` |
+| Agate `queue_seconds` | Agate `created_at → started_at`; a persisted running-phase boundary may be used when native `started_at` is absent |
+| Agate `execution_seconds` | Agate `started_at → finished_at`; uses the same phase boundary as `queue_seconds` |
 | Agate `total_seconds` | Agate `created_at → finished_at`; submission-to-terminal time |
 | `pending_age_seconds` | Age from the known start/submission timestamp to this observation |
 
 `waiting_seconds` and `average_waiting_seconds` are compatibility aliases for `queue_seconds`.
 They are not Runtime end-to-end wait times.
+
+Each timing field has a companion `*_source`; summaries expose `*_source_counts`:
+
+- `agate_started_at`: native Agate `started_at`;
+- `agate_phase_elapsed`: phase boundary derived from persisted `updated_at - phase_elapsed_ms`;
+- `agate_running_updated_at`: Agate `updated_at` from the first observed running snapshot;
+- `runtime_observed_running`: local first-running observation, whose precision is bounded by the poll interval;
+- `agate_created_finished`: native Agate `created_at → finished_at`.
+
+New SDK requests privately persist queued/running/terminal observations so phase timing remains
+available when the terminal Agate payload omits `started_at`. Historical checkpoints without those
+facts keep `queue_seconds` and `execution_seconds` as `null`; the tool never invents a split from
+`total_seconds`.
 
 Aggregates only use persisted timing samples:
 
@@ -192,8 +208,9 @@ measurement failed.
 - `unresolvable_kernel_commits`: an accepted commit cannot be resolved from saved Agent Git/source
   artifacts.
 - `unlinked_runtime_audits`: a Runtime receipt references a missing Gateway Record.
-- `gateway_records_missing_runtime_audit`: a new-format Gateway Record has a Runtime request ID but its
-  Runtime receipt is missing.
+- `gateway_records_missing_runtime_audit`: a new-format Gateway Record has an original Runtime
+  request ID, but no creator receipt exists in any Campaign lineage. Each issue includes the
+  `gateway_record_id` and `visible_scopes`; peer reuse alone is not a missing-audit condition.
 
 Old Campaigns may not contain stable request IDs or token checkpoints. The tools report those gaps
 instead of joining unrelated records by timestamp.
@@ -213,7 +230,7 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
 
 | Option | Default | Meaning |
 |---|---:|---|
-| `--stale-after SECONDS` | `600` | Classify a lock-owning lineage as `running_no_recent_activity` after this age; does not stop it |
+| `--stale-after SECONDS` | `600` | Classify a lock-owning lineage with no active Supervisor request as `running_no_recent_activity` after this age; does not stop it |
 | `--lineage NAME` | all | Return only this scope; repeatable |
 | `--research-limit N` | `50` | Maximum Direction rows and Experiment rows per lineage; positive integer |
 | `--all-research` | off | Return every Direction and Experiment; overrides the limit |
@@ -242,10 +259,18 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
         "completed_episodes": 1,
         "latest_activity_at": "...",
         "stagnation_seconds": 14.2,
+        "main_session_silence_seconds": 14.2,
         "active_session_count": 1,
         "active_sessions": [
           {"phase": "waiting_agate", "tool": "evaluate", "activity_state": "recent_activity"}
-        ]
+        ],
+        "active_supervisor_activity_count": 1,
+        "supervisor_activity": {
+          "phase": "claim_review",
+          "operation": "record-experiment",
+          "state": "running",
+          "elapsed_seconds": 1842.0
+        }
       },
       "runtime_configuration": {"optimization_mode": "ultra", "hardware": "L20D"},
       "research": {
@@ -277,9 +302,20 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
 
 - `writer_active` is the direct current-execution authority. If it is false, the trajectory
   must not be reported as running.
-- `liveness` is `running_recent_activity`, `running_no_recent_activity`, or `not_running`.
+- `liveness` is `running_recent_activity`, `running_supervisor_activity`,
+  `running_no_recent_activity`, or `not_running`. `running_supervisor_activity` means the main
+  Session may be quiet while an authoritative Runtime request is still executing, so a long Claim
+  Review is not misreported as lineage stagnation.
 - Campaign `phase` describes the controller. Session phase is typically `thinking`,
-  `executing_tool`, `executing_runtime_tool`, `waiting_agate`, or `waiting_wiki`.
+  `executing_tool`, `executing_runtime_tool`, `waiting_agate`, or `waiting_wiki`. A former
+  `thinking` phase with no Provider event beyond the stale threshold is reported as
+  `provider_wait_unknown` rather than claiming continuous reasoning.
+- `main_session_silence_seconds` preserves the main Agent Session's time since its last event even
+  while the Supervisor is reviewing, separating Session silence from whole-lineage inactivity.
+- `supervisor_activity` is the latest or current authoritative Runtime request. Active entries carry
+  the operation, state, and elapsed time; long `record-experiment` / `update-direction` requests are
+  projected as `claim_review`. A completed background Runtime request also advances the lineage's
+  newest durable activity.
 - `runtime_configuration` is the actual saved Runtime configuration, including mode, hardware,
   timeouts, and Shape batching. Prefer it over reconstructing settings from a launch command.
   Current Campaigns read it from top-level `campaign.json`; detached `runtime-config.json` is a
@@ -543,8 +579,11 @@ With no selector, `calls=[]`; `summary` remains Campaign-wide.
       "p95_queue_seconds": 44.0,
       "queue_seconds_samples": 15,
       "queue_seconds_coverage": 0.8333,
+      "queue_seconds_source_counts": {"agate_phase_elapsed": 15},
       "average_execution_seconds": 60.0,
+      "execution_seconds_source_counts": {"agate_phase_elapsed": 15},
       "average_total_seconds": 72.0,
+      "total_seconds_source_counts": {"agate_created_finished": 18},
       "oldest_pending_seconds": 91.0,
       "average_waiting_seconds": 12.0
     }
@@ -560,8 +599,11 @@ With no selector, `calls=[]`; `summary` remains Campaign-wide.
       "submission": 2,
       "runtime_request_ids": ["4f..."],
       "queue_seconds": 5.1,
+      "queue_seconds_source": "agate_phase_elapsed",
       "execution_seconds": 600.0,
+      "execution_seconds_source": "agate_phase_elapsed",
       "total_seconds": 605.1,
+      "total_seconds_source": "agate_created_finished",
       "error": {"reason": "job deadline exceeded", "category": "timeout"}
     }
   ]

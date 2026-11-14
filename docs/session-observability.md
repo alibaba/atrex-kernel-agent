@@ -91,10 +91,11 @@ Functional output waits for both pipe readers to reach EOF. A configured timeout
 
 ## Where records live
 
-Light writes into its Episode archive, so records survive removal of the Episode worktree:
+Light writes into the Supervisor-private Campaign archive, independently of the persistent
+Agent Git workspace:
 
 ```text
-<campaign>/.atrex_long_horizon/episodes/eNNNN/sessions/
+<supervisor-campaign>/segments/episodes/eNNNN/sessions/
   run-<uuid>/
     conversation.jsonl
     token-usage.json
@@ -103,6 +104,9 @@ Light writes into its Episode archive, so records survive removal of the Episode
       stderr.log
       native/               # selected provider transcripts, if available
 ```
+
+For pooled search, each lineage owns the corresponding path below
+`<supervisor-campaign>/lineages/tNNNN/segments/`.
 
 Every managed Light invocation has an explicit Supervisor-private archive root. This includes the
 main optimizer and independent final-source-policy, Direction-claim, Experiment-claim and

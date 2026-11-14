@@ -66,7 +66,7 @@ Public Kernel identities are full Agent Git commit IDs. `--workspace` names a no
 | `workflow` | Legacy workflow, not Light |
 | `observed` / `sandbox` | Legacy workflow with an alternate Agent boundary, not Light |
 
-Bubblewrap profiles require Linux. On macOS use native `light` or run Linux through Lima. In Aone Sandbox, use the documented `/proc` shim when private `/proc` is unavailable.
+Bubblewrap profiles require Linux. On macOS use native `light` or run Linux through Lima. Ordinary Linux/Lima defaults to `proc_mode: private`; every Aone Sandbox Light launch defaults to explicit `proc_mode: host`.
 
 | Mode | Final submitted source |
 |---|---|
@@ -157,7 +157,7 @@ Do not print credentials. Preserve uncommitted user changes before syncing or in
 
 ## Runtime evaluation defaults
 
-For standard Evaluate and explicit ABBA, current Light batches at most 10 Shape IDs per outer Ray Data request, sends the complete operator bundle, selects the current batch with `shape_ids`, and sets `shape_shards=1`. It uses 20 warmups, 100 timing iterations, deterministic correctness cases, and best-effort `lock_clocks=true` without a fixed MHz. Aggregation follows the benchmark's declared performance objective after all batches are merged.
+For standard Evaluate and explicit ABBA, current Light batches at most 10 Shapes per outer Ray Data request and sets `shape_shards=1`. Standard Evaluate retains the complete operator bundle and selects the batch with native `shape_ids`. As a temporary Agate compatibility layer, ABBA instead rebuilds each batch as a complete shard-local operator reference and sends no `shape_ids`, because current Agate ABBA requires every Shape in its submitted reference. The compatibility is isolated in `aka.light.evaluation.abba_shape_compat` so it can be removed when Agate accepts native ABBA Shape selection. Light uses 20 warmups, 100 timing iterations, deterministic correctness cases, and best-effort `lock_clocks=true` without a fixed MHz. Aggregation follows the benchmark's declared performance objective after all batches are merged.
 
 Use Runtime tool help for exact operation-specific Agate fields. Endpoint, credentials, source selection and other authority-bearing options remain Supervisor-owned.
 
@@ -196,7 +196,7 @@ views expose `evidence_health`. In Agate timing, `queue_seconds` is queue time a
 
 | Scenario | Reference |
 |---|---|
-| Installation, Bubblewrap, Lima or Aone `/proc` shim | [Installation](references/installation.md) |
+| Installation, Bubblewrap, Lima or Aone host-proc mode | [Installation](references/installation.md) |
 | Native/SOL contracts, Shapes, hidden flow or layouts | [Problem inputs](references/problem-inputs.md) |
 | CLI flags, defaults, patches and Legacy-only parser flags | [Configuration](references/configuration.md) |
 | Launch, modes, V0, persistent Episodes, resume and cleanup | [Operations](references/operations.md) |

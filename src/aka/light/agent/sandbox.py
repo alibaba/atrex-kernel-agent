@@ -14,7 +14,6 @@ import re
 import shutil
 import stat
 import subprocess
-import sys
 from pathlib import Path
 
 from aka.light.agent.home import HOST_HOME_ENV, PREPARED_ENV, open_private_directory, projected_backends
@@ -75,8 +74,8 @@ SYSTEM_PATHS = (
 
 
 def sandbox_executable(environment: dict[str, str]) -> str | None:
-    if environment.get("ATREX_AGENT_PROC_MODE", "private") not in {"private", "projected"}:
-        raise ValueError("ATREX_AGENT_PROC_MODE must be private or projected")
+    if environment.get("ATREX_AGENT_PROC_MODE", "private") not in {"private", "host"}:
+        raise ValueError("ATREX_AGENT_PROC_MODE must be private or host")
     mode = environment.get("ATREX_AGENT_SANDBOX", "none")
     if mode not in {"none", "bwrap"}:
         raise ValueError("ATREX_AGENT_SANDBOX must be none or bwrap")
@@ -285,20 +284,17 @@ def wrap_agent_command(
         if role != "optimizer" else None
     )
     try:
-        projected_proc = environment.get("ATREX_AGENT_PROC_MODE", "private") == "projected"
+        host_proc = environment.get("ATREX_AGENT_PROC_MODE", "private") == "host"
         argv = [executable]
         # Only a durable handoff owner controls the sandbox lifetime. Direct
         # launches preserve native behavior on Supervisor/spawning-thread death.
         # spawn_owned_session validates the handoff before starting its wrapper.
-        # In projected mode the durable proc-view wrapper is bwrap's parent;
-        # it survives the Supervisor in the direct path, but owns the view for
-        # the whole CLI lifetime and must not leave a namespace without it.
-        if environment.get(HANDOFF_ID_ENV) or projected_proc:
+        if environment.get(HANDOFF_ID_ENV):
             argv.append("--die-with-parent")
+        argv.extend(("--new-session", "--unshare-user"))
+        if not host_proc:
+            argv.append("--unshare-pid")
         argv.extend((
-            "--new-session",
-            "--unshare-user",
-            "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
             "--unshare-cgroup-try",
@@ -314,12 +310,11 @@ def wrap_agent_command(
             if path.exists():
                 _mount(argv, path.resolve(), path)
         argv.extend(("--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run"))
-        if projected_proc:
-            from aka.light.agent.proc_view import SHIM_SOURCE, SHIM_TARGET, projected_mounts
-            argv.extend(projected_mounts())
-            argv.extend(("--dir", "/run/aka-proc", "--ro-bind", SHIM_SOURCE, SHIM_TARGET))
-        else:
-            argv.extend(("--proc", "/proc"))
+        # Aone Sandbox already provides a container-scoped procfs but rejects
+        # mounting another procfs in a nested Bubblewrap namespace. Host mode
+        # deliberately shares that complete procfs and PID namespace. Private
+        # mode retains an isolated PID namespace and a newly mounted procfs.
+        argv.extend(("--bind", "/proc", "/proc") if host_proc else ("--proc", "/proc"))
         _mount(argv, view.root if view else workspace, workspace, writable=True)
         if managed:
             for name, directory in (
@@ -355,11 +350,6 @@ def wrap_agent_command(
             # Hooks receive only their narrow rendezvous directory, never the
             # containing Supervisor campaign tree.
             _mount(argv, control_root, control_root, writable=True)
-        legacy_control = workspace / ".atrex_long_horizon"
-        if environment.get("ATREX_AKA_RUNTIME_URL") and legacy_control.is_dir():
-            # Resumed workspaces can retain pre-migration controller files.
-            # Hide those files from the Agent without deleting audit state.
-            argv.extend(("--tmpfs", str(legacy_control)))
         # HTTP sessions carry their reviewed tool/Skill copies in the workspace.
         # Do not re-expose the repository's retired workflows or evaluator code.
         assets = PUBLIC_ASSETS if view is None and not environment.get("ATREX_AKA_RUNTIME_URL") else ()
@@ -541,26 +531,7 @@ def wrap_agent_command(
                 )
             }
         argv.extend(("--chdir", str(workspace)))
-        if not projected_proc:
-            return SandboxLaunch.with_bwrap_environment(argv, command, values), view
-        child_values = dict(values, LD_PRELOAD=SHIM_TARGET, ATREX_PROC_MAPS_SOCKET="/proc/.maps.sock")
-        # Wait for the first namespace-local census, with a bounded readiness
-        # failure rather than letting the Provider start against an empty view.
-        ready = ["/bin/sh", "-c", 'n=0; while [ ! -r /proc/self/stat ]; do '
-                 'n=$((n+1)); if [ "$n" -ge 1200 ]; then '
-                 'echo "Agent process view did not become ready" >&2; exit 125; fi; '
-                 'sleep 0.025; done; exec "$@"', "aka-proc-ready", *command]
-        launch = SandboxLaunch.with_bwrap_environment(argv, ready, child_values)
-        # The shim belongs inside bwrap only, not in its trusted Python parent.
-        launch.environment = values
-        prefix = [sys.executable, "-m", "aka.light.agent.proc_view",
-                  "--workspace", str(workspace), "--argument-fd", str(launch.pass_fds[0])]
-        provider = shutil.which(command[0], path=values.get("PATH")) if command else None
-        if provider:
-            # The same exact executable has already passed installation_mounts.
-            prefix.extend(("--provider-executable", str(Path(provider).resolve(strict=True))))
-        launch.command = [*prefix, "--", *launch.command]
-        return launch, view
+        return SandboxLaunch.with_bwrap_environment(argv, command, values), view
     except BaseException:
         if view:
             view.close()

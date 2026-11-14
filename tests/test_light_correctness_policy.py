@@ -37,8 +37,11 @@ from aka.light.acceptance.source_policy import (
     production_structure_violations,
     workspace_policy_block,
 )
+from aka.light.evaluation.abba_shape_compat import (
+    full_reference_abba_batch_request,
+)
 from aka.light.evaluation.gateway import (
-    COMMAND_WORKSPACE_MANIFEST,
+    COMMAND_WORKSPACE_MANIFEST_ENV,
     _command_input_paths,
     _make_input_bundle,
     _requested_gateway_kind,
@@ -422,6 +425,61 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             agent_result["result"]["actionable_diagnostics"][0]["message"],
             long_message,
         )
+
+    def test_compact_receipt_surfaces_http_validation_errors(self):
+        record_id = "gateway-" + "6" * 32
+        validation_errors = [
+            {
+                "type": "value_error",
+                "loc": ["body", "abba", "shape_ids"],
+                "msg": "Value error, abba uses every reference shape",
+                "input": {"private": "large request payload must not be projected"},
+                "ctx": {"error": "private validator object"},
+            },
+            {
+                "type": "missing",
+                "loc": ["body", "options", "timeout_s"],
+                "msg": "Field required",
+            },
+        ]
+        receipt = compact_receipt({
+            "operation": "evaluate",
+            "status": "failed",
+            "gateway_record_id": record_id,
+            "result": {
+                "outcome": "rejected",
+                "http_status": 422,
+                "error": {
+                    "error_class": "validation",
+                    "reason": "request_validation_failed",
+                    "message": "Agate rejected the request before dispatch",
+                    "details": {"validation_errors": validation_errors},
+                },
+            },
+        })
+
+        self.assertEqual(receipt["result"]["http_status"], 422)
+        error = receipt["result"]["error"]
+        self.assertEqual(error["reason"], "request_validation_failed")
+        self.assertEqual(
+            error["details"]["validation_errors"],
+            [
+                {
+                    "type": "value_error",
+                    "loc": ["body", "abba", "shape_ids"],
+                    "msg": "Value error, abba uses every reference shape",
+                },
+                {
+                    "type": "missing",
+                    "loc": ["body", "options", "timeout_s"],
+                    "msg": "Field required",
+                },
+            ],
+        )
+        self.assertEqual(error["details"]["validation_errors_count"], 2)
+        self.assertFalse(error["details"]["validation_errors_truncated"])
+        self.assertNotIn("input", error["details"]["validation_errors"][0])
+        self.assertNotIn("ctx", error["details"]["validation_errors"][0])
 
     def test_compact_receipt_preserves_experiment_recording_hint(self):
         record_id = "gateway-" + "4" * 32
@@ -1476,6 +1534,65 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertEqual(len(request["reference"]["shapes"]), 21)
         self.assertEqual(len(request["runner_overrides"]["shape_ids"]), 21)
 
+    def test_abba_batches_rebuild_the_complete_reference_without_shape_ids(self):
+        request = {
+            "reference": {
+                "operator": "example",
+                "reference_py": "class Model: pass\n",
+                "input_py": "def generate_input(*args, **kwargs): return ()\n",
+                "shapes": {str(index): {"x": index} for index in range(4)},
+                "metadata": {
+                    "num_shapes": 4,
+                    "performance_objective": "geomean",
+                    "shapes": {
+                        str(index): {"weight": index + 1} for index in range(4)
+                    },
+                    "cases": {
+                        str(index): {"seed": index} for index in range(4)
+                    },
+                },
+                "roofline": {
+                    "unit": "flop",
+                    "shapes": {
+                        str(index): {"flops": index + 1} for index in range(4)
+                    },
+                },
+            },
+            "options": {
+                "timeout_s": 600,
+                "shape_ids": ["0", "1", "2", "3"],
+            },
+            "runner_overrides": {"shape_ids": ["0", "1", "2", "3"]},
+            "lock_clocks": True,
+        }
+        original = json.loads(json.dumps(request))
+
+        batch = full_reference_abba_batch_request(
+            request, ["2", "3"], timeout_s=840
+        )
+
+        self.assertEqual(list(batch["reference"]["shapes"]), ["2", "3"])
+        self.assertEqual(
+            list(batch["reference"]["metadata"]["shapes"]), ["2", "3"]
+        )
+        self.assertEqual(
+            list(batch["reference"]["metadata"]["cases"]), ["2", "3"]
+        )
+        self.assertEqual(
+            list(batch["reference"]["roofline"]["shapes"]), ["2", "3"]
+        )
+        self.assertEqual(batch["reference"]["metadata"]["num_shapes"], 2)
+        self.assertEqual(
+            batch["reference"]["metadata"]["performance_objective"],
+            "geomean",
+        )
+        self.assertEqual(batch["reference"]["roofline"]["unit"], "flop")
+        self.assertEqual(batch["options"]["timeout_s"], 840)
+        self.assertEqual(batch["options"]["shape_shards"], 1)
+        self.assertNotIn("shape_ids", batch["options"])
+        self.assertNotIn("shape_ids", batch["runner_overrides"])
+        self.assertEqual(request, original)
+
     def test_eval_delegates_locked_clock_frequency_to_agate(self):
         defaults = measurement_defaults("L20N")
 
@@ -1902,6 +2019,74 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertTrue(all(item[1] is False for item in client.polls))
         self.assertTrue(all(1 <= item[2] <= 30 for item in client.polls))
         self.assertEqual(sleep.call_count, 2)
+
+    def test_gateway_checkpoint_persists_sdk_phase_observations(self):
+        def submit():
+            return subprocess.CompletedProcess(
+                [],
+                0,
+                json.dumps({
+                    "job_id": "ev_phase_timing",
+                    "status": "queued",
+                    "created_at": "2026-01-01T00:00:00Z",
+                    "updated_at": "2026-01-01T00:00:01Z",
+                }),
+                "",
+            )
+
+        def poll(
+            process,
+            _remaining,
+            *,
+            recovery_probe=False,
+            observation_callback=None,
+        ):
+            self.assertFalse(recovery_probe)
+            self.assertIsNotNone(observation_callback)
+            observation_callback(json.loads(process.stdout))
+            observation_callback({
+                "job_id": "ev_phase_timing",
+                "status": "running",
+                "execution_phase": "execution",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:12Z",
+                "phase_elapsed_ms": 2000,
+            })
+            terminal = {
+                "job_id": "ev_phase_timing",
+                "status": "succeeded",
+                "execution_phase": "terminal",
+                "created_at": "2026-01-01T00:00:00Z",
+                "updated_at": "2026-01-01T00:00:40Z",
+                "finished_at": "2026-01-01T00:00:40Z",
+                "result": {"ok": True},
+            }
+            observation_callback(terminal)
+            return subprocess.CompletedProcess([], 0, json.dumps(terminal), "")
+
+        with tempfile.TemporaryDirectory() as directory, patch.dict(
+            os.environ, {JOB_ROOT_ENV: str(Path(directory).resolve())}
+        ):
+            process = execute_job(
+                {"request": "phase-timing"},
+                submit,
+                poll,
+                wait_budget=60,
+                capture_phase_observations=True,
+            )
+            state_path = next(Path(directory).glob("jobs/*/state.json"))
+            state = json.loads(state_path.read_text())
+
+        self.assertEqual(process.returncode, 0)
+        self.assertEqual(state["phase"], "terminal")
+        self.assertEqual(
+            [item["status"] for item in state["phase_observations"]],
+            ["queued", "running", "succeeded"],
+        )
+        running = state["phase_observations"][1]
+        self.assertEqual(running["execution_phase"], "execution")
+        self.assertEqual(running["agate_updated_at"], "2026-01-01T00:00:12Z")
+        self.assertEqual(running["phase_elapsed_ms"], 2000)
 
     def test_light_has_no_agate_cli_or_raw_gateway_transport(self):
         from aka.light.evaluation import agate_native, gateway
@@ -2400,8 +2585,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             (workspace / "tools/helper.py").write_text("VALUE = 1\n")
             (workspace / "kernel.py").write_text("def kernel(): pass\n")
             (workspace / "README.md").write_text("# task\n")
-            manifest = workspace / COMMAND_WORKSPACE_MANIFEST
-            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest = workspace.parent / f"{workspace.name}-command-workspace.json"
             manifest.write_text(json.dumps([
                 "README.md", "scratch/probe.py", "tools/helper.py",
             ]))
@@ -2420,17 +2604,18 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 workspace,
                 args.command,
                 full_workspace=True,
+                workspace_manifest=str(manifest),
             )
             self.assertIn("README.md", selected)
             self.assertIn("scratch/probe.py", selected)
             self.assertIn("tools/helper.py", selected)
             self.assertNotIn("private.json", selected)
-            self.assertNotIn(COMMAND_WORKSPACE_MANIFEST, selected)
+            self.assertFalse(manifest.is_relative_to(workspace))
 
             request, frozen = measurement_inputs(
                 args,
                 workspace,
-                {},
+                {COMMAND_WORKSPACE_MANIFEST_ENV: str(manifest)},
                 identity_key=b"command-test-key",
             )
             self.assertEqual(request["operation"], "dev")
@@ -2439,6 +2624,25 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             self.assertIn("tools/helper.py", request["inputs"])
             self.assertIn("README.md", frozen)
             self.assertNotIn("private.json", request["inputs"])
+            manifest.unlink()
+
+            with self.assertRaisesRegex(
+                ValueError, "Supervisor-private Command workspace manifest"
+            ):
+                _command_input_paths(
+                    workspace,
+                    args.command,
+                    full_workspace=True,
+                )
+            in_workspace_manifest = workspace / "command-workspace.json"
+            in_workspace_manifest.write_text("[]", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "outside the Agent workspace"):
+                _command_input_paths(
+                    workspace,
+                    args.command,
+                    full_workspace=True,
+                    workspace_manifest=str(in_workspace_manifest),
+                )
 
             encoded, _, _ = _make_input_bundle(
                 workspace,
@@ -3460,55 +3664,66 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertNotIn("feedback_truncation", projected)
 
 
-class ProjectedProcStartupPreflightTests(unittest.TestCase):
-    @staticmethod
-    def _config(*, proc_mode="projected"):
-        return {
-            "sandbox": "bwrap",
-            "capture": True,
-            "timeout_seconds": 28800,
-            "bwrap_executable": "bwrap",
-            "proc_mode": proc_mode,
-            "read_only_paths": [],
-        }
+class AgentProcModeConfigurationTests(unittest.TestCase):
+    def test_agent_schema_exposes_only_private_and_host_proc_modes(self):
+        from aka.light.agent.plugin import Config
 
-    def test_projected_light_sandbox_compiles_shim_before_campaign_launch(self):
-        from aka.light.agent.plugin import validate_config
+        self.assertEqual(
+            Config["properties"]["proc_mode"]["enum"],
+            ["private", "host"],
+        )
 
-        with (
-            patch("aka.light.agent.sandbox.sandbox_executable"),
-            patch("aka.light.agent.preflight.check_projected_proc") as preflight,
-        ):
-            validate_config(self._config())
+    def test_retired_projected_proc_mode_is_rejected(self):
+        from aka.light.agent.sandbox import sandbox_executable
 
-        preflight.assert_called_once_with()
+        with self.assertRaisesRegex(ValueError, "must be private or host"):
+            sandbox_executable({
+                "ATREX_AGENT_PROC_MODE": "projected",
+                "ATREX_AGENT_SANDBOX": "none",
+            })
 
-    def test_projected_light_sandbox_reports_missing_compiler_as_startup_error(self):
-        from aka.light.agent.plugin import validate_config
+    def test_bwrap_private_and_host_modes_build_distinct_proc_boundaries(self):
+        from aka.light.agent.home import HOST_HOME_ENV, PREPARED_ENV
+        from aka.light.agent.sandbox import wrap_agent_command
 
-        with (
-            patch("aka.light.agent.sandbox.sandbox_executable"),
-            patch(
-                "aka.light.agent.preflight.check_projected_proc",
-                side_effect=FileNotFoundError("cc"),
-            ),
-            self.assertRaisesRegex(
-                ValueError,
-                r"working C compiler and development headers.*preflight",
-            ),
-        ):
-            validate_config(self._config())
-
-    def test_private_proc_does_not_require_compiler_preflight(self):
-        from aka.light.agent.plugin import validate_config
-
-        with (
-            patch("aka.light.agent.sandbox.sandbox_executable"),
-            patch("aka.light.agent.preflight.check_projected_proc") as preflight,
-        ):
-            validate_config(self._config(proc_mode="private"))
-
-        preflight.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            workspace = root / "workspace"
+            home = root / "session-home"
+            host_home = root / "operator-home"
+            for path in (workspace, home, host_home):
+                path.mkdir(parents=True)
+            common = {
+                PREPARED_ENV: str(home),
+                HOST_HOME_ENV: str(host_home),
+                "ATREX_AGENT_SANDBOX": "bwrap",
+                "PATH": os.environ.get("PATH", ""),
+            }
+            for mode in ("private", "host"):
+                with self.subTest(mode=mode), patch(
+                    "aka.light.agent.sandbox.sandbox_executable",
+                    return_value="/usr/bin/bwrap",
+                ):
+                    launch, view = wrap_agent_command(
+                        ["/usr/bin/true"],
+                        workspace,
+                        dict(common, ATREX_AGENT_PROC_MODE=mode),
+                    )
+                try:
+                    self.assertIsNone(view)
+                    argv = launch.command
+                    pairs = [argv[index:index + 2] for index in range(len(argv) - 1)]
+                    triples = [argv[index:index + 3] for index in range(len(argv) - 2)]
+                    if mode == "private":
+                        self.assertIn("--unshare-pid", argv)
+                        self.assertIn(["--proc", "/proc"], pairs)
+                        self.assertNotIn(["--bind", "/proc", "/proc"], triples)
+                    else:
+                        self.assertNotIn("--unshare-pid", argv)
+                        self.assertNotIn(["--proc", "/proc"], pairs)
+                        self.assertIn(["--bind", "/proc", "/proc"], triples)
+                finally:
+                    launch.close()
 
 
 if __name__ == "__main__":

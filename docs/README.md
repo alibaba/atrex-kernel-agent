@@ -14,7 +14,7 @@ describe the versions and environments identified in those documents.
 | [Light modules and profiles](optional-light-modules.md) | Provider options, Wiki, search, source imports, budgets, recovery |
 | [Installed startup](application-plugin-migration.md) | CLI/profile selection, package ownership, frozen continuations |
 | [Native CUDA and source layouts](native-cuda.md) | Source trees, single-file and CUDA manifests, source identity |
-| [Agent workspace isolation](agent-workspace-isolation.md) | Native/Bubblewrap selection, Homes, mounts, projected proc |
+| [Agent workspace isolation](agent-workspace-isolation.md) | Native/Bubblewrap selection, Homes, mounts, private/host proc modes |
 | [Supplemental numerical validation](numerical-validation.md) | Optional production risk probes and repair semantics |
 
 ## Runtime and extensions

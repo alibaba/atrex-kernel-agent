@@ -88,9 +88,8 @@ Use `capture-iket` and `export-iket` separately only for local debugging. Export
 non-empty native Perfetto trace exists, the target launch is present, all declared events are observed
 with the declared kind, locations are valid, and range timestamps are ordered. It emits the common
 deterministic Perfetto JSON gzip, summary, manifest, binary identity, native-capture index, and receipt.
-The commands above create exploration evidence. Managed Light does not project the Supervisor's
-private evaluator log into the Agent workspace; do not search for or fabricate
-`.atrex_long_horizon/evaluations.jsonl`. Request `--stage final` only when Runtime explicitly returns
+The commands above create exploration evidence. Managed Light keeps evaluator authority in immutable
+Gateway Records rather than projecting a private evaluator log into the Agent workspace. Request `--stage final` only when Runtime explicitly returns
 a hash-bound correctness receipt accepted by `--correctness-evidence`. Otherwise keep the trace
 diagnostic, remove all probes, and rely on the ordinary immutable evaluator for final Kernel
 acceptance; `--correctness passed` alone cannot produce `decision_grade`.

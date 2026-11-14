@@ -12,10 +12,6 @@ from aka.light.workflow.models import SupervisorState
 from aka.light.workflow.protocol import atomic_write_json, atomic_write_text
 from aka.light.workflow.telemetry import render_episode_brief
 
-RUNTIME_DIR = ".atrex_long_horizon"
-VERIFY_DIR = "verification_artifacts/.atrex_long_horizon_verify"
-
-
 class CampaignStore:
     def __init__(self, workspace: Path):
         self.workspace = workspace.resolve()
@@ -31,9 +27,9 @@ class CampaignStore:
     def ensure_excluded(workspace: Path, *, wiki_trace_only: bool = False) -> None:
         """Install supervisor excludes, or only the early Wiki trace subset.
 
-        Workspace setup happens before the framework baseline commit.  At that
+        Workspace setup starts before the initial Agent source commit. At that
         point only consumer-owned Wiki telemetry may be excluded; installing
-        the complete supervisor set would also hide baseline plans.
+        the complete Supervisor set would also hide Agent-authored plans.
         """
         result = subprocess.run(
             ["git", "rev-parse", "--git-path", "info/exclude"],
@@ -52,8 +48,6 @@ class CampaignStore:
             "/.aka-agent-observations/",
         )
         supervisor_rules = (
-            f"/{RUNTIME_DIR}/",
-            f"/{VERIFY_DIR}/",
             f"/{main_adapter.STALL_STATE_FILE}",
             *wiki_trace_rules,
             # Episode evidence is archived by the supervisor and must never

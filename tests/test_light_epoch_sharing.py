@@ -4029,14 +4029,9 @@ def test_agent_git_reincludes_cuda_manifest_candidate_metadata(tmp_path):
 
 
 
-def test_light_ignores_legacy_journal_files_and_creates_no_transaction_file(tmp_path):
+def test_light_research_updates_use_central_store_without_transaction_file(tmp_path):
     workspace = tmp_path / "workspace"
-    legacy_root = workspace / ".atrex_long_horizon"
-    legacy_root.mkdir(parents=True)
-    (legacy_root / "journal.json").write_text(
-        json.dumps({"state": "candidate_ready", "experiments": [{"id": "legacy"}]}),
-        encoding="utf-8",
-    )
+    workspace.mkdir()
     journals = tmp_path / "journals"
     evidence = journals / "episodes" / "e00000001"
     evidence.mkdir(parents=True)
@@ -4051,11 +4046,11 @@ def test_light_ignores_legacy_journal_files_and_creates_no_transaction_file(tmp_
         "operation": "direction_update",
         "request": {
             "action": "propose",
-            "name": "Ignore legacy state",
+            "name": "Use central research state",
             "change_scope": "incremental",
             "objective": "Validate directly against the central Research Store.",
             "applicability": "Current Light campaigns.",
-            "expected_benefit": "Avoid legacy transaction-state coupling.",
+            "expected_benefit": "Keep research state out of the Agent workspace.",
             "plan": ["Record one central Direction revision."],
         },
     })
@@ -5187,6 +5182,8 @@ def test_pooled_search_seals_peer_evidence_without_promotion(tmp_path):
         "active",
         "completed_epochs",
         "global_best",
+        "options",
+        "token_budget",
     }
     assert (root / "coordinator.lock").is_file()
     assert not (root / "search").exists()
@@ -6909,6 +6906,15 @@ def test_pooled_search_derives_observational_winners_without_promoting(tmp_path)
     ).run()
     assert result == "search: completed Epoch budget"
     state = read_state(root / COORDINATOR_STATE)
+    assert state["options"] == {
+        "epochs": 1,
+        "trajectories": 2,
+        "episodes_per_trajectory": 1,
+        "max_parallel_episodes": 2,
+        "synchronization": "synchronous",
+        "role_specialization": False,
+    }
+    assert state["token_budget"] == 0
     assert state["global_best"]["kernel_commit_id"] == "1" * 40
     assert state["global_best"]["trajectory"] == 1
     assert "lineages" not in state

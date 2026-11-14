@@ -114,6 +114,7 @@ def _audit_calls(scope) -> list[dict]:
                 "request_id": path.stem.removeprefix("request-"),
                 "created_at": started_at,
                 "started_at": started_at,
+                "updated_at": value.get("updated_at") or value.get("finished_at") or started_at,
                 "finished_at": value.get("finished_at"),
                 "tool": value.get("tool") or _tool(value.get("operation"), value.get("argv")),
                 "operation_family": value.get("operation"),

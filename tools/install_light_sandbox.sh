@@ -74,7 +74,6 @@ python3 -m pip install --no-index --no-deps --force-reinstall \
   "${deploy_root}"/wheels/atrex_aka_light-*.whl
 
 command -v bwrap >/dev/null
-command -v cc >/dev/null || dnf install -y gcc glibc-devel
 
 export ATREX_SANDBOX_ATREX_BENCH_VERSION="${required_atrex_bench_version}"
 

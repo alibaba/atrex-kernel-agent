@@ -27,12 +27,12 @@ limactl shell aka-light
 
 # inside the default Ubuntu guest
 sudo apt-get update
-sudo apt-get install -y bubblewrap build-essential libc6-dev git python3 python3-venv
+sudo apt-get install -y bubblewrap git python3 python3-venv
 ```
 
 Install AKA, the Agent CLI and its credentials inside the guest, then launch
 `--profile light-sandbox` there. The GPU workload remains remote in Agate; Lima does not need GPU
-passthrough. Run `python3 -m aka.light.agent.preflight` in the guest after installing AKA.
+passthrough.
 
 Configure custom isolation through the Agent provider, with a composition patch before `--`:
 
@@ -77,7 +77,7 @@ environment from these options.
 | `capture` | Diagnostic capture, independent of filesystem isolation |
 | `bwrap_executable` | Bubblewrap executable, default `bwrap` |
 | `read_only_paths` | Explicit extra installation/runtime paths |
-| `proc_mode` | `private` procfs, or explicit `projected` compatibility view |
+| `proc_mode` | `private` procfs, or the existing complete `host` procfs and PID namespace |
 | `timeout_seconds` | Per-invocation active-time ceiling; Workflow Episode budget is separate |
 
 ## Launch lifecycle
@@ -135,13 +135,13 @@ separate snapshot rules; reusable state can survive an unpromoted kernel.
 Reserved assets are refreshed from trusted sources. See
 [reusable workspace](optional-light-modules.md#reusable-workspace).
 
-## Restricted containers and preflight
+## Restricted containers
 
-Use `proc_mode: projected` only when deliberately selecting the supported restricted-container
-view. It preserves namespace and filesystem isolation while exposing a bounded Session process
-view. It requires a compiler/development headers and ordinary namespace/bind permissions.
+Use `proc_mode: host` as the default for Light inside Aone Sandbox. It preserves Bubblewrap's
+filesystem isolation but shares the outer container's PID namespace and complete `/proc` with
+the Agent. Ordinary Linux and Lima continue to default to `private`.
 
-This is the required Bubblewrap mode in the current Aone Sandbox environment: its outer
+This is the default and required Bubblewrap mode in the current Aone Sandbox environment: its outer
 container policy rejects Bubblewrap's normal nested procfs mount. Use an Agent composition patch
 that retains the complete `light-sandbox` settings:
 
@@ -151,24 +151,15 @@ that retains the complete `light-sandbox` settings:
   "patches": [{"id": "agent", "config": {
     "sandbox": "bwrap",
     "capture": true,
-    "proc_mode": "projected"
+    "proc_mode": "host"
   }}]
 }
 ```
 
 Pass it as `--profile light-sandbox --patch /path/to/patch.json` before the optimizer's `--`
-separator. The shim is a packaged Light component and is compiled and loaded automatically; the
-user must not create a host `/proc` mount or set `LD_PRELOAD` manually.
-
-The installed, model-free compiler preflight is:
-
-```bash
-python3 -m aka.light.agent.preflight
-```
-
-Run it in the Linux environment that will actually launch the Agent. It checks the packaged
-shim and compiler; it does not certify Bubblewrap namespace permission or GPU execution.
-See [projected proc details](optional-light-modules.md#bubblewrap-in-restricted-containers).
+separator. No compiler, compatibility shim or `LD_PRELOAD` configuration is required. Because
+the Agent can see every process in the Aone Sandbox, use a dedicated Sandbox and do not treat
+host mode as process isolation.
 
 ## Verification and rollback
 

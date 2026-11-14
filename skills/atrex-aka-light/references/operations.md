@@ -57,7 +57,7 @@ aka optimize --repo-root /path/to/atrex-kernel-agent -- --help
 
 Only `light` and `light-sandbox` select the current persistent Session, Agent Git, Runtime/MeasurementStore, Research Store and accepted-submission workflow. `observed` and `sandbox` do not turn Legacy into Light.
 
-Bubblewrap requires Linux. On macOS use native Light or a Lima Linux VM. In Aone Sandbox use the documented `/proc` shim when private procfs cannot be mounted. Bubblewrap limits filesystem/process visibility; it is not a network allowlist or another OS account.
+Bubblewrap requires Linux. On macOS use native Light or a Lima Linux VM. Ordinary Linux/Lima defaults to `proc_mode: private`. Every Aone Sandbox Light launch defaults to explicit `proc_mode: host`, which binds the Sandbox's complete `/proc` and shares its PID namespace. Host mode retains filesystem isolation but is not process isolation. Bubblewrap is not a network allowlist or another OS account.
 
 ## Modes
 

@@ -177,9 +177,10 @@ from aka.light.evaluation.result_json import (
 DEFAULT_SYNC_PATHS = ("profiles",)
 COMMAND_SYNC_PATHS = ("scratch",)
 # Runtime-private allowlist captured before trusted evaluator inputs are staged.
-# Keep it below an existing control root so SourceProvider collection can never
-# mistake the transport manifest for candidate Kernel source.
-COMMAND_WORKSPACE_MANIFEST = ".atrex_long_horizon/command-workspace.json"
+# The Supervisor stores it outside the staged Agent workspace and passes only
+# its private path through this environment variable. It is request metadata,
+# never Candidate source or persistent Agent state.
+COMMAND_WORKSPACE_MANIFEST_ENV = "ATREX_AKA_COMMAND_WORKSPACE_MANIFEST"
 INPUT_SKIP_DIRS = {
     ".git",
     "__pycache__",
@@ -340,7 +341,6 @@ PRIVATE_EVALUATOR_FILENAMES = (
     "roofline.json",
 )
 PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
-EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 PROFILE_ENVIRONMENT_KEYS = (
     "PROFILE_ITERS",
     "PROFILE_WARMUP",
@@ -665,37 +665,43 @@ def _command_input_paths(
     explicit_inputs: Iterable[str] = (),
     *,
     full_workspace: bool = False,
+    workspace_manifest: str | None = None,
 ) -> frozenset[str]:
     """Build the minimal allowlist for a non-evaluator sandbox command.
 
-    Legacy single-file commands start with an empty workspace. Tree commands
-    always receive their contracted candidate sources. Other paths named on the
-    command line are uploaded automatically; dynamically opened non-source
-    dependencies must be declared with ``--input``.
+    Command requests receive the exact Agent-visible workspace allowlist frozen
+    by Supervisor Runtime before trusted evaluator files are staged. Other paths
+    named on the command line are uploaded automatically; dynamically opened
+    non-source dependencies must be declared with ``--input``.
     """
     parts = _command_parts(command)
     selected: set[str] = set()
     if full_workspace:
-        manifest = workspace / COMMAND_WORKSPACE_MANIFEST
-        if manifest.is_file():
-            try:
-                values = json.loads(manifest.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError) as error:
-                raise ValueError(f"invalid command workspace manifest: {error}") from error
-            if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
-                raise ValueError("invalid command workspace manifest: expected a path array")
-            for value in values:
-                normalized = _safe_relative(value)
-                if (workspace / normalized).is_file():
-                    selected.add(normalized)
-        else:
-            # Standalone use has no Supervisor staging manifest. Apply the same
-            # bounded/no-follow traversal used by the transport and let its
-            # skip lists remove local control state.
-            selected.update(
-                path.relative_to(workspace).as_posix()
-                for path in _walk_files(workspace)
+        if not workspace_manifest:
+            raise ValueError(
+                "Supervisor-private Command workspace manifest is unavailable"
             )
+        manifest = Path(workspace_manifest)
+        try:
+            manifest.relative_to(workspace)
+        except ValueError:
+            pass
+        else:
+            raise ValueError(
+                "Command workspace manifest must remain outside the Agent workspace"
+            )
+        if manifest.is_symlink() or not manifest.is_file():
+            raise ValueError("Command workspace manifest is unavailable")
+        try:
+            values = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ValueError(f"invalid command workspace manifest: {error}") from error
+        if not isinstance(values, list) or any(not isinstance(value, str) for value in values):
+            raise ValueError("invalid command workspace manifest: expected a path array")
+        for value in values:
+            normalized = _safe_relative(value)
+            if (workspace / normalized).is_file():
+                selected.add(normalized)
 
         # Built-in tools are normally exposed through a local symlink and are
         # therefore absent from the staged Agent snapshot. Select their names so
@@ -3056,59 +3062,6 @@ def _mask_generalized_result(
     return masked
 
 
-def _record_episode_evaluation(
-    workspace: Path,
-    result: dict[str, Any],
-    *,
-    gateway_kind: str,
-    job_id: object = None,
-) -> None:
-    """Persist exact optimizer-facing results for private Runtime recovery.
-
-    Long-horizon workers use ``--no-memory`` because Light does not create Agent-facing
-    memory summaries. Keep their complete evaluator results in excluded episode Runtime
-    state so a pivot or interruption retains this round's real per-shape performance
-    without parsing model-authored journal prose.
-    """
-    runtime = workspace / ".atrex_long_horizon"
-    if not (runtime / "journal.json").is_file():
-        return
-    try:
-        from aka.light.workspace.sources import snapshot as source_snapshot
-        kernel_sha256 = hashlib.sha256(source_snapshot(workspace)).hexdigest()
-    except (OSError, ValueError):
-        kernel_sha256 = None
-    payload = {
-        "schema_version": 2,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "gateway_kind": gateway_kind,
-        "job_id": str(job_id) if job_id else None,
-        "kernel_sha256": kernel_sha256,
-        "result": result,
-    }
-    path = workspace / EPISODE_EVALUATIONS_PATH
-    path.parent.mkdir(parents=True, exist_ok=True)
-    line = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode(
-        "utf-8"
-    )
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-    try:
-        os.write(descriptor, line)
-    finally:
-        os.close(descriptor)
-
-
-def _record_result_lines(workspace: Path, stdout: str, *, gateway_kind: str) -> None:
-    """Record the last structured result emitted by a dev evaluator command."""
-    for line in reversed(stdout.splitlines()):
-        result = parse_evaluation_result_line(line)
-        if result is not None:
-            _record_episode_evaluation(
-                workspace, result, gateway_kind=gateway_kind
-            )
-            return
-
-
 def _positive_number(value: object) -> float | None:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
@@ -3670,12 +3623,6 @@ def _run_typed_gateway(
             )
             if batched
             else batch_results[0],
-        )
-        _record_episode_evaluation(
-            workspace,
-            result,
-            gateway_kind=kind,
-            job_id=",".join(str(job.get("job_id")) for job in jobs),
         )
         print(evaluation_result_json(result))
         return 0 if result["all_pass"] else 1
@@ -4283,7 +4230,6 @@ def _main(argv: list[str] | None = None) -> int:
     if evaluator_command:
         command_stdout = _hydrate_abba_result_lines(workspace, command_stdout)
         command_stdout = _hydrate_result_lines(workspace, command_stdout)
-        _record_result_lines(workspace, command_stdout, gateway_kind="dev")
     if hide_evaluator_details or _is_numerical_probe_command(args.command):
         projected = []
         for line in command_stdout.splitlines():
@@ -4348,6 +4294,9 @@ def measurement_inputs(args, workspace: Path, environment: dict, *,
                        command,
                        args.input,
                        full_workspace=args.kind == "command",
+                       workspace_manifest=environment.get(
+                           COMMAND_WORKSPACE_MANIFEST_ENV
+                       ),
                    ))
     from aka.light.workspace.sources import measurement_contracts, measurement_paths
     candidate_paths, source_snapshots = measurement_paths(workspace, baseline_path)

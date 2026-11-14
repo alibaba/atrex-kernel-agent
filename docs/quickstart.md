@@ -13,11 +13,8 @@ OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workf
 - A native Atrex-Bench operator in its owning Bench checkout.
 - For coordinator isolation, `light-sandbox` requires Linux, the `bwrap` executable, and
   permission to create the required namespaces. Native `light` does not require Bubblewrap.
-  `light-sandbox` with `proc_mode: projected` also requires a working C compiler and libc
-  development headers in the exact execution environment (`gcc glibc-devel` on the supported
-  DNF image, or `build-essential libc6-dev` on Ubuntu). Run
-  `python3 -m aka.light.agent.preflight` there before launch; startup fails closed if this
-  compile check does not pass. macOS supports native Light but cannot run Bubblewrap directly.
+  Ordinary Linux/Lima defaults to `proc_mode: private`; Aone Sandbox launches default to
+  `proc_mode: host`. macOS supports native Light but cannot run Bubblewrap directly.
 
 NVIDIA profiling requires the appropriate NCU tools on the worker; AMD and PPU profiling
 use their respective worker toolchains. Initialize only the reference-project submodules
@@ -64,22 +61,23 @@ Then, inside the Lima VM:
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y bubblewrap build-essential libc6-dev git python3 python3-venv
+sudo apt-get install -y bubblewrap git python3 python3-venv
 git clone https://github.com/alibaba/atrex-kernel-agent.git
 cd atrex-kernel-agent
-# Follow "Install from a matching checkout" above, then verify the guest:
-python3 -m aka.light.agent.preflight
+# Follow "Install from a matching checkout" above.
 ```
 
 Install AKA and launch `--profile light-sandbox` from inside that VM. Keep the checkout,
 Python environment, Agent CLI credentials and campaign workspace inside (or explicitly mounted
 into) the VM; running only the Agent subprocess in Lima is not a supported split deployment.
 
-### Aone Sandbox: use the projected `/proc` shim
+### Aone Sandbox default: `proc_mode: host`
 
 The current Aone Sandbox container policy does not allow a nested Bubblewrap process to mount a
-fresh procfs. Keep Bubblewrap isolation enabled, but select Light's bundled projected-proc shim.
-Save this composition patch inside the Aone Sandbox:
+fresh procfs. Therefore every Aone Sandbox Light launch should default to `proc_mode: host` and share
+the Aone Sandbox's existing PID namespace and complete `/proc`. Use a dedicated Sandbox because
+this mode exposes every process in that Sandbox to the Agent. Save this composition patch inside
+the Aone Sandbox. Do not omit this patch and fall back to the provider-wide `private` default:
 
 ```json
 {
@@ -87,32 +85,30 @@ Save this composition patch inside the Aone Sandbox:
   "patches": [{"id": "agent", "config": {
     "sandbox": "bwrap",
     "capture": true,
-    "proc_mode": "projected"
+    "proc_mode": "host"
   }}]
 }
 ```
 
-Install the local prerequisites in the same Aone execution image, then run the preflight:
+Install Bubblewrap in the same Aone execution image:
 
 ```bash
-sudo dnf install -y bubblewrap gcc glibc-devel
-python3 -m aka.light.agent.preflight
+sudo dnf install -y bubblewrap
 ```
 
 Launch with the patch before the `--` separator:
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox --patch /path/to/aone-projected-proc.json -- \
+  --profile light-sandbox --patch /path/to/aone-host-proc.json -- \
   --op-dir /path/to/atrex-bench/operator \
   --platform L20D --specify-dsl --framework Cuda --agent-cli claude \
   --optimization-mode ultra --workspace /workspace/aka-opt
 ```
 
-Light compiles and loads the packaged compatibility shim automatically. Do not manually mount
-the host `/proc`, expose the host process tree, or configure `LD_PRELOAD`. The projected view
-contains only the bounded process metadata needed by the Agent CLI. Startup fails before the
-Campaign begins if the shim cannot compile.
+Light binds the Aone Sandbox's existing `/proc` directly into Bubblewrap. It does not compile or
+load a compatibility shim and does not set `LD_PRELOAD`. `--cap-drop ALL` and the existing
+filesystem allowlist remain active, but PID/process visibility is intentionally not isolated.
 
 ## Prepare the problem
 
@@ -293,12 +289,11 @@ See [execution recovery](measurement-records.md#failure-and-recovery-policy).
 | Output | Meaning |
 | --- | --- |
 | Agent Git repository | Complete implementation history, current HEAD, branches and imported peer refs |
-| `.atrex_versions/vN.json` | Supervisor-owned segment and outcome facts when generated memory is disabled |
-| `.atrex_long_horizon/` | Episode state, attempts, usage observations, and Session archives |
-| Private Supervisor scope | Measurement snapshots, central Research/Submission stores, Runtime audit, source archives, and GPU checkpoints outside Agent Git |
+| Private Supervisor Campaign directory | Segment state, Session archives, Measurement snapshots, central Research/Submission stores, Runtime audit, source archives, and GPU checkpoints outside Agent Git |
 | `profiles/` and requested artifacts | Available profiler outputs and diagnostic evidence |
 
-Raw private stores and Session traces are not public submission artifacts. The optional
+Light does not write Campaign or Episode control state into the Agent workspace. Raw private
+stores and Session traces are not public submission artifacts. The optional
 [dashboard](optimization-dashboard.md) reads persisted observations; its default file exporter
 does not package complete multi-file source trees. Use the workflow's source-aware export
 for those candidates.

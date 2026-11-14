@@ -21,7 +21,9 @@ trajectory，不需要逐个指定子目录。
 并行搜索只有一棵 Campaign 私有状态树：各 lineage 的 Research、Session
 和 Runtime audit 位于 `lineages/tNNNN/` 命名空间；不可变 Gateway Record 只在
 Campaign Measurement Store 中保存一份。观测工具根据 Runtime audit 归属记录，
-不会把中央共享证据重复统计成每条 lineage 各自产生的结果。
+不会把中央共享证据重复统计成每条 lineage 各自产生的结果。中央 Record 被同伴
+lineage 复用时，Record 内的原始 `runtime_request_id` 在整个 Campaign 的 audit
+命名空间中解析；消费方只需有指向该 Record 的自身 audit，不要求复制创建方 audit。
 
 - 六个状态/查询命令只读，不会提交、重试、取消或修改 Runtime/Agate 工作。
 - 两个 `export_*` 命令只创建新的本地导出目录；目标已存在时拒绝覆盖。
@@ -130,13 +132,25 @@ Runtime/Agate 明细统一投影为：
 | 字段 | 精确定义 |
 |---|---|
 | Runtime `duration_seconds` | Runtime request 从接收到返回/终结的端到端时间 |
-| Agate `queue_seconds` | Agate `created_at → started_at`，只表示排队 |
-| Agate `execution_seconds` | Agate `started_at → finished_at` |
+| Agate `queue_seconds` | Agate `created_at → started_at`；无原生 `started_at` 时可使用持久化的 running 阶段边界 |
+| Agate `execution_seconds` | Agate `started_at → finished_at`；与 `queue_seconds` 使用同一个阶段边界 |
 | Agate `total_seconds` | Agate `created_at → finished_at`，提交到终态 |
 | `pending_age_seconds` | 从已知开始/提交时间到本次观测时刻的年龄 |
 
 `waiting_seconds` 及 `average_waiting_seconds` 只是旧消费者兼容别名，等于
 `queue_seconds`；它不是 Runtime 端到端等待。
+
+每个时间字段都伴随 `*_source`，汇总中提供 `*_source_counts`：
+
+- `agate_started_at`：Agate 原生 `started_at`；
+- `agate_phase_elapsed`：由轮询期间持久化的 `updated_at - phase_elapsed_ms` 得到阶段边界；
+- `agate_running_updated_at`：首个 running 观测的 Agate `updated_at`；
+- `runtime_observed_running`：首个 running 本地观测时刻，精度受轮询周期限制；
+- `agate_created_finished`：Agate 原生 `created_at → finished_at`。
+
+新 SDK 请求会私下持久化 `queued/running/terminal` 阶段观测，以便在
+Agate 终态不提供 `started_at` 时仍能报告有来源的分阶段时间。历史 checkpoint
+没有这些事实时仍返回 `null`，不从 `total_seconds` 擅自拆分。
 
 统计字段均只使用实际持久化样本：
 
@@ -183,7 +197,7 @@ Kernel 历史、winner 与 Kernel 导出会附带证据健康检查：
 - `missing_token_checkpoints`：事件存在，但当时累计 Token checkpoint 缺失；
 - `unresolvable_kernel_commits`：accepted commit 无法从保存的 Agent Git/source artifact 解析；
 - `unlinked_runtime_audits`：Runtime receipt 指向不存在的 Gateway Record；
-- `gateway_records_missing_runtime_audit`：新格式 Gateway Record 有 Runtime request ID，但对应 Runtime receipt 缺失。
+- `gateway_records_missing_runtime_audit`：新格式 Gateway Record 有原始 Runtime request ID，但在整个 Campaign 的所有 lineage 中都找不到对应创建 receipt。条目同时给出 `gateway_record_id` 与 `visible_scopes`；同伴复用本身不属于缺失。
 
 旧 Campaign 可能天然没有 request ID 或 token checkpoint；工具会报告缺失，不按时间戳
 猜测关联。
@@ -203,7 +217,7 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
 
 | 选项 | 默认 | 含义 |
 |---|---:|---|
-| `--stale-after SECONDS` | `600` | 最近活动超过此秒数时，将持锁 lineage 标为 `running_no_recent_activity`；只影响分类，不停止进程 |
+| `--stale-after SECONDS` | `600` | 没有活跃 Supervisor 请求且最近活动超过此秒数时，将持锁 lineage 标为 `running_no_recent_activity`；只影响分类，不停止进程 |
 | `--lineage NAME` | 全部 | 只返回指定 lineage；可重复 |
 | `--research-limit N` | `50` | 每条 lineage 最多返回 N 条 Direction 和 N 条 Experiment 明细；必须为正整数 |
 | `--all-research` | 关闭 | 返回全部 Direction/Experiment，并覆盖 `--research-limit` |
@@ -232,10 +246,18 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
         "completed_episodes": 1,
         "latest_activity_at": "...",
         "stagnation_seconds": 14.2,
+        "main_session_silence_seconds": 14.2,
         "active_session_count": 1,
         "active_sessions": [
           {"phase": "waiting_agate", "tool": "evaluate", "activity_state": "recent_activity"}
-        ]
+        ],
+        "active_supervisor_activity_count": 1,
+        "supervisor_activity": {
+          "phase": "claim_review",
+          "operation": "record-experiment",
+          "state": "running",
+          "elapsed_seconds": 1842.0
+        }
       },
       "runtime_configuration": {"optimization_mode": "ultra", "hardware": "L20D"},
       "research": {
@@ -266,9 +288,17 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
 ### 3.4 关键字段
 
 - `writer_active`：唯一直接的当前执行锁事实；`false` 时不能声称 trajectory 仍在运行。
-- `liveness`：`running_recent_activity`、`running_no_recent_activity` 或 `not_running`。
+- `liveness`：`running_recent_activity`、`running_supervisor_activity`、
+  `running_no_recent_activity` 或 `not_running`。`running_supervisor_activity` 表示主 Session
+  可能暂时静默，但有权威 Runtime 请求仍在执行；长 Claim Review 不再误报为 lineage 停滞。
 - `phase`：Campaign 阶段；Session `phase` 常见为 `thinking`、`executing_tool`、
-  `executing_runtime_tool`、`waiting_agate`、`waiting_wiki`。
+  `executing_runtime_tool`、`waiting_agate`、`waiting_wiki`。超过 stale 阈值且没有
+  Provider 事件的原 `thinking` 会显示为 `provider_wait_unknown`，避免把未知等待误称为持续思考。
+- `main_session_silence_seconds`：主 Agent Session 距最后事件的时间；即使 Supervisor 正在
+  Review 也保留，便于区分“Session 静默”和“整个 lineage 无活动”。
+- `supervisor_activity`：最近或当前的权威 Runtime 请求。`active=true` 时包含 operation、
+  state 和已运行时间；`record-experiment` / `update-direction` 的长请求会投影为
+  `claim_review`。已完成的后台 Runtime 请求也会更新 lineage 的最近活动时间。
 - `runtime_configuration`：实际 Runtime 配置快照；用于确认 mode、hardware、timeout、
   shape batch 等，不应用启动命令猜测。新 Campaign 从顶层 `campaign.json` 读取；
   独立 `runtime-config.json` 仅作为旧 Campaign 的只读兼容输入。
@@ -554,8 +584,11 @@ python3 "$AKA_REPO/observability/light_agate_calls.py" "$CAMPAIGN" \
       "p95_queue_seconds": 44.0,
       "queue_seconds_samples": 15,
       "queue_seconds_coverage": 0.8333,
+      "queue_seconds_source_counts": {"agate_phase_elapsed": 15},
       "average_execution_seconds": 60.0,
+      "execution_seconds_source_counts": {"agate_phase_elapsed": 15},
       "average_total_seconds": 72.0,
+      "total_seconds_source_counts": {"agate_created_finished": 18},
       "oldest_pending_seconds": 91.0,
       "average_waiting_seconds": 12.0
     }
@@ -573,8 +606,11 @@ python3 "$AKA_REPO/observability/light_agate_calls.py" "$CAMPAIGN" \
       "submission": 2,
       "runtime_request_ids": ["4f..."],
       "queue_seconds": 5.1,
+      "queue_seconds_source": "agate_phase_elapsed",
       "execution_seconds": 600.0,
+      "execution_seconds_source": "agate_phase_elapsed",
       "total_seconds": 605.1,
+      "total_seconds_source": "agate_created_finished",
       "pending_age_seconds": null,
       "error": {"reason": "job deadline exceeded", "category": "timeout"}
     }

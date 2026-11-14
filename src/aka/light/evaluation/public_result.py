@@ -32,6 +32,8 @@ IDENTITIES = (*PRIVATE_IDENTITIES, *PUBLIC_IDENTITIES)
 RECEIPT_TEXT_PREVIEW_BYTES = 2048
 RECEIPT_ACTIONABLE_DIAGNOSTIC_LIMIT = 4
 RECEIPT_DIAGNOSTIC_SHAPE_LIMIT = 16
+RECEIPT_VALIDATION_ERROR_LIMIT = 16
+RECEIPT_VALIDATION_LOCATION_LIMIT = 16
 _RECEIPT_RESULT_FIELDS = (
     "correct",
     "passed",
@@ -47,6 +49,7 @@ _RECEIPT_RESULT_FIELDS = (
     "measured_shape_count",
     "outcome",
     "reason",
+    "http_status",
 )
 _RECEIPT_ERROR_FIELDS = (
     "code",
@@ -59,6 +62,55 @@ _RECEIPT_ERROR_FIELDS = (
     "outcome",
     "candidate_repairable",
 )
+
+
+def _receipt_validation_error(value: object) -> dict | None:
+    """Project one bounded request-validation diagnostic without its input."""
+    if isinstance(value, str):
+        return {"message": _receipt_string(value, limit=1024)}
+    if not isinstance(value, dict):
+        return None
+    summary = {}
+    for key in ("type", "code", "msg", "message", "field", "path"):
+        item = value.get(key)
+        if isinstance(item, str):
+            summary[key] = _receipt_string(item, limit=1024)
+        elif type(item) in {int, float} and math.isfinite(item):
+            summary[key] = item
+    location = value.get("loc")
+    if isinstance(location, (list, tuple)):
+        summary["loc"] = [
+            _receipt_string(str(item), limit=256)
+            for item in location[:RECEIPT_VALIDATION_LOCATION_LIMIT]
+            if isinstance(item, (str, int)) and not isinstance(item, bool)
+        ]
+        if len(location) > RECEIPT_VALIDATION_LOCATION_LIMIT:
+            summary["loc_truncated"] = True
+    return summary or None
+
+
+def _receipt_error_details(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    errors = value.get("validation_errors")
+    if not isinstance(errors, list):
+        return None
+    projected = []
+    count = 0
+    for error in errors:
+        item = _receipt_validation_error(error)
+        if item is None:
+            continue
+        count += 1
+        if len(projected) < RECEIPT_VALIDATION_ERROR_LIMIT:
+            projected.append(item)
+    if not projected:
+        return None
+    return {
+        "validation_errors": projected,
+        "validation_errors_count": count,
+        "validation_errors_truncated": count > len(projected),
+    }
 
 
 def _receipt_text(value: str, *, limit: int = RECEIPT_TEXT_PREVIEW_BYTES) -> dict:
@@ -100,6 +152,9 @@ def _receipt_error(value: object) -> dict | None:
                 summary[key] = item
         elif type(item) in {int, float} and math.isfinite(item):
             summary[key] = item
+    details = _receipt_error_details(value.get("details"))
+    if details is not None:
+        summary["details"] = details
     return summary or {"message": "Full error details are available in the saved Gateway Record."}
 
 

@@ -13,11 +13,13 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from aka.legacy.evaluation.abba import verification_schedule
-from aka.light.evaluation.result_conversion import compile_failures
-from aka.light.evaluation.shapes import batch_shape_ids, shape_batch_request
+from aka.light.agent.runtime.process import ENVIRONMENT_TEMPFAIL
+from aka.light.evaluation.abba_shape_compat import full_reference_abba_batch_request
 from aka.light.evaluation.evaluation_feedback import evaluation_feedback
 from aka.light.evaluation.policy import BATCH_WORKERS, validate_abba_repeats
 from aka.light.evaluation.public_result import correctness_summary
+from aka.light.evaluation.result_conversion import compile_failures
+from aka.light.evaluation.shapes import batch_shape_ids
 from aka.light.experiment.abba_checkpoints import AbbaBatchStore, validate_batch
 from aka.light.experiment.store import (
     ABBA_BATCH_ROOT_ENV,
@@ -25,8 +27,6 @@ from aka.light.experiment.store import (
     JOB_ROOT_ENV,
     EvidenceUnavailable,
 )
-from aka.light.agent.runtime.process import ENVIRONMENT_TEMPFAIL
-
 
 ABBA_WALL_CLOCK_TIMEOUT_REASON = "abba_run_wall_clock_timeout"
 _ABBA_WALL_CLOCK_TIMEOUT = re.compile(
@@ -382,12 +382,12 @@ def parse_native_abba(job: dict, repeats: int, shapes: list[str]) -> dict:
 
 
 def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
+    from aka.light.acceptance.verifier import merge_abba_batch_payloads
     from aka.light.evaluation.operations import (
         comparison_allocation_timeout,
         comparison_run_timeout,
         validate_comparison,
     )
-    from aka.light.acceptance.verifier import merge_abba_batch_payloads
     from aka.light.evaluation.projection import abba, emit_gateway_error
     from aka.light.execution.gateway_jobs import eval_retry_kind, payload_identity
 
@@ -462,7 +462,9 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             record_store.retain_terminal_job(identity, retained)
 
     def run_batch(ids):
-        batch = shape_batch_request(request, ids)
+        # Temporary Agate compatibility: ABBA rejects Shape selectors. Build a
+        # complete shard-local reference and submit all of its Shapes instead.
+        batch = full_reference_abba_batch_request(request, ids)
         identity = {"transport": (
                         "ssh_native_eval_abba" if args.ssh else "agate_native_eval_abba"
                     ), "request": payload_identity(batch),

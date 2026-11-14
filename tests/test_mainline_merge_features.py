@@ -97,8 +97,8 @@ def test_kernel_milestone_token_checkpoint_separates_main_and_reviews(tmp_path):
     workspace = tmp_path / "campaign"
     workspace.mkdir()
     audit_root = supervisor_campaign_root(workspace)
-    capture_root = workspace / ".atrex_long_horizon/episodes/e0002/sessions"
-    first = workspace / ".atrex_long_horizon/episodes/e0001/sessions/run-first"
+    capture_root = audit_root / "segments/episodes/e0002/sessions"
+    first = audit_root / "segments/episodes/e0001/sessions/run-first"
     current = capture_root / "run-current"
     first.mkdir(parents=True)
     current.mkdir(parents=True)

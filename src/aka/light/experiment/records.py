@@ -19,9 +19,6 @@ from aka.light.experiment.store import (
     private_write_bytes,
     read_json,
 )
-from aka.light.workspace.files import MAX_FILE_BYTES, publish
-from aka.light.agent.session_tail import read_regular_bytes
-
 from aka.light.evaluation.provider import PREFIXES, result_from_response
 from aka.light.evaluation.public_result import cacheable_evaluation, seal_response
 from aka.light.runtime.request_errors import AgentRequestError, error_response
@@ -372,33 +369,9 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                 raise InfrastructureUnavailable(
                     "Acceptance measurement is incomplete or uncertain; inspect its private Gateway Record"
                 )
-            if operation == "evaluate" and repetitions > 1 and samples:
-                from aka.light.evaluation.gateway import EPISODE_EVALUATIONS_PATH
-                # The old report compiler must see the same aggregate as the
-                # Agent, not whichever repetition happened to finish last.
-                log = read_regular_bytes(staged / EPISODE_EVALUATIONS_PATH, limit=MAX_FILE_BYTES + 1)
-                if len(log) > MAX_FILE_BYTES:
-                    raise ValueError("Evaluation log exceeds the size limit")
-                if log.strip():
-                    row = json.loads(log.splitlines()[-1])
-                    row["result"] = result_from_response(response, operation)
-                    row["gateway_record_id"] = task.record_id
-                    publish(staged, str(EPISODE_EVALUATIONS_PATH), (json.dumps(row) + "\n").encode())
-            # Record publication precedes legacy-output publication: a later
-            # filesystem error cannot cause a completed GPU task to run again.
+            # The immutable Measurement Store is the only evaluation authority.
+            # Do not mirror results into an Agent-workspace episode log.
             from aka.light.runtime.errors import ResultPublicationError
-            try:
-                effects.publish_log(staged)
-            except ResultPublicationError as error:
-                error.bind_record(task.record_id)
-                raise
-            except Exception as error:
-                raise ResultPublicationError(
-                    f"GPU operation completed and was recorded, but evaluation-log publication failed: {error}",
-                    code="evaluation_log_publication_failed",
-                    phase="evaluation_log_publication",
-                    gateway_record_id=task.record_id,
-                ) from error
             if response["exit_code"] == 0:
                 try:
                     effects.publish_outputs(staged, args)

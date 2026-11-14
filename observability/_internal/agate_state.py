@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 import re
 import sys
@@ -29,6 +29,7 @@ from observability._internal.common import (
     normalized_job_status,
     observed_at,
     operation_name,
+    parse_timestamp,
     read_json,
     runtime_audit_paths,
     search_state,
@@ -83,16 +84,67 @@ def _retry_count(value: object) -> int:
     return count
 
 
-def _timing(job: object) -> dict[str, float | None]:
+def _observed_execution_start(
+    observations: object,
+) -> tuple[float | None, str | None]:
+    if not isinstance(observations, list):
+        return None, None
+    for observation in observations:
+        if not isinstance(observation, dict) or str(
+            observation.get("status") or ""
+        ).casefold() != "running":
+            continue
+        updated_value = observation.get("agate_updated_at")
+        if updated_value is None:
+            updated_value = observation.get("last_agate_updated_at")
+        updated = parse_timestamp(updated_value)
+        elapsed = observation.get("phase_elapsed_ms")
+        if elapsed is None:
+            elapsed = observation.get("last_phase_elapsed_ms")
+        if updated is not None and type(elapsed) in {int, float} and elapsed >= 0:
+            return (
+                (updated - timedelta(milliseconds=float(elapsed))).timestamp(),
+                "agate_phase_elapsed",
+            )
+        # Agate's updated_at is preferable to the local polling time, but it is
+        # still an observed running transition rather than a native started_at.
+        first_updated = parse_timestamp(observation.get("agate_updated_at"))
+        if first_updated is not None:
+            return first_updated.timestamp(), "agate_running_updated_at"
+        observed = parse_timestamp(observation.get("first_observed_at"))
+        if observed is not None:
+            return observed.timestamp(), "runtime_observed_running"
+    return None, None
+
+
+def _timing(job: object, observations: object = None) -> dict[str, object]:
     if not isinstance(job, dict):
-        return {"queue_seconds": None, "execution_seconds": None, "total_seconds": None}
+        return {
+            "queue_seconds": None,
+            "execution_seconds": None,
+            "total_seconds": None,
+            "queue_seconds_source": None,
+            "execution_seconds_source": None,
+            "total_seconds_source": None,
+        }
     created = job.get("created_at") or job.get("submitted_at")
     started = job.get("started_at")
     finished = job.get("finished_at") or job.get("completed_at")
+    start_source = "agate_started_at" if parse_timestamp(started) is not None else None
+    if start_source is None:
+        started, start_source = _observed_execution_start(observations)
+    queue_seconds = elapsed_seconds(created, started)
+    execution_seconds = elapsed_seconds(started, finished)
+    total_seconds = elapsed_seconds(created, finished)
     return {
-        "queue_seconds": elapsed_seconds(created, started),
-        "execution_seconds": elapsed_seconds(started, finished),
-        "total_seconds": elapsed_seconds(created, finished),
+        "queue_seconds": queue_seconds,
+        "execution_seconds": execution_seconds,
+        "total_seconds": total_seconds,
+        "queue_seconds_source": start_source if queue_seconds is not None else None,
+        "execution_seconds_source": start_source if execution_seconds is not None else None,
+        "total_seconds_source": (
+            "agate_created_finished" if total_seconds is not None else None
+        ),
     }
 
 
@@ -179,7 +231,7 @@ def _physical_job(scope, state: dict, *, source: str, record_id: str | None,
         "checkpoint_updated_at": state.get("checkpoint_updated_at"),
         "retry_count": _retry_count(state["retries"]),
         "checkpoint_references": state.get("checkpoint_references", []),
-        "timing": _timing(job),
+        "timing": _timing(job, state.get("phase_observations")),
         "pending_seconds": None if terminal else _pending_seconds(
             job, state.get("checkpoint_updated_at")
         ),

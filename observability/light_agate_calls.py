@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 from pathlib import Path
 import sys
 
@@ -61,9 +62,12 @@ def snapshot(
                 "kind": row.get("operation") or "unknown",
                 "status": _status(row),
                 "queue_seconds": timing.get("queue_seconds"),
+                "queue_seconds_source": timing.get("queue_seconds_source"),
                 "waiting_seconds": timing.get("queue_seconds"),
                 "execution_seconds": timing.get("execution_seconds"),
+                "execution_seconds_source": timing.get("execution_seconds_source"),
                 "total_seconds": timing.get("total_seconds"),
+                "total_seconds_source": timing.get("total_seconds_source"),
                 "pending_age_seconds": row.get("pending_seconds"),
             }
         )
@@ -79,6 +83,13 @@ def snapshot(
             row[f"{prefix}_waiting_seconds"] = row.get(f"{prefix}_queue_seconds")
         row["waiting_seconds_samples"] = row.get("queue_seconds_samples")
         row["waiting_seconds_coverage"] = row.get("queue_seconds_coverage")
+        kind_calls = [call for call in calls if call.get("kind") == row.get("kind")]
+        for field in ("queue_seconds", "execution_seconds", "total_seconds"):
+            row[f"{field}_source_counts"] = dict(Counter(
+                call.get(f"{field}_source")
+                for call in kind_calls
+                if call.get(field) is not None and call.get(f"{field}_source")
+            ))
     selected = calls
     if kinds:
         wanted = set(kinds)

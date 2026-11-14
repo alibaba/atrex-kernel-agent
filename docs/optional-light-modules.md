@@ -302,17 +302,13 @@ the required `startup` service and prevents the CLI from launching the campaign.
 
 Capture can be switched without enabling isolation. Wiki disabling removes its mounted Skill and required-query prompt fragments as well as rejecting the endpoint. Supplemental numerical planning is disabled by default and can be enabled independently. Leaving it disabled does not disable ordinary evaluator correctness, five-case Atrex-Bench validation, full SOL workload coverage, production constraints, or ABBA acceptance. Three-repetition aggregation is opt-in; untimed correctness checks are not repeated three times.
 
-### Projected-proc compiler preflight
+### Bubblewrap process views
 
-For `proc_mode: projected`, run `python -m aka.light.agent.preflight` in the
-Linux container that will execute the Agent. This public, model-free command
-checks the packaged C shim, compiler/development headers and temporary storage,
-returning `{"check": "projected_proc_compile", "status": "ready"}` on success
-and a nonzero exit with fixed guidance on failure. CI consumers should use this
-entry point instead of importing private process-view helpers. It neither
-installs system packages nor launches an Agent/GPU job, and it does not certify
-Bubblewrap namespace permissions. Packages installed in a separate CI container
-are not evidence that this execution container has a working compiler.
+`proc_mode` has two values. `private` creates a private PID namespace and mounts
+a new procfs; it is the ordinary Linux/Lima default. `host` shares the outer
+container's PID namespace and bind-mounts its complete `/proc`; it is the Aone
+Sandbox launch default because Aone rejects nested procfs mounts. Neither mode
+compiles or loads a shim.
 
 ### Agent active-time limit and blocking Runtime calls
 
@@ -795,7 +791,7 @@ parallel implementations or import aliases:
 
 | Owner under `src/aka/light/` | Implementation |
 | --- | --- |
-| `agent/` | CLI adapters, sessions/capture, provider Homes, Bubblewrap, projected-proc shim and process lifetime |
+| `agent/` | CLI adapters, sessions/capture, provider Homes, Bubblewrap and process lifetime |
 | `workspace/` | Auxiliary/draft views, source snapshots, private Git, inheritance and resource installation |
 | `execution/` | Dispatch, Gateway-job recovery, infrastructure retry and configuration |
 | `evaluation/` | Gateway CLI, native Eval/ABBA, Profile, result projection and measurement policy |
@@ -821,12 +817,12 @@ filenames are unchanged. Pause at an Episode boundary before upgrading code;
 retain the original package/resource identity for recorded continuations, or use a new
 workspace for a changed identity. Do not rewrite locks to bypass reconstruction checks. Private Python module
 paths are not compatibility APIs. Update direct integrations to the new owners,
-notably `aka.light.agent.preflight` for projected-proc compilation preflight,
+notably `aka.light.agent.preflight` for deployment-version checks,
 `aka.light.evaluation.gateway` for the executor CLI and
-`aka.light.acceptance.audit_recovery` for operator repair. Historical
-`.atrex_long_horizon/`, `.atrex-supervisor-runtime/`, Record IDs and public
-`tools/`, `skills/`, `scratch/` paths are deliberately retained. This change does
-not silently restart running Agents or rewrite existing Campaign artifacts.
+`aka.light.acceptance.audit_recovery` for operator repair. Current Campaign state,
+Runtime audit and Record IDs live in the Supervisor-private Campaign directory;
+public `tools/`, `skills/` and `scratch/` paths retain their Agent-facing roles.
+This change does not silently restart running Agents or rewrite existing Campaign artifacts.
 
 Refactor verification covers 224 local regression cases (220 passed; four
 Linux-only cases skipped on macOS), including real local subprocess/HTTP Episode
@@ -838,8 +834,8 @@ subsequent shared-code extraction described below additionally checks standalone
 CLI behavior and the new helper-file dependency closure. The three distributions build
 from sdist; an isolated installation passes the eight layout/resource/entrypoint
 checks without the source tree on `PYTHONPATH`. A separate Lima Linux run checks
-projected-proc Bubblewrap isolation, shim compilation, writable candidate files,
-read-only contracts and the mounted shell guard. These are local regressions,
+Bubblewrap isolation, writable candidate files, read-only contracts and the
+mounted shell guard. These are local regressions,
 not a new live-model/GPU campaign or an internal CI run. No test fixtures or
 generated distribution files are installed into the Agent workspace.
 
@@ -887,8 +883,8 @@ implementations. Offline before/after checks cover argv/error handling, token an
 Journal fields, numerical scheduling and standalone scripts. All 18 reuse checks
 pass on macOS and Lima Linux, including actual direct/handoff subprocesses and
 FD transfer. The 224-case local suite passes with four platform-specific skips;
-Lima also passes the nine dependency/sandbox checks, including private and
-projected-proc Bubblewrap. These checks do not claim new model/GPU performance or
+Lima also passes the dependency/sandbox checks for private-proc Bubblewrap.
+These checks do not claim new model/GPU performance or
 live Campaign evidence, and the test fixtures remain outside the repository.
 
 ## Infrastructure recovery and Agent feedback
@@ -938,7 +934,7 @@ Light promotion now matches Runtime: compare the candidate and incumbent's GeoMe
 
 Light's shared defaults are defined in `aka.light.evaluation.policy`. Performance sampling uses 100 timing iterations and 20 warmup iterations. One Runtime-owned 300-second per-Shape step budget applies consistently to candidate construction, correctness, Performance, and each A/B run. With the default two measurements per side, the enclosing ABBA allocation is 1230 seconds, including 30 seconds of scheduling overhead. If a request increases ABBA repeats without explicitly increasing the allocation, the implicit per-run limit is reduced to the equal share that fits; an explicit per-run limit is never silently reduced. Clock locking remains enabled. Full Evaluate, correctness-only Evaluate, and ABBA use 5 correctness cases per Shape (base plus 4 additional). Evaluate and ABBA batch up to 4 Shapes per job, with up to 16 batches in parallel. Shape batch size is a Runtime-owned Campaign setting and participates in task identity. Changing these defaults changes measurement identity, so records made with older policies remain readable but are not reused for new default requests.
 
-ABBA submits native `Eval` requests with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Agent exploration and Supervisor retention use the same Runtime-owned five-case correctness policy. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume; the former Dev-driver fallback is removed. Explicit SSH uses the same native request and evidence contract. SOL comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
+ABBA submits native `Eval` requests with baseline source and `abba.repeats` counting complete A/B/B/A blocks. The public repeat count is per side, even 2–16; default 2 means one block. Because current Agate ABBA rejects `shape_ids`, each outer Light batch is temporarily rebuilt as a complete reference containing exactly that batch; no Shape selector is sent. This compatibility is isolated in `aka.light.evaluation.abba_shape_compat` and can be deleted when Agate accepts native ABBA Shape selection. Agent exploration and Supervisor retention use the same Runtime-owned five-case correctness policy. Native SDK run order and all Shape evidence are checked before recording a verdict. Completed batches survive sibling failures and resume; the former Dev-driver fallback is removed. Explicit SSH uses the same native request and evidence contract. SOL comparisons without a native Atrex-Bench contract fail explicitly before submission; ordinary SOL Evaluate is unchanged.
 
 The resolved measurement defaults and native transport participate in the task identity. Old Dev ABBA/old-policy Evaluate records remain readable but cannot satisfy the new measurement contract. Acceptance retry keys also identify the GeoMean policy. Journal options, persistent-workspace organization and supplemental numerical-validation configuration are unchanged.
 
@@ -946,47 +942,22 @@ The resolved measurement defaults and native transport participate in the task i
 
 ### Bubblewrap in restricted containers
 
-Keep `sandbox: bwrap` and set the Agent module's `proc_mode: projected` when an
-outer OCI policy rejects a fresh procfs mount. The default `private` mode keeps
-the existing `--proc /proc` behavior; neither mode silently disables isolation.
-This is an explicit compatibility choice, not an automatic permission fallback:
+In Aone Sandbox, keep `sandbox: bwrap` and default the Agent module to
+`proc_mode: host`. The provider-wide `private` default remains appropriate for
+ordinary Linux/Lima and keeps the existing `--proc /proc` behavior. Aone launch
+configuration must set `host` explicitly; there is no runtime permission fallback:
 
 ```json
-{"api_version": 1, "patches": [{"id": "agent", "config": {"sandbox": "bwrap", "capture": true, "proc_mode": "projected"}}]}
+{"api_version": 1, "patches": [{"id": "agent", "config": {"sandbox": "bwrap", "capture": true, "proc_mode": "host"}}]}
 ```
 
-The projected mode ports the standalone Runtime's container implementation:
-user/PID/IPC/UTS namespaces and the empty-root filesystem allowlist remain intact.
-A trusted parent publishes only this Session's descendants' namespace-local
-`stat`, `status`, `cmdline` and `task/children` into a private, read-only view.
-The outer `/proc` directory, other Sessions and process `root/cwd/environ/mem/fd`
-escape links are not mounted. Selected public machine statistics are separately
-read-only mounted. The live view uses private temporary storage (`/dev/shm` when
-available), is not inherited as Runtime State and is removed on normal exit.
-
-The bundled libc shim supports Bun's own memory-map/stack and FD-readlink needs.
-Its Unix-socket broker checks peer PID ancestry and accepts no caller-chosen PID
-or path. It serves only the caller's read-only maps or FD link text; the fixed
-`exe` alias targets the already-allowlisted CLI executable. This is a limited
-compatibility view, not a complete procfs implementation. `cc`, writable temporary
-storage, namespace creation and ordinary bind mounts are still required.
-
-FD link text is supplied only for metadata handles (`O_PATH` without
-`O_DIRECTORY`). Ordinary I/O and pinned-directory handles report `ENOENT`, so
-CLI capability checks use their checked-path fallback instead of trying to open
-nonexistent `/proc/self/fd/N[/leaf]` magic links. The shim does not translate
-directory handles back into path-based writes or expose the host's FD tree.
-The Light shell guard is independently mounted read-only from the same packaged
-resource named by `BASH_ENV`, including resumable-session launches; it does not
-depend on the old checkout-level `tools/` location.
-
-Light preserves its anonymous-FD environment transport across the additional
-wrapper; credentials never become `KEY=value` arguments. The shim is loaded only
-inside bwrap. The wrapper owns the namespace and temporary view for the CLI's
-lifetime, including cancellation; direct launches retain the existing ability
-to survive Supervisor exit. Select `private` again on a compatible host to
-restore native procfs, or explicitly select `sandbox: none` for cooperative-only
-testing. Neither compatibility mode is a network isolation boundary.
+Host mode omits PID-namespace isolation and bind-mounts the outer container's
+complete `/proc` read-write. The empty-root filesystem allowlist, private temporary
+directories, anonymous-FD environment transport and `--cap-drop ALL` remain. The
+Agent can nevertheless see every process in that outer container, so use a
+dedicated Aone Sandbox and do not treat host mode as process isolation. Select
+`private` on compatible Linux/Lima hosts, or explicitly select `sandbox: none`
+for cooperative-only testing. Neither mode is a network isolation boundary.
 
 `sandbox=none` is cooperative same-UID coordination, not a malicious-Agent security boundary. Private directory layout and HTTP capabilities do not stop a process with the operator's own OS privileges. With the legacy Workflow, even Bubblewrap must retain the Git/evaluator/credential access required by that workflow. Choose the complete `light-sandbox` composition for a trajectory-stable Agent Git repository with Supervisor-owned trusted worktrees and GPU/Wiki credentials. This is filesystem/process isolation, not network isolation or a separate OS account.
 
@@ -1006,32 +977,6 @@ The following records describe checks performed for the referenced implementatio
 Their counts and local fixture paths are historical evidence, not a committed test suite or
 an assertion that this documentation update reran GPU/model campaigns. Current live source-layout
 evidence is collected in [native CUDA validation](native-cuda.md).
-
-Projected-proc compatibility was checked on 2026-10-19 in the existing restricted
-GDN/`<gpu_arch>` Sandbox with Bubblewrap 0.4.0: the unchanged private-proc probe fails with
-`Operation not permitted`, while namespace-only and projected-mode probes pass.
-Eight external Linux regressions cover process ownership/local PID projection,
-forbidden proc links, read-only mounts, caller-only maps/FD compatibility,
-anonymous environment-FD handling, and cancellation cleanup. The final wheel
-includes the C source and successfully launches the real Claude Code 2.1.247 CLI.
-The local module suite passes 13 checks with two Linux-only skips. Two independent
-live smoke campaigns (`sandbox` and `light-sandbox`, one Bootstrap and one Episode
-each, three of 90 Shapes) have passed Bootstrap and entered real Agent sessions in
-distinct PID namespaces. This is startup/isolation evidence, not a claim that the
-full Episodes or every Provider CLI have completed successfully.
-
-The 2026-10-21 file-operation regression was reproduced with the real Claude Code
-2.1.302 CLI: the old projection allowed Read but Write failed with `ENOENT` and
-left the candidate unchanged. After the fix, Claude Code 2.1.235 and 2.1.302 passed
-Read followed by Write, Edit or Bash in both private and projected proc modes
-(12 combinations) on Lima/Linux. Additional checks cover the native-session
-entrypoint, mounted shell guard, workspace atomic replacement, read-only public
-inputs, hidden operator files, caller-only read-only maps and unavailable proc
-escape links. Framework, Legacy and Light wheels were rebuilt from sdists and
-installed into a fresh Linux environment; Claude Write and native-session Bash
-also passed using those packaged resources. Model responses were controlled local
-fixtures; these are real CLI and Bubblewrap checks, not a new live model/GPU
-campaign or CI pass.
 
 Research module selection is checked for both `light` and `light-sandbox`, including the default
 Direction+Experiment mode, each single-module mode, and explicit report-only mode. The checks cover
@@ -1072,9 +1017,8 @@ handling and the 60-second validation retry policy. Fourteen existing targeted
 Gateway/environment recovery regressions passed separately. These are offline
 fault-injection and local-process checks, not live model/GPU or outage-monitor runs.
 
-The native Session Home binding was checked with eight targeted regressions on
-macOS and with real Bubblewrap in Lima/Linux in both private and projected proc
-modes. Controlled CLI subprocesses write root and subagent transcripts, continue
+The native Session Home binding was checked with targeted regressions on
+macOS and with private-proc Bubblewrap in Lima/Linux. Controlled CLI subprocesses write root and subagent transcripts, continue
 after a simulated SIGTERM exit, and close/export/restore their checkpoints. The
 checks also cover constructor-time Codex observer binding, per-Session isolation,
 unchanged native/Legacy Homes and rejection of mid-Session Home changes. These
@@ -1107,9 +1051,9 @@ The shared-code refactor was additionally checked against a pre-refactor source 
 
 The refactored framework/legacy/light wheels were rebuilt from sdists and installed into a fresh environment. Isolated (`python -I`) smoke checks cover workflow/observed/light composition startup, both Gateway entrypoints, installed script assets, standalone SOL seed help, Qoder persistence policy, Light native resume and a captured subprocess. Shared Agent imports do not load the checkout-only legacy executor; that runner is imported only when actually selected. These checks do not use live model or GPU services and make no performance claim.
 
-On 2026-10-20, 12 controlled active-time/suspension regressions passed on macOS
-and Lima/Linux. Linux additionally exercised both private-proc and projected-proc
-Bubblewrap paths within the HTTP integration cases, including the actual foreground
+On 2026-10-20, controlled active-time/suspension regressions passed on macOS
+and Lima/Linux. Linux additionally exercised private-proc Bubblewrap within the
+HTTP integration cases, including the actual foreground
 hook inside the namespace. Checks cover an operation longer than the Agent's active
 budget, all four HTTP routes, error recovery, multi-megabyte responses, overlapping
 waits, peer isolation, revocation while stopped, PID reuse, and a parent exiting while

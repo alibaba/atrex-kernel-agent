@@ -31,11 +31,64 @@ from observability._internal.common import (
     table,
 )
 from aka.legacy.workflow.public_state import writer_active
+from observability._internal.runtime_audit import _audit_calls
 
 
 AGATE_KINDS = frozenset(
     {"run", "evaluate", "same_allocation_abba", "abba", "profile", "check", "disassemble", "dev"}
 )
+CLAIM_REVIEW_TOOLS = frozenset({"record-experiment", "update-direction"})
+
+
+def _supervisor_activity_rows(scope) -> list[dict]:
+    """Project durable Runtime requests that explain Supervisor-side work."""
+    rows = []
+    for call in _audit_calls(scope):
+        state = str(call.get("status") or "unknown").casefold()
+        # ``pending`` is a completed HTTP request whose response says the
+        # underlying operation has not reached a terminal result.  Only a
+        # request audit that is still ``running`` proves Supervisor-side work
+        # is currently executing.
+        active = state == "running"
+        tool = str(call.get("tool") or "unknown")
+        observed = (
+            call.get("updated_at")
+            or call.get("finished_at")
+            or call.get("started_at")
+            or call.get("created_at")
+        )
+        rows.append(
+            {
+                "phase": "claim_review" if tool in CLAIM_REVIEW_TOOLS else "runtime_request",
+                "phase_source": "runtime_request_tool_semantics",
+                "operation": tool,
+                "operation_family": call.get("operation_family"),
+                "state": state,
+                "active": active,
+                "runtime_request_id": call.get("request_id"),
+                "started_at": call.get("started_at") or call.get("created_at"),
+                "updated_at": observed,
+                "finished_at": call.get("finished_at"),
+                "elapsed_seconds": (
+                    call.get("pending_age_seconds")
+                    if active
+                    else call.get("duration_seconds")
+                ),
+                "gateway_record_id": call.get("gateway_record_id"),
+                "error": call.get("error"),
+            }
+        )
+    return sorted(
+        rows,
+        key=lambda row: (
+            0 if row["active"] else 1,
+            age_seconds(row.get("updated_at"))
+            if age_seconds(row.get("updated_at")) is not None
+            else float("inf"),
+        ),
+    )
+
+
 def _episode_rows(attempts: list[dict], active: int | None) -> list[dict]:
     """Render Episode boundaries as execution segments, not acceptance gates."""
     rows = []
@@ -257,6 +310,8 @@ def _active_session_rows(scope, *, current_episode: int | None, writer_active: b
             default=value.get("started_at"),
         )
         stale = age_seconds(updated_at)
+        if phase == "thinking" and stale is not None and stale > stale_after:
+            phase = "provider_wait_unknown"
         rows.append(
             {
                 "scope": scope.label,
@@ -300,6 +355,32 @@ def _search_projection(state: dict | None) -> dict | None:
         raw_jobs = asynchronous.get("jobs")
         if isinstance(raw_jobs, dict):
             jobs = [row for row in raw_jobs.values() if isinstance(row, dict)]
+    options = state.get("options") if isinstance(state.get("options"), dict) else None
+    options_source = "persisted"
+    if options is None:
+        # Checkpoints produced between the coordinator-layout migration and
+        # option persistence are still useful.  Report only facts that the
+        # checkpoint itself proves; do not invent epochs or Episode counts.
+        trajectories = {
+            job.get("trajectory")
+            for job in jobs
+            if type(job.get("trajectory")) is int and job.get("trajectory") > 0
+        }
+        asynchronous = state.get("asynchronous")
+        if isinstance(asynchronous, dict) and isinstance(asynchronous.get("jobs"), dict):
+            trajectories.update(
+                int(key)
+                for key in asynchronous["jobs"]
+                if str(key).isdigit() and int(key) > 0
+            )
+        options = {
+            "synchronization": (
+                "asynchronous" if isinstance(asynchronous, dict) else "synchronous"
+            ),
+        }
+        if trajectories:
+            options["trajectories"] = max(trajectories)
+        options_source = "inferred_from_checkpoint"
     return {
         "source": "persisted_scheduler_checkpoint",
         "epoch": state.get("epoch"),
@@ -308,7 +389,8 @@ def _search_projection(state: dict | None) -> dict | None:
         "stop_reason": state.get("stop_reason"),
         "active_winner": active.get("winner"),
         "global_best": state.get("global_best"),
-        "options": state.get("options") if isinstance(state.get("options"), dict) else None,
+        "options": options,
+        "options_source": options_source,
         "binding_digest": state.get("binding") if isinstance(state.get("binding"), str) else None,
         "token_budget": state.get("token_budget"),
         "lineages": state.get("lineages") if isinstance(state.get("lineages"), dict) else {},
@@ -323,7 +405,7 @@ def _search_projection(state: dict | None) -> dict | None:
 
 
 def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
-    """Read pre-Episode bootstrap captures and legacy baseline captures."""
+    """Read Supervisor-private captures created before the first segment."""
     root = scope.workspace.parent / ".atrex-session-traces" / scope.workspace.name
     rows = []
     for usage_path in sorted(root.glob("run-*/token-usage.json")):
@@ -345,6 +427,8 @@ def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
             default=value.get("started_at"),
         )
         stale = age_seconds(updated_at)
+        if phase == "thinking" and stale is not None and stale > stale_after:
+            phase = "provider_wait_unknown"
         rows.append(
             {
                 "scope": scope.label,
@@ -412,6 +496,25 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                 scope,
                 stale_after=stale_after,
             )
+        supervisor_activities = _supervisor_activity_rows(scope)
+        active_supervisor_activities = [
+            activity for activity in supervisor_activities if activity["active"]
+        ]
+        supervisor_activity = (
+            active_supervisor_activities[0]
+            if active_supervisor_activities
+            else supervisor_activities[0]
+            if supervisor_activities
+            else None
+        )
+        main_session_silence = min(
+            (
+                session["stagnation_seconds"]
+                for session in active_sessions
+                if session["stagnation_seconds"] is not None
+            ),
+            default=None,
+        )
         activity_points = []
         if progress["writer_active"]:
             activity_points = [
@@ -420,6 +523,11 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                     (session["stagnation_seconds"], session["updated_at"])
                     for session in active_sessions
                 ],
+                *[
+                    (age_seconds(activity["updated_at"]), activity["updated_at"])
+                    for activity in supervisor_activities
+                    if activity["updated_at"] is not None
+                ],
             ]
         latest_activity = min(
             (point for point in activity_points if point[0] is not None),
@@ -427,12 +535,18 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
             key=lambda point: point[0],
         )
         age, latest_activity_at = latest_activity
-        if progress["writer_active"] and (age is None or age <= stale_after):
+        if progress["writer_active"] and active_supervisor_activities:
+            liveness = "running_supervisor_activity"
+            stagnation = None
+        elif progress["writer_active"] and (age is None or age <= stale_after):
             liveness = "running_recent_activity"
+            stagnation = age
         elif progress["writer_active"]:
             liveness = "running_no_recent_activity"
+            stagnation = age
         else:
             liveness = "not_running"
+            stagnation = age
         recorded_sessions = _session_rows(scope)
         active_ids = {row["session_id"] for row in active_sessions}
         for session in recorded_sessions:
@@ -451,12 +565,15 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                 "completed_episodes": progress["completed_episodes"],
                 "state_updated_at": progress["updated_at"],
                 "latest_activity_at": latest_activity_at,
-                "stagnation_seconds": age,
+                "stagnation_seconds": stagnation,
+                "main_session_silence_seconds": main_session_silence,
                 "liveness": liveness,
                 "episode_counts": dict(Counter(row["category"] for row in episodes)),
                 "episodes": episodes,
                 "active_session_count": len(active_sessions),
                 "active_sessions": active_sessions,
+                "active_supervisor_activity_count": len(active_supervisor_activities),
+                "supervisor_activity": supervisor_activity,
                 "sessions": recorded_sessions,
             }
         )
@@ -475,7 +592,10 @@ def render(value: dict) -> str:
     lines = ["AKA Light 运行状态", ""]
     lines.append(
         table(
-            ["Scope", "Campaign Phase", "Episode", "Done", "Liveness", "Stale(s)", "Active Sessions"],
+            [
+                "Scope", "Campaign Phase", "Episode", "Done", "Liveness",
+                "Stale(s)", "Supervisor Activity", "Active Sessions",
+            ],
             [
                 [
                     row["scope"],
@@ -484,6 +604,11 @@ def render(value: dict) -> str:
                     row["completed_episodes"],
                     row["liveness"],
                     round(row["stagnation_seconds"], 1) if row["stagnation_seconds"] is not None else None,
+                    (
+                        f"{row['supervisor_activity']['phase']}:{row['supervisor_activity']['operation']}:{row['supervisor_activity']['state']}"
+                        if row.get("supervisor_activity")
+                        else None
+                    ),
                     row["active_session_count"],
                 ]
                 for row in value["scopes"]

@@ -29,8 +29,7 @@ from aka.light.evaluation.shapes import shape_request_timeout
 from aka.light.evaluation.public_result import compact_receipt
 
 from aka.light.evaluation.gateway import (
-    COMMAND_WORKSPACE_MANIFEST,
-    EPISODE_EVALUATIONS_PATH,
+    COMMAND_WORKSPACE_MANIFEST_ENV,
     build_parser,
     configured_queue_wait_grace,
     requested_sync_paths,
@@ -1357,11 +1356,21 @@ class SupervisorRuntime:
         environment.pop(TERMINAL_VALIDATION_ENV, None)
         if terminal_validation:
             environment[TERMINAL_VALIDATION_ENV] = "1"
-        for key in (OWNER_ENV, URL_ENV, TOKEN_ENV, "ATREX_PRIVATE_REFERENCE_DIR"):
+        for key in (
+            OWNER_ENV,
+            URL_ENV,
+            TOKEN_ENV,
+            "ATREX_PRIVATE_REFERENCE_DIR",
+            COMMAND_WORKSPACE_MANIFEST_ENV,
+        ):
             environment.pop(key, None)
         kernel_ids: dict[str, str] = dict(trusted_kernel_ids or {})
         with tempfile.TemporaryDirectory(dir=self.root, prefix="request-") as temporary:
-            staged = Path(temporary)
+            request_root = Path(temporary)
+            staged = request_root / "workspace"
+            control = request_root / "control"
+            staged.mkdir()
+            control.mkdir()
             with _validating_request():
                 if route.endswith("query"):
                     command = self._wiki_command(capability, request["tool"], argv, staged, environment)
@@ -1434,7 +1443,7 @@ class SupervisorRuntime:
                             from aka.light.workspace.sources import Artifact, from_git
                             try:
                                 baseline = Artifact(from_git(git.workspace, baseline_commit))
-                                baseline_path = ".atrex_long_horizon/abba-baseline"
+                                baseline_path = ".atrex_request/abba-baseline"
                                 baseline.export(staged / baseline_path)
                             except (OSError, UnicodeError, ValueError, subprocess.SubprocessError) as error:
                                 raise AgentRequestError(
@@ -1459,12 +1468,14 @@ class SupervisorRuntime:
                                 for path in staged.rglob("*")
                                 if path.is_file() and not path.is_symlink()
                             )
-                            command_workspace_manifest = staged / COMMAND_WORKSPACE_MANIFEST
-                            command_workspace_manifest.parent.mkdir(
-                                parents=True, exist_ok=True
+                            command_workspace_manifest = (
+                                control / "command-workspace.json"
                             )
                             command_workspace_manifest.write_text(
                                 json.dumps(command_workspace), encoding="utf-8"
+                            )
+                            environment[COMMAND_WORKSPACE_MANIFEST_ENV] = str(
+                                command_workspace_manifest
                             )
                         if capability.journal and capability.journal.view:
                             from aka.light.workspace.episode import PUBLIC_FILES
@@ -1560,9 +1571,6 @@ class SupervisorRuntime:
                         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(
                             evaluator_reference_dir
                         )
-                    # Keep the legacy report compiler's log alongside private records.
-                    (staged / ".atrex_long_horizon").mkdir(exist_ok=True)
-                    (staged / ".atrex_long_horizon/journal.json").write_text("{}")
                     if parsed is not None:
                         for value in requested_sync_paths(parsed):
                             if relative_path(value).parts[0] not in {"profiles", "scratch"}:
@@ -1610,7 +1618,6 @@ class SupervisorRuntime:
                                    self.config.url, str(self.config.atrex_bench_root or "")),
                     run=lambda command, cwd, env: self.run_executor(command, cwd, env, capability),
                     audit=lambda argv, process, record: self.audit_process(capability, "gateway", argv, process, record),
-                    publish_log=lambda staged: self.publish_evaluation_log(capability.workspace, staged),
                     publish_outputs=lambda staged, args: self.publish_legacy_outputs(capability.workspace, staged, args),
                     deadline=capability.deadline, request_id=capability.request_id,
                     kernel_ids=kernel_ids,
@@ -1690,7 +1697,6 @@ class SupervisorRuntime:
             process = self.run_executor(command, staged, environment, capability)
             self.audit_process(capability, kind, argv, process)
             if kind == "gateway":
-                self.publish_evaluation_log(capability.workspace, staged)
                 if process.returncode == 0:
                     self.publish_legacy_outputs(capability.workspace, staged, parsed)
             from aka.light.evaluation.projection import credential_values, project_response
@@ -1998,11 +2004,24 @@ class SupervisorRuntime:
         failed = http_status >= 400 or (
             type(execution_exit_code) is int and execution_exit_code != 0
         )
-        error = {
-            key: response.get(key)
-            for key in ("code", "reason", "error_class", "message", "outcome", "phase")
-            if response.get(key) is not None
-        }
+        nested_error = response.get("error")
+        error = dict(nested_error) if isinstance(nested_error, dict) else {}
+        # Retain compatibility with executor responses that still put error
+        # identity at the top level, while treating the Agent-facing structured
+        # error as authoritative for HTTP request failures.
+        for key in (
+            "code", "reason", "error_class", "message", "outcome", "phase",
+            "next_action",
+        ):
+            if key not in error and response.get(key) is not None:
+                error[key] = response[key]
+        if response.get("detail") is not None and "detail" not in error:
+            error["detail"] = response["detail"]
+        if isinstance(response.get("issues"), list):
+            error["issues"] = response["issues"]
+        details = response.get("details")
+        if isinstance(details, dict) and isinstance(details.get("validation_errors"), list):
+            error["validation_errors"] = details["validation_errors"]
         gateway_record_id = response.get("gateway_record_id")
         if not isinstance(gateway_record_id, str):
             details = response.get("details")
@@ -2248,21 +2267,6 @@ class SupervisorRuntime:
                     publish(ready, relative, data)
             for relative in sorted(paths):
                 publish(workspace, relative, read_input(ready, relative))
-
-    def publish_evaluation_log(self, workspace, staged):
-        # Failed correctness evaluations still belong in the legacy evidence
-        # log, but their partial profiles/scratch files do not belong in outputs.
-        log = staged / EPISODE_EVALUATIONS_PATH
-        if log.is_file():
-            from aka.light.agent.session_tail import read_regular_bytes
-            data = read_regular_bytes(log, limit=MAX_FILE_BYTES + 1)
-            if len(data) > MAX_FILE_BYTES:
-                raise ValueError("Evaluation log exceeds the size limit")
-            binding = self.journals.get(workspace)
-            destination = binding.service.git_workspace if binding and binding.view else workspace
-            publish(destination, EPISODE_EVALUATIONS_PATH,
-                    data, append=True)
-
 
 @contextmanager
 def session_environment(workspace: Path, environment: dict[str, str], *, session_control=None):

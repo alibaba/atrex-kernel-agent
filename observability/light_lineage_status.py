@@ -91,8 +91,11 @@ def snapshot(
                         "completed_episodes",
                         "latest_activity_at",
                         "stagnation_seconds",
+                        "main_session_silence_seconds",
                         "active_session_count",
                         "active_sessions",
+                        "active_supervisor_activity_count",
+                        "supervisor_activity",
                     )
                 },
                 "runtime_configuration": row.get("runtime_configuration"),
@@ -148,6 +151,11 @@ def render(value: dict) -> str:
                 runtime.get("liveness"),
                 runtime.get("current_episode"),
                 runtime.get("active_session_count"),
+                (
+                    runtime.get("supervisor_activity", {}).get("phase")
+                    if isinstance(runtime.get("supervisor_activity"), dict)
+                    else None
+                ),
                 directions.get("proposed", 0),
                 directions.get("in_progress", 0),
                 directions.get("deferred", 0) + directions.get("blocked", 0),
@@ -168,6 +176,7 @@ def render(value: dict) -> str:
                     "Liveness",
                     "Episode",
                     "Sessions",
+                    "Supervisor",
                     "Proposed",
                     "Active Dir",
                     "Paused Dir",

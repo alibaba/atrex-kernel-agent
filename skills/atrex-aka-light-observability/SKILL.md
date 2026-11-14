@@ -81,6 +81,9 @@ Public observability JSON uses `runtime_request_id`, `agate_job_id`, and
 - Runtime `duration_seconds` is request end-to-end time.
 - Agate `queue_seconds` is submitted-to-started only; `execution_seconds` is started-to-finished;
   `total_seconds` is submitted-to-terminal.
+- Read each timing field's `*_source` and the summary's `*_source_counts`. Native `started_at`
+  is authoritative; otherwise new SDK checkpoints may use a persisted running-phase boundary.
+  Historical checkpoints without either source remain missing rather than splitting total time.
 - Timing averages use only persisted samples. Always retain sample count and coverage.
 - Review tokens remain separate from main-Agent tokens. Reasoning tokens are a breakdown, not an
   amount to add to total tokens again.

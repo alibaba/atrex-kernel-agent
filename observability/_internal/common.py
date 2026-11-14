@@ -93,9 +93,7 @@ class Scope:
 
     @property
     def segment_root(self) -> Path:
-        current = self.audit_root / "segments"
-        legacy = self.workspace / ".atrex_long_horizon"
-        return legacy if not current.exists() and legacy.exists() else current
+        return self.audit_root / "segments"
 
 
 def resolve_workspace(value: Path) -> Path:
@@ -339,19 +337,8 @@ def search_state(workspace: Path) -> dict[str, Any] | None:
 
 
 def startup_stage(workspace: Path) -> str:
-    """Classify only legacy sibling captures; current Episode 0 is not startup."""
-    episode_zero = workspace / ".atrex_long_horizon" / "episodes" / "e0000"
-    if episode_zero.is_dir():
-        return "bootstrap"
-    live = read_json(workspace / "memory/live.json", default={})
-    if isinstance(live, dict):
-        if live.get("episode_branch") == "framework-baseline":
-            return "framework_baseline"
-        phase = live.get("phase")
-        if isinstance(phase, str) and phase:
-            return phase
-    if (workspace / ".atrex_long_horizon/framework_baseline").exists():
-        return "framework_baseline"
+    """Current Light starts directly in the optimization Session."""
+    _ = workspace
     return "bootstrap"
 
 
@@ -413,6 +400,11 @@ def job_state_rows(record_directory: Path) -> list[dict[str, Any]]:
                     value
                     for value in state.get("runtime_request_ids", [])
                     if isinstance(value, str) and value
+                ],
+                "phase_observations": [
+                    dict(value)
+                    for value in state.get("phase_observations", [])
+                    if isinstance(value, dict)
                 ],
                 "process": process,
                 "job": job,
@@ -506,6 +498,11 @@ def job_attempt_rows(record_directory: Path) -> list[dict[str, Any]]:
                     value
                     for value in state.get("runtime_request_ids", [])
                     if isinstance(value, str) and value
+                ],
+                "phase_observations": [
+                    dict(value)
+                    for value in state.get("phase_observations", [])
+                    if isinstance(value, dict)
                 ],
                 "process": process,
                 "job": job,

@@ -173,55 +173,99 @@ def evidence_health(
 
     incomplete_records = []
     unreadable_records = []
-    record_runtime_request_ids: dict[str, set[str]] = defaultdict(set)
-    audit_request_ids: set[str] = set()
-    unlinked_runtime_audits = []
+    # Gateway Records are Campaign-scoped. A peer lineage may consume the same
+    # central Record through its own Runtime request, while the immutable
+    # Record retains the original creator's runtime_request_id. Index the
+    # physical Record once and resolve that creator request across all lineage
+    # audit namespaces rather than requiring it to exist in every consumer.
+    record_facts: dict[Path, dict[str, Any]] = {}
+    audit_request_ids: dict[str, set[str]] = defaultdict(set)
+    runtime_audits: list[dict[str, Any]] = []
     scopes = discover_scopes(workspace)
     for scope in scopes:
         if not hasattr(scope, "measurement_root") or not hasattr(scope, "audit_root"):
             continue
-        known_records = set()
         for item in iter_records(scope, include_incomplete=True):
             record_id = item["gateway_record_id"]
-            known_records.add(record_id)
-            if item.get("read_error"):
-                unreadable_records.append(
-                    {
-                        "scope": scope.label,
-                        "gateway_record_id": record_id,
-                        "error": item["read_error"],
-                    }
-                )
-            elif not item.get("complete"):
-                incomplete_records.append(
-                    {"scope": scope.label, "gateway_record_id": record_id}
-                )
+            directory = Path(item["directory"]).resolve()
             record = item.get("record") if isinstance(item.get("record"), dict) else {}
             request_id = record.get("runtime_request_id")
+            fact = record_facts.setdefault(
+                directory,
+                {
+                    "gateway_record_id": record_id,
+                    "visible_scopes": set(),
+                    "runtime_request_ids": set(),
+                    "complete": bool(item.get("complete")),
+                    "read_error": item.get("read_error"),
+                },
+            )
+            fact["visible_scopes"].add(scope.label)
+            fact["complete"] = bool(fact["complete"] or item.get("complete"))
+            if fact.get("read_error") is None and item.get("read_error"):
+                fact["read_error"] = item["read_error"]
             if isinstance(request_id, str) and request_id:
-                record_runtime_request_ids[scope.label].add(request_id)
+                fact["runtime_request_ids"].add(request_id)
         for path in runtime_audit_paths(scope):
             value = read_json(path, default={})
             if not isinstance(value, dict):
                 continue
             request_id = value.get("request_id") or path.stem.removeprefix("request-")
             if isinstance(request_id, str) and request_id:
-                audit_request_ids.add(f"{scope.label}:{request_id}")
-            record_id = value.get("gateway_record_id")
-            if isinstance(record_id, str) and record_id not in known_records:
-                unlinked_runtime_audits.append(
-                    {
-                        "scope": scope.label,
-                        "runtime_request_id": request_id,
-                        "gateway_record_id": record_id,
-                    }
-                )
+                audit_request_ids[request_id].add(scope.label)
+            runtime_audits.append(
+                {
+                    "scope": scope.label,
+                    "runtime_request_id": request_id,
+                    "gateway_record_id": value.get("gateway_record_id"),
+                }
+            )
+
+    known_record_ids = {
+        fact["gateway_record_id"] for fact in record_facts.values()
+    }
+    unlinked_runtime_audits = [
+        audit
+        for audit in runtime_audits
+        if isinstance(audit.get("gateway_record_id"), str)
+        and audit["gateway_record_id"] not in known_record_ids
+    ]
+
+    for fact in record_facts.values():
+        visible_scopes = sorted(fact["visible_scopes"])
+        scope = visible_scopes[0] if len(visible_scopes) == 1 else "campaign"
+        if fact.get("read_error"):
+            unreadable_records.append(
+                {
+                    "scope": scope,
+                    "visible_scopes": visible_scopes,
+                    "gateway_record_id": fact["gateway_record_id"],
+                    "error": fact["read_error"],
+                }
+            )
+        elif not fact["complete"]:
+            incomplete_records.append(
+                {
+                    "scope": scope,
+                    "visible_scopes": visible_scopes,
+                    "gateway_record_id": fact["gateway_record_id"],
+                }
+            )
 
     missing_audits = [
-        {"scope": scope, "runtime_request_id": request_id}
-        for scope, request_ids in sorted(record_runtime_request_ids.items())
-        for request_id in sorted(request_ids)
-        if f"{scope}:{request_id}" not in audit_request_ids
+        {
+            "scope": (
+                min(fact["visible_scopes"])
+                if len(fact["visible_scopes"]) == 1
+                else "campaign"
+            ),
+            "visible_scopes": sorted(fact["visible_scopes"]),
+            "gateway_record_id": fact["gateway_record_id"],
+            "runtime_request_id": request_id,
+        }
+        for fact in record_facts.values()
+        for request_id in sorted(fact["runtime_request_ids"])
+        if request_id not in audit_request_ids
     ]
     accepted_missing = [
         {

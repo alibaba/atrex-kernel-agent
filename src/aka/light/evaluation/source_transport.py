@@ -417,7 +417,13 @@ def run_sdk_job(
             ["agate-sdk", "submit"], 0, json.dumps(accepted), ""
         )
 
-    def poll(initial, remaining, *, recovery_probe=False):
+    def poll(
+        initial,
+        remaining,
+        *,
+        recovery_probe=False,
+        observation_callback=None,
+    ):
         _ = recovery_probe
         accepted = json.loads(initial.stdout)
         job_id = accepted["job_id"]
@@ -425,6 +431,8 @@ def run_sdk_job(
         job = accepted
         try:
             while True:
+                if observation_callback is not None:
+                    observation_callback(job)
                 if job.get("status") in TERMINAL_JOB_STATES:
                     return subprocess.CompletedProcess(
                         ["agate-sdk", "get", job_id],
@@ -445,6 +453,8 @@ def run_sdk_job(
                     )
                     if isinstance(observed, dict):
                         job = observed
+                        if observation_callback is not None:
+                            observation_callback(job)
                 except GatewayError as error:
                     status = getattr(error, "status", None)
                     if (
@@ -494,6 +504,7 @@ def run_sdk_job(
         idempotent_submission=True,
         max_device_retries=10 if eval_semantics else None,
         device_retry_delay=60 if eval_semantics else None,
+        capture_phase_observations=True,
     )
     timeout_s = request.get("timeout_s")
     if timeout_s is None and isinstance(request.get("options"), dict):

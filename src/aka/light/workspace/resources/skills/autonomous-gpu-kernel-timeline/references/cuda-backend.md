@@ -54,8 +54,7 @@ and reject symlinks. The sandbox evaluator binds correctness to the canonical co
 tree, so `decision_grade` evidence must identify the same source-set digest as the measured candidate.
 
 An exploration receipt may use `--correctness passed` as an explicit Agent report. In managed Light,
-the Supervisor's private evaluator log is not projected into the Agent workspace, so do not search
-for or fabricate `.atrex_long_horizon/evaluations.jsonl`. Produce diagnostic evidence unless the
+the Supervisor's evaluator authority remains in immutable Gateway Records rather than an Agent-workspace log. Produce diagnostic evidence unless the
 Runtime explicitly returns a hash-bound correctness receipt that the tool accepts through
 `--correctness-evidence`. Final Kernel acceptance still uses the ordinary immutable evaluator after
 all probes are removed.

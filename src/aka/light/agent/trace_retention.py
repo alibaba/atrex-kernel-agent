@@ -73,15 +73,6 @@ def collect_evidence_files(workspace: Path) -> list[dict[str, str]]:
         if MEMORY_RE.fullmatch(path.name):
             add(path, "controller-version-facts")
 
-    runtime = workspace / ".atrex_long_horizon"
-    add(runtime / "state.json", "long-horizon-state")
-    add(runtime / "evaluations.jsonl", "authoritative-evaluation")
-    episodes = runtime / "episodes"
-    if episodes.is_dir():
-        for episode in episodes.glob("e*/episode_runtime"):
-            add(episode / "journal.json", "episode-journal")
-            add(episode / "evaluations.jsonl", "episode-evaluation")
-
     profile = workspace / ".gpu_wiki_profile"
     add(profile / "run.json", "wiki-run-identity")
     query_root = profile / "raw" / "query_events"

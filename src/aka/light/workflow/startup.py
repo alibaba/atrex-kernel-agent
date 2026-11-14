@@ -128,8 +128,8 @@ class LightWorkflowStartup:
         ):
             raise ValueError("selected SSH execution requires ssh and scp")
         problem = self._workflow._load_problem(launch.request)
-        # Light resume identity is validated by campaign.json.  It must not
-        # read or create Legacy .atrex_long_horizon checkpoint context.
+        # Light resume identity is validated only by campaign.json and the
+        # Supervisor-private Campaign stores.
         request, frameworks = prepare_request(launch, problem, frozen=False)
         if not launch.request.settings.framework and launch.request.settings.specify_dsl:
             return self._run_framework_campaigns(

@@ -97,3 +97,12 @@ At launch, pass the same source checkout through `--repo-root`. Read [operations
 4. Start a new campaign with the updated environment, or verify resume identity before resuming an existing campaign.
 
 Do not skip reinstallation merely because the distributions still report version `0.1.0`. Do not replace code underneath a running campaign and assume its processes loaded the update; restart through the campaign's Supervisor or workload mechanism and verify the result.
+
+## Bubblewrap proc modes
+
+Light supports exactly two Bubblewrap process-view modes:
+
+- `private` creates a private PID namespace and mounts a new procfs. It is the default for ordinary Linux and Lima.
+- `host` shares the outer container's PID namespace and bind-mounts its complete `/proc`. It is the default for every Aone Sandbox Light launch because Aone rejects a nested procfs mount; use a dedicated Sandbox.
+
+Host mode requires Bubblewrap but no C compiler, development headers, compatibility shim or `LD_PRELOAD`. It preserves the filesystem allowlist and dropped capabilities, but it deliberately does not isolate process visibility within the Aone Sandbox.

@@ -92,7 +92,7 @@ Episode active time is unlimited unless `workflow.config.episode_timeout_seconds
 | `--verify-shape-batch-size N` | `10` | Maximum Shape IDs in one outer Evaluate or ABBA batch |
 | `--gpu-clock-mhz MHZ` | compatibility only | Current Agate requests send `lock_clocks=true` without a fixed MHz |
 
-Standard Evaluate and explicit ABBA use outer batches of at most 10 Shapes, complete operator uploads, native `shape_ids`, Ray Data with `shape_shards=1`, 20 warmups, 100 timing iterations and deterministic correctness cases. Light merges all batches before applying `metadata.performance_objective`.
+Standard Evaluate and explicit ABBA use outer batches of at most 10 Shapes, Ray Data with `shape_shards=1`, 20 warmups, 100 timing iterations and deterministic correctness cases. Standard Evaluate uploads the complete operator and uses native `shape_ids`. Until Agate ABBA supports Shape selectors, Light rebuilds each ABBA batch as a complete operator reference containing exactly that batch and omits `shape_ids`; this removable adapter lives in `aka.light.evaluation.abba_shape_compat`. Light merges all batches before applying `metadata.performance_objective`.
 
 Explicit ABBA is an Agent tool, not an automatic Episode terminal gate. `submit-kernel` requires a passing standard full Evaluate with complete per-Shape performance for the exact commit; it does not require ABBA or a speedup threshold.
 
@@ -154,7 +154,7 @@ Composition patches are JSON files passed before `--`. A module entry supplies t
 
 | Module | Current Light behavior |
 |---|---|
-| `agent` | `sandbox`, capture, provider wall timeout, Bubblewrap binary, proc mode and extra read-only paths |
+| `agent` | `sandbox`, capture, provider wall timeout, Bubblewrap binary, `proc_mode: private\|host`, and extra read-only paths. The provider-wide default is `private`; Aone Sandbox launch configuration defaults to explicit `host`. |
 | `tool_runtime` | Measurement repetitions, Agent pause during Runtime calls, GPU/Wiki queues and timeouts, Wiki configuration |
 | `workflow` | Optional active-time limit, supplemental numerical validation, goal segmentation, generated memory, output-limit recovery, pooled search and source import |
 | `candidate` / `workspace` | `source_tree`, `single_file`, or `cuda_manifest`, plus persistent state handling |

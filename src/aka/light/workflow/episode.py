@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,7 +14,7 @@ import aka.light.workflow.context as main_adapter
 from aka.light.workspace.git import git_head, git_text
 from aka.light.workflow.models import SupervisorState
 from aka.light.workflow.session import LongSessionRunner
-from aka.light.workflow.store import RUNTIME_DIR, VERIFY_DIR, CampaignStore
+from aka.light.workflow.store import CampaignStore
 from aka.light.workflow.telemetry import summarize_episode
 from aka.light.agent.home import SESSION_HOME_ROOT_ENV
 
@@ -241,26 +240,6 @@ class LongHorizonCampaign:
 
 
 
-    def _copy_runtime_artifacts(
-        self, segment: SegmentBinding, episode_dir: Path
-    ) -> None:
-        source = segment.path / RUNTIME_DIR
-        if source.is_dir():
-            destination = episode_dir / "episode_runtime"
-            if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(source, destination)
-        verification = segment.path / VERIFY_DIR
-        if verification.is_dir():
-            destination = episode_dir / "verification_runtime"
-            if destination.exists():
-                shutil.rmtree(destination)
-            shutil.copytree(verification, destination)
-
-
-
-
-
     def _record_session_segment(
         self,
         store: CampaignStore,
@@ -318,7 +297,6 @@ class LongHorizonCampaign:
             "measurement": telemetry["measurement"],
             "reason_codes": telemetry["reason_codes"],
         }
-        self._copy_runtime_artifacts(segment, store.episode_dir(episode))
         store.archive_attempt(episode, attempt)
         state.attempts.append(attempt)
         if session_id:

@@ -17,7 +17,6 @@ class MeasurementEffects:
     private_paths: tuple[str, ...]
     run: Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess]
     audit: Callable[[list[str], subprocess.CompletedProcess, str], None]
-    publish_log: Callable[[Path], None]
     publish_outputs: Callable[[Path, object], None]
     deadline: float | None = None
     request_id: str = ""

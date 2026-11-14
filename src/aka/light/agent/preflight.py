@@ -1,18 +1,11 @@
-"""Public, model-free checks for the Light Agent execution environment.
-
-Run ``python -m aka.light.agent.preflight`` in the Agent's execution container.
-This checks projected-proc shim compilation, not Bubblewrap namespace admission.
-"""
+"""Public, model-free checks for the Light Agent execution environment."""
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import re
-import subprocess
 import sys
-import tempfile
 from typing import Mapping
 
 ATREX_BENCH_VERSION_ENV = "ATREX_SANDBOX_ATREX_BENCH_VERSION"
@@ -22,17 +15,6 @@ _RELEASE_VERSION = re.compile(
     r"(?P<suffix>(?:(?:a|b|rc)\d+|\.dev\d+|\.post\d+)?)"
     r"(?:\+[0-9A-Za-z.-]+)?$"
 )
-
-
-def check_projected_proc() -> None:
-    """Verify the packaged shim and compiler without launching an Agent."""
-    if sys.platform != "linux":
-        raise RuntimeError("projected-proc requires a Linux execution container")
-    from .proc_view import _install_maps_shim
-
-    with tempfile.TemporaryDirectory(prefix="aka-proc-preflight-") as directory:
-        # A valid cache must not hide a missing compiler/header in this container.
-        _install_maps_shim(Path(directory), force_rebuild=True)
 
 
 def _agate_version() -> str:
@@ -143,16 +125,6 @@ def main() -> int:
         parser.error(
             "--require-agate-version and --require-atrex-bench-version must be supplied together"
         )
-    try:
-        check_projected_proc()
-    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
-        print(
-            f"Projected-proc preflight failed ({type(exc).__name__}); "
-            "check Linux, cc/C development headers, packaged proc_maps.c and "
-            "writable temporary storage in this execution container",
-            file=sys.stderr,
-        )
-        return 1
     versions = None
     if args.require_agate_version:
         try:
@@ -160,13 +132,13 @@ def main() -> int:
                 args.require_agate_version,
                 args.require_atrex_bench_version,
             )
-        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        except (OSError, ValueError, RuntimeError) as exc:
             print(
                 f"Light installation version preflight failed ({type(exc).__name__}): {exc}",
                 file=sys.stderr,
             )
             return 1
-    result: dict[str, object] = {"check": "projected_proc_compile", "status": "ready"}
+    result: dict[str, object] = {"check": "light_environment", "status": "ready"}
     if versions is not None:
         result["versions"] = versions
     print(json.dumps(result, sort_keys=True))

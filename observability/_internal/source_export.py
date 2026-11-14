@@ -22,6 +22,7 @@ if str(SOURCE_ROOT) not in sys.path:
 from aka.light.experiment.store import MeasurementStore  # noqa: E402
 from aka.light.runtime.paths import supervisor_measurement_root  # noqa: E402
 from aka.light.workspace.sources import Artifact, from_git  # noqa: E402
+from aka.light.workspace.sources.registry import for_policy  # noqa: E402
 
 from observability._internal.measurement_sources import measurement_workspaces  # noqa: E402
 
@@ -101,7 +102,16 @@ def export_source(located: LocatedSource, destination: Path) -> dict:
     temporary = Path(tempfile.mkdtemp(prefix=".aka-source-export-", dir=destination.parent))
     artifact = Artifact(located.snapshot)
     try:
-        artifact.install(temporary, replace=False, bind=True)
+        # This is a read-only evidence export, not an Agent workspace.  The
+        # ordinary Artifact.install path binds a private SourceProvider contract
+        # and therefore creates a sibling .atrex-supervisor-runtime directory.
+        # Materialize the already validated artifact through its file-system
+        # implementation without creating Campaign state.
+        for_policy(artifact.contract).install(
+            temporary,
+            artifact.files,
+            artifact.contract,
+        )
         os.replace(temporary, destination)
     except BaseException:
         if temporary.exists():
