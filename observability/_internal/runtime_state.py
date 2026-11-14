@@ -108,6 +108,8 @@ def _progress(scope, *, writer: bool | None = None) -> dict:
     root = scope.segment_root
     state = read_json(root / "state.json", default={})
     state = state if isinstance(state, dict) else {}
+    lineage_state = read_json(scope.audit_root / "state.json", default={})
+    lineage_state = lineage_state if isinstance(lineage_state, dict) else {}
     active = read_json(root / "active_episode.json", default={})
     active = active if isinstance(active, dict) else {}
     identity = read_json(root / "public-identity.json", default={})
@@ -131,7 +133,11 @@ def _progress(scope, *, writer: bool | None = None) -> dict:
         "writer_active": writer,
         "episode": episode_checkpoint if writer else None,
         "episode_checkpoint": episode_checkpoint,
-        "completed_episodes": state.get("episodes"),
+        "completed_episodes": (
+            lineage_state.get("completed_episodes")
+            if type(lineage_state.get("completed_episodes")) is int
+            else state.get("episodes")
+        ),
         "updated_at": updated,
         "runtime_configuration": runtime_configuration,
     }
@@ -370,9 +376,8 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
     scopes = discover_scopes(workspace)
     scheduler_checkpoint = _search_projection(search_state(scopes[0].workspace))
     # Current Light owns one process-wide writer lease at the Campaign root.
-    # Lineage Agent workspaces intentionally have no independent writer lock.
-    # Applying ``writer_active`` to each lineage path therefore produces a
-    # false not-running result even while its persistent Session is alive.
+    # A lineage is actively executing only while its own Runtime segment says
+    # so; peer waiting/sealing must not inherit the Campaign lock as liveness.
     campaign_writer_workspace = (
         scopes[0].campaign_root
         if (scopes[0].campaign_root / "campaign.json").is_file()
@@ -381,7 +386,20 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
     campaign_writer_active = writer_active(campaign_writer_workspace)
     rows = []
     for scope in scopes:
-        progress = _progress(scope, writer=campaign_writer_active)
+        lineage_state = read_json(scope.audit_root / "state.json", default={})
+        lineage_active = (
+            campaign_writer_active
+            and isinstance(lineage_state, dict)
+            and lineage_state.get("segment_status") == "active"
+        )
+        progress = _progress(
+            scope,
+            writer=(
+                campaign_writer_active
+                if scope.trajectory is None
+                else lineage_active
+            ),
+        )
         episodes = _episode_rows(attempt_documents(scope), progress["episode"])
         active_sessions = _active_session_rows(
             scope,

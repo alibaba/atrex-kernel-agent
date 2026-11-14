@@ -176,7 +176,10 @@ from aka.light.evaluation.result_json import (
 
 DEFAULT_SYNC_PATHS = ("profiles",)
 COMMAND_SYNC_PATHS = ("scratch",)
-COMMAND_WORKSPACE_MANIFEST = ".atrex_command_workspace.json"
+# Runtime-private allowlist captured before trusted evaluator inputs are staged.
+# Keep it below an existing control root so SourceProvider collection can never
+# mistake the transport manifest for candidate Kernel source.
+COMMAND_WORKSPACE_MANIFEST = ".atrex_long_horizon/command-workspace.json"
 INPUT_SKIP_DIRS = {
     ".git",
     "__pycache__",

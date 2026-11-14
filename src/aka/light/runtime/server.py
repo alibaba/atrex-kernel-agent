@@ -1459,7 +1459,11 @@ class SupervisorRuntime:
                                 for path in staged.rglob("*")
                                 if path.is_file() and not path.is_symlink()
                             )
-                            (staged / COMMAND_WORKSPACE_MANIFEST).write_text(
+                            command_workspace_manifest = staged / COMMAND_WORKSPACE_MANIFEST
+                            command_workspace_manifest.parent.mkdir(
+                                parents=True, exist_ok=True
+                            )
+                            command_workspace_manifest.write_text(
                                 json.dumps(command_workspace), encoding="utf-8"
                             )
                         if capability.journal and capability.journal.view:

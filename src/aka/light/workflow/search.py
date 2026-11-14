@@ -243,6 +243,46 @@ class PooledSearch:
         for trajectory in range(1, self.options.trajectories + 1):
             self._save_lineage(trajectory, self._lineage(trajectory))
 
+    def _record_completed_episode(self, job: dict) -> None:
+        """Project one durable Episode result into its lineage immediately.
+
+        Publication is an Epoch-level operation and may legitimately wait for
+        peer trajectories.  Episode progress is lineage-local, so delaying it
+        until publication makes an already stopped Session look stalled.  The
+        coordinator job is persisted before this projection; replaying this
+        method during recovery is therefore idempotent.
+        """
+        if job.get("status") not in {"completed", "sealing"}:
+            return
+        trajectory = job.get("trajectory")
+        episode = job.get("episode")
+        result = job.get("result")
+        if type(trajectory) is not int or trajectory < 1:
+            raise ValueError("Completed search job has an invalid trajectory")
+        if type(episode) is not int or episode < 1:
+            raise ValueError("Completed search job has an invalid Episode")
+        if not isinstance(result, dict):
+            raise TypeError("Completed search job has no result")
+
+        lineage = self._lineage(trajectory)
+        previous = lineage.get("completed_episodes", 0)
+        if type(previous) is not int or previous < 0:
+            raise ValueError("Search lineage has invalid Episode progress")
+        lineage["completed_episodes"] = max(previous, episode)
+        # Never let recovery of an older result replace the identity attached
+        # to a later completed Episode.
+        if episode >= previous:
+            head = result.get("agent_head_commit_id")
+            if isinstance(head, str) and head:
+                lineage["agent_head_commit_id"] = head
+            session_id = result.get("session_id")
+            if isinstance(session_id, str) and session_id:
+                lineage["session_id"] = session_id
+            observed = result.get("best_submitted_evaluation")
+            if isinstance(observed, dict):
+                lineage["lineage_winner"] = observed
+        self._save_lineage(trajectory, lineage)
+
     def _run(self):
         try:
             state = read_state(self.path)
@@ -311,31 +351,18 @@ class PooledSearch:
                     return "budget: token-budget (Epoch incomplete; no peer publication)"
                 active["phase"] = "sealing"
                 self._save(state)
+            # Reconcile completed jobs before potentially slow peer sealing.
+            # This also repairs a crash after the coordinator job was saved but
+            # before its lineage projection was written.
+            for job in active["jobs"]:
+                self._record_completed_episode(job)
+            self._refresh_observed_winners(state)
             if active["phase"] == "sealing":
                 self.driver.seal_epoch(epoch, active["jobs"])
                 active["phase"] = "publishing"
                 self._save(state)
             elif active["phase"] == "publishing" and not self.driver.epoch_sealed(epoch):
                 self.driver.seal_epoch(epoch, active["jobs"])
-
-            for job in active["jobs"]:
-                trajectory = job["trajectory"]
-                lineage = self._lineage(trajectory)
-                lineage["completed_episodes"] = max(
-                    lineage["completed_episodes"], job["episode"]
-                )
-                head = job["result"].get("agent_head_commit_id")
-                if isinstance(head, str) and head:
-                    lineage["agent_head_commit_id"] = head
-                session_id = job["result"].get("session_id")
-                if isinstance(session_id, str) and session_id:
-                    lineage["session_id"] = session_id
-                observed = job["result"].get("best_submitted_evaluation")
-                if isinstance(observed, dict):
-                    lineage["lineage_winner"] = observed
-                self._save_lineage(trajectory, lineage)
-
-            self._refresh_observed_winners(state)
 
             summary = dict(active, phase="completed", tokens=self.driver.tokens())
             update_publication(
@@ -507,6 +534,7 @@ class PooledSearch:
                         raise
                     job.update(status="completed", result=result)
                     self._save(state)
+                    self._record_completed_episode(job)
         except BaseException:
             self.driver.interrupt()
             raise
@@ -516,7 +544,8 @@ class PooledSearch:
     def _finalize_asynchronous(self, state, trajectory, job):
         asynchronous = state["asynchronous"]
         key = str(trajectory)
-        lineage = self._lineage(trajectory)
+        # A recovered completed/sealing job may predate its lineage projection.
+        self._record_completed_episode(job)
         if job["status"] == "completed":
             result = job.get("result")
             if not isinstance(result, dict):
@@ -566,17 +595,6 @@ class PooledSearch:
             scheduler=summary,
         )
 
-        lineage["completed_episodes"] = job["episode"]
-        head = job["result"].get("agent_head_commit_id")
-        if isinstance(head, str) and head:
-            lineage["agent_head_commit_id"] = head
-        session_id = job["result"].get("session_id")
-        if isinstance(session_id, str) and session_id:
-            lineage["session_id"] = session_id
-        observed = job["result"].get("best_submitted_evaluation")
-        if isinstance(observed, dict):
-            lineage["lineage_winner"] = observed
-        self._save_lineage(trajectory, lineage)
         self._refresh_observed_winners(state)
         asynchronous.update(
             latest_publication=publication,
@@ -652,6 +670,7 @@ class PooledSearch:
                             )
                         job.update(status="completed", result=result)
                         self._save(state)
+                        self._record_completed_episode(job)
                     except Exception as error:
                         failure = failure or error
                 if failure is not None and running:

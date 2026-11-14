@@ -5,7 +5,7 @@ import json
 import subprocess
 from io import BytesIO
 from pathlib import Path
-from threading import Event, Lock
+from threading import Event, Lock, Thread
 from types import SimpleNamespace
 
 import pytest
@@ -5196,6 +5196,90 @@ def test_pooled_search_seals_peer_evidence_without_promotion(tmp_path):
     assert publication["scheduler"]["phase"] == "completed"
     assert not (root / "epochs").exists()
     assert not (root / "async-publications").exists()
+
+
+def test_pooled_search_projects_completed_lineage_before_peer_finishes(tmp_path):
+    peer_running = Event()
+    release_peer = Event()
+    projected = Event()
+    errors = []
+
+    class Driver:
+        def bootstrap(self):
+            return {"latency_us_geomean": 10.0}
+
+        def initialize(self, seed, trajectories):
+            pass
+
+        def prepare_epoch(self, epoch):
+            pass
+
+        def run_episode(self, epoch, trajectory, episode):
+            if trajectory == 2:
+                peer_running.set()
+                assert release_peer.wait(5)
+            return {
+                "epoch": epoch,
+                "trajectory": trajectory,
+                "episode": episode,
+                "agent_head_commit_id": str(trajectory) * 40,
+                "best_submitted_evaluation": None,
+                "tokens": 1,
+            }
+
+        def seal_epoch(self, epoch, jobs):
+            pass
+
+        def epoch_sealed(self, epoch):
+            return False
+
+        def tokens(self):
+            return 2
+
+        def interrupt(self):
+            release_peer.set()
+
+    root = tmp_path / "campaign-A"
+    search = PooledSearch(
+        root,
+        SearchOptions(
+            epochs=1,
+            trajectories=2,
+            episodes_per_trajectory=1,
+            max_parallel_episodes=2,
+        ),
+        Driver(),
+    )
+    save_lineage = search._save_lineage
+
+    def observe_lineage(trajectory, lineage):
+        save_lineage(trajectory, lineage)
+        if trajectory == 1 and lineage.get("completed_episodes") == 1:
+            projected.set()
+
+    search._save_lineage = observe_lineage
+
+    def run_search():
+        try:
+            search.run()
+        except Exception as error:
+            errors.append(error)
+
+    thread = Thread(target=run_search)
+    thread.start()
+    try:
+        assert peer_running.wait(5)
+        assert projected.wait(5)
+        first = read_state(lineage_state_path(root, 1))
+        second = read_state(lineage_state_path(root, 2))
+        assert first["completed_episodes"] == 1
+        assert first["agent_head_commit_id"] == "1" * 40
+        assert second["completed_episodes"] == 0
+    finally:
+        release_peer.set()
+        thread.join(5)
+    assert not thread.is_alive()
+    assert errors == []
 
 
 def test_search_synchronization_rejects_unknown_mode():

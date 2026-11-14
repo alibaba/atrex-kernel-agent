@@ -128,7 +128,13 @@ from aka.light.workflow.output_limit import dependency_policy_recovery_prompt
 from aka.light.workflow.episode import LongHorizonCampaign, SegmentBinding
 from aka.light.workflow.search import SearchOptions
 from aka.light.workflow.session_io import _evaluation_performance_timeout
-from aka.light.workspace.sources import default_tree, install, instructions, pack
+from aka.light.workspace.sources import (
+    default_tree,
+    install,
+    instructions,
+    pack,
+    snapshot as source_snapshot,
+)
 from aka.light.workspace.episode import _claude_instructions
 from aka.legacy.workflow.cli_conversion import adapt_argv
 
@@ -2394,10 +2400,21 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             (workspace / "tools/helper.py").write_text("VALUE = 1\n")
             (workspace / "kernel.py").write_text("def kernel(): pass\n")
             (workspace / "README.md").write_text("# task\n")
-            (workspace / "private.json").write_text("{}\n")
-            (workspace / COMMAND_WORKSPACE_MANIFEST).write_text(json.dumps([
+            manifest = workspace / COMMAND_WORKSPACE_MANIFEST
+            manifest.parent.mkdir(parents=True, exist_ok=True)
+            manifest.write_text(json.dumps([
                 "README.md", "scratch/probe.py", "tools/helper.py",
             ]))
+
+            # The Command transport allowlist is Runtime state, not candidate
+            # source. A source-tree snapshot must ignore it rather than reject
+            # it for being outside kernel.py + impl/.
+            policy, _ = default_tree({"kernel.py": b"def kernel(): pass\n"})
+            self.assertEqual(
+                source_snapshot(workspace, policy=policy),
+                pack({"kernel.py": b"def kernel(): pass\n"}, policy),
+            )
+            (workspace / "private.json").write_text("{}\n")
 
             selected = _command_input_paths(
                 workspace,
