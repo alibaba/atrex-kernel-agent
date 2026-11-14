@@ -417,6 +417,33 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             long_message,
         )
 
+    def test_compact_receipt_preserves_experiment_recording_hint(self):
+        record_id = "gateway-" + "4" * 32
+        direction_id = "direction_" + "5" * 32
+        receipt = compact_receipt({
+            "operation": "dev",
+            "status": "completed",
+            "gateway_record_id": record_id,
+            "result": {"exit_code": 0},
+            "research_next_action": {
+                "operation": "record-experiment",
+                "gateway_record_ids": [record_id],
+                "direction_id": direction_id,
+                "instruction": (
+                    "If this result changes the next decision, record it before another candidate."
+                ),
+            },
+        })
+
+        self.assertEqual(receipt["research_next_action"], {
+            "operation": "record-experiment",
+            "gateway_record_ids": [record_id],
+            "direction_id": direction_id,
+            "instruction": (
+                "If this result changes the next decision, record it before another candidate."
+            ),
+        })
+
     def test_compact_receipt_omits_actionable_diagnostics_when_absent(self):
         receipt = compact_receipt({
             "operation": "evaluate",
@@ -3072,7 +3099,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 saved["request"]["visibility"], "supervisor_private_v0"
             )
             self.assertIn("ev_part_a,ev_part_b", saved["response"]["stderr"])
-            self.assertNotIn(
+            self.assertIn(
                 gateway_record_id, _git_visible_record_ids(store, workspace)
             )
 
@@ -3088,7 +3115,7 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
                 }
             ).decode()
             self.assertIn(
-                f"private Gateway Record: `{gateway_record_id}`", progress
+                f"Gateway Record: `{gateway_record_id}`", progress
             )
             self.assertNotIn("ev_part_a", progress)
             self.assertNotIn("ev_part_b", progress)

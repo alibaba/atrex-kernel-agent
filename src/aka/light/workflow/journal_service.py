@@ -23,7 +23,7 @@ import tempfile
 import threading
 import uuid
 from collections import ChainMap
-from collections.abc import Callable, Mapping, MutableMapping, Set as AbstractSet
+from collections.abc import Callable, Iterable, Mapping, MutableMapping, Set as AbstractSet
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -1884,8 +1884,6 @@ def _git_visible_record_ids(
     ):
         try:
             record = store.read(record_id)
-            if record.get("request", {}).get("visibility") == "supervisor_private_v0":
-                continue
             kernels = record.get("kernels")
             if not isinstance(kernels, Mapping) or not kernels:
                 continue
@@ -2542,9 +2540,9 @@ def _progress_markdown(
         f"- **V0 baseline source commit ID:** {commit(baseline.get('kernel_commit_id'))}; "
         f"GeoMean: **{baseline_latency_text}**; correctness: "
         f"`{text(baseline.get('correctness_status'), empty='unknown')}`; measured Shapes: "
-        f"{text(baseline.get('measured_shape_count'), empty='unknown')}; private Gateway Record: "
+        f"{text(baseline.get('measured_shape_count'), empty='unknown')}; Gateway Record: "
         f"{commit(baseline.get('gateway_record_id'))}."
-        if baseline else "- **V0 baseline:** private evidence is unavailable."
+        if baseline else "- **V0 baseline:** evidence is unavailable."
     )
     def finite(value: object) -> float | None:
         return (
@@ -3545,10 +3543,15 @@ def record_experiment(
                         "then record this Experiment against the local Direction."
                     ),
                 )
-            if direction["status"] not in {"in_progress", *_CLOSED_STATUSES}:
+            if direction["status"] not in {
+                "proposed",
+                "in_progress",
+                *_CLOSED_STATUSES,
+            }:
                 raise ValueError(
-                    "Experiment Direction must be in progress or closed; start a proposed Direction "
-                    "before recording evidence. Late evidence does not reopen exploration"
+                    "Experiment Direction must be a local proposed, in-progress, or closed "
+                    "Direction. Evidence may be recorded against a proposed Direction before "
+                    "its admission Review; late evidence does not reopen exploration"
                 )
     elif "direction_id" in value:
         raise ValueError("Direction recording is disabled; omit direction_id from Experiment")
@@ -4353,6 +4356,74 @@ class SupervisorJournalService:
             payload["last_correct_kernel_id"] = kernel_commit_id
         self.research.checkpoint_lineage(payload, origin=self.origin)
 
+    def experiment_recording_hint(
+        self, agent_result: Mapping[str, object]
+    ) -> dict[str, object] | None:
+        """Return one compact post-measurement reminder for enabled Experiments.
+
+        Measurements remain useful without an Experiment, so Runtime never
+        auto-generates scientific interpretation. The immediate receipt is the
+        reliable point to remind the Agent to preserve a decision-changing
+        result before another candidate displaces it from working context.
+        """
+        if "experiments" not in self.tool_modules:
+            return None
+        record_id = agent_result.get("gateway_record_id")
+        if (
+            not isinstance(record_id, str)
+            or GATEWAY_RECORD_ID_RE.fullmatch(record_id) is None
+        ):
+            return None
+        try:
+            _validate_record_ids(
+                self.campaign_root,
+                [record_id],
+                measurement_root=self.measurement_root,
+            )
+        except (
+            AgentRequestError,
+            RuntimeStateError,
+            OSError,
+            ValueError,
+            KeyError,
+            TypeError,
+        ):
+            # Transport-only/unbound Records are still useful diagnostics but
+            # cannot be cited as Experiment evidence, so do not recommend an
+            # operation that Runtime would immediately reject.
+            return None
+        hint: dict[str, object] = {
+            "operation": "record-experiment",
+            "gateway_record_ids": [record_id],
+            "instruction": (
+                "If this result changes the keep, repair, restore, or next-branch decision, "
+                "record the Experiment now before launching another candidate. A disposable "
+                "probe that changes no decision need not be recorded."
+            ),
+        }
+        if "directions" in self.tool_modules:
+            try:
+                history = _visible_history(self._research_state, self.campaign_root)
+                local = [
+                    direction
+                    for direction in _direction_views(
+                        self._research_state,
+                        self.campaign_root,
+                        history=history,
+                    ).values()
+                    if direction.get("direction_id")
+                    not in history.shared_direction_ids
+                    and direction.get("status") in {"proposed", "in_progress"}
+                ]
+            except (RuntimeStateError, OSError, ValueError, KeyError, TypeError):
+                # The hint must remain best-effort: a damaged Research view
+                # must not turn an otherwise successful GPU measurement into
+                # a failed Runtime request.
+                return hint
+            if len(local) == 1 and isinstance(local[0].get("direction_id"), str):
+                hint["direction_id"] = local[0]["direction_id"]
+        return hint
+
     def publish_research_files(
         self,
         *,
@@ -4421,6 +4492,23 @@ class SupervisorJournalService:
             record_id = audit.get("gateway_record_id")
             if isinstance(record_id, str):
                 local_record_ids.add(record_id)
+        from aka.light.workspace.baseline import read_baseline_gateway_record
+
+        baseline_gateway_record = read_baseline_gateway_record(
+            self.git_workspace,
+            measurement_root=self.measurement_root,
+        )
+        baseline_gateway_record_id = (
+            baseline_gateway_record.get("gateway_record_id")
+            if isinstance(baseline_gateway_record, Mapping)
+            else None
+        )
+        if isinstance(baseline_gateway_record_id, str):
+            # Raw V0 requests and physical Job details stay private, while the
+            # standardized public Gateway projection is readable like every
+            # other exact, Git-reachable measurement. Otherwise each lineage
+            # reruns V0 merely to inspect per-Shape evidence.
+            local_record_ids.add(baseline_gateway_record_id)
         shared = _shared_research(self.campaign_root)
         shared_record_ids = {
             value
@@ -4464,7 +4552,10 @@ class SupervisorJournalService:
         from aka.light.workspace.baseline import read_baseline_record
         # V0 is an ordinary Campaign MeasurementStore record. Project only its
         # bounded summary and stable Gateway identity into PROGRESS.md.
-        baseline = read_baseline_record(self.git_workspace) or {}
+        baseline = read_baseline_record(
+            self.git_workspace,
+            measurement_root=self.measurement_root,
+        ) or {}
         performance = baseline.get("performance")
         performance = performance if isinstance(performance, Mapping) else {}
         correctness = baseline.get("correctness")
@@ -4724,6 +4815,22 @@ class SupervisorJournalService:
                 for item in _visible_experiments(self._research_state, self.campaign_root)
                 if isinstance(item, dict)
             }
+            # Admission Review must see evidence already recorded against the
+            # draft Direction. Requiring a supporting edge on ``start`` made
+            # the evidence impossible to attach naturally: the Experiment was
+            # forced to wait for an in-progress Direction, while the Direction
+            # Review was already evaluating measured prose without it.
+            if (
+                isinstance(direction_id, str)
+                and target.get("action") == "start"
+            ):
+                experiment_ids.extend(
+                    str(experiment_id)
+                    for experiment_id, experiment in experiments.items()
+                    if isinstance(experiment_id, str)
+                    and isinstance(experiment, Mapping)
+                    and experiment.get("direction_id") == direction_id
+                )
             for experiment_id in dict.fromkeys(experiment_ids):
                 experiment = experiments.get(experiment_id)
                 if not isinstance(experiment, dict):

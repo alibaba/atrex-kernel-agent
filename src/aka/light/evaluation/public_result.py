@@ -78,8 +78,10 @@ def _receipt_text(value: str, *, limit: int = RECEIPT_TEXT_PREVIEW_BYTES) -> dic
     return {"bytes": len(raw), "preview": preview, "truncated": truncated}
 
 
-def _receipt_string(value: str) -> str:
-    preview = _receipt_text(value)
+def _receipt_string(
+    value: str, *, limit: int = RECEIPT_TEXT_PREVIEW_BYTES
+) -> str:
+    preview = _receipt_text(value, limit=limit)
     return preview["preview"]
 
 
@@ -175,6 +177,29 @@ def compact_receipt(agent_result: dict) -> dict:
     record_id = receipt.get("gateway_record_id")
     if isinstance(record_id, str):
         receipt["record_path"] = f"records/{record_id}.json"
+    research_next_action = agent_result.get("research_next_action")
+    if isinstance(research_next_action, dict):
+        operation = research_next_action.get("operation")
+        instruction = research_next_action.get("instruction")
+        gateway_record_ids = research_next_action.get("gateway_record_ids")
+        direction_id = research_next_action.get("direction_id")
+        projected_action: dict[str, object] = {}
+        if isinstance(operation, str):
+            projected_action["operation"] = _receipt_string(operation, limit=128)
+        if isinstance(instruction, str):
+            projected_action["instruction"] = _receipt_string(
+                instruction, limit=1024
+            )
+        if isinstance(gateway_record_ids, list):
+            projected_action["gateway_record_ids"] = [
+                str(value)[:128]
+                for value in gateway_record_ids[:8]
+                if isinstance(value, str)
+            ]
+        if isinstance(direction_id, str):
+            projected_action["direction_id"] = direction_id[:128]
+        if projected_action:
+            receipt["research_next_action"] = projected_action
     summary = _receipt_metrics(result)
     for side in ("baseline", "candidate"):
         metrics = _receipt_metrics(result.get(side))

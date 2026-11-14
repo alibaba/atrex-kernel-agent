@@ -200,11 +200,18 @@ def read_baseline_gateway_record(
     return max(candidates, key=lambda item: str(item.get("created_at") or ""))
 
 
-def read_baseline_record(workspace: Path, *, migrate_legacy: bool = True) -> dict | None:
+def read_baseline_record(
+    workspace: Path,
+    *,
+    migrate_legacy: bool = True,
+    measurement_root: Path | None = None,
+) -> dict | None:
     """Read V0 facts from MeasurementStore, with legacy files as fallback."""
-    measurement = read_baseline_gateway_record(workspace)
+    measurement = read_baseline_gateway_record(
+        workspace, measurement_root=measurement_root
+    )
     if measurement is not None:
-        store = _measurement_store(workspace)
+        store = _measurement_store(workspace, measurement_root)
         return _baseline_summary(
             measurement,
             store.root / "records" / str(measurement["gateway_record_id"]),
@@ -215,12 +222,16 @@ def read_baseline_record(workspace: Path, *, migrate_legacy: bool = True) -> dic
             continue
         if migrate_legacy and isinstance(record.get("git_commit_hash"), str):
             try:
-                ensure_baseline_gateway_record(workspace)
+                ensure_baseline_gateway_record(
+                    workspace, measurement_root=measurement_root
+                )
             except (OSError, ValueError, RuntimeError):
                 pass
-            measurement = read_baseline_gateway_record(workspace)
+            measurement = read_baseline_gateway_record(
+                workspace, measurement_root=measurement_root
+            )
             if measurement is not None:
-                store = _measurement_store(workspace)
+                store = _measurement_store(workspace, measurement_root)
                 return _baseline_summary(
                     measurement,
                     store.root

@@ -38,9 +38,12 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
   runs the admission Review; active revisions and closures are reviewed again. Every archived state
   is published to peers with its actual review quality; only eligible evidence may support research
   conclusions.
-- Record decisive work as an Experiment with `name`, concrete `intent`, and bounded
+- Record an Experiment immediately when a probe or measurement changes the keep, repair, restore,
+  or next-branch decision, before launching another candidate or switching paths. Disposable probes
+  that change no decision need not be recorded. Use `name`, concrete `intent`, and bounded
   `interpretation`. Records and archived references are independent optional evidence. Keep measured
-  facts in Records. A note without a Record is not promotion evidence. Revise only
+  facts in Records. A note without a Record is not promotion evidence. A proposed local Direction
+  may own an Experiment when existing evidence informs its admission Review. Revise only
   `local_writable` Experiments; extend `peer_read_only` evidence with a new local Experiment.
 - Use local Git for candidate history. Imported peer history is available through remote-tracking refs such as `atrex/T2`; inspect it with `git log`/`git diff`, or continue it with `git switch -c <branch> atrex/T2`. Runtime moves the ref at its configured publication boundary without changing your HEAD. Commit or restore local work before switching.
 - Continue bounded probe/edit/measurement/revert-or-keep cycles while the selected path has a

@@ -7,7 +7,9 @@ these generated files directly; do not edit them.
 
 ## Record an Experiment
 
-Record a decision-useful interpretation after a real probe or measurement:
+Record a decision-useful interpretation immediately after a real probe or measurement changes the
+keep, repair, restore, or next-branch decision, before another candidate or path switch. A disposable
+probe that changes no decision need not be recorded:
 
 ```json
 {

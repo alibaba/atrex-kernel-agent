@@ -110,7 +110,15 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
             ),
         }
         if directions_enabled:
-            properties["direction_id"] = {"type": "string", "pattern": "^direction_[0-9a-f]{32}$"}
+            properties["direction_id"] = {
+                "type": "string",
+                "pattern": "^direction_[0-9a-f]{32}$",
+                "description": (
+                    "Intended local Direction. An explicitly named proposed Direction is valid "
+                    "when this evidence informs its admission Review; omission is inferred only "
+                    "when exactly one local Direction is in progress."
+                ),
+            }
         properties.update(gateway_record_ids=_ids("gateway-", minimum=0),
                           wiki_usage={"type": "array", "maxItems": 64, "items": usage},
                           wiki_query_ids={"type": "array", "maxItems": 64, "items": query_id},

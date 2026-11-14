@@ -165,6 +165,9 @@ are terminal and continued work requires a derived Direction.
 A trajectory may own multiple local active Directions. The most recently started Direction is the
 focus; queue reordering does not change it. Runtime infers an omitted Experiment `direction_id` only
 when exactly one local Direction is active; with zero or multiple active Directions, include it.
+An explicitly named local proposed Direction may also own an Experiment when existing evidence
+informs its admission Review. Record that Experiment first, then start the Direction; the admission
+Review receives all visible Experiments bound to the Direction.
 Keep concurrent work intentional, address updates by Direction ID, and leave new ideas proposed until work actually starts. Continue each
 selected redesign through bounded edit/measurement cycles instead of reporting its first promotable checkpoint.
 
@@ -188,8 +191,10 @@ changes the claim or remaining plan, submit a complete `action=revise` Direction
 
 ## Record an Experiment
 
-Record a research conclusion when it becomes useful. Cite exact Gateway Record IDs and supporting
-workspace material when they exist:
+Record a research conclusion immediately when a probe or measurement changes the keep, repair,
+restore, or next-branch decision, before another candidate or path switch. A disposable probe that
+changes no decision need not be recorded. Cite exact Gateway Record IDs and supporting workspace
+material when they exist:
 
 ```json
 {
@@ -206,8 +211,9 @@ python3 tools/sandbox.py --kind record-experiment --request-file scratch/experim
 ```
 
 When Directions are enabled, Runtime infers `direction_id` only when exactly one local Direction is
-active. With zero or multiple active Directions, include the ID explicitly. When Directions are
-disabled, omit it.
+active. With zero or multiple active Directions, include the ID explicitly. An explicitly named
+local proposed Direction is valid, but is never selected implicitly. When Directions are disabled,
+omit `direction_id`.
 
 Runtime validates every cited ID; its standardized public result is available under root `records/`.
 Correctness, latency, failure, operation and Kernel commit identity live only in those records. Use

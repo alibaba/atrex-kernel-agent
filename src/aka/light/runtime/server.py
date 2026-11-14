@@ -1653,6 +1653,12 @@ class SupervisorRuntime:
                                 else frozenset()
                             ),
                         )
+                        if isinstance(agent_result, dict):
+                            hint = capability.journal.service.experiment_recording_hint(
+                                agent_result
+                            )
+                            if hint is not None:
+                                agent_result["research_next_action"] = hint
                     except (OSError, ValueError, RuntimeStateError) as error:
                         if isinstance(reused_record_id, str):
                             raise RuntimeStateError(

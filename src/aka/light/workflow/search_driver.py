@@ -1087,6 +1087,12 @@ class EpisodeSearchDriver:
                 publication=epoch - 1,
                 trajectory=number,
             )
+            self._set_search_coordinate(
+                child,
+                epoch=epoch,
+                trajectory=number,
+                episode=expected + 1,
+            )
             child.start_runtime()
 
     def prepare_trajectory(
@@ -1100,6 +1106,12 @@ class EpisodeSearchDriver:
         from aka.light.workflow.store import CampaignStore
 
         child = self.children[trajectory]
+        self._set_search_coordinate(
+            child,
+            epoch=epoch,
+            trajectory=trajectory,
+            episode=episode,
+        )
         store = self._state(child)
         active = CampaignStore(child.workspace).active_path
         if store["episodes"] == episode:
@@ -1148,13 +1160,22 @@ class EpisodeSearchDriver:
                 raise ValueError("Invalid trajectory Episode/usage checkpoint")
         return state
 
-    def run_episode(self, epoch, trajectory, episode):
-        from aka.light.workflow.store import CampaignStore
+    def _set_search_coordinate(
+        self,
+        child,
+        *,
+        epoch: int,
+        trajectory: int,
+        episode: int,
+    ) -> None:
+        """Bind pooled-search semantics before the child Runtime is opened.
 
-        child = self.children[trajectory]
-        current = self._state(child)["episodes"]
-        if current not in {episode - 1, episode}:
-            raise RuntimeError("Trajectory Episode sequence differs from the Epoch schedule")
+        RuntimeConfig snapshots research synchronization when ``start_runtime``
+        first opens the service. Setting this only in ``run_episode`` is too
+        late because synchronous/asynchronous preparation opens the Runtime at
+        the publication boundary. In that ordering every pooled lineage was
+        silently registered as ``independent`` for the life of the process.
+        """
         child.search_coordinate = {
             "epoch": epoch,
             "trajectory": trajectory,
@@ -1165,6 +1186,20 @@ class EpisodeSearchDriver:
                 self.campaign.module_options.search.role_specialization
             ),
         }
+
+    def run_episode(self, epoch, trajectory, episode):
+        from aka.light.workflow.store import CampaignStore
+
+        child = self.children[trajectory]
+        current = self._state(child)["episodes"]
+        if current not in {episode - 1, episode}:
+            raise RuntimeError("Trajectory Episode sequence differs from the Epoch schedule")
+        self._set_search_coordinate(
+            child,
+            epoch=epoch,
+            trajectory=trajectory,
+            episode=episode,
+        )
         # An archived terminal Episode is not run again after coordinator restart.
         campaign_store = CampaignStore(child.workspace)
         if current < episode or campaign_store.active_path.exists():

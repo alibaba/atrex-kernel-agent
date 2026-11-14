@@ -2147,6 +2147,8 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
     })
     assert revised_draft["archive_path"] == proposed["archive_path"]
     assert revised_draft["revision"] == 0
+
+
     assert "review" not in revised_draft
     projected_draft = json.loads(
         (workspace / revised_draft["archive_path"]).read_text()
@@ -2227,6 +2229,103 @@ def test_research_mutation_receipts_include_archive_and_inline_qwen_review(tmp_p
     } == {"review-session-1", "review-session-2"}
     assert not (evidence / "claim-reviews").exists()
     assert not (evidence / "claim-review-index").exists()
+
+
+def test_proposed_direction_can_collect_experiment_before_admission_review(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    journals = tmp_path / "scope" / "journals"
+    evidence = journals / "episodes" / "e00000001"
+    evidence.mkdir(parents=True)
+    initialize_journal(
+        evidence / "journal.json",
+        episode=1,
+        base_commit="a" * 40,
+        branch="work",
+        tool_modules=("directions", "experiments"),
+    )
+    record_id, _ = _passing_full_measurement(
+        MeasurementStore(tmp_path / "scope" / "measurements"),
+        b"def kernel():\n    return 1\n",
+        "pre-admission-experiment",
+        {"shape_a": 1.0},
+    )
+    reviewed = []
+
+    def reviewer(root):
+        target = json.loads((root / "submissions" / "target.json").read_text())
+        if "experiment_id" in target:
+            assert target["direction_id"] == direction_id
+            assert (
+                root / "gateway-records" / record_id / "record.json"
+            ).is_file()
+            reviewed.append("experiment")
+        else:
+            assert target["action"] == "start"
+            supporting = list(
+                (root / "submissions" / "supporting-experiments").glob("*.json")
+            )
+            assert len(supporting) == 1
+            saved_experiment = json.loads(supporting[0].read_text())
+            assert saved_experiment["direction_id"] == direction_id
+            assert saved_experiment["gateway_record_ids"] == [record_id]
+            assert (
+                root / "gateway-records" / record_id / "record.json"
+            ).is_file()
+            reviewed.append("direction")
+        return _supported_claim_review(["submissions/target.json"])
+
+    service = SupervisorJournalService(
+        workspace=workspace,
+        campaign_root=journals,
+        evidence_root=evidence,
+        research_root=tmp_path / "research",
+        tool_modules=("directions", "experiments"),
+        claim_reviewer=reviewer,
+    )
+    proposed = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "propose",
+            "name": "Launch-overhead program",
+            "change_scope": "incremental",
+            "objective": "Reduce launch-bound latency across small shapes.",
+            "applicability": "Small vector-add shapes.",
+            "expected_benefit": "Resolve the dominant small-shape overhead.",
+            "plan": ["Measure allocation and launch variants."],
+        },
+    })
+    direction_id = proposed["direction_id"]
+    hint = service.experiment_recording_hint({
+        "gateway_record_id": record_id,
+        "operation": "evaluate",
+        "status": "completed",
+    })
+    assert hint["operation"] == "record-experiment"
+    assert hint["gateway_record_ids"] == [record_id]
+    assert hint["direction_id"] == direction_id
+    experiment = service.execute({
+        "operation": "experiment_record",
+        "request": {
+            "direction_id": direction_id,
+            "name": "V0 launch floor",
+            "intent": "Measure whether small shapes are launch-bound.",
+            "interpretation": "The measured baseline makes launch overhead the first branch.",
+            "gateway_record_ids": [record_id],
+        },
+    })
+    started = service.execute({
+        "operation": "direction_update",
+        "request": {
+            "action": "start",
+            "direction_id": direction_id,
+            "analysis": "Start the program using the recorded launch-floor evidence.",
+        },
+    })
+
+    assert experiment["status"] == "recorded"
+    assert started["status"] == "recorded"
+    assert reviewed == ["experiment", "direction"]
 
 
 def test_research_claim_reviewer_returns_durable_conversation_links(tmp_path):
@@ -3707,6 +3806,9 @@ def test_partial_research_modes_install_complete_module_specific_reference(
     for marker in required:
         assert marker in journal
     assert unavailable not in journal
+    if modules == ("experiments",):
+        assert "prioritize-direction" not in journal
+        assert "Direction queue" not in journal
 
 
 def test_runtime_install_does_not_mutate_tracked_gitignore(tmp_path):
@@ -5099,6 +5201,52 @@ def test_pooled_search_seals_peer_evidence_without_promotion(tmp_path):
 def test_search_synchronization_rejects_unknown_mode():
     with pytest.raises(ValueError, match="synchronous or asynchronous"):
         SearchOptions(synchronization="eventually")
+
+
+@pytest.mark.parametrize("synchronization", ["synchronous", "asynchronous"])
+def test_pooled_preparation_binds_research_synchronization_before_runtime_start(
+    tmp_path, synchronization
+):
+    workspace = tmp_path / synchronization
+    workspace.mkdir()
+    subprocess.run(["git", "init", "--quiet"], cwd=workspace, check=True)
+    observed = []
+    child = SimpleNamespace(
+        workspace=workspace,
+        search_coordinate=None,
+    )
+
+    def start_runtime():
+        observed.append(dict(child.search_coordinate or {}))
+
+    child.start_runtime = start_runtime
+    search = SimpleNamespace(
+        synchronization=synchronization,
+        role_specialization=False,
+        episodes_per_trajectory=1,
+    )
+    campaign = SimpleNamespace(
+        workspace=tmp_path / "campaign",
+        module_options=SimpleNamespace(search=search),
+    )
+    driver = EpisodeSearchDriver(campaign, tmp_path / "coordinator")
+    driver.children = {1: child}
+    driver._state = lambda _child: {"episodes": 0, "tokens": 0}
+    driver._import_peer_history = lambda *_args, **_kwargs: None
+
+    if synchronization == "synchronous":
+        driver.prepare_epoch(1)
+    else:
+        driver.prepare_trajectory(1, 1, 1, 0)
+
+    assert observed == [{
+        "epoch": 1,
+        "trajectory": 1,
+        "episode": 1,
+        "cross_trajectory_sharing": True,
+        "synchronization": synchronization,
+        "role_specialization": False,
+    }]
 
 
 def test_search_role_specialization_is_optional_and_defaults_disabled():
