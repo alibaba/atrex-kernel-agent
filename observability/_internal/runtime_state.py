@@ -104,7 +104,7 @@ def _session_rows(scope) -> list[dict]:
     return rows
 
 
-def _progress(scope) -> dict:
+def _progress(scope, *, writer: bool | None = None) -> dict:
     root = scope.segment_root
     state = read_json(root / "state.json", default={})
     state = state if isinstance(state, dict) else {}
@@ -112,7 +112,7 @@ def _progress(scope) -> dict:
     active = active if isinstance(active, dict) else {}
     identity = read_json(root / "public-identity.json", default={})
     identity = identity if isinstance(identity, dict) else {}
-    writer = writer_active(scope.workspace)
+    writer = writer_active(scope.workspace) if writer is None else writer
     terminal = read_json(scope.workspace / "trace-retention-manifest.json", default={})
     terminal = terminal if isinstance(terminal, dict) else {}
     if writer:
@@ -369,9 +369,19 @@ def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
 def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
     scopes = discover_scopes(workspace)
     scheduler_checkpoint = _search_projection(search_state(scopes[0].workspace))
+    # Current Light owns one process-wide writer lease at the Campaign root.
+    # Lineage Agent workspaces intentionally have no independent writer lock.
+    # Applying ``writer_active`` to each lineage path therefore produces a
+    # false not-running result even while its persistent Session is alive.
+    campaign_writer_workspace = (
+        scopes[0].campaign_root
+        if (scopes[0].campaign_root / "campaign.json").is_file()
+        else scopes[0].workspace
+    )
+    campaign_writer_active = writer_active(campaign_writer_workspace)
     rows = []
     for scope in scopes:
-        progress = _progress(scope)
+        progress = _progress(scope, writer=campaign_writer_active)
         episodes = _episode_rows(attempt_documents(scope), progress["episode"])
         active_sessions = _active_session_rows(
             scope,

@@ -373,6 +373,10 @@ class RuntimeConfig:
     ssh_init: str = ""
     ssh_gpu: int | None = None
     health_command: str = ""
+    # Native evaluator inputs remain Supervisor-owned even when exact Shapes
+    # are public.  This is independent of ``private_reference_dir``, which
+    # denotes the generalized hidden-Shape policy.
+    evaluator_reference_dir: Path | None = None
     private_reference_dir: Path | None = None
     atrex_bench_root: Path | None = None
     wiki_profile_root: Path | None = None
@@ -411,6 +415,10 @@ class RuntimeConfig:
             self.measurement_root, Path
         ):
             raise TypeError("Runtime measurement_root must be a pathlib.Path")
+        for name in ("evaluator_reference_dir", "private_reference_dir"):
+            value = getattr(self, name)
+            if value is not None and not isinstance(value, Path):
+                raise TypeError(f"Runtime {name} must be a pathlib.Path")
         if type(self.evaluation_step_timeout) is not int or self.evaluation_step_timeout <= 0:
             raise ValueError("Runtime evaluation_step_timeout must be a positive integer")
         if type(self.shape_batch_size) is not int or self.shape_batch_size <= 0:
@@ -497,6 +505,7 @@ class _Handler(BaseHTTPRequestHandler):
             from aka.light.evaluation.projection import credential_values, redact_diagnostics
             result = redact_diagnostics(result,
                 private_paths=(str(owner.root), str(owner.audit_root or ""), str(ROOT),
+                               str(getattr(owner.config, "evaluator_reference_dir", None) or ""),
                                str(owner.config.private_reference_dir or ""), owner.config.url,
                                str(owner.config.atrex_bench_root or "")),
                 private_values=(*credential_values(owner.environment), getattr(self, "bearer", "")))
@@ -1538,8 +1547,15 @@ class SupervisorRuntime:
                     # The trusted evaluator checkout is shared, not copied per Session.
                     if self.config.atrex_bench_root:
                         environment["ATREX_BENCH_RUNTIME_ROOT"] = str(self.config.atrex_bench_root)
-                    if self.config.private_reference_dir:
-                        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(reference_snapshot or self.config.private_reference_dir)
+                    evaluator_reference_dir = (
+                        reference_snapshot
+                        or self.config.evaluator_reference_dir
+                        or self.config.private_reference_dir
+                    )
+                    if evaluator_reference_dir:
+                        environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(
+                            evaluator_reference_dir
+                        )
                     # Keep the legacy report compiler's log alongside private records.
                     (staged / ".atrex_long_horizon").mkdir(exist_ok=True)
                     (staged / ".atrex_long_horizon/journal.json").write_text("{}")
@@ -1582,8 +1598,11 @@ class SupervisorRuntime:
                     )
                 effects = MeasurementEffects(
                     mode=self.config.optimization_mode, repetitions=self.measurement_repetitions,
+                    evaluator_reference_dir=self.config.evaluator_reference_dir,
                     private_reference_dir=self.config.private_reference_dir,
-                    private_paths=(str(self.root), str(ROOT), str(self.config.private_reference_dir or ""),
+                    private_paths=(str(self.root), str(ROOT),
+                                   str(self.config.evaluator_reference_dir or ""),
+                                   str(self.config.private_reference_dir or ""),
                                    self.config.url, str(self.config.atrex_bench_root or "")),
                     run=lambda command, cwd, env: self.run_executor(command, cwd, env, capability),
                     audit=lambda argv, process, record: self.audit_process(capability, "gateway", argv, process, record),
@@ -1669,6 +1688,7 @@ class SupervisorRuntime:
                                     operation=parsed.kind if kind == "gateway" and parsed is not None else None,
                                     private_values=credential_values(environment),
                                     wiki=kind == "wiki", private_paths=(str(staged), str(self.root),
+                                    str(self.config.evaluator_reference_dir or ""),
                                     str(self.config.private_reference_dir or ""), str(ROOT),
                                     self.config.url, str(self.config.atrex_bench_root or "")))
             if kind == "gateway" and parsed is not None and parsed.kind == "env":
@@ -2045,6 +2065,7 @@ class SupervisorRuntime:
             with tempfile.TemporaryDirectory(dir=self.root, prefix="wiki-") as temporary:
                 private_paths = (
                     str(temporary), str(self.root), str(self.audit_root or ""),
+                    str(self.config.evaluator_reference_dir or ""),
                     str(self.config.private_reference_dir or ""),
                     str(self.config.wiki_profile_root or ""),
                     self.config.wiki_options.settings_file, self.config.wiki_options.base_url,

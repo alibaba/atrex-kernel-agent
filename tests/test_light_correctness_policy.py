@@ -2772,6 +2772,67 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIs(request["lock_clocks"], True)
         self.assertNotIn("gpu_clock_mhz", request["runner_overrides"])
 
+    def test_native_eval_uses_supervisor_inputs_outside_agent_workspace(self):
+        from aka.light.evaluation.gateway import (
+            PRIVATE_REFERENCE_ENV,
+            _typed_workspace_limitation,
+        )
+
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            root = Path(directory)
+            workspace = root / "agent-workspace"
+            reference = root / "trusted-evaluator"
+            workspace.mkdir()
+            reference.mkdir()
+            (workspace / "kernel.py").write_text("class Model: pass\n")
+            (reference / "reference.py").write_text(
+                "class Model: pass\n", encoding="utf-8"
+            )
+            (reference / "input.py").write_text(
+                "def generate_input(*args, **kwargs): return ()\n",
+                encoding="utf-8",
+            )
+            shapes = {"0": {"init_kwargs": {}, "input_kwargs": {}}}
+            (reference / "shapes.json").write_text(
+                json.dumps(shapes), encoding="utf-8"
+            )
+            environment = {PRIVATE_REFERENCE_ENV: str(reference)}
+
+            with patch.dict(os.environ, environment, clear=False):
+                self.assertIsNone(
+                    _typed_workspace_limitation(
+                        workspace, ["python3", "test_kernel.py"], "run"
+                    )
+                )
+                typed = build_typed_request(
+                    workspace,
+                    "L20N",
+                    600,
+                    [],
+                    ["python3", "test_kernel.py"],
+                    "run",
+                )
+
+            request, frozen = measurement_inputs(
+                build_parser().parse_args(["--kind", "run", "--no-sync"]),
+                workspace,
+                environment,
+                identity_key=b"supervisor-native-evaluator-inputs",
+            )
+
+            self.assertFalse((workspace / "reference.py").exists())
+            self.assertFalse((workspace / "input.py").exists())
+            self.assertFalse((workspace / "shapes.json").exists())
+
+        self.assertEqual(typed["reference"]["reference_py"], "class Model: pass\n")
+        self.assertEqual(typed["reference"]["shapes"], shapes)
+        self.assertEqual(
+            {"reference.py", "input.py", "shapes.json", "test_kernel.py"}
+            - set(frozen),
+            set(),
+        )
+        self.assertIn("test_kernel.py", request["inputs"])
+
     def test_v0_and_candidates_share_60_second_performance_timeout(self):
         with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
             workspace = Path(directory)

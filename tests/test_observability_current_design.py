@@ -424,6 +424,57 @@ def test_runtime_status_projects_asynchronous_jobs():
     ]
 
 
+def test_runtime_status_applies_campaign_writer_lease_to_lineages(
+    monkeypatch, tmp_path
+):
+    campaign = tmp_path / "campaign"
+    lineage = campaign / "lineages" / "t0001"
+    agent_workspace = lineage / "agent-workspace"
+    session = (
+        lineage
+        / "segments"
+        / "episodes"
+        / "e0001"
+        / "sessions"
+        / "run-example"
+    )
+    agent_workspace.mkdir(parents=True)
+    session.mkdir(parents=True)
+    (campaign / "campaign.json").write_text("{}\n")
+    (lineage / "segments" / "active_episode.json").write_text(
+        '{"episode":1,"phase":"running"}\n'
+    )
+    (session / "token-usage.json").write_text(
+        '{"session_id":"session-example","backend":"claude",'
+        '"state":"running","started_at":"2099-01-01T00:00:00Z"}\n'
+    )
+    (session / "conversation.jsonl").write_text("")
+    scopes = [
+        common.Scope(campaign, campaign, "campaign", None),
+        common.Scope(agent_workspace, lineage, "t0001", 1),
+    ]
+    monkeypatch.setattr(light_runtime_status, "discover_scopes", lambda _: scopes)
+    monkeypatch.setattr(light_runtime_status, "search_state", lambda _: None)
+    monkeypatch.setattr(
+        light_runtime_status, "campaign_runtime_configuration", lambda _: None
+    )
+    observed = []
+
+    def active(path):
+        observed.append(Path(path))
+        return Path(path) == campaign
+
+    monkeypatch.setattr(light_runtime_status, "writer_active", active)
+
+    result = light_runtime_status.snapshot(campaign)
+    row = result["scopes"][1]
+
+    assert observed == [campaign]
+    assert row["writer_active"] is True
+    assert row["liveness"] == "running_recent_activity"
+    assert row["active_session_count"] == 1
+
+
 def test_tool_usage_normalizes_wiki_question_to_stable_tool_name():
     assert light_tool_usage._tool("wiki", ["a long natural-language question"]) == (
         "wiki-query"

@@ -176,6 +176,12 @@ class ManagedCampaign(Campaign):
     def private_reference_dir(self):
         return self.problem.evaluation.private_reference_dir
 
+    @property
+    def evaluator_reference_dir(self):
+        if self.problem.initial_source.kind == "sol":
+            return None
+        return Path(self.problem.evaluation.directory).expanduser().resolve()
+
     def prepare(self, *, recovery_ready=None):
         # LongHorizon.run owns the idempotent V0/resume prelude.
         self.workspace.parent.mkdir(parents=True, exist_ok=True)

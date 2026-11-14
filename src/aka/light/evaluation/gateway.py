@@ -329,7 +329,13 @@ TYPED_FALLBACK_REASONS = (
 AGENT_PROBLEM_FILENAME = "agent_problem.json"
 MODE_STATE_FILENAME = ".orchestrator_mode.json"
 PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
-PRIVATE_EVALUATOR_FILENAMES = ("shapes.json", "metadata.json", "roofline.json")
+PRIVATE_EVALUATOR_FILENAMES = (
+    "reference.py",
+    "input.py",
+    "shapes.json",
+    "metadata.json",
+    "roofline.json",
+)
 PRIVATE_PROFILE_CASE_FILENAME = ".atrex_private_profile_case.json"
 EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 PROFILE_ENVIRONMENT_KEYS = (
@@ -930,17 +936,25 @@ def _is_generalized_workspace(workspace: Path) -> bool:
 
 
 def private_reference_dir(workspace: Path, *, environment: Mapping[str, str] | None = None) -> Path | None:
-    """Resolve private evaluator inputs only for a generalized production workspace."""
-    if not _is_generalized_workspace(workspace):
-        return None
+    """Resolve Supervisor-owned evaluator inputs outside the Agent workspace.
+
+    Current Light keeps Native reference/input/Shape files out of Agent Git in
+    both exposed- and hidden-Shape campaigns.  ``agent_problem.json`` decides
+    whether those inputs are hidden; it must not decide whether Runtime can
+    locate the trusted evaluator contract.
+    """
     raw = (os.environ if environment is None else environment).get(PRIVATE_REFERENCE_ENV, "")
     if not raw:
-        raise ValueError(
-            f"{PRIVATE_REFERENCE_ENV} is required for generalized Atrex-Bench evaluation"
-        )
+        if _is_generalized_workspace(workspace):
+            raise ValueError(
+                f"{PRIVATE_REFERENCE_ENV} is required for generalized Atrex-Bench evaluation"
+            )
+        return None
     private_dir = Path(raw).expanduser().resolve()
     if not private_dir.is_dir():
         raise ValueError("configured private Atrex-Bench reference directory is missing")
+    if not _is_generalized_workspace(workspace):
+        return private_dir
     private_problem = private_dir / AGENT_PROBLEM_FILENAME
     public_problem = workspace / AGENT_PROBLEM_FILENAME
     # A user-provided contract remains evaluator-owned and must match byte-for-byte.
@@ -972,7 +986,7 @@ def _private_evaluator_inputs(workspace: Path, *, environment=None) -> dict[str,
     inputs: dict[str, Path] = {}
     for filename in PRIVATE_EVALUATOR_FILENAMES:
         path = private_dir / filename
-        if filename in {"shapes.json", "metadata.json"} and not path.is_file():
+        if filename in {"reference.py", "input.py", "shapes.json"} and not path.is_file():
             raise ValueError(f"required private evaluator input is missing: {filename}")
         if path.is_file():
             inputs[filename] = path
@@ -1043,11 +1057,9 @@ def _typed_workspace_limitation(
     limitation = typed_limitation(workspace)
     if limitation:
         return limitation
-    required = ("reference.py", "input.py")
-    missing = [name for name in required if not (workspace / name).is_file()]
-    if missing:
-        return "missing " + ", ".join(missing)
     try:
+        for name in ("reference.py", "input.py"):
+            _evaluator_input_path(workspace, name, required=True)
         _evaluator_input_path(workspace, "shapes.json", required=True)
     except ValueError as exc:
         return str(exc)
@@ -1300,11 +1312,15 @@ def build_typed_request(
 
     reference: dict[str, Any] = {
         "operator": workspace.name,
-        "reference_py": (workspace / "reference.py").read_text(encoding="utf-8"),
+        "reference_py": _evaluator_input_path(
+            workspace, "reference.py", required=True
+        ).read_text(encoding="utf-8"),
         "input_py": (
             custom_input_source
             if custom_input_source is not None
-            else (workspace / "input.py").read_text(encoding="utf-8")
+            else _evaluator_input_path(
+                workspace, "input.py", required=True
+            ).read_text(encoding="utf-8")
         ),
         "shapes": shapes,
     }

@@ -12,6 +12,7 @@ from aka.light.experiment.store import MeasurementStore
 class MeasurementEffects:
     mode: str
     repetitions: int
+    evaluator_reference_dir: Path | None
     private_reference_dir: Path | None
     private_paths: tuple[str, ...]
     run: Callable[[list[str], Path, dict[str, str]], subprocess.CompletedProcess]

@@ -271,7 +271,10 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     pinned = directory / "runtime-requirements.txt"
                     private_write_bytes(pinned, ("\n".join(plan.runtime_pins["requirements"]) + "\n").encode())
                     env["ATREX_SANDBOX_REQUIREMENTS_FILE"] = str(pinned)
-                if effects.private_reference_dir is not None:
+                if (
+                    effects.evaluator_reference_dir is not None
+                    or effects.private_reference_dir is not None
+                ):
                     env["ATREX_PRIVATE_REFERENCE_DIR"] = str(task.directory / "inputs")
                 try:
                     process = effects.run(command, staged, env)

@@ -283,6 +283,15 @@ class Campaign:
             )
         return op_dir
 
+    @property
+    def evaluator_reference_dir(self) -> Path | None:
+        """Return the trusted Native evaluator contract for Runtime only."""
+        if not self.atrex_bench_root:
+            return None
+        op_dir = Path(self.kernel_demo).resolve().parent
+        required = ("reference.py", "input.py", "shapes.json")
+        return op_dir if all((op_dir / name).is_file() for name in required) else None
+
     def _ensure_agent_problem(self) -> None:
         """Materialize the public contract before any production optimization session.
 
@@ -445,6 +454,7 @@ class Campaign:
             url=self.sandbox_url, profile=self.sandbox_profile, ssh=self.sandbox_ssh,
             ssh_init=self.sandbox_ssh_init, ssh_gpu=self.sandbox_ssh_gpu,
             health_command=self.sandbox_health_command, private_reference_dir=self.private_reference_dir,
+            evaluator_reference_dir=self.evaluator_reference_dir,
             atrex_bench_root=Path(self.atrex_bench_root).resolve() if self.atrex_bench_root else None,
             wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
             optimization_mode=self.optimization_mode,
