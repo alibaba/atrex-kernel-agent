@@ -137,7 +137,10 @@ Do not skip reinstallation merely because the distributions still report version
 
 Light supports exactly two Bubblewrap process-view modes:
 
-- `private` creates a private PID namespace and mounts a new procfs. It is the default for ordinary Linux and Lima.
-- `host` shares the outer container's PID namespace and bind-mounts its complete `/proc`. It is the default for every Aone Sandbox Light launch because Aone rejects a nested procfs mount; use a dedicated Sandbox.
+- `private` creates a private PID namespace and mounts a new procfs. It is supported on ordinary Linux and Lima.
+- `host` shares the outer container's PID namespace and bind-mounts its complete `/proc`. It is the only supported Bubblewrap proc mode inside Aone Sandbox because Aone rejects a nested procfs mount; use a dedicated Sandbox.
 
 Host mode requires Bubblewrap but no C compiler, development headers, compatibility shim or `LD_PRELOAD`. It preserves the filesystem allowlist and dropped capabilities, but it deliberately does not isolate process visibility within the Aone Sandbox.
+For every new launch, ask the user to select `private` or `host` after they select
+`light-sandbox`. Inside Aone, ask the user to accept `host` or choose native `light`; do not apply a
+proc-mode default on the user's behalf.

@@ -10,10 +10,15 @@ Before every new launch, explain the mode choices and explicitly ask the user fo
 
 - a safe way to make Agate `AGATE_AK` and `AGATE_SK` available to the Supervisor process;
 - the canonical Atrex-Bench checkout root containing `scripts/run_eval.py` and `src/atrex_bench/`;
-- the target GPU/platform token, for example `L20N` or `L20D`.
+- the target GPU/platform token, for example `L20N` or `L20D`; never infer it from the problem,
+  available Sandbox, queue state or an older Campaign.
 - the optimization mode: Fast, Performance or Ultra; when Ultra is selected, also require its DSL.
 - whether to run the Agent with Bubblewrap Sandbox (`light-sandbox`) or without it (`light`); when
   Sandbox is selected, ask for `private` or `host` proc mode.
+
+These are required user decisions for every new Campaign. Pass the chosen `--optimization-mode`
+and `--profile` explicitly; do not rely on parser or composition defaults. When Bubblewrap is
+chosen, also materialize the user's proc-mode choice explicitly.
 
 Explain the modes as follows:
 
@@ -38,7 +43,7 @@ When Sandbox is selected, explain and require one proc-mode choice:
 
 | Proc mode | Isolation and supported environment |
 |---|---|
-| `private` | New PID namespace and procfs; unrelated coordinator processes are hidden. Default/recommended on ordinary Linux and Lima. |
+| `private` | New PID namespace and procfs; unrelated coordinator processes are hidden. Supported on ordinary Linux and Lima. |
 | `host` | Shares the outer PID namespace and complete `/proc`; filesystem allowlist and dropped capabilities remain, but process visibility is not isolated. |
 
 **Aone Sandbox supports only `host`.** Its container policy rejects the nested procfs mount used by
@@ -47,11 +52,12 @@ host-proc agent composition patch described in [installation](installation.md), 
 Aone Sandbox because the Agent can see every process in it. Without Agent Sandbox (`light`), proc
 mode is not applicable and must not be requested.
 
-Do not reuse these values from an older Campaign or silently select a nearby checkout. Do not ask
+Do not reuse these values from an older Campaign or silently select a GPU based on availability.
+Do not silently select a nearby checkout. Do not ask
 the user to paste AK/SK values into chat. Credentials must already be present in the launch
 environment or come from an existing secure credential source; verify presence without printing
 values. Ask separately for `--sandbox-hardware` only when its Agate worker token differs from the
-logical platform.
+logical platform, and require the user to confirm both tokens.
 
 Resolve before launch:
 
@@ -71,6 +77,9 @@ command, use [the Native Vector Add example](../examples/native-atrex-bench-vect
 
 ## Launch command
 
+The following is only an Ultra/CUDA syntax example. Use it only if the user explicitly selected
+`light-sandbox`, `L20D`, `ultra`, and `Cuda`; otherwise substitute every user-selected value.
+
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
   --profile light-sandbox -- \
@@ -89,7 +98,10 @@ repositories only at `lineages/tNNNN/agent-workspace`. It does not create a
 parent `.atrex-supervisor-runtime/<hash>` namespace, a nested
 `.atrex-supervisor-runtime/` wrapper, or Controller Git clones.
 
-Launch options precede `--`; campaign options follow it. Omit `--profile` for native Light. `light-sandbox` is the Bubblewrap boundary on the coordinator, not an Aone Sandbox request.
+Launch options precede `--`; campaign options follow it. Pass `--profile light` for the explicitly
+selected native boundary or `--profile light-sandbox` for the explicitly selected Bubblewrap
+boundary. `light-sandbox` is the Bubblewrap boundary on the coordinator, not an Aone Sandbox
+request.
 
 Run checkout-specific help first:
 
@@ -109,7 +121,11 @@ aka optimize --repo-root /path/to/atrex-kernel-agent -- --help
 
 Only `light` and `light-sandbox` select the current persistent Session, Agent Git, Runtime/MeasurementStore, Research Store and accepted-submission workflow. `observed` and `sandbox` do not turn Legacy into Light.
 
-Bubblewrap requires Linux. On macOS use native Light or a Lima Linux VM. Ordinary Linux/Lima defaults to `proc_mode: private`. Every Aone Sandbox Light launch defaults to explicit `proc_mode: host`, which binds the Sandbox's complete `/proc` and shares its PID namespace. Host mode retains filesystem isolation but is not process isolation. Bubblewrap is not a network allowlist or another OS account.
+Bubblewrap requires Linux. On macOS the user must choose native Light or a Lima Linux VM. In Lima,
+the user may explicitly select `private` or `host`. Aone Sandbox allows only explicit `host`, which
+binds the Sandbox's complete `/proc` and shares its PID namespace; if the user does not accept that
+boundary, use native `light`. Host mode retains filesystem isolation but is not process isolation.
+Bubblewrap is not a network allowlist or another OS account.
 
 ## Modes
 

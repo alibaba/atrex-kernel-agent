@@ -17,12 +17,18 @@ aka optimize \
 
 Options before `--` choose installed components. Options after `--` configure the campaign.
 
+The `Default` column below records parser/provider fallback behavior. For a new Campaign, the Skill
+must not convert those fallbacks into user intent: require the user to choose the optimization mode
+and Agent boundary, pass `--optimization-mode` and `--profile` explicitly, and require an explicit
+`private` or `host` choice whenever `light-sandbox` is selected. The target GPU/platform is also a
+required user choice and must never be inferred from queue or Sandbox availability.
+
 ### Launch options
 
 | Option | Default | Meaning |
 |---|---:|---|
 | `--repo-root PATH` | required | Checkout whose profiles, resources and packaged Skills match the installed wheels |
-| `--profile PROFILE` | `light` | `light`, `light-sandbox`, a Legacy profile, or an explicit Profile JSON |
+| `--profile PROFILE` | `light` parser fallback; explicit for new Campaigns | `light`, `light-sandbox`, a Legacy profile, or an explicit Profile JSON |
 | `--patch FILE` | none | Repeatable composition patch; each module entry replaces that module's whole configuration |
 | `--execution-profile PROFILE` | selected default | Advanced independent prepared-Execution selection |
 | `--execution-patch FILE` | none | Repeatable patch for that independent Execution selection |
@@ -37,7 +43,7 @@ Recorded continuations restore their frozen launch selection. Do not add a new p
 | `--platform TOKEN` | required | Logical target product shown to the Agent and normally used as the Agate worker token |
 | `--framework DSL` | none | Required only by Ultra; Fast and Performance leave DSL selection to the Agent |
 | `--[no-]specify-dsl` | derived | Fast/Performance are open DSL; Ultra forces a pinned DSL |
-| `--optimization-mode MODE` | `fast` | `fast`, `performance`, or `ultra`; historical names remain resume aliases |
+| `--optimization-mode MODE` | `fast` parser fallback; explicit for new Campaigns | `fast`, `performance`, or `ultra`; historical names remain resume aliases |
 | `--[no-]expose-evaluator-shapes` | exposed | Expose evaluator Shapes, or request the supported hidden Performance/Ultra flow |
 | `--workspace PATH` | current directory | Base for durable child campaign workspaces |
 | `--notes TEXT` | `none` | Additional operator constraints; never put credentials here |
@@ -154,7 +160,7 @@ Composition patches are JSON files passed before `--`. A module entry supplies t
 
 | Module | Current Light behavior |
 |---|---|
-| `agent` | `sandbox`, capture, provider wall timeout, Bubblewrap binary, `proc_mode: private\|host`, and extra read-only paths. The provider-wide default is `private`; Aone Sandbox launch configuration defaults to explicit `host`. |
+| `agent` | `sandbox`, capture, provider wall timeout, Bubblewrap binary, `proc_mode: private\|host`, and extra read-only paths. Provider fallbacks do not replace the required user choice for new Campaigns; Aone supports only an explicitly accepted `host`. |
 | `tool_runtime` | Measurement repetitions, Agent pause during Runtime calls, GPU/Wiki queues and timeouts, Wiki configuration |
 | `workflow` | Optional active-time limit, supplemental numerical validation, goal segmentation, generated memory, output-limit recovery, pooled search and source import |
 | `candidate` / `workspace` | `source_tree`, `single_file`, or `cuda_manifest`, plus persistent state handling |
