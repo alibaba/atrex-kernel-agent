@@ -83,6 +83,7 @@ Use these fields together:
 | Field | Interpretation |
 |---|---|
 | `runtime.writer_active` | Current lineage execution authority; a scheduler checkpoint alone does not prove liveness |
+| `runtime.segment_status` / `runtime.state_inconsistent` | Persisted segment checkpoint and its consistency with live Supervisor work. `state_inconsistent=true` means an active Supervisor request proves current work even though the segment checkpoint is not `active`; liveness is reported as `running_supervisor_activity`, never `not_running`. |
 | `runtime.liveness` | `running_recent_activity`, `running_supervisor_activity`, `running_no_recent_activity`, or `not_running` |
 | `runtime.latest_activity_at` / `stagnation_seconds` | Age of the newest durable activity |
 | `runtime.main_session_silence_seconds` | Main Agent silence even when Supervisor work is active |

@@ -19,9 +19,10 @@ Options before `--` choose installed components. Options after `--` configure th
 
 The `Default` column below records parser/provider fallback behavior. For a new Campaign, the Skill
 must not convert those fallbacks into user intent: require the user to choose the optimization mode
-and Agent boundary, pass `--optimization-mode` and `--profile` explicitly, and require an explicit
-`private` or `host` choice whenever `light-sandbox` is selected. The target GPU/platform is also a
-required user choice and must never be inferred from queue or Sandbox availability.
+Agent CLI and Agent boundary, pass `--optimization-mode`, `--agent-cli`, and `--profile`
+explicitly, and require an explicit `private` or `host` choice whenever `light-sandbox` is selected.
+The target GPU/platform is also a required user choice and must never be inferred from queue or
+Sandbox availability.
 
 ### Launch options
 
@@ -48,7 +49,7 @@ Recorded continuations restore their frozen launch selection. Do not add a new p
 | `--workspace PATH` | current directory | Base for durable child campaign workspaces |
 | `--notes TEXT` | `none` | Additional operator constraints; never put credentials here |
 | `--arch ARCH` | probed | Intentional runtime-architecture override such as `sm_103a` or `gfx942` |
-| `--agent-cli CLI` | `claude` | Agent provider such as `claude`, `qodercli`, `codex`, or `pi` |
+| `--agent-cli CLI` | `claude` parser fallback; explicit for new Campaigns | User-selected Agent provider: `claude`, `codex`, `qodercli`, or `pi` |
 | `--agent-reference-dir DIR...` | none | Repeatable read-only mounts at `references/<basename>/`; requires Bubblewrap and unique basenames |
 | `--setup-timeout SECONDS` | `7200` | Per-attempt authoring limit for a missing hidden-flow `agent_problem.json`; not an Episode limit |
 
@@ -56,7 +57,13 @@ Mode, Shape visibility, framework, candidate layout, composition and problem sna
 
 ## Search and stop conditions
 
-Current Light defaults to pooled search. Configure it through `workflow.config.search`:
+Current Light defaults to one independent serial trajectory. Configure explicit advanced pooled
+search through `workflow.config.search`:
+
+These defaults document parser behavior only. An ordinary Skill-driven new Campaign explicitly
+uses serial `search: {}` and asks the user only for its positive `--max-iters`; it must not silently
+use the pooled values in the table. Expose pooled fields only when the user explicitly requests
+multi-trajectory search.
 
 | Field | Default | Meaning |
 |---|---:|---|
@@ -164,7 +171,7 @@ Composition patches are JSON files passed before `--`. A module entry supplies t
 | `tool_runtime` | Measurement repetitions, Agent pause during Runtime calls, GPU/Wiki queues and timeouts, Wiki configuration |
 | `workflow` | Optional active-time limit, supplemental numerical validation, goal segmentation, generated memory, output-limit recovery, pooled search and source import |
 | `candidate` / `workspace` | `source_tree`, `single_file`, or `cuda_manifest`, plus persistent state handling |
-| `light_journal` | `tool_modules`: any subset of `directions` and `experiments`; empty disables both annotations |
+| `light_journal` | `tool_modules`: defaults to empty; advanced launches may explicitly enable any subset of `directions` and `experiments` |
 | `wiki` | Knowledge provider/root; Tool Runtime separately decides whether Wiki is exposed |
 
 Direction/Experiment annotations are optional. Standard Evaluate evidence, exact Agent Git commits, `submit-kernel` receipts and accepted-submission winner selection remain available when both modules are disabled.

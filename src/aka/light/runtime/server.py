@@ -981,6 +981,25 @@ class SupervisorRuntime:
             updated_at=datetime.now(timezone.utc).isoformat(),
         )
 
+    def _write_binding_lineage_state(
+        self, binding: JournalBinding, *, segment_status: str
+    ) -> None:
+        """Project the live Session state for one lineage binding."""
+        service = binding.service
+        self._write_lineage_state(
+            episode=service.episode,
+            branch=service.episode_branch,
+            base_commit=service.base_commit,
+            base_kernel_commit_id=service.base_kernel_id,
+            agent_head_commit_id=(
+                binding.view.agent_git.head()
+                if binding.view is not None
+                else service.base_commit
+            ),
+            tool_modules=service.tool_modules,
+            segment_status=segment_status,
+            origin=service.origin,
+        )
 
     def baseline_kernel_commit(self, workspace: Path) -> str:
         """Return this Episode's canonical baseline in Agent-visible Git."""
@@ -1185,60 +1204,81 @@ class SupervisorRuntime:
             capability.journal = self.journals.get(workspace)
         values = scrub_environment(environment)
         values.update({URL_ENV: self.url, TOKEN_ENV: token})
-        if capability.journal and capability.journal.view:
+        binding = capability.journal
+        if binding and binding.view:
             from aka.light.workspace.episode import EPISODE_WORKSPACE_ENV
             from aka.light.workspace.managed_assets import PROTECTED_PATHS_ENV
-            with capability.journal.lock:
-                values[PROTECTED_PATHS_ENV] = json.dumps(capability.journal.view.prepare_session())
-            values[EPISODE_WORKSPACE_ENV] = str(capability.journal.view.root)
-            from aka.light.agent.sandbox import git_directory
-            common = git_directory(capability.journal.view.source_workspace)
-            if common is None:
-                raise RuntimeError(
-                    "Cannot resolve the managed Episode Git common directory; "
-                    "refusing to start an Agent Session without private-path protection. "
-                    "Repair the persistent Agent repository before retrying"
+            with binding.lock:
+                values[PROTECTED_PATHS_ENV] = json.dumps(
+                    binding.view.prepare_session()
                 )
-            private_paths = [self.audit_root or self.root]
-            if not common.is_relative_to(capability.journal.view.root):
-                private_paths.append(common)
-            values["ATREX_EPISODE_PRIVATE_PATHS"] = json.dumps(
-                [str(path) for path in private_paths]
-            )
-            values["GIT_CEILING_DIRECTORIES"] = str(capability.journal.view.root.parent)
-        # Preparation can fail or race with shutdown; grant authority only after
-        # every required private path is known, without holding the lock over Git.
-        with self.lock:
-            if self.closed:
-                raise RuntimeError("Supervisor Runtime is closed")
-            self.capabilities[token] = capability
+                values[EPISODE_WORKSPACE_ENV] = str(binding.view.root)
+                from aka.light.agent.sandbox import git_directory
+                common = git_directory(binding.view.source_workspace)
+                if common is None:
+                    raise RuntimeError(
+                        "Cannot resolve the managed Episode Git common directory; "
+                        "refusing to start an Agent Session without private-path protection. "
+                        "Repair the persistent Agent repository before retrying"
+                    )
+                private_paths = [self.audit_root or self.root]
+                if not common.is_relative_to(binding.view.root):
+                    private_paths.append(common)
+                values["ATREX_EPISODE_PRIVATE_PATHS"] = json.dumps(
+                    [str(path) for path in private_paths]
+                )
+                values["GIT_CEILING_DIRECTORIES"] = str(binding.view.root.parent)
+                # Every provider invocation owns a fresh Runtime capability,
+                # including same-Episode output-limit continuations.  Register
+                # that ownership before exposing the capability so a prior
+                # invocation's idle checkpoint cannot make live work appear
+                # stopped.
+                with self.lock:
+                    if self.closed:
+                        raise RuntimeError("Supervisor Runtime is closed")
+                    self.capabilities[token] = capability
+                try:
+                    self._write_binding_lineage_state(
+                        binding, segment_status="active"
+                    )
+                except BaseException:
+                    self.revoke(token)
+                    raise
+        else:
+            # Preparation can fail or race with shutdown; grant authority only
+            # after every required private path is known.
+            with self.lock:
+                if self.closed:
+                    raise RuntimeError("Supervisor Runtime is closed")
+                self.capabilities[token] = capability
         try:
             yield values
         finally:
-            self.revoke(token)
-            if capability.journal and capability.journal.view:
-                with capability.journal.lock:
+            if binding and binding.view:
+                # Serialize capability transitions per lineage.  A Session may
+                # overlap another invocation or a synchronous Supervisor call;
+                # only the last live capability is allowed to publish `idle`.
+                with binding.lock:
+                    self.revoke(token)
+                    with self.lock:
+                        lineage_still_active = any(
+                            other.journal is binding
+                            for other in self.capabilities.values()
+                        )
                     primary = sys.exception()
                     try:
-                        capability.journal.view.publish()
-                        service = capability.journal.service
-                        self._write_lineage_state(
-                            episode=service.episode,
-                            branch=service.episode_branch,
-                            base_commit=service.base_commit,
-                            base_kernel_commit_id=service.base_kernel_id,
-                            agent_head_commit_id=(
-                                capability.journal.view.agent_git.head()
-                            ),
-                            tool_modules=service.tool_modules,
-                            segment_status="idle",
-                            origin=service.origin,
-                        )
+                        binding.view.publish()
+                        if not lineage_still_active:
+                            self._write_binding_lineage_state(
+                                binding, segment_status="idle"
+                            )
                     except Exception as error:
                         if primary is not None:
                             primary.add_note(f"Episode draft publication failed: {error}")
                         else:
                             raise
+            else:
+                self.revoke(token)
 
     def _live(self, capability):
         with self.lock:

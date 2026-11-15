@@ -9,7 +9,7 @@ from aka.light.workflow.journal_service import SupervisorJournalService
 
 @dataclass(frozen=True)
 class JournalFactory:
-    tool_modules: tuple[str, ...] | list[str] = ("directions", "experiments")
+    tool_modules: tuple[str, ...] | list[str] = ()
 
     def __post_init__(self):
         modules = tuple(self.tool_modules)

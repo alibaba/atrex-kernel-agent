@@ -12,13 +12,25 @@ Before every new launch, explain the mode choices and explicitly ask the user fo
 - the canonical Atrex-Bench checkout root containing `scripts/run_eval.py` and `src/atrex_bench/`;
 - the target GPU/platform token, for example `L20N` or `L20D`; never infer it from the problem,
   available Sandbox, queue state or an older Campaign.
+- the Agent CLI: `claude` (Claude Code), `codex`, `qodercli`, or `pi`;
 - the optimization mode: Fast, Performance or Ultra; when Ultra is selected, also require its DSL.
 - whether to run the Agent with Bubblewrap Sandbox (`light-sandbox`) or without it (`light`); when
   Sandbox is selected, ask for `private` or `host` proc mode.
 
-These are required user decisions for every new Campaign. Pass the chosen `--optimization-mode`
-and `--profile` explicitly; do not rely on parser or composition defaults. When Bubblewrap is
-chosen, also materialize the user's proc-mode choice explicitly.
+These are required user decisions for every new Campaign. Pass the chosen `--agent-cli`,
+`--optimization-mode`, and `--profile` explicitly; do not rely on parser or composition defaults.
+When Bubblewrap is chosen, also materialize the user's proc-mode choice explicitly.
+
+For Atrex-Bench, offer exactly two acquisition paths: use an existing canonical checkout supplied
+by the user, or clone `https://github.com/alibaba/atrex-bench` into a destination selected by the
+user. Do not suggest `/Users/guoyuqi/atrex-bench` merely because it exists locally.
+
+| Agent CLI | Selection meaning |
+|---|---|
+| `claude` | Claude Code; requires its existing authentication/configuration |
+| `codex` | OpenAI Codex CLI; requires its existing authentication/configuration |
+| `qodercli` | Qoder CLI; requires its existing authentication/configuration |
+| `pi` | Pi CLI; requires its existing authentication/configuration |
 
 Explain the modes as follows:
 
@@ -64,8 +76,8 @@ Resolve before launch:
 - AKA checkout and commit matching installed wheels;
 - supported Native Atrex-Bench or SOL input;
 - target platform, Agate route and optional distinct worker alias;
+- explicit Agent CLI and its existing authentication;
 - explicit framework for Ultra, or intentional Agent-selected DSL for Fast/Performance;
-- Agent backend and existing authentication;
 - Fast, Performance or Ultra final-source policy;
 - Shape visibility and candidate layout;
 - durable workspace, search topology and budgets.
@@ -77,17 +89,16 @@ command, use [the Native Vector Add example](../examples/native-atrex-bench-vect
 
 ## Launch command
 
-The following is only an Ultra/CUDA syntax example. Use it only if the user explicitly selected
-`light-sandbox`, `L20D`, `ultra`, and `Cuda`; otherwise substitute every user-selected value.
+The uppercase values below are required user selections, not defaults. Include
+`--framework USER_SELECTED_ULTRA_DSL` only for Ultra.
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox -- \
+  --profile USER_SELECTED_PROFILE -- \
   --op-dir /path/to/atrex-bench/data/operator \
-  --platform L20D \
-  --framework Cuda \
-  --agent-cli claude \
-  --optimization-mode ultra \
+  --platform USER_SELECTED_GPU \
+  --agent-cli USER_SELECTED_AGENT_CLI \
+  --optimization-mode USER_SELECTED_MODE \
   --workspace /path/to/campaign-root
 ```
 
@@ -108,6 +119,23 @@ Run checkout-specific help first:
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent -- --help
 ```
+
+Before constructing an ordinary command, use one independent serial trajectory: carry a patch with
+`workflow.config.search: {}` and ask the user for a positive `--max-iters N`. Do not choose the
+value for them. Direction and Experiment annotations stay disabled and should not burden ordinary
+launch intake. Expose pooled search or Research module settings only after an explicit user request.
+
+After validation, launch in the background by default. Preserve the Campaign root, launcher log,
+checkout commit, and durable process identity. In Aone Sandbox use `akfctl sandbox command submit`
+and retain its command ID; do not emulate durability with `bash ... &`. For a local host use the
+host's durable process supervisor or a detached launch script with stdout/stderr redirected to a
+known bounded log. Run in the foreground only when the user explicitly asks for an interactive
+launch.
+
+Once accepted, observe the Campaign with the `atrex-aka-light-observability` skill. The first status
+view is `light_lineage_status.py`; use `light_kernel_history.py`, `light_kernel_best.py`,
+`light_runtime_calls.py`, `light_agate_calls.py`, and evidence tracing/export only as needed. The
+launcher process is not sufficient evidence of lineage progress or GPU execution health.
 
 ## Profiles
 
@@ -197,7 +225,14 @@ The layout is fixed for the campaign. `impl/` is optional and must not be create
 
 ## Search and budgets
 
-Pooled search is the default: 10 Epochs, 3 trajectories, 1 Episode per trajectory per Epoch, 3 parallel Episodes, asynchronous publication and no role specialization. Each trajectory owns one durable conversation/workspace/Git lineage.
+One independent serial trajectory is the default. Explicit advanced pooled search may use, for
+example, 10 Epochs, 3 trajectories, 1 Episode per trajectory per Epoch, 3 parallel Episodes,
+asynchronous publication and no role specialization. Each pooled trajectory owns one durable
+conversation/workspace/Git lineage.
+
+This is an implementation default, not an ordinary launch recommendation. Ordinary Skill launches
+use one independent serial trajectory and require a user-selected positive `--max-iters`. Pooled
+settings are advanced options shown only when the user explicitly requests multi-trajectory search.
 
 Set `workflow.config.search` to `{}` for serial mode. Then `--max-iters N` counts Episode audit segments. In pooled mode, the schedule is `epochs × trajectories × episodes_per_trajectory`; `--max-iters` is not the pooled segment count.
 

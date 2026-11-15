@@ -6455,6 +6455,54 @@ def test_runtime_reuses_agent_repository_without_episode_worktree(tmp_path):
         runtime.close()
 
 
+def test_runtime_session_reactivates_lineage_and_reference_counts_overlap(tmp_path):
+    campaign_root = initialize_campaign_root(
+        tmp_path / "campaign",
+        name="session-lineage-state",
+        launch_composition=_test_launch_composition(),
+        source=_test_source_binding(b"def run():\n    return 1\n"),
+    )
+    agent = _controller_repository(
+        campaign_root / "lineages" / "t0001" / "agent-workspace",
+        "def run():\n    return 1\n",
+    )
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=agent,
+        text=True,
+        capture_output=True,
+        check=True,
+    ).stdout.strip()
+    state_path = campaign_root / "lineages" / "t0001" / "state.json"
+    runtime = SupervisorRuntime(
+        RuntimeConfig(hardware="L20D", workspace=agent, wiki_enabled=False),
+        workspace_provider=ManagedCandidateWorkspace(),
+    )
+    try:
+        runtime.register_episode(
+            agent,
+            episode=1,
+            base_commit=head,
+            branch="work",
+            memory_version=1,
+            managed_agent_workspace=True,
+        )
+
+        with runtime.session(agent, {}):
+            assert json.loads(state_path.read_text())["segment_status"] == "active"
+            with runtime.session(agent, {}):
+                assert json.loads(state_path.read_text())["segment_status"] == "active"
+            assert json.loads(state_path.read_text())["segment_status"] == "active"
+        assert json.loads(state_path.read_text())["segment_status"] == "idle"
+
+        # A same-Episode continuation must reactivate the persisted lineage.
+        with runtime.session(agent, {}):
+            assert json.loads(state_path.read_text())["segment_status"] == "active"
+        assert json.loads(state_path.read_text())["segment_status"] == "idle"
+    finally:
+        runtime.close()
+
+
 def test_legacy_episode_submissions_migrate_once_into_campaign_store(tmp_path):
     legacy = tmp_path / "legacy-journals"
     journal = legacy / "episodes" / "e00000003" / "journal.json"

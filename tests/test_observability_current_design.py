@@ -621,6 +621,55 @@ def test_runtime_status_treats_running_claim_review_as_supervisor_activity(
     assert row["supervisor_activity"]["state"] == "running"
 
 
+def test_runtime_status_reports_idle_checkpoint_with_live_request_as_inconsistent(
+    monkeypatch, tmp_path
+):
+    campaign = tmp_path / "campaign"
+    lineage = campaign / "lineages" / "t0001"
+    agent_workspace = lineage / "agent-workspace"
+    audit = lineage / "runtime-audit" / "requests" / "request-review.json"
+    agent_workspace.mkdir(parents=True)
+    audit.parent.mkdir(parents=True)
+    (campaign / "campaign.json").write_text("{}\n")
+    (lineage / "state.json").write_text(
+        '{"trajectory":1,"segment_status":"idle","completed_episodes":0}\n'
+    )
+    audit.write_text(
+        json.dumps(
+            {
+                "state": "running",
+                "operation": "journal",
+                "tool": "update-direction",
+                "created_at": "2020-01-01T00:00:00Z",
+                "started_at": "2020-01-01T00:00:00Z",
+                "updated_at": "2020-01-01T00:00:00Z",
+            }
+        )
+    )
+    scopes = [
+        common.Scope(campaign, campaign, "campaign", None),
+        common.Scope(agent_workspace, lineage, "t0001", 1),
+    ]
+    monkeypatch.setattr(light_runtime_status, "discover_scopes", lambda _: scopes)
+    monkeypatch.setattr(light_runtime_status, "search_state", lambda _: None)
+    monkeypatch.setattr(
+        light_runtime_status, "campaign_runtime_configuration", lambda _: None
+    )
+    monkeypatch.setattr(
+        light_runtime_status,
+        "writer_active",
+        lambda path: Path(path) == campaign,
+    )
+
+    row = light_runtime_status.snapshot(campaign, stale_after=600)["scopes"][1]
+
+    assert row["writer_active"] is True
+    assert row["segment_status"] == "idle"
+    assert row["state_inconsistent"] is True
+    assert row["liveness"] == "running_supervisor_activity"
+    assert row["active_supervisor_activity_count"] == 1
+
+
 def test_runtime_status_does_not_call_stale_provider_gap_thinking(
     monkeypatch, tmp_path
 ):
@@ -1053,7 +1102,7 @@ def test_runtime_status_reads_episode_zero_attempt_from_private_segments(
     monkeypatch.setattr(light_runtime_status, "search_state", lambda _: None)
     result = light_runtime_status.snapshot(tmp_path)
     scope = result["scopes"][0]
-    assert result["schema_version"] == 4
+    assert result["schema_version"] == 5
     assert scope["campaign_id"] == "campaign-example"
     assert scope["episodes"][0]["episode"] == 0
     assert "accepted" not in scope["episodes"][0]

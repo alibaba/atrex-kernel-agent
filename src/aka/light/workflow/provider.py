@@ -20,9 +20,9 @@ class WorkflowOptions:
     output_limit_recovery_retries: int = DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES
     dependency_policy_recovery_retries: int = 2
     episode_timeout_seconds: float | None = None
-    # Persistent three-island search is the default topology.  An explicit
-    # empty mapping keeps a supported escape hatch for a serial Campaign.
-    search: SearchOptions | dict | None = field(default_factory=SearchOptions)
+    # One independent lineage is the ordinary default.  Pooled search is an
+    # explicit advanced configuration rather than an implicit launch choice.
+    search: SearchOptions | dict | None = None
     source_tree: dict | None = None
 
     def __post_init__(self):

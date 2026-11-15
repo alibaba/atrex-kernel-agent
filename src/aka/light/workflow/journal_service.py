@@ -442,7 +442,7 @@ def initialize_journal(
     base_commit: str,
     branch: str,
     memory_version: int | None = None,
-    tool_modules: tuple[str, ...] | list[str] = ("directions", "experiments"),
+    tool_modules: tuple[str, ...] | list[str] = (),
 ) -> dict[str, Any]:
     """Create one private Runtime-managed Episode Journal."""
     modules = tuple(tool_modules)
@@ -3833,7 +3833,7 @@ class SupervisorJournalService:
         base_commit: str = "",
         base_kernel_id: str | None = None,
         episode_branch: str = "work",
-        tool_modules: tuple[str, ...] | list[str] = ("directions", "experiments"),
+        tool_modules: tuple[str, ...] | list[str] = (),
         session_capture_root: Path | None = None,
         origin: Mapping[str, object] | None = None,
         claim_reviewer: Callable[..., Mapping[str, object]] | None = None,

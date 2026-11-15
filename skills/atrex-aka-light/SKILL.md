@@ -22,31 +22,48 @@ Do not use this skill for the Legacy `workflow` Profile or standalone Aone Sandb
 
 ## Required launch intake
 
-Before constructing or executing a new Light launch, explain the optimization modes and Agent execution boundaries, then explicitly ask the user for all five inputs below. Do not infer them from an older Campaign, shell history, another Sandbox, or a nearby checkout:
+Before constructing or executing a new Light launch, explain every choice below and explicitly ask
+the user for all seven inputs. Do not recommend or preselect a combination for a minimal smoke run,
+and do not infer values from an older Campaign, shell history, another Sandbox, the host OS, or a
+nearby checkout:
 
 1. **Agate AK/SK availability and safe injection source.** Ask the user to make `AGATE_AK` and `AGATE_SK` available to the Supervisor process, or to identify an already configured secure credential source. Never ask the user to paste either secret into chat, and never print, copy, log, commit, or place them in argv, notes, patches, workspace files, or manifests. Verify only that both values are present.
-2. **Canonical Atrex-Bench checkout root.** This is the path containing `scripts/run_eval.py` and `src/atrex_bench/`; it is not merely the operator directory.
+2. **Canonical Atrex-Bench checkout root.** Ask the user either to provide an existing checkout path
+   containing `scripts/run_eval.py` and `src/atrex_bench/`, or to choose a destination where
+   `https://github.com/alibaba/atrex-bench` should be cloned. Do not assume
+   `/Users/guoyuqi/atrex-bench` or any nearby checkout.
 3. **Target GPU/platform token.** Require the user to select an explicit value such as `L20N` or
    `L20D`. Never infer it from the operator, an older Campaign, a currently available Sandbox or
    queue availability. If the Agate worker alias differs, ask the user to confirm that token
    separately and pass it through `--sandbox-hardware`.
-4. **Optimization mode.** Present the following choices before asking the user to select one:
+4. **Agent CLI.** Present all supported choices and require one: `claude` (Claude Code), `codex`
+   (OpenAI Codex), `qodercli`, or `pi`. Check that the selected CLI is installed and authenticated;
+   do not default to Claude Code or Codex.
+5. **Optimization mode.** Present the following choices before asking the user to select one:
    - **Fast:** the Agent chooses any evaluator-supported DSL or mixture; explicitly declared reproducible libraries or prebuilt implementations may perform core computation. Use it for the fastest path to a working/high-performance result when external implementation reuse is acceptable.
    - **Performance:** the Agent chooses the DSL using expertise and measurements, but the final core computation must be self-authored; prebuilt or third-party core compute is not allowed. Use it to pursue strong performance without pinning a DSL.
    - **Ultra:** the final core computation must be self-authored and one user-selected DSL is mandatory and enforced, such as `Cuda`, `Triton`, or `CuteDSL`. If the user selects Ultra, also require the DSL; refuse launch when it is missing.
    Every new launch must pass the selected `--optimization-mode` explicitly. Never treat the CLI's
    `fast` fallback as user intent.
-5. **Agent Sandbox choice.** Explain that this controls the local Agent process boundary, not whether Agate uses remote GPUs and not whether an Aone Sandbox is created. Require an explicit choice even though the CLI has a native-process fallback:
+6. **Agent Sandbox choice.** Explain that this controls the local Agent process boundary, not whether Agate uses remote GPUs and not whether an Aone Sandbox is created. Require an explicit choice even though the CLI has a native-process fallback:
    - **With Sandbox (`--profile light-sandbox`):** run the Agent inside a Bubblewrap filesystem/process boundary while retaining Light capture, persistent Session, workspace and Agent Git. Supervisor-private credentials and state stay outside the Agent view. This requires Linux with Bubblewrap; on macOS use a Lima Linux VM. When the user selects this option, require one further choice:
      - **`private`:** create a private PID namespace and mount a new procfs. The Agent cannot see unrelated coordinator processes. This is available on ordinary Linux and Lima.
      - **`host`:** share the outer environment's PID namespace and bind its complete `/proc`. Filesystem allowlisting and dropped capabilities remain, but process visibility is not isolated. Use a dedicated outer environment. **Aone Sandbox can only use `host`; reject `private` there because Aone does not permit the nested procfs mount required by `private`.**
    - **Without Sandbox (`--profile light`):** run the Agent as a normal process under the coordinator's current OS user, without Bubblewrap isolation. Light capture, persistent Session, workspace and Agent Git still work. This is compatible with native macOS but gives the Agent the host access permitted to that user, so use it only when that trust boundary is acceptable.
+7. **Run length.** The ordinary launch is one independent trajectory, not three-line pooled
+   search. Require the user to choose a positive `--max-iters N`; `N` is the number of Episode
+   audit segments, not the number of Kernel versions or Evaluates. Do not preselect `1`, `5`, `20`,
+   or any other value for a smoke run. Direction and Experiment annotations remain disabled and
+   are not part of ordinary launch intake. Only when the user explicitly requests advanced pooled
+   search or Research annotations should you expose and collect those additional settings. An
+   ordinary launch creates one Campaign repeat; ask for a repeat count only when the user requests
+   repeated independent Campaigns.
 
 When any required value is missing, pause the launch and ask one concise question containing the missing fields. A suitable prompt is:
 
-> AKA Light 提供三种优化模式：Fast（Agent 自选 DSL，允许声明清楚的库或预制实现承担核心计算）、Performance（Agent 自选 DSL，但核心计算必须自行实现）、Ultra（核心计算自行实现，并强制使用用户指定 DSL）。Agent 也有两种运行边界：使用 Sandbox（`light-sandbox`，Linux Bubblewrap 隔离，不等于创建 Aone Sandbox）和不使用 Sandbox（`light`，Agent 以当前系统用户直接运行，兼容原生 macOS但隔离较弱）。Sandbox 又分为 `private`（私有 PID namespace 和 procfs）与 `host`（共享外层 PID namespace 和完整 `/proc`，不提供进程可见性隔离）；如果运行在 Aone Sandbox 中，只能选择 `host`。启动前请主动选择并提供：① Agate AK/SK 的安全注入方式（请将 `AGATE_AK`、`AGATE_SK` 预先放入 Supervisor 环境，不要在聊天中粘贴明文）；② canonical `atrex-bench` 根目录；③ 目标 GPU，例如 `L20N` 或 `L20D`；④ `fast`、`performance` 或 `ultra`，如选 `ultra` 请同时指定 DSL；⑤ 使用 Sandbox 还是不使用 Sandbox，如使用请再选择 `private` 或 `host`。未明确选择时不会使用默认值启动。
+> 启动前请逐项选择：① Agate AK/SK 的安全注入方式（将 `AGATE_AK`、`AGATE_SK` 预先放入 Supervisor 环境，不要在聊天中粘贴明文）；② 已有 canonical `atrex-bench` 路径，或从 `https://github.com/alibaba/atrex-bench` clone 到哪个自选路径；③ Agate 的确切目标 GPU token，例如 `L20N` 或 `L20D`，示例不是默认值；④ Agent CLI：`claude`（Claude Code）、`codex`、`qodercli` 或 `pi`；⑤ 优化模式：`fast`（允许声明清楚的外部核心实现）、`performance`（核心计算自行实现，Agent 选 DSL）或 `ultra`（核心计算自行实现并固定用户指定 DSL），Ultra 还需选择 DSL；⑥ Agent 边界：`light`（原生进程）或 `light-sandbox`（Bubblewrap），后者还需选择 `private` 或 `host`，Aone Sandbox 只支持 `host`；⑦ 单线独立运行多少个 Episode audit segment，即明确给出正整数 `max-iters`。Direction/Experiment 默认关闭，普通启动不询问；只有明确要求高级 Research 或多线搜索时才展开相关选项。未明确选择时不会根据最小试跑、Mac 环境或 CLI 默认值启动。
 
-After the user answers, validate the checkout markers, supported operator input, non-empty credential presence, target platform, explicitly selected optimization mode, any Ultra DSL, explicitly selected Agent boundary, and whether the selected host supports the chosen proc mode before creating remote work or a Campaign workspace. Never start `private` proc mode inside an Aone Sandbox. In Aone, ask the user to accept `host` or choose no inner Agent Sandbox; do not silently select `host`.
+After the user answers, validate the checkout markers, supported operator input, non-empty credential presence, target platform, selected and authenticated Agent CLI, explicitly selected optimization mode, any Ultra DSL, explicitly selected Agent boundary, whether the selected host supports the chosen proc mode, and the complete explicit search schedule before creating remote work or a Campaign workspace. Never start `private` proc mode inside an Aone Sandbox. In Aone, ask the user to accept `host` or choose no inner Agent Sandbox; do not silently select `host`.
 
 ## Supported problem inputs
 
@@ -129,7 +146,8 @@ Evaluator Shapes are exposed by default. A hidden request is valid only for the 
 
 ## Search and budgets
 
-Current Light defaults to pooled search:
+Current Light defaults to one independent serial trajectory. Pooled search is an explicit advanced
+configuration with these available fields and former three-line values shown only as an example:
 
 ```json
 {
@@ -142,7 +160,10 @@ Current Light defaults to pooled search:
 }
 ```
 
-Set `workflow.config.search` to an explicit empty mapping to select serial mode. In serial mode `--max-iters N` is the number of Episode audit segments. Pooled mode uses `epochs × trajectories × episodes_per_trajectory` and does not use `--max-iters` as its segment count.
+The default empty `workflow.config.search` selects serial mode. In serial mode `--max-iters N` is
+the user-selected number of Episode audit segments. Pooled mode uses
+`epochs × trajectories × episodes_per_trajectory` and does not use `--max-iters` as its segment
+count. Direction and Experiment annotations default to disabled.
 
 Episode active time has no limit by default; set `workflow.config.episode_timeout_seconds` only when a limit is wanted. `--token-budget 0` means no token cap. Agate request, queue and per-Shape execution budgets are separate.
 
@@ -168,20 +189,44 @@ The Campaign root has no `.git`, `.atrex-supervisor-runtime`, path-hash wrapper,
 
 ## Launch
 
-Launch options precede `--`; campaign options follow it. The command below is only an Ultra/CUDA
-syntax example and is valid only after the user explicitly selects `light-sandbox`, `L20D`,
-`ultra`, and `Cuda`; substitute the user's actual choices:
+Launch options precede `--`; campaign options follow it. The uppercase values below are required
+user selections, not defaults. Include `--framework USER_SELECTED_ULTRA_DSL` only for Ultra:
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox -- \
+  --profile USER_SELECTED_PROFILE \
+  --patch /path/to/user-selected-search-schedule.json -- \
   --op-dir /path/to/atrex-bench/data/operator \
-  --platform L20D \
-  --framework Cuda \
-  --agent-cli claude \
-  --optimization-mode ultra \
+  --platform USER_SELECTED_GPU \
+  --agent-cli USER_SELECTED_AGENT_CLI \
+  --optimization-mode USER_SELECTED_MODE \
+  USER_SELECTED_SERIAL_MAX_ITERS_IF_APPLICABLE \
   --workspace /path/to/campaign-root
 ```
+
+The search patch is mandatory for an ordinary Skill-constructed new launch and contains explicit
+serial `search: {}`. Replace the serial placeholder with the user's `--max-iters N`. This creates
+one independent trajectory. Do not expose Direction/Experiment or pooled-search settings unless
+the user explicitly asks for those advanced features.
+
+Run a new Campaign as a durable background task by default unless the user explicitly asks for an
+interactive foreground run. Before detaching, validate the complete command. Persist and report:
+
+- the Campaign root;
+- the background process or Sandbox command ID;
+- the bounded launcher-log path;
+- the exact checkout commit and selected launch configuration.
+
+On a normal host, use an environment-appropriate durable process supervisor or a background launch
+script with redirected logs; do not leave the Campaign coupled to an interactive terminal. In an
+Aone Sandbox, use the Sandbox's durable `command submit` API rather than shell `&`, and retain the
+returned command ID. A local wait timeout or client disconnect does not mean the Campaign stopped.
+
+After launch, inspect progress with the dedicated `atrex-aka-light-observability` skill. Start with
+`light_lineage_status.py` for lineage/session/Research/token state, then use Kernel, Runtime, Agate,
+or evidence-export views only when the question requires them. Do not repeatedly scrape raw logs,
+walk the whole Campaign tree, or infer health from the launcher process alone when the supported
+observability views are available.
 
 For an end-to-end Native input and launch command based on Vector Add, read
 [the Vector Add launch example](examples/native-atrex-bench-vector-add/README.md). It uses the
@@ -200,7 +245,7 @@ Resolve before launch:
 - explicit framework for Ultra, or intentional Agent-selected DSL for Fast/Performance;
 - authenticated Agent and user-confirmed Agate AK/SK injection;
 - mode, Shape visibility and candidate layout;
-- durable workspace, search topology and budgets.
+- durable workspace, explicit search topology, explicit run length and budgets.
 
 Do not print credentials. Preserve uncommitted user changes before syncing or installing code.
 
@@ -213,6 +258,10 @@ Use Runtime tool help for exact operation-specific Agate fields. Endpoint, crede
 ## Resume and inspect
 
 Resume with the same checkout behavior, workspace, profile composition, problem identity, mode, Shape visibility, framework and candidate layout. Do not clear a workspace merely because the process exited; inspect Session, Runtime and Agate state first.
+
+For “状态如何” or “跑得怎么样” requests, use the `atrex-aka-light-observability` skill rather
+than restarting the launch or reading every file. Distinguish the background launcher/command state
+from Campaign lineage state and from Agate Job state.
 
 Start inspection with:
 

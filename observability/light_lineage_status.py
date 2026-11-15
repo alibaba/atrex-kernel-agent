@@ -86,6 +86,8 @@ def snapshot(
                     for key in (
                         "phase",
                         "writer_active",
+                        "segment_status",
+                        "state_inconsistent",
                         "liveness",
                         "current_episode",
                         "completed_episodes",
@@ -149,6 +151,11 @@ def render(value: dict) -> str:
             [
                 item["lineage"],
                 runtime.get("liveness"),
+                (
+                    "state_inconsistent"
+                    if runtime.get("state_inconsistent")
+                    else runtime.get("segment_status")
+                ),
                 runtime.get("current_episode"),
                 runtime.get("active_session_count"),
                 (
@@ -174,6 +181,7 @@ def render(value: dict) -> str:
                 [
                     "Lineage",
                     "Liveness",
+                    "State",
                     "Episode",
                     "Sessions",
                     "Supervisor",

@@ -471,10 +471,28 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
     rows = []
     for scope in scopes:
         lineage_state = read_json(scope.audit_root / "state.json", default={})
+        supervisor_activities = _supervisor_activity_rows(scope)
+        active_supervisor_activities = [
+            activity for activity in supervisor_activities if activity["active"]
+        ]
+        segment_status = (
+            lineage_state.get("segment_status")
+            if isinstance(lineage_state, dict)
+            else None
+        )
+        state_inconsistent = bool(
+            scope.trajectory is not None
+            and campaign_writer_active
+            and active_supervisor_activities
+            and segment_status != "active"
+        )
         lineage_active = (
             campaign_writer_active
             and isinstance(lineage_state, dict)
-            and lineage_state.get("segment_status") == "active"
+            and (
+                segment_status == "active"
+                or bool(active_supervisor_activities)
+            )
         )
         progress = _progress(
             scope,
@@ -496,10 +514,6 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                 scope,
                 stale_after=stale_after,
             )
-        supervisor_activities = _supervisor_activity_rows(scope)
-        active_supervisor_activities = [
-            activity for activity in supervisor_activities if activity["active"]
-        ]
         supervisor_activity = (
             active_supervisor_activities[0]
             if active_supervisor_activities
@@ -560,6 +574,8 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
                 "runtime_configuration": progress["runtime_configuration"],
                 "phase": progress["phase"],
                 "writer_active": progress["writer_active"],
+                "segment_status": segment_status,
+                "state_inconsistent": state_inconsistent,
                 "current_episode": progress["episode"],
                 "episode_checkpoint": progress["episode_checkpoint"],
                 "completed_episodes": progress["completed_episodes"],
@@ -579,7 +595,7 @@ def snapshot(workspace: Path, *, stale_after: float = 600.0) -> dict:
         )
 
     return {
-        "schema_version": 4,
+        "schema_version": 5,
         "observed_at": observed_at(),
         "campaign_workspace": str(scopes[0].workspace),
         "stale_after_seconds": stale_after,

@@ -2306,23 +2306,20 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             5,
         )
 
-    def test_island_search_is_the_default_and_can_be_disabled_explicitly(self):
-        defaults = WorkflowOptions().search
-        self.assertIsInstance(defaults, SearchOptions)
-        self.assertEqual(defaults.trajectories, 3)
-        self.assertEqual(defaults.max_parallel_episodes, 3)
-        self.assertEqual(defaults.episodes_per_trajectory, 1)
-        self.assertEqual(defaults.synchronization, "asynchronous")
-        self.assertFalse(defaults.role_specialization)
-        self.assertEqual(WORKFLOW_PLUGIN_DEFAULTS["search"], {
+    def test_serial_search_is_the_default_and_island_search_is_explicit(self):
+        self.assertIsNone(WorkflowOptions().search)
+        self.assertEqual(WORKFLOW_PLUGIN_DEFAULTS["search"], {})
+        self.assertIsNone(WorkflowOptions(search={}).search)
+        pooled = WorkflowOptions(search={
             "epochs": 10,
             "trajectories": 3,
             "episodes_per_trajectory": 1,
             "max_parallel_episodes": 3,
             "synchronization": "asynchronous",
             "role_specialization": False,
-        })
-        self.assertIsNone(WorkflowOptions(search={}).search)
+        }).search
+        self.assertIsInstance(pooled, SearchOptions)
+        self.assertEqual(pooled.trajectories, 3)
 
     def test_full_and_shape_selected_evaluates_use_five_cases(self):
         self.assertEqual(

@@ -10,7 +10,7 @@ Config = {"type": "object", "properties": {
         "items": {"type": "string", "enum": ["directions", "experiments"]},
     },
 }, "additionalProperties": False}
-Defaults = {"tool_modules": ["directions", "experiments"]}
+Defaults = {"tool_modules": []}
 
 def apply(ctx, config):
     from .journal import JournalFactory
