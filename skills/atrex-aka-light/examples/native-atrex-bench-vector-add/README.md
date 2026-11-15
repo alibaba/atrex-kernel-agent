@@ -34,6 +34,7 @@ AKA_REPO=/path/to/atrex-kernel-agent
 ATREX_BENCH_ROOT=/path/to/atrex-bench
 CAMPAIGN_ROOT=/path/to/vector-add-campaign
 AGENT_PATCH=/path/to/agent-boundary.json
+AGENT_CLI=${AGENT_CLI:-claude}
 
 : "${TARGET_PLATFORM:?set the user-selected GPU token}"
 : "${OPTIMIZATION_MODE:?set fast, performance, or ultra from the user selection}"
@@ -49,6 +50,13 @@ launch Ultra without the user's DSL choice. `light-sandbox` requires Linux/Bubbl
 mode in a complete Agent composition patch. Inside Aone Sandbox, `host` must still be accepted by
 the user; never launch `private` there. Proc mode is not applicable when
 `AGENT_PROFILE=light`. See [installation](../../references/installation.md) for the boundary.
+
+`AGENT_CLI` defaults to `claude`, which launches Claude Code. To use Codex instead, set it before
+launching:
+
+```bash
+AGENT_CLI=codex
+```
 
 This directory is stored in the Skill, not under a canonical Atrex-Bench runtime. Copy
 it into the `data/` tree of the user-provided Atrex-Bench checkout that will evaluate it:
@@ -123,7 +131,7 @@ esac
 aka optimize --repo-root "$AKA_REPO" "${PROFILE_ARGS[@]}" -- \
   --op-dir "$ATREX_BENCH_ROOT/data/native-atrex-bench-vector-add" \
   --platform "$TARGET_PLATFORM" \
-  --agent-cli claude \
+  --agent-cli "$AGENT_CLI" \
   "${MODE_ARGS[@]}" \
   --workspace "$CAMPAIGN_ROOT"
 ```
