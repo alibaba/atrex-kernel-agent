@@ -50,7 +50,7 @@ Recorded continuations restore their frozen launch selection. Do not add a new p
 | `--notes TEXT` | `none` | Additional operator constraints; never put credentials here |
 | `--arch ARCH` | probed | Intentional runtime-architecture override such as `sm_103a` or `gfx942` |
 | `--agent-cli CLI` | `claude` parser fallback; explicit for new Campaigns | User-selected Agent provider: `claude`, `codex`, `qodercli`, or `pi` |
-| `--agent-reference-dir DIR...` | none | Repeatable read-only mounts at `references/<basename>/`; requires Bubblewrap and unique basenames |
+| `--agent-reference-dir DIR...` | none | Repeatable knowledge projections at `references/<basename>/`; unique basenames required. Bubblewrap mounts read-only; native Light links the originals without write protection, so retain an independent copy |
 | `--setup-timeout SECONDS` | `7200` | Per-attempt authoring limit for a missing hidden-flow `agent_problem.json`; not an Episode limit |
 
 Mode, Shape visibility, framework, candidate layout, composition and problem snapshot are resume identity. A hidden request that cannot actually produce the hidden projection fails; it is not recorded as hidden while exposing the original inputs.

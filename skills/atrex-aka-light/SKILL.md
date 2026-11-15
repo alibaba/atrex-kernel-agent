@@ -23,7 +23,7 @@ Do not use this skill for the Legacy `workflow` Profile or standalone Aone Sandb
 ## Required launch intake
 
 Before constructing or executing a new Light launch, explain every choice below and explicitly ask
-the user for all seven inputs. Do not recommend or preselect a combination for a minimal smoke run,
+the user for all eight inputs. Do not recommend or preselect a combination for a minimal smoke run,
 and do not infer values from an older Campaign, shell history, another Sandbox, the host OS, or a
 nearby checkout:
 
@@ -58,12 +58,19 @@ nearby checkout:
    search or Research annotations should you expose and collect those additional settings. An
    ordinary launch creates one Campaign repeat; ask for a repeat count only when the user requests
    repeated independent Campaigns.
+8. **Optional reference knowledge.** Ask whether the user wants to expose one or more existing
+   knowledge directories through `--agent-reference-dir`; `none` is a valid explicit answer. Each
+   directory appears at `references/<basename>/`, and basenames must be unique. With
+   `light-sandbox`, Bubblewrap mounts the directories read-only. With native `light`, Light creates
+   workspace links but cannot prevent the Agent from modifying the original directories because it
+   runs as the coordinator OS user. Warn native users to retain an independent copy or backup of
+   every supplied knowledge directory before launch.
 
 When any required value is missing, pause the launch and ask one concise question containing the missing fields. A suitable prompt is:
 
-> 启动前请逐项选择：① Agate AK/SK 的安全注入方式（将 `AGATE_AK`、`AGATE_SK` 预先放入 Supervisor 环境，不要在聊天中粘贴明文）；② 已有 canonical `atrex-bench` 路径，或从 `https://github.com/alibaba/atrex-bench` clone 到哪个自选路径；③ Agate 的确切目标 GPU token，例如 `L20N` 或 `L20D`，示例不是默认值；④ Agent CLI：`claude`（Claude Code）、`codex`、`qodercli` 或 `pi`；⑤ 优化模式：`fast`（允许声明清楚的外部核心实现）、`performance`（核心计算自行实现，Agent 选 DSL）或 `ultra`（核心计算自行实现并固定用户指定 DSL），Ultra 还需选择 DSL；⑥ Agent 边界：`light`（原生进程）或 `light-sandbox`（Bubblewrap），后者还需选择 `private` 或 `host`，Aone Sandbox 只支持 `host`；⑦ 单线独立运行多少个 Episode audit segment，即明确给出正整数 `max-iters`。Direction/Experiment 默认关闭，普通启动不询问；只有明确要求高级 Research 或多线搜索时才展开相关选项。未明确选择时不会根据最小试跑、Mac 环境或 CLI 默认值启动。
+> 启动前请逐项选择：① Agate AK/SK 的安全注入方式（将 `AGATE_AK`、`AGATE_SK` 预先放入 Supervisor 环境，不要在聊天中粘贴明文）；② 已有 canonical `atrex-bench` 路径，或从 `https://github.com/alibaba/atrex-bench` clone 到哪个自选路径；③ Agate 的确切目标 GPU token，例如 `L20N` 或 `L20D`，示例不是默认值；④ Agent CLI：`claude`（Claude Code）、`codex`、`qodercli` 或 `pi`；⑤ 优化模式：`fast`（允许声明清楚的外部核心实现）、`performance`（核心计算自行实现，Agent 选 DSL）或 `ultra`（核心计算自行实现并固定用户指定 DSL），Ultra 还需选择 DSL；⑥ Agent 边界：`light`（原生进程）或 `light-sandbox`（Bubblewrap），后者还需选择 `private` 或 `host`，Aone Sandbox 只支持 `host`；⑦ 单线独立运行多少个 Episode audit segment，即明确给出正整数 `max-iters`；⑧ 是否通过 `--agent-reference-dir` 提供一个或多个参考知识目录，或明确选择 `none`。Bubblewrap 下为只读挂载；原生 `light` 无法阻止 Agent 修改原目录，使用前必须自行保留原始副本。Direction/Experiment 默认关闭，普通启动不询问；只有明确要求高级 Research 或多线搜索时才展开相关选项。未明确选择时不会根据最小试跑、Mac 环境或 CLI 默认值启动。
 
-After the user answers, validate the checkout markers, supported operator input, non-empty credential presence, target platform, selected and authenticated Agent CLI, explicitly selected optimization mode, any Ultra DSL, explicitly selected Agent boundary, whether the selected host supports the chosen proc mode, and the complete explicit search schedule before creating remote work or a Campaign workspace. Never start `private` proc mode inside an Aone Sandbox. In Aone, ask the user to accept `host` or choose no inner Agent Sandbox; do not silently select `host`.
+After the user answers, validate the checkout markers, supported operator input, non-empty credential presence, target platform, selected and authenticated Agent CLI, explicitly selected optimization mode, any Ultra DSL, explicitly selected Agent boundary, whether the selected host supports the chosen proc mode, optional reference directories, and the complete explicit search schedule before creating remote work or a Campaign workspace. Never start `private` proc mode inside an Aone Sandbox. In Aone, ask the user to accept `host` or choose no inner Agent Sandbox; do not silently select `host`. For native `light`, confirm that the reference-directory warning was shown; Light cannot make those originals read-only.
 
 ## Supported problem inputs
 
@@ -200,6 +207,7 @@ aka optimize --repo-root /path/to/atrex-kernel-agent \
   --platform USER_SELECTED_GPU \
   --agent-cli USER_SELECTED_AGENT_CLI \
   --optimization-mode USER_SELECTED_MODE \
+  USER_SELECTED_AGENT_REFERENCE_DIRS_IF_ANY \
   USER_SELECTED_SERIAL_MAX_ITERS_IF_APPLICABLE \
   --workspace /path/to/campaign-root
 ```
@@ -251,6 +259,7 @@ Resolve before launch:
 - logical platform and any distinct Agate worker alias;
 - explicit framework for Ultra, or intentional Agent-selected DSL for Fast/Performance;
 - authenticated Agent and user-confirmed Agate AK/SK injection;
+- explicit `none` or validated optional reference directories, with the native-write warning;
 - mode, Shape visibility and candidate layout;
 - durable workspace, explicit search topology, explicit run length and budgets.
 

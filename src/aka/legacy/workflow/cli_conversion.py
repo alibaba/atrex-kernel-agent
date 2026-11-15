@@ -206,9 +206,10 @@ def parse_arguments(argv):
         default=[],
         metavar="DIR",
         help=(
-            "Mount one or more existing directories read-only at references/<basename>/ "
-            "inside the optimization Agent workspace. Repeat the option or list several "
-            "directories after one option. Requires a bwrap Agent profile."
+            "Expose one or more existing directories at references/<basename>/ inside the "
+            "optimization Agent workspace. Repeat the option or list several directories "
+            "after one option. Bubblewrap mounts them read-only; native Agent execution "
+            "uses links and cannot prevent modification of the original directories."
         ),
     )
     ap.add_argument(

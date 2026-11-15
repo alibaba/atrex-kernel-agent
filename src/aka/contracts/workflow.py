@@ -20,8 +20,8 @@ class WorkflowSettings:
     framework: str
     specify_dsl: bool = True
     expose_evaluator_shapes: bool = True
-    # Operator-supplied read-only engineering references.  The CLI derives each
-    # stable mount name from the directory basename and freezes absolute paths.
+    # Operator-supplied engineering references. Bubblewrap mounts them read-only;
+    # native execution links them without a filesystem protection boundary.
     agent_reference_paths: tuple[tuple[str, str], ...] = ()
     notes: str = "none"
     arch: str = ""

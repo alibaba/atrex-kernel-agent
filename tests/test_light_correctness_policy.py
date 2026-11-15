@@ -1168,15 +1168,19 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             )
             self.assertIn("agent_reference_paths", launch.provided_settings)
 
-    def test_reference_directories_require_bwrap_at_campaign_boundary(self):
-        with self.assertRaisesRegex(ValueError, "requires.*sandbox=bwrap"):
-            Campaign(
+    def test_reference_directories_are_supported_by_native_agent_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reference = Path(directory) / "nvidia"
+            reference.mkdir()
+            campaign = Campaign(
                 name="operator",
                 kernel_demo="reference.py",
                 platform="L20D",
                 framework="Cuda",
-                agent_reference_paths=(("nvidia", "/knowledge/nvidia"),),
+                agent_sandbox="none",
+                agent_reference_paths=(("nvidia", str(reference)),),
             )
+        self.assertEqual(campaign.agent_reference_paths, (("nvidia", str(reference)),))
 
     def test_open_dsl_policy_is_neutral_and_disables_conversion(self):
         directive = optimization_mode_directive(
@@ -1271,6 +1275,56 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertIn("`references/nvidia/`", prompt)
         self.assertIn("read-only engineering references", prompt)
         self.assertIn("not the task contract, measurement evidence, or candidate source", prompt)
+
+    def test_native_reference_prompt_warns_that_originals_are_not_protected(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as directory:
+            reference = Path(directory) / "nvidia"
+            reference.mkdir()
+            campaign = Campaign(
+                name="op",
+                kernel_demo=str(Path(directory) / "reference.py"),
+                platform="L20D",
+                framework="Cuda",
+                work_dir=directory,
+                agent_sandbox="none",
+                agent_reference_paths=(("nvidia", str(reference)),),
+            )
+            prompt = campaign.reference_knowledge_prompt()
+        self.assertIn("cannot enforce read-only access", prompt)
+        self.assertIn("retain an independent copy", prompt)
+
+    def test_native_agent_links_named_reference_inside_workspace(self):
+        from aka.light.agent.sandbox import wrap_agent_command
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            tempfile.TemporaryDirectory() as knowledge_directory,
+        ):
+            workspace = Path(directory).resolve()
+            reference = Path(knowledge_directory).resolve() / "nvidia-knowledge"
+            reference.mkdir()
+            (reference / "ATREX_FA_EXAMPLE.md").write_text(
+                "knowledge\n", encoding="utf-8"
+            )
+            environment = {
+                "ATREX_AGENT_SANDBOX": "none",
+                "ATREX_AGENT_REFERENCE_PATHS": json.dumps(
+                    {"nvidia": str(reference)}
+                ),
+            }
+
+            launch, view = wrap_agent_command(
+                ["python3", "-c", "pass"], workspace, environment
+            )
+
+            try:
+                self.assertIsNone(view)
+                destination = workspace / "references" / "nvidia"
+                self.assertTrue(destination.is_symlink())
+                self.assertEqual(destination.resolve(strict=True), reference)
+                self.assertNotIn("ATREX_AGENT_REFERENCE_PATHS", launch.environment)
+            finally:
+                launch.close()
 
     def test_hardware_prompt_contains_only_dynamic_runtime_arch(self):
         directive = hardware_directive("masked-product", "vendor_arch_987")

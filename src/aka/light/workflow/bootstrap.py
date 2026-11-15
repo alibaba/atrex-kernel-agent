@@ -198,10 +198,6 @@ class Campaign:
             type(self.gpu_clock_mhz) is not int or self.gpu_clock_mhz <= 0
         ):
             raise ValueError("gpu_clock_mhz must be a positive integer")
-        if self.agent_reference_paths and self.agent_sandbox != "bwrap":
-            raise ValueError(
-                "--agent-reference-dir requires an Agent profile with sandbox=bwrap"
-            )
 
     @property
     def campaign_name(self) -> str:
@@ -426,10 +422,17 @@ class Campaign:
         entries = "\n".join(
             f"- `references/{name}/`" for name, _ in self.agent_reference_paths
         )
+        access = (
+            "These Supervisor-mounted directories are read-only engineering references. "
+            if self.agent_sandbox == "bwrap"
+            else "These Supervisor-linked directories are optional engineering references. "
+            "The native Agent boundary cannot enforce read-only access: do not modify them, "
+            "and the operator must retain an independent copy of the original knowledge. "
+        )
         return (
             "## Reference knowledge\n\n"
             f"{entries}\n\n"
-            "These Supervisor-mounted directories are read-only engineering references. "
+            f"{access}"
             "Use them selectively for architecture facts, implementation patterns, and probe design. "
             "They are not the task contract, measurement evidence, or candidate source. Verify "
             "applicability on the target hardware through Runtime. Do not execute or import them, "

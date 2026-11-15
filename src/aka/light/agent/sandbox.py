@@ -126,10 +126,8 @@ def read_only_grants(environment: dict[str, str]) -> tuple[Path, ...]:
 REFERENCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
-def reference_grants(
-    environment: dict[str, str], workspace: Path
-) -> tuple[tuple[str, Path, Path], ...]:
-    """Resolve named knowledge roots to read-only workspace mountpoints."""
+def reference_sources(environment: dict[str, str]) -> tuple[tuple[str, Path], ...]:
+    """Resolve and validate named operator knowledge roots."""
     raw = json.loads(environment.get("ATREX_AGENT_REFERENCE_PATHS", "{}"))
     if not isinstance(raw, dict) or any(
         not isinstance(name, str)
@@ -138,16 +136,33 @@ def reference_grants(
         for name, value in raw.items()
     ):
         raise ValueError("ATREX_AGENT_REFERENCE_PATHS must map safe names to paths")
-    root = workspace / "references"
-    if raw:
-        root.mkdir(exist_ok=True)
-        if root.is_symlink() or root.resolve(strict=True) != root:
-            raise ValueError("Agent references mountpoint must be a real workspace directory")
-    grants = []
+    sources = []
     for name, value in sorted(raw.items()):
         source = Path(value).expanduser().resolve(strict=True)
         if not source.is_dir():
             raise ValueError(f"Agent reference must be a directory: {source}")
+        sources.append((name, source))
+    return tuple(sources)
+
+
+def _reference_root(workspace: Path) -> Path:
+    root = workspace / "references"
+    root.mkdir(exist_ok=True)
+    if root.is_symlink() or root.resolve(strict=True) != root:
+        raise ValueError("Agent references root must be a real workspace directory")
+    return root
+
+
+def reference_grants(
+    environment: dict[str, str], workspace: Path
+) -> tuple[tuple[str, Path, Path], ...]:
+    """Resolve named knowledge roots to read-only Bubblewrap mountpoints."""
+    sources = reference_sources(environment)
+    if not sources:
+        return ()
+    root = _reference_root(workspace)
+    grants = []
+    for name, source in sources:
         destination = root / name
         destination.mkdir(exist_ok=True)
         if destination.is_symlink() or destination.resolve(strict=True) != destination:
@@ -156,6 +171,34 @@ def reference_grants(
             raise ValueError(f"Agent reference mountpoint must be empty: {destination}")
         grants.append((name, source, destination))
     return tuple(grants)
+
+
+def project_native_references(environment: dict[str, str], workspace: Path) -> None:
+    """Link knowledge roots into an unsandboxed Agent workspace.
+
+    This is a discoverability projection, not a protection boundary. The Agent
+    runs as the coordinator OS user and can modify the referenced source tree.
+    """
+    sources = reference_sources(environment)
+    if not sources:
+        return
+    workspace = workspace.resolve(strict=True)
+    root = _reference_root(workspace)
+    for name, source in sources:
+        if source.is_relative_to(workspace) or workspace.is_relative_to(source):
+            raise ValueError(f"Agent reference overlaps Agent workspace: {source}")
+        destination = root / name
+        if destination.is_symlink():
+            if destination.resolve(strict=True) != source:
+                raise ValueError(
+                    f"Agent reference link targets a different directory: {destination}"
+                )
+            continue
+        if destination.exists():
+            raise ValueError(
+                f"Native Agent reference projection must be absent or a managed link: {destination}"
+            )
+        destination.symlink_to(source, target_is_directory=True)
 
 
 def _mount(argv: list[str], source: Path, destination: Path, *, writable=False) -> None:
@@ -243,9 +286,16 @@ def wrap_agent_command(
     if executable is None:
         if auxiliary_input_files:
             raise ValueError("Explicit auxiliary inputs require a Bubblewrap auxiliary workspace")
+        if environment.get(WORKSPACE_ROLE_ENV, "optimizer") == "optimizer":
+            project_native_references(environment, workspace)
         native_environment = {
             key: value for key, value in environment.items()
-            if key not in {"ATREX_EPISODE_PRIVATE_PATHS", "ATREX_AKA_RUNTIME_OWNER", "GIT_CEILING_DIRECTORIES"}
+            if key not in {
+                "ATREX_EPISODE_PRIVATE_PATHS",
+                "ATREX_AKA_RUNTIME_OWNER",
+                "ATREX_AGENT_REFERENCE_PATHS",
+                "GIT_CEILING_DIRECTORIES",
+            }
         }
         return SandboxLaunch(list(command), native_environment), None
     workspace = workspace.resolve(strict=True)

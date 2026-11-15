@@ -16,10 +16,18 @@ Before every new launch, explain the mode choices and explicitly ask the user fo
 - the optimization mode: Fast, Performance or Ultra; when Ultra is selected, also require its DSL.
 - whether to run the Agent with Bubblewrap Sandbox (`light-sandbox`) or without it (`light`); when
   Sandbox is selected, ask for `private` or `host` proc mode.
+- whether to expose optional knowledge directories with `--agent-reference-dir`, or explicitly use
+  none. Bubblewrap mounts them read-only; native Light cannot protect the original directories from
+  modification, so tell the user to retain an independent copy.
 
 These are required user decisions for every new Campaign. Pass the chosen `--agent-cli`,
 `--optimization-mode`, and `--profile` explicitly; do not rely on parser or composition defaults.
 When Bubblewrap is chosen, also materialize the user's proc-mode choice explicitly.
+
+Reference directories appear as `references/<basename>/` and must have unique basenames. They are
+optional engineering knowledge, not candidate source or evaluation evidence. Native Light creates
+workspace links to the original directories; it does not copy them and cannot enforce read-only
+access under the coordinator OS user.
 
 For Atrex-Bench, offer exactly two acquisition paths: use an existing canonical checkout supplied
 by the user, or clone `https://github.com/alibaba/atrex-bench` into a destination selected by the

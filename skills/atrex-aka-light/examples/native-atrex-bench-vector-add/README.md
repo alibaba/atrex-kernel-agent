@@ -39,6 +39,9 @@ Before preparing or launching this example, explicitly obtain from the user:
    namespace and `/proc`). Aone Sandbox supports only `host`.
 7. the positive `max-iters` for the ordinary one-trajectory run. This is the number of Episode
    audit segments; the example does not choose it for the user.
+8. whether to expose optional knowledge directories through `--agent-reference-dir`, or use none.
+   Bubblewrap mounts them read-only. Native `light` links the originals without write protection;
+   the user must retain an independent copy before exposing them.
 
 Present the choices explicitly; the example has no preselected row:
 
@@ -53,6 +56,7 @@ Present the choices explicitly; the example has no preselected row:
 | Agent boundary | `light` (native process) or `light-sandbox` (Bubblewrap on Linux/Lima) |
 | Bubblewrap proc mode | Required only for `light-sandbox`: `private` or `host`; Aone Sandbox permits only `host` |
 | Run length | Positive `max-iters`, the user-selected number of Episode audit segments for one independent trajectory |
+| Reference knowledge | `none`, or one or more existing directories with unique basenames; native Light requires an independent backup because originals remain writable |
 
 Native macOS does not silently select `light`: the user may choose native `light`, or choose
 `light-sandbox` and provide/use a Lima Linux environment. Do not launch until every applicable row
@@ -74,6 +78,7 @@ SEARCH_PATCH=/path/to/search-schedule.json
 : "${MAX_ITERS:?set the user-selected Episode count}"
 # Also require AGENT_PROC_MODE=private|host when AGENT_PROFILE=light-sandbox.
 # Also require ULTRA_FRAMEWORK when OPTIMIZATION_MODE=ultra.
+# Set AGENT_REFERENCE_DIRS to an array of existing directories, or an empty array for none.
 ```
 
 Set every required environment variable from the user's explicit selection; this example does not
@@ -196,12 +201,17 @@ printf '%s\n' \
   > "$SEARCH_PATCH"
 SEARCH_ARGS=(--patch "$SEARCH_PATCH")
 RUN_LENGTH_ARGS=(--max-iters "$MAX_ITERS")
+REFERENCE_ARGS=()
+if ((${#AGENT_REFERENCE_DIRS[@]})); then
+  REFERENCE_ARGS=(--agent-reference-dir "${AGENT_REFERENCE_DIRS[@]}")
+fi
 
 aka optimize --repo-root "$AKA_REPO" "${PROFILE_ARGS[@]}" "${SEARCH_ARGS[@]}" -- \
   --op-dir "$ATREX_BENCH_ROOT/data/native-atrex-bench-vector-add" \
   --platform "$TARGET_PLATFORM" \
   --agent-cli "$AGENT_CLI" \
   "${MODE_ARGS[@]}" \
+  "${REFERENCE_ARGS[@]}" \
   "${RUN_LENGTH_ARGS[@]}" \
   --workspace "$CAMPAIGN_ROOT"
 ```

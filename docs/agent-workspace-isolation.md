@@ -51,7 +51,7 @@ Configure custom isolation through the Agent provider, with a composition patch 
 
 Replace the illustrative runtime path with an existing narrowly scoped directory, or omit it.
 Optional engineering references are selected per optimization launch, independently of the Agent
-composition patch:
+composition patch. They work with both Agent boundaries:
 
 ```bash
 aka optimize --repo-root /path/to/agent --profile light-sandbox -- \
@@ -59,12 +59,15 @@ aka optimize --repo-root /path/to/agent --profile light-sandbox -- \
   --agent-reference-dir /knowledge/nvidia /knowledge/cuda-guides
 ```
 
-The option may be repeated. Each directory is mounted read-only at
-`references/<directory-basename>/` inside the Agent workspace. Basenames must be unique. The Prompt
-identifies these directories as optional engineering knowledge rather than task contract,
-measurement evidence, or candidate source. References require `sandbox=bwrap`; they are excluded
-from Kernel Git, candidate snapshots, and remote command uploads, and cannot be selected as GPU
-request files. The final Kernel must not import or depend on them.
+The option may be repeated. Each directory appears at
+`references/<directory-basename>/` inside the Agent workspace. Basenames must be unique. Bubblewrap
+mounts the directory read-only. Native `light` creates a symbolic link to the original directory;
+because the Agent runs as the coordinator OS user, Light cannot prevent modification of those
+original files. Retain an independent copy or backup before exposing knowledge to a native Agent.
+The Prompt identifies these directories as optional engineering knowledge rather than task
+contract, measurement evidence, or candidate source. References are excluded from Kernel Git,
+candidate snapshots, and remote command uploads, and cannot be selected as GPU request files. The
+final Kernel must not import or depend on them.
 A patch replaces the whole Agent configuration. Include both sandbox and capture settings
 when preserving `light-sandbox` behavior; the provider's standalone capture default is false.
 The former `--agent-sandbox`, `--bwrap-executable`, and `--agent-read-only-path` optimizer
