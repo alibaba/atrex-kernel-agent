@@ -48,7 +48,7 @@ The checkout later supplied through `--repo-root` must match the installed wheel
 3. An Episode is only an audit segment created when the Agent stops; the next Episode inherits the same conversation, workspace and Git history.
 4. The Agent may probe, edit, commit, Evaluate, Profile, Check, Disassemble, use Dev/Command, and manage optional Direction/Experiment records throughout the Session.
 5. The Agent decides when an exact commit is ready to serve as a final implementation for the current mode. It may then call `submit-kernel`; this is not required after every Evaluate and requires a passing standard full Evaluate with complete per-Shape performance for the clean commit.
-6. `submit-kernel` reviews the exact commit against the selected mode's final-source policy. It does not end the Session, run automatic terminal ABBA, compare against a promotion threshold, roll back source, or modify Agent Git.
+6. `submit-kernel` reviews the exact commit against the selected mode's final-source policy. Its first receipt returns a stable Submission ID and immutable `v1`; repaired, fully evaluated commits may revise that identity as `v2`, `v3`, and so on. It does not end the Session, run automatic terminal ABBA, compare against a promotion threshold, roll back source, or modify Agent Git.
 7. Accepted submissions with eligible full-Evaluate evidence determine lineage winners, optional global winners and the accepted-submission Pareto frontier.
 
 There is no Framework Baseline stage, `episode-report`, candidate sealing, terminal handoff, automatic terminal ABBA, or Supervisor promotion threshold in the current Light workflow. Explicit ABBA remains available as an Agent-requested measurement operation.
@@ -97,7 +97,7 @@ Current Light defaults to pooled search:
   "trajectories": 3,
   "episodes_per_trajectory": 1,
   "max_parallel_episodes": 3,
-  "synchronization": "synchronous",
+  "synchronization": "asynchronous",
   "role_specialization": false
 }
 ```

@@ -212,6 +212,7 @@ def test_submission_acceptance_uses_central_store_and_exact_eval(monkeypatch, tm
     from aka.light.workflow.submissions import append_submission
     submission_root = submissions.supervisor_submission_root(workspace)
     append_submission(submission_root, {
+        "revision": 1,
         "submission_id": "submission-" + "c" * 32,
         "lineage": "T1",
         "episode": 2,

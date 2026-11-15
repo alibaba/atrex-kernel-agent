@@ -573,7 +573,7 @@ Research Board、测量记录和 Git 历史始终是跨 Session 的权威工程�
 Pooled search 应采用 island model，不能每轮都用 Epoch winner 替换所有 trajectory。
 
 Light 默认启动三条持久 island，每条 island 每个 Epoch 运行一个 Episode，最多三条并发；
-显式配置 `search: {}` 时才使用串行 Workflow。默认使用同步 Epoch barrier，角色区分关闭。
+显式配置 `search: {}` 时才使用串行 Workflow。默认使用异步 publication，角色区分关闭。
 
 每条 trajectory 保留：
 
@@ -585,8 +585,8 @@ Light 默认启动三条持久 island，每条 island 每个 Epoch 运行一个 
 
 跨 trajectory 调度由 `search.synchronization` 显式选择：
 
-- `synchronous`（默认）保留严格 Epoch barrier，所有 trajectory 的本轮 Episode 都终态后才密封共享；
-- `asynchronous` 取消全局准入 barrier。每条 trajectory 内部仍串行，某条 trajectory 终态后立即形成累计 publication，并可直接开始下一 Episode。调度使用 round-robin，避免并发槽位少于 trajectory 数量时快岛长期饿死未启动的岛。
+- `synchronous` 保留严格 Epoch barrier，所有 trajectory 的本轮 Episode 都终态后才密封共享；
+- `asynchronous`（默认）取消全局准入 barrier。每条 trajectory 内部仍串行，某条 trajectory 终态后立即形成累计 publication，并可直接开始下一 Episode。调度使用 round-robin，避免并发槽位少于 trajectory 数量时快岛长期饿死未启动的岛。
 
 两种模式都会共享中央目录中的全部 Direction/Experiment revision，并保留其真实 Review 质量；质量只决定证据资格，不决定 claim 或附件可见性。每条 lineage 的 Gateway Record 投影单独计算：本地 Record、该 lineage 当前可见 Direction/Experiment revision 引用的 Record，以及通过的标准 full Evaluate；accepted submission/winner 的完整 Evaluate 因而自动可见。Agent 不能任意发布其他本地 Record。聚合后的只读共享池顺序、密封且经过源码范围过滤的 Git 历史和 accepted submission frontier 仍按既定同步点发布。每条 trajectory 的本地工作队列与优先级独立，不会被 publication 覆盖；不共享 scratch、conversation 或其他本地测量。同步模式按该 lineage 的 Epoch watermark 投影同伴 revision，异步模式按其实时可见 revision 集合投影；共享历史中的未测量 commit 只作为工程过程，不作为证据。
 

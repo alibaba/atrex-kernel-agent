@@ -298,8 +298,22 @@ python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-subm
 ```
 
 The commit may be current HEAD or another commit reachable from local/imported Agent refs. Run a
-standard full Evaluate for that exact commit first. The response contains `accepted`,
-`evaluation_evidence`, per-policy status, and actionable diagnostics. Submission reuses the saved
-result and launches no new evaluation. Rejection does not alter Git or roll back source; repair and
-evaluate a new commit before resubmitting it. The Supervisor retains every submission and review
-privately for audit. A normal Session exit ends the Episode.
+standard full Evaluate for that exact commit first. The response contains the stable
+`submission_id`, immutable `revision`, `accepted`, `evaluation_evidence`, per-policy status and
+actionable diagnostics. Submission reuses the saved result and launches no new evaluation.
+
+The first call creates `v1`. Rejection does not alter Git or roll back source. Repair and fully
+evaluate a new commit, then revise the same Submission with:
+
+```json
+{
+  "submission_id": "submission-0123456789abcdef0123456789abcdef",
+  "kernel_commit_id": "fedcba9876543210fedcba9876543210fedcba98"
+}
+```
+
+Each revision receives a fresh immutable `vN`; the independent Reviewer resumes its prior Session
+while rechecking the complete current candidate. An accepted older revision remains accepted if a
+later revision fails. Replaying the same commit with unchanged evidence and decision is idempotent.
+Omit `submission_id` only to create a distinct Submission. The Supervisor retains every revision,
+Review conversation and token receipt privately for audit. A normal Session exit ends the Episode.

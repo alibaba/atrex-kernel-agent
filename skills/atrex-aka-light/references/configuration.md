@@ -58,7 +58,7 @@ Current Light defaults to pooled search. Configure it through `workflow.config.s
 | `trajectories` | `3` | Persistent private Agent trajectories |
 | `episodes_per_trajectory` | `1` | Audit segments per trajectory per Epoch |
 | `max_parallel_episodes` | `3` | Maximum concurrent trajectory segments; cannot exceed trajectories |
-| `synchronization` | `synchronous` | `synchronous` barrier publication or `asynchronous` publication after completed segments |
+| `synchronization` | `asynchronous` | `synchronous` barrier publication or `asynchronous` publication after completed segments |
 | `role_specialization` | `false` | Add distinct trajectory role prompts |
 
 An explicit empty mapping selects serial mode:
@@ -134,7 +134,7 @@ Composition patches are JSON files passed before `--`. A module entry supplies t
           "trajectories": 3,
           "episodes_per_trajectory": 1,
           "max_parallel_episodes": 3,
-          "synchronization": "synchronous",
+          "synchronization": "asynchronous",
           "role_specialization": false
         }
       }

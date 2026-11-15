@@ -56,16 +56,16 @@ from aka.light.acceptance.source_policy import (
     install_workspace_policy,
     optimization_mode_directive,
     production_kernel_violations,
+    production_structure_violations,
     workspace_policy_block,
 )
 from aka.light.acceptance.policy_modes import (
     canonical_submission_policy,
-    compute_policy,
     dsl_policy,
     permits_hidden_shapes,
     requires_explicit_dsl,
 )
-from aka.legacy.acceptance.review import _validate_production_review
+from aka.light.acceptance.review import validate_light_production_review
 from aka.light.workflow.session_io import (
     SessionResult,
     _production_review_candidate_paths,
@@ -755,6 +755,8 @@ class Campaign:
         parent=None,
         require_gluon: bool = False,
         submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
     ) -> dict[str, object] | list[str]:
         """Review exact frozen candidate bytes and preserve observed implementation facts."""
         if not self.source_checks_enabled:
@@ -771,37 +773,50 @@ class Campaign:
             }
             if submission_id is not None:
                 review_kwargs["submission_id"] = submission_id
+                review_kwargs["submission_revision"] = submission_revision
+                review_kwargs["resume_session_id"] = resume_session_id
             violations = self._production_kernel_violations(
                 frozen, **review_kwargs
             )
+        policy = canonical_submission_policy(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        )
         implementation_review: dict[str, object] = {
-            "availability": "unavailable",
+            "availability": (
+                "not_applicable" if policy == "fast" else "unavailable"
+            ),
+        }
+        policy_review: dict[str, object] = {
+            "verdict": "not_applicable" if policy == "fast" else "unavailable",
+            "checks": [],
+            "dependencies": [],
+            "summary": (
+                "Fast does not run the independent final-source Reviewer."
+                if policy == "fast"
+                else "The independent final-source Review is unavailable."
+            ),
         }
         if review_records:
             record = review_records[-1]
-            payload = record.get("review")
-            payload = payload if isinstance(payload, dict) else {}
-            framework = payload.get("framework")
-            framework = framework if isinstance(framework, dict) else {}
-            technologies = framework.get("technologies")
-            unexpected = framework.get("unexpected_core_technologies")
+            policy_result = record.get("policy_result")
+            policy_result = (
+                policy_result if isinstance(policy_result, dict) else {}
+            )
+            if policy_result:
+                policy_review = dict(policy_result)
             implementation_review = {
                 "availability": "available",
-                "technologies": (
-                    list(technologies) if isinstance(technologies, list) else []
-                ),
                 "dsl_policy": record.get("dsl_policy"),
                 "configured_dsl": record.get("framework"),
                 "required_phase": record.get("required_phase"),
-                "evaluator_supported": framework.get("evaluator_supported"),
-                "configured_dsl_used": framework.get("configured_framework_used"),
-                "required_phase_used": framework.get("required_phase_used"),
-                "unexpected_core_technologies": (
-                    list(unexpected) if isinstance(unexpected, list) else []
-                ),
             }
         return {
             "violations": violations,
+            "source_contract": (
+                "pass" if not violations or review_records else "fail"
+            ),
+            "review": policy_review,
             "implementation_review": implementation_review,
         }
 
@@ -1063,19 +1078,21 @@ class Campaign:
     def _persist_production_review_record(
         workspace: Path,
         submission_id: str,
+        submission_revision: int,
         review_record: dict[str, object],
         *,
         conversation: Path | None = None,
         token_usage: Path | None = None,
     ) -> list[str]:
         from aka.light.runtime.paths import supervisor_submission_root
+        from aka.light.workflow.submissions import submission_revision_root
         from aka.light.workflow.review_archive import archive_review
 
-        record_path = (
-            supervisor_submission_root(workspace)
-            / submission_id
-            / "review"
-        )
+        record_path = submission_revision_root(
+            supervisor_submission_root(workspace),
+            submission_id,
+            submission_revision,
+        ) / "review"
         try:
             archive_review(
                 record_path,
@@ -1098,6 +1115,8 @@ class Campaign:
         *,
         candidate_digest: str,
         submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
         record_workspace: Path | None = None,
         review_record_sink=None,
     ) -> list[str]:
@@ -1123,20 +1142,26 @@ class Campaign:
             if submission_id is None:
                 return list(cached_errors)
             previous_submission_id = review_record.get("submission_id")
-            previous_root = (
-                supervisor_submission_root(self.workspace)
-                / str(previous_submission_id)
-                / "review"
-            )
+            previous_revision = review_record.get("submission_revision", 1)
+            from aka.light.workflow.submissions import submission_revision_root
+
+            previous_root = submission_revision_root(
+                supervisor_submission_root(self.workspace),
+                str(previous_submission_id),
+                int(previous_revision),
+            ) / "review"
             reused_record = {
                 **review_record,
                 "submission_id": submission_id,
+                "submission_revision": submission_revision,
                 "review_execution": "reused",
                 "reused_from_submission_id": previous_submission_id,
+                "reused_from_submission_revision": previous_revision,
             }
             persistence_errors = self._persist_production_review_record(
                 self.workspace,
                 submission_id,
+                submission_revision,
                 reused_record,
                 conversation=previous_root / "conversation.jsonl",
                 token_usage=previous_root / "token-usage.json",
@@ -1145,13 +1170,9 @@ class Campaign:
 
         errors: list[str]
         review_payload: object | None = None
-        derived_review: dict[str, object] | None = None
+        policy_result: dict[str, object] | None = None
         review_summary = ""
         effective_dsl_policy = dsl_policy(
-            self.optimization_mode,
-            specify_dsl=self.specify_dsl,
-        )
-        effective_compute_policy = compute_policy(
             self.optimization_mode,
             specify_dsl=self.specify_dsl,
         )
@@ -1170,7 +1191,11 @@ class Campaign:
             )
             / "review-capture"
             / "final-source"
-            / (submission_id or uuid.uuid4().hex)
+            / (
+                f"{submission_id}-v{submission_revision}"
+                if submission_id is not None
+                else uuid.uuid4().hex
+            )
         )
         with tempfile.TemporaryDirectory(
             prefix="atrex-production-review-"
@@ -1196,7 +1221,7 @@ class Campaign:
                     else None
                 ),
                 "dsl_policy": effective_dsl_policy,
-                "compute_policy": effective_compute_policy,
+                "compute_policy": "self_authored_only",
                 "required_phase": (
                     "gluon"
                     if require_gluon and pinned_dsl
@@ -1210,6 +1235,8 @@ class Campaign:
                 ),
                 "candidate_digest": candidate_digest,
                 "candidate_files": sorted(source_hashes),
+                "submission_id": submission_id,
+                "submission_revision": submission_revision,
             }
             (review_workspace / "review_request.json").write_text(
                 json.dumps(request, indent=2, ensure_ascii=False) + "\n",
@@ -1233,6 +1260,8 @@ class Campaign:
                     reasoning_effort="high",
                     agent_plugins=False,
                     extra_environment=review_environment,
+                    session_id=resume_session_id,
+                    resume_session=bool(resume_session_id),
                 )
                 from aka.light.workflow.review_usage import account_review
                 account_review(
@@ -1275,11 +1304,10 @@ class Campaign:
                     review_payload = json.loads(
                         review_path.read_text(encoding="utf-8")
                     )
-                    errors, review_summary, derived_review = _validate_production_review(
+                    errors, review_summary, policy_result = validate_light_production_review(
                         review_payload,
                         candidate_files=frozenset(source_hashes),
                         dsl_policy=effective_dsl_policy,
-                        compute_policy=effective_compute_policy,
                     )
                 except (
                     OSError,
@@ -1325,7 +1353,7 @@ class Campaign:
             "candidate_digest": candidate_digest,
             "framework": framework if pinned_dsl else None,
             "dsl_policy": effective_dsl_policy,
-            "compute_policy": effective_compute_policy,
+            "compute_policy": "self_authored_only",
             "required_phase": (
                 "gluon"
                 if require_gluon and pinned_dsl
@@ -1339,15 +1367,19 @@ class Campaign:
             "errors": errors,
             "summary": review_summary,
             "review": review_payload,
-            "derived_review": derived_review,
+            "policy_result": policy_result,
             "review_execution": "executed",
             "session_id": result.session_id,
         }
+        if resume_session_id is not None:
+            review_record["resumed_from_session_id"] = resume_session_id
         if submission_id is not None:
             review_record["submission_id"] = submission_id
+            review_record["submission_revision"] = submission_revision
             persistence_errors = self._persist_production_review_record(
                 self.workspace,
                 submission_id,
+                submission_revision,
                 review_record,
                 conversation=session_archive.conversation,
                 token_usage=session_archive.token_usage,
@@ -1367,6 +1399,8 @@ class Campaign:
         *,
         review_record_sink=None,
         submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
     ) -> list[str]:
         """Bound timeout retries across sessions and supervisor restarts."""
         from aka.light.execution.retry import retry_review
@@ -1406,6 +1440,8 @@ class Campaign:
                     require_gluon,
                     candidate_digest=digest,
                     submission_id=submission_id,
+                    submission_revision=submission_revision,
+                    resume_session_id=resume_session_id,
                     review_record_sink=review_record_sink,
                 ),
                 cancel=getattr(self, "search_cancel", None),
@@ -1420,9 +1456,21 @@ class Campaign:
         require_gluon: bool = False,
         review_record_sink=None,
         submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
     ) -> list[str]:
         if not self.source_checks_enabled:
             return []
+        if canonical_submission_policy(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        ) == "fast":
+            return production_structure_violations(
+                workspace or self.workspace,
+                self.framework,
+                require_gluon=False,
+                specify_dsl=False,
+            )
         production_reviewer = self._review_production_candidate
         if review_record_sink is not None:
             production_reviewer = lambda candidate, framework, gluon: (
@@ -1432,6 +1480,8 @@ class Campaign:
                     gluon,
                     review_record_sink=review_record_sink,
                     submission_id=submission_id,
+                    submission_revision=submission_revision,
+                    resume_session_id=resume_session_id,
                 )
             )
         elif submission_id is not None:
@@ -1441,6 +1491,8 @@ class Campaign:
                     framework,
                     gluon,
                     submission_id=submission_id,
+                    submission_revision=submission_revision,
+                    resume_session_id=resume_session_id,
                 )
             )
         return production_kernel_violations(

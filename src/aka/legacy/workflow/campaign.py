@@ -443,7 +443,6 @@ class Campaign:
 
         errors: list[str]
         review_payload: object | None = None
-        derived_review: dict[str, object] | None = None
         review_summary = ""
         review_valid = False
         review_trace_issue = False
@@ -468,8 +467,6 @@ class Campaign:
             request = {
                 "schema_version": DEPENDENCY_REVIEW_SCHEMA_VERSION,
                 "framework": framework,
-                "dsl_policy": "pinned",
-                "compute_policy": "self_authored_only",
                 "required_phase": "gluon" if require_gluon else "selected_framework",
                 "optimization_mode": "production",
                 "candidate_digest": candidate_digest,
@@ -523,7 +520,7 @@ class Campaign:
                 review_path = review_workspace / "dependency_review.json"
                 try:
                     review_payload = json.loads(review_path.read_text(encoding="utf-8"))
-                    errors, review_summary, derived_review = _validate_production_review(
+                    errors, review_summary = _validate_production_review(
                         review_payload,
                         candidate_files=frozenset(source_hashes),
                     )
@@ -575,7 +572,6 @@ class Campaign:
             "errors": errors,
             "summary": review_summary,
             "review": review_payload,
-            "derived_review": derived_review,
         }
         persistence_errors = self._persist_production_review_record(
             workspace,

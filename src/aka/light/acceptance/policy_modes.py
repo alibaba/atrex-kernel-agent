@@ -60,7 +60,7 @@ def review_fields(mode: str, *, specify_dsl: bool = True) -> tuple[str, ...]:
         "solution_manifest",
     )
     if policy == "fast":
-        return common
+        return ()
     if policy == "performance":
         return ("compute_provenance", *common)
     return ("dsl_policy", "compute_provenance", *common)

@@ -102,7 +102,7 @@ prepare deterministic V0
 
 An Episode is an audit segment, not a candidate slot. When the Agent stops, the segment ends; the next segment resumes the same conversation, workspace and Agent Git. There is no Framework Baseline, `episode-report`, source sealing, terminal handoff, automatic terminal ABBA, candidate rollback or Supervisor promotion threshold.
 
-`submit-kernel` accepts only a reachable clean Agent Git commit whose standard full Evaluate is passing and has complete per-Shape performance. It then reviews final-source policy. It does not end the Session or change Agent Git. Rejected commits receive actionable diagnostics and may be repaired, re-Evaluated and resubmitted.
+`submit-kernel` accepts only a reachable clean Agent Git commit whose standard full Evaluate is passing and has complete per-Shape performance. Fast skips the independent final-source Reviewer; Performance and Ultra run it, with Ultra additionally enforcing the configured DSL. The first call creates immutable `v1` under a stable Submission ID. A repaired and fully evaluated commit can revise that identity as the next `vN`; its Reviewer resumes the prior Session while rechecking the complete candidate. Submission does not end the Session or change Agent Git, and a rejected later revision does not revoke an older accepted revision.
 
 Explicit ABBA remains available when the Agent wants paired comparison evidence. It is not automatically invoked at Episode boundaries.
 
@@ -129,7 +129,7 @@ The layout is fixed for the campaign. `impl/` is optional and must not be create
 
 ## Search and budgets
 
-Pooled search is the default: 10 Epochs, 3 trajectories, 1 Episode per trajectory per Epoch, 3 parallel Episodes, synchronous publication and no role specialization. Each trajectory owns one durable conversation/workspace/Git lineage.
+Pooled search is the default: 10 Epochs, 3 trajectories, 1 Episode per trajectory per Epoch, 3 parallel Episodes, asynchronous publication and no role specialization. Each trajectory owns one durable conversation/workspace/Git lineage.
 
 Set `workflow.config.search` to `{}` for serial mode. Then `--max-iters N` counts Episode audit segments. In pooled mode, the schedule is `epochs × trajectories × episodes_per_trajectory`; `--max-iters` is not the pooled segment count.
 

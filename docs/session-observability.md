@@ -127,7 +127,7 @@ separate Review index:
 ```text
 research-library/directions/<direction-id>/vN/review/
 research-library/experiments/<experiment-id>/vN/review/
-submissions/<submission-id>/review/
+submissions/<submission-id>/vN/review/
   result.json
   conversation.jsonl
   token-usage.json

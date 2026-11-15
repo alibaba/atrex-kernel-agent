@@ -116,9 +116,11 @@ def submission_rows(scope: Scope) -> list[dict[str, Any]]:
             "episode": submission.get("episode"),
             "submission_index": index,
             "submission_id": submission.get("submission_id"),
+            "submission_revision": submission.get("revision", 1),
             "submitted_at": submission.get("submitted_at"),
             "kernel_commit_id": submission.get("kernel_commit_id"),
             "accepted": submission.get("accepted") is True,
+            "source_contract": submission.get("source_contract"),
             "review": review if isinstance(review, dict) else {},
             "implementation_review": (
                 implementation_review
@@ -129,10 +131,14 @@ def submission_rows(scope: Scope) -> list[dict[str, Any]]:
             "evaluation_evidence": evidence if isinstance(evidence, dict) else {},
             "token_checkpoint": submission.get("token_checkpoint"),
             "submission_path": str(
-                root / str(submission["submission_id"]) / "submission.json"
+                root / str(submission["submission_id"])
+                / f"v{submission.get('revision', 1)}" / "submission.json"
             ),
             "review_path": str(
-                root / str(submission["submission_id"]) / "review" / "result.json"
+                root / str(submission["submission_id"])
+                / f"v{submission.get('revision', 1)}"
+                / "review"
+                / "result.json"
             ),
         })
     return rows
@@ -142,10 +148,16 @@ def _join_submission_evidence(scope: Scope, submission: dict[str, Any]) -> dict[
     row = dict(submission)
     evidence = submission.get("evaluation_evidence") or {}
     record_id = evidence.get("gateway_record_id")
-    row.update({"gateway_record_id": record_id if isinstance(record_id, str) else None,
-                "evidence_status": "not_accepted" if not submission.get("accepted") else "missing",
-                "latency_us_geomean": None, "latency_us_arith_mean": None,
-                "shape_count": None, "kernel_artifact_digest": None})
+    row.update({
+        "gateway_record_id": record_id if isinstance(record_id, str) else None,
+        "evidence_status": (
+            "not_accepted" if not submission.get("accepted") else "missing"
+        ),
+        "latency_us_geomean": None,
+        "latency_us_arith_mean": None,
+        "shape_count": None,
+        "kernel_artifact_digest": None,
+    })
     if not submission.get("accepted"):
         return row
     if not isinstance(record_id, str) or RECORD_ID.fullmatch(record_id) is None:

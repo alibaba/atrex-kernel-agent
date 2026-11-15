@@ -15,6 +15,7 @@ from aka.light.runtime.paths import supervisor_campaign_root, supervisor_submiss
 from aka.light.workflow.token_checkpoints import capture_token_checkpoint
 from aka.light.workflow.bootstrap import Campaign
 from aka.light.runtime.server import SupervisorRuntime
+from aka.light.acceptance.review import validate_light_production_review
 from aka.legacy.acceptance.review import _validate_production_review
 from aka.legacy.agent import dsh
 from observability._internal.token_usage import snapshot as token_time_snapshot
@@ -452,98 +453,212 @@ def test_ssh_device_map_uses_explicit_character_devices():
         ssh_devices.resolve(0, isolation="process", device_map={})
 
 
-def _mixed_compute_fact_review():
+def _upstream_source_review(
+    *,
+    framework_decision="allow",
+    framework_category="framework_compliant",
+    compute_decision="allow",
+    compute_category="self_authored_compute",
+):
     evidence = ["candidate/kernel.py:1"]
+    rejected = framework_decision == "reject" or compute_decision == "reject"
     return {
-        "schema_version": 3,
-        "framework": {
-            "technologies": ["triton", "torch_aten"],
-            "evaluator_supported": True,
-            "configured_framework_used": False,
-            "required_phase_used": False,
-            "unexpected_core_technologies": [],
-            "reason": "both technologies are visible and evaluator-supported",
-            "evidence": evidence,
-        },
-        "compute_origins": [
+        "schema_version": 2,
+        "verdict": "reject" if rejected else "allow",
+        "checks": [
             {
-                "kind": "self_authored",
-                "technology": "triton",
-                "role": "primary",
-                "declared": True,
-                "reproducible": True,
-                "hidden_dispatch": False,
-                "reason": "candidate-authored Triton is the primary path",
+                "id": "framework_compliance",
+                "decision": framework_decision,
+                "category": framework_category,
+                "reason": "the implementation framework is visible",
                 "evidence": evidence,
             },
             {
-                "kind": "framework_builtin",
-                "technology": "torch_aten",
-                "role": "fallback",
-                "declared": True,
-                "reproducible": True,
-                "hidden_dispatch": False,
-                "reason": "visible Torch fallback handles excluded inputs",
+                "id": "compute_provenance",
+                "decision": compute_decision,
+                "category": compute_category,
+                "reason": "the target computation source is visible",
+                "evidence": evidence,
+            },
+            {
+                "id": "dependency_inventory",
+                "decision": "allow",
+                "category": "inventory_complete",
+                "reason": "all dependencies are inventoried",
+                "evidence": evidence,
+            },
+            {
+                "id": "external_code_loading",
+                "decision": "allow",
+                "category": "no_external_code",
+                "reason": "no external implementation is loaded",
+                "evidence": evidence,
+            },
+            {
+                "id": "solution_manifest",
+                "decision": "allow",
+                "category": "not_applicable",
+                "reason": "no manifest is required",
                 "evidence": evidence,
             },
         ],
-        "dependency_inventory": {
-            "complete": True,
-            "reason": "Torch and Triton are both inventoried",
-            "evidence": evidence,
-        },
-        "external_code_loading": {
-            "status": "none",
-            "declared": True,
-            "reproducible": True,
-            "hidden_dispatch": False,
-            "reason": "no external implementation is loaded",
-            "evidence": evidence,
-        },
-        "solution_manifest": {
-            "status": "not_applicable",
-            "reason": "this source-tree candidate has no manifest",
-            "evidence": evidence,
-        },
         "dependencies": [
             {
-                "name": name,
-                "kind": "framework_runtime",
-                "role": role,
-                "declared": True,
-                "reproducible": True,
-                "hidden_dispatch": False,
-                "reason": reason,
+                "name": "torch",
+                "decision": "allow",
+                "category": "framework_runtime",
+                "reason": "Torch supplies tensor and launch plumbing only",
                 "evidence": evidence,
             }
-            for name, role, reason in (
-                ("triton", "kernel compiler", "Triton compiles the candidate source"),
-                ("torch", "tensor and fallback runtime", "Torch exposes the fallback"),
-            )
         ],
-        "summary": "self-authored Triton with a visible Torch fallback",
+        "summary": "complete upstream source-policy review",
     }
 
 
-def test_runtime_derives_final_source_verdict_from_reviewer_facts():
-    review = _mixed_compute_fact_review()
-    fast_errors, _, fast = _validate_production_review(
+def test_light_reuses_upstream_review_and_ignores_only_non_pinned_dsl():
+    review = _upstream_source_review(
+        framework_decision="reject",
+        framework_category="alternate_framework",
+    )
+    upstream_errors, _ = _validate_production_review(
         review,
         candidate_files=frozenset({"kernel.py"}),
-        dsl_policy="open",
-        compute_policy="declared_external_allowed",
     )
-    strict_errors, _, strict = _validate_production_review(
+    guided_errors, _, guided = validate_light_production_review(
         review,
         candidate_files=frozenset({"kernel.py"}),
         dsl_policy="guided",
-        compute_policy="self_authored_only",
+    )
+    pinned_errors, _, pinned = validate_light_production_review(
+        review,
+        candidate_files=frozenset({"kernel.py"}),
+        dsl_policy="pinned",
     )
 
-    assert fast_errors == []
-    assert fast["verdict"] == "allow"
-    assert strict["verdict"] == "reject"
-    assert any("torch_aten" in error for error in strict_errors)
+    assert upstream_errors
+    assert guided_errors == []
+    assert guided["verdict"] == "allow"
+    assert [item["id"] for item in guided["checks"]] == [
+        "compute_provenance",
+        "dependency_inventory",
+        "external_code_loading",
+        "solution_manifest",
+    ]
+    assert "reviewer_verdict" not in guided
+    assert all("reviewer_decision" not in item for item in guided["checks"])
+    assert pinned["verdict"] == "reject"
+    assert any("framework_compliance" in error for error in pinned_errors)
+
+
+def test_upstream_review_allows_framework_runtime_and_support_plumbing():
+    review = _upstream_source_review()
+    review["dependencies"].append({
+        "name": "ninja",
+        "decision": "allow",
+        "category": "toolchain_plumbing",
+        "reason": "Ninja only schedules candidate compilation",
+        "evidence": ["candidate/kernel.py:1"],
+    })
+    errors, _ = _validate_production_review(
+        review,
+        candidate_files=frozenset({"kernel.py"}),
+    )
+    assert errors == []
+
+
+def test_fast_submission_skips_independent_final_source_reviewer(tmp_path):
+    (tmp_path / "kernel.py").write_text(
+        "def custom_kernel(x):\n    return x\n",
+        encoding="utf-8",
+    )
+    campaign = Campaign.__new__(Campaign)
+    campaign.__dict__["source_checks_enabled"] = True
+    campaign.optimization_mode = "fast"
+    campaign.specify_dsl = False
+    campaign.framework = ""
+
+    def unexpected_review(*_args, **_kwargs):
+        raise AssertionError("Fast must not start the independent final-source Reviewer")
+
+    campaign._review_production_candidate = unexpected_review
+    assert campaign._production_kernel_violations(tmp_path) == []
+
+
+def test_submit_kernel_receipt_reports_only_the_failed_policy_axis(
+    monkeypatch, tmp_path
+):
+    commit_id = "b" * 40
+    runtime = SupervisorRuntime.__new__(SupervisorRuntime)
+    runtime.production_review_required = True
+    runtime.submission_specify_dsl = True
+    runtime.config = SimpleNamespace(optimization_mode="ultra")
+    runtime.measurements = object()
+    def policy_validator(*_args, **kwargs):
+        assert kwargs["submission_id"] == "submission-" + "1" * 32
+        assert kwargs["submission_revision"] == 2
+        assert kwargs["resume_session_id"] == "review-session-v1"
+        return {
+            "violations": ["external operator performs target computation"],
+            "source_contract": "pass",
+            "implementation_review": {"availability": "available"},
+            "review": {
+                "schema_version": 2,
+                "verdict": "reject",
+                "checks": [{
+                    "id": "compute_provenance",
+                    "decision": "reject",
+                    "category": "prebuilt_compute",
+                    "reason": "external operator performs target computation",
+                    "evidence": ["candidate/kernel.py:1"],
+                }],
+                "dependencies": [],
+                "summary": "external compute remains",
+            },
+        }
+
+    runtime.production_policy_validator = policy_validator
+    monkeypatch.setattr(
+        "aka.light.workspace.sources.from_git",
+        lambda _workspace, _commit: b"candidate",
+    )
+    monkeypatch.setattr(
+        "aka.light.runtime.server.kernel_full_evaluation_evidence",
+        lambda _store, _commit: {"status": "passed"},
+    )
+    agent_git = SimpleNamespace(
+        workspace=tmp_path,
+        commit_reachable=lambda value: value == commit_id,
+    )
+    binding = SimpleNamespace(
+        service=SimpleNamespace(git_workspace=tmp_path),
+        require_gluon=False,
+    )
+
+    result = runtime._review_submitted_kernel(
+        SimpleNamespace(),
+        binding,
+        agent_git,
+        commit_id,
+        "submission-" + "1" * 32,
+        2,
+        "review-session-v1",
+    )
+
+    assert result["accepted"] is False
+    assert result["source_contract"] == "pass"
+    assert result["review"] == {
+        "schema_version": 2,
+        "verdict": "reject",
+        "checks": [{
+            "id": "compute_provenance",
+            "decision": "reject",
+            "category": "prebuilt_compute",
+            "reason": "external operator performs target computation",
+            "evidence": ["candidate/kernel.py:1"],
+        }],
+        "dependencies": [],
+        "summary": "external compute remains",
+    }
 
 
 def test_submission_policy_feedback_preserves_observed_implementation_facts(
@@ -551,6 +666,8 @@ def test_submission_policy_feedback_preserves_observed_implementation_facts(
 ):
     campaign = Campaign.__new__(Campaign)
     campaign.__dict__["source_checks_enabled"] = True
+    campaign.optimization_mode = "performance"
+    campaign.specify_dsl = False
 
     monkeypatch.setattr(
         "aka.light.workspace.sources.install",
@@ -560,17 +677,20 @@ def test_submission_policy_feedback_preserves_observed_implementation_facts(
     def review(_workspace, *, require_gluon, review_record_sink):
         assert require_gluon is False
         review_record_sink({
-            "dsl_policy": "open",
+            "dsl_policy": "guided",
             "framework": None,
             "required_phase": "open_dsl",
             "review": {
-                "framework": {
-                    "technologies": ["triton", "torch_aten"],
-                    "evaluator_supported": True,
-                    "configured_framework_used": False,
-                    "required_phase_used": False,
-                    "unexpected_core_technologies": [],
-                }
+                "schema_version": 2,
+                "verdict": "allow",
+            },
+            "policy_result": {
+                "verdict": "allow",
+                "checks": [
+                    {"id": "compute_provenance", "decision": "allow"},
+                ],
+                "dependencies": [],
+                "summary": "self-authored compute",
             },
         })
         return []
@@ -579,16 +699,18 @@ def test_submission_policy_feedback_preserves_observed_implementation_facts(
     result = campaign.production_policy_feedback(tmp_path, b"candidate")
 
     assert result["violations"] == []
+    assert result["source_contract"] == "pass"
+    assert result["review"] == {
+        "verdict": "allow",
+        "checks": [{"id": "compute_provenance", "decision": "allow"}],
+        "dependencies": [],
+        "summary": "self-authored compute",
+    }
     assert result["implementation_review"] == {
         "availability": "available",
-        "technologies": ["triton", "torch_aten"],
-        "dsl_policy": "open",
+        "dsl_policy": "guided",
         "configured_dsl": None,
         "required_phase": "open_dsl",
-        "evaluator_supported": True,
-        "configured_dsl_used": False,
-        "required_phase_used": False,
-        "unexpected_core_technologies": [],
     }
 
 
@@ -651,6 +773,7 @@ def test_final_source_review_is_attached_to_submission(tmp_path):
     errors = Campaign._persist_production_review_record(
         tmp_path,
         submission_id,
+        1,
         {
             "review_execution": "executed",
             "accepted": True,
@@ -661,46 +784,44 @@ def test_final_source_review_is_attached_to_submission(tmp_path):
     )
 
     assert errors == []
-    root = supervisor_submission_root(tmp_path) / submission_id / "review"
+    root = supervisor_submission_root(tmp_path) / submission_id / "v1" / "review"
     assert json.loads((root / "result.json").read_text())["accepted"] is True
     assert (root / "conversation.jsonl").read_text() == '{"type":"session_end"}\n'
     usage = json.loads((root / "token-usage.json").read_text())
     assert usage["total"]["total_tokens"] == 42
 
 
-def test_reviewer_cannot_supply_policy_decision_or_verdict():
-    review = _mixed_compute_fact_review()
-    review["compute_origins"][1]["decision"] = "reject"
-    with pytest.raises(ValueError, match="facts, not decision"):
+def test_upstream_reviewer_rejects_inconsistent_decision_and_category():
+    review = _upstream_source_review()
+    review["checks"][1]["decision"] = "reject"
+    with pytest.raises(ValueError, match="inconsistent"):
         _validate_production_review(
             review,
             candidate_files=frozenset({"kernel.py"}),
-            dsl_policy="open",
-            compute_policy="declared_external_allowed",
         )
 
 
-def test_runtime_enforces_pinned_framework_from_reviewer_facts():
-    review = _mixed_compute_fact_review()
-    review["framework"].update({
-        "unexpected_core_technologies": ["triton"],
-    })
-    errors, _, derived = _validate_production_review(
+def test_light_adapter_enforces_pinned_framework_review_decision():
+    review = _upstream_source_review(
+        framework_decision="reject",
+        framework_category="alternate_framework",
+    )
+    errors, _, adapted = validate_light_production_review(
         review,
         candidate_files=frozenset({"kernel.py"}),
         dsl_policy="pinned",
-        compute_policy="declared_external_allowed",
     )
-    assert derived["verdict"] == "reject"
+    assert adapted["verdict"] == "reject"
     assert any("framework_compliance" in error for error in errors)
 
 
-def test_final_source_reviewer_prompt_requests_facts_not_policy_decisions():
+def test_final_source_reviewer_prompt_uses_upstream_verdict_schema():
     prompt = (
         Path(__file__).resolve().parents[1]
         / "src/aka/light/workflow/prompts/dependency_review.md"
     ).read_text(encoding="utf-8")
-    assert '"schema_version": 3' in prompt
-    assert '"compute_origins"' in prompt
-    assert '"decision":' not in prompt
-    assert '"verdict":' not in prompt
+    assert '"schema_version": 2' in prompt
+    assert '"checks"' in prompt
+    assert '"decision": "allow | reject"' in prompt
+    assert '"verdict": "allow | reject"' in prompt
+    assert "Fast mode does not invoke this review" in prompt

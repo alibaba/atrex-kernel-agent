@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import subprocess
 from io import BytesIO
 from pathlib import Path
@@ -1481,6 +1482,7 @@ def test_research_records_are_projected_as_normal_workspace_files(tmp_path):
         kernel_commit_id=second_commit,
     )
     append_submission(tmp_path / "scope" / "submissions", {
+        "revision": 1,
         "submission_id": "submission-" + "1" * 32,
         "lineage": "T1",
         "episode": 1,
@@ -3061,10 +3063,15 @@ def test_submit_kernel_records_review_without_finalizing_episode(monkeypatch, tm
             },
         },
     )
+    submission_id = result["submission_id"]
+    assert re.fullmatch(r"submission-[0-9a-f]{32}", submission_id)
     assert result == {
         "status": "reviewed",
+        "submission_id": submission_id,
+        "revision": 1,
         "kernel_commit_id": commit_id,
         "accepted": True,
+        "source_contract": "pass",
         "review": {
             "source_contract": "pass",
             "dsl_policy": "not_applicable",
@@ -3078,8 +3085,8 @@ def test_submit_kernel_records_review_without_finalizing_episode(monkeypatch, tm
             "measured_shape_count": 3,
         },
         "runtime_action": (
-            "The exact commit has a passing full Evaluate and passed final-source "
-            "review. Continue development or end the Session."
+            "The exact commit has a passing full Evaluate and passed the applicable "
+            "final-source checks. Continue development or end the Session."
         ),
     }
     submission_rows = submissions(tmp_path / "scope" / "submissions")
@@ -3145,7 +3152,10 @@ def test_submit_kernel_requires_saved_full_evaluation(tmp_path):
     incomplete = service.execute(
         {
             "operation": "kernel_submit",
-            "request": {"kernel_commit_id": "b" * 40},
+            "request": {
+                "submission_id": result["submission_id"],
+                "kernel_commit_id": "c" * 40,
+            },
         },
         review_kernel=lambda _submitted: {
             "accepted": False,
@@ -3164,9 +3174,108 @@ def test_submit_kernel_requires_saved_full_evaluation(tmp_path):
         },
     )
     assert incomplete["status"] == "rejected"
+    assert incomplete["submission_id"] == result["submission_id"]
+    assert incomplete["revision"] == 2
     assert incomplete["accepted"] is False
     assert "performance result is incomplete or unparseable" in incomplete["runtime_action"]
     assert "same commit" in incomplete["runtime_action"]
+
+
+def test_submit_kernel_versions_resume_review_and_preserve_accepted_revision(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    campaign = tmp_path / "scope" / "journals"
+    evidence = campaign / "episodes" / "e00000001"
+    evidence.mkdir(parents=True)
+    initialize_journal(
+        evidence / "journal.json",
+        episode=1,
+        base_commit="a" * 40,
+        branch="work",
+        tool_modules=(),
+    )
+    service = SupervisorJournalService(
+        workspace=workspace,
+        campaign_root=campaign,
+        evidence_root=evidence,
+        research_root=tmp_path / "research",
+    )
+    calls = []
+
+    def review(commit_id, submission_id, revision, resume_session_id):
+        calls.append((commit_id, submission_id, revision, resume_session_id))
+        accepted = commit_id == "b" * 40
+        return {
+            "accepted": accepted,
+            "source_contract": "pass" if accepted else "fail",
+            "review": {
+                "verdict": "allow" if accepted else "reject",
+                "checks": [],
+                "dependencies": [],
+            },
+            "implementation_review": {"availability": "available"},
+            "diagnostics": [] if accepted else ["external compute remains"],
+            "evaluation_evidence": {
+                "status": "passed",
+                "gateway_record_id": "gateway-" + ("1" if accepted else "2") * 32,
+                "latency_us_geomean": 4.0 if accepted else 3.5,
+                "measured_shape_count": 3,
+            },
+        }
+
+    first = service.execute(
+        {
+            "operation": "kernel_submit",
+            "request": {"kernel_commit_id": "b" * 40},
+        },
+        review_kernel=review,
+    )
+    review_root = (
+        tmp_path
+        / "scope"
+        / "submissions"
+        / first["submission_id"]
+        / "v1"
+        / "review"
+    )
+    review_root.mkdir(parents=True)
+    (review_root / "result.json").write_text(
+        json.dumps({"session_id": "review-session-1"}), encoding="utf-8"
+    )
+
+    second = service.execute(
+        {
+            "operation": "kernel_submit",
+            "request": {
+                "submission_id": first["submission_id"],
+                "kernel_commit_id": "c" * 40,
+            },
+        },
+        review_kernel=review,
+    )
+    assert second["submission_id"] == first["submission_id"]
+    assert second["revision"] == 2
+    assert second["accepted"] is False
+    assert calls == [
+        ("b" * 40, first["submission_id"], 1, None),
+        ("c" * 40, first["submission_id"], 2, "review-session-1"),
+    ]
+    stored = submissions(tmp_path / "scope" / "submissions")
+    assert [row["revision"] for row in stored] == [1, 2]
+    assert accepted_submission_kernel_ids(
+        tmp_path / "scope" / "submissions"
+    ) == {"b" * 40}
+
+    replay = service.execute(
+        {
+            "operation": "kernel_submit",
+            "request": {"kernel_commit_id": "b" * 40},
+        },
+        review_kernel=lambda *_args: pytest.fail("idempotent replay reran Review"),
+    )
+    assert replay["idempotent"] is True
+    assert replay["submission_id"] == first["submission_id"]
+    assert replay["revision"] == 1
 
 
 
@@ -3178,6 +3287,9 @@ def test_submit_kernel_schema_and_prompt_have_no_handoff_contract():
         "kernel_submit", {"kernel_commit_id": "a" * 40}, research_records=False
     )
     assert schema["required"] == ["kernel_commit_id"]
+    assert schema["properties"]["submission_id"]["pattern"] == (
+        "^submission-[0-9a-f]{32}$"
+    )
     assert "handoff_reason" not in schema["properties"]
     prompt = (
         Path(__file__).resolve().parents[1]
@@ -5169,7 +5281,13 @@ def test_pooled_search_seals_peer_evidence_without_promotion(tmp_path):
     root = tmp_path / "campaign-A"
     result = PooledSearch(
         root,
-        SearchOptions(epochs=1, trajectories=1, episodes_per_trajectory=1, max_parallel_episodes=1),
+        SearchOptions(
+            epochs=1,
+            trajectories=1,
+            episodes_per_trajectory=1,
+            max_parallel_episodes=1,
+            synchronization="synchronous",
+        ),
         Driver(),
     ).run()
 
@@ -5244,6 +5362,7 @@ def test_pooled_search_projects_completed_lineage_before_peer_finishes(tmp_path)
             trajectories=2,
             episodes_per_trajectory=1,
             max_parallel_episodes=2,
+            synchronization="synchronous",
         ),
         Driver(),
     )
@@ -6901,7 +7020,7 @@ def test_pooled_search_derives_observational_winners_without_promoting(tmp_path)
     result = PooledSearch(
         root,
         SearchOptions(epochs=1, trajectories=2, episodes_per_trajectory=1,
-                      max_parallel_episodes=2),
+                      max_parallel_episodes=2, synchronization="synchronous"),
         Driver(),
     ).run()
     assert result == "search: completed Epoch budget"

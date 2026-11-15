@@ -20,6 +20,8 @@ audit segment; it does not submit, seal or promote source. `submit-kernel` is th
 Kernel submission action. It accepts an exact Agent Git commit only when MeasurementStore already
 contains a passing full Evaluate with complete per-Shape performance for that commit and the
 final-source review passes. Accepted submissions drive lineage/global winners and sharing.
+Each Submission has one stable Runtime-issued ID and immutable `vN` revisions, so repaired commits
+can continue the same Reviewer Session without overwriting or revoking earlier decisions.
 
 MeasurementStore keeps canonical source artifacts and immutable Gateway Records. Supervisor state
 archives facts and source bytes, but it does not own a second candidate Git history, mirror Agent

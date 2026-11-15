@@ -146,7 +146,7 @@ def bound_review_usage_rows(
         return value if isinstance(value, dict) else None
 
     for result_path in sorted(
-        (campaign_root / "submissions").glob("submission-*/review/result.json")
+        (campaign_root / "submissions").glob("submission-*/v*/review/result.json")
     ):
         result = read_review_result(result_path)
         if result is None or result.get("review_execution") == "reused":

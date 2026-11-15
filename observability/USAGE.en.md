@@ -242,7 +242,7 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
 ```json
 {
   "campaign_configuration": {
-    "search": {"trajectories": 3, "synchronization": "synchronous"},
+    "search": {"trajectories": 3, "synchronization": "asynchronous"},
     "search_binding_digest": "...",
     "token_budget": 0
   },
@@ -374,19 +374,28 @@ python3 "$AKA_REPO/observability/light_kernel_history.py" "$CAMPAIGN" [options]
           "submissions": [
             {
               "submission_id": "submission-...",
+              "submission_revision": 2,
               "accepted": true,
               "evidence_status": "verified",
-              "review": {"source_contract": "pass"},
+              "source_contract": "pass",
+              "review": {
+                "schema_version": 2,
+                "verdict": "allow",
+                "checks": [{
+                  "id": "compute_provenance",
+                  "decision": "allow",
+                  "category": "self_authored_compute",
+                  "reason": "The candidate source implements the core computation.",
+                  "evidence": ["candidate/kernel.py:12"]
+                }],
+                "dependencies": [],
+                "summary": "The final source satisfies the active mode."
+              },
               "implementation_review": {
                 "availability": "available",
-                "technologies": ["triton"],
-                "dsl_policy": "open",
+                "dsl_policy": "guided",
                 "configured_dsl": null,
-                "required_phase": "open_dsl",
-                "evaluator_supported": true,
-                "configured_dsl_used": false,
-                "required_phase_used": false,
-                "unexpected_core_technologies": []
+                "required_phase": "open_dsl"
               },
               "diagnostics": [],
               "submit_token_usage": {

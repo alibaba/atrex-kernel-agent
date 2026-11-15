@@ -30,4 +30,4 @@ Keep reasoning concise and act once the next step is testable.
 
 {{SUBMISSION_CONTRACT}}
 
-Write `scratch/kernel-submit.json` with `{"kernel_commit_id":"<full Agent Git commit>"}` and run `python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-submit.json`.
+Write `scratch/kernel-submit.json` with `{"kernel_commit_id":"<full Agent Git commit>"}` and run `python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-submit.json`. The first call returns a stable `submission_id`. To revise that production candidate after Review feedback, fully evaluate the repaired commit and submit `{"submission_id":"<returned ID>","kernel_commit_id":"<new commit>"}`; omit the ID only for an unrelated Submission.

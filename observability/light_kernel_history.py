@@ -184,11 +184,13 @@ def snapshot(
         result["submissions"].append(
             {
                 "submission_id": submission.get("submission_id"),
+                "submission_revision": submission.get("submission_revision", 1),
                 "submission_index": submission.get("submission_index"),
                 "episode": submission.get("episode"),
                 "submitted_at": submission.get("submitted_at"),
                 "accepted": accepted,
                 "evidence_status": submission.get("evidence_status"),
+                "source_contract": submission.get("source_contract"),
                 "review": submission.get("review") or {},
                 "implementation_review": submission.get("implementation_review") or {
                     "availability": "unavailable"

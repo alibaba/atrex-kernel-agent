@@ -292,12 +292,12 @@ the required `startup` service and prevents the CLI from launching the campaign.
 | `aka.light.agent.plugin` | `sandbox: none`, `capture: false`, `bwrap_executable: bwrap`, `read_only_paths: []`, `proc_mode: private`, `timeout_seconds: 28800` |
 | `aka.light.runtime.plugin` | `measurement_repetitions: 1` (or `3`), `pause_agent_during_requests: true`, `wiki: true`, `queue_timeout: 60`; omitted `request_timeout` preserves the controller's queue/execution deadline policy; `wiki_options` independently controls Wiki execution (above) |
 | `aka.light.wiki.plugin` | `root: ""` (the selected checkout's `gpu-wiki`); see [Wiki providers](#wiki-providers) |
-| `aka.light.workflow.plugin` | `startup: false` in the standalone provider, set to `true` by CLI profiles; `numerical_validation: false`, `goal_episodes: false`, `output_limit_recovery_retries: 5`, no Episode active-time limit by default; pooled three-trajectory synchronous `search` is enabled by default and an explicit empty mapping selects serial execution; optional `source_tree` import compatibility |
+| `aka.light.workflow.plugin` | `startup: false` in the standalone provider, set to `true` by CLI profiles; `numerical_validation: false`, `goal_episodes: false`, `output_limit_recovery_retries: 5`, no Episode active-time limit by default; pooled three-trajectory asynchronous `search` is enabled by default and an explicit empty mapping selects serial execution; optional `source_tree` import compatibility |
 | `aka.light.workspace.plugin` | No functional options; every trajectory uses one persistent Agent repository and keeps source, Git, scratch, custom Skills and tools across Episode audit segments. The retired stored value `inherit_state: true` remains readable; `false` is rejected. |
 | `aka.light.execution.plugin` | No options; endpoint/timeouts remain prepared Execution request values |
 | `aka.light.evaluation.plugin` | No options; constructs measurement plans and projects/aggregates results |
 | `aka.light.experiment.plugin` | No options; injects the selected Evaluation and opens Campaign-scoped stores |
-| `aka.light.acceptance.plugin` | No options; supplies source-policy review used by `submit-kernel`; ordinary Evaluate remains the correctness/performance evidence authority |
+| `aka.light.acceptance.plugin` | No options; supplies source-policy review used by versioned `submit-kernel` revisions; ordinary Evaluate remains the correctness/performance evidence authority |
 | `aka.light.workflow.journal_plugin` | `tool_modules: [directions, experiments]`; select either module independently or use an empty list to disable both research annotations |
 
 Capture can be switched without enabling isolation. Wiki disabling removes its mounted Skill and required-query prompt fragments as well as rejecting the endpoint. Supplemental numerical planning is disabled by default and can be enabled independently. Leaving it disabled does not disable ordinary evaluator correctness, five-case Atrex-Bench validation, full SOL workload coverage, production constraints, or ABBA acceptance. Three-repetition aggregation is opt-in; untimed correctness checks are not repeated three times.
@@ -409,7 +409,7 @@ equivalent to:
       "trajectories": 3,
       "episodes_per_trajectory": 1,
       "max_parallel_episodes": 3,
-      "synchronization": "synchronous",
+      "synchronization": "asynchronous",
       "role_specialization": false
     }
   }}]

@@ -32,7 +32,7 @@ class SearchOptions:
     trajectories: int = 3
     episodes_per_trajectory: int = 1
     max_parallel_episodes: int = 3
-    synchronization: str = "synchronous"
+    synchronization: str = "asynchronous"
     role_specialization: bool = False
 
     def __post_init__(self):

@@ -1320,6 +1320,102 @@ def _catalog_versions_by_sequence(
     return result
 
 
+def _kernel_submission_result(
+    record: Mapping[str, object],
+    *,
+    idempotent: bool = False,
+) -> dict[str, object]:
+    """Project one immutable Submission revision into the Agent receipt."""
+    reviewed = dict(record)
+    evaluation_evidence = deepcopy(
+        reviewed.get("evaluation_evidence", {"status": "missing"})
+    )
+    review_status = reviewed.get("review", {})
+    source_contract = reviewed.get("source_contract")
+    if (
+        source_contract not in {"pass", "fail"}
+        and isinstance(review_status, Mapping)
+    ):
+        source_contract = review_status.get("source_contract")
+    review_verdict = (
+        review_status.get("verdict")
+        if isinstance(review_status, Mapping)
+        else None
+    )
+    review_accepted = (
+        review_verdict in {"allow", "not_applicable"}
+        if review_verdict is not None
+        else isinstance(review_status, Mapping)
+        and "fail" not in review_status.values()
+    )
+    source_accepted = (
+        source_contract == "pass"
+        and not bool(reviewed.get("diagnostics"))
+        and review_accepted
+    )
+    accepted = bool(reviewed.get("accepted")) and (
+        isinstance(evaluation_evidence, Mapping)
+        and evaluation_evidence.get("status") == "passed"
+    )
+    evidence_status = (
+        evaluation_evidence.get("status")
+        if isinstance(evaluation_evidence, Mapping)
+        else "missing"
+    )
+    if accepted:
+        status = "reviewed"
+        runtime_action = (
+            "The exact commit has a passing full Evaluate and passed the applicable "
+            "final-source checks. Continue development or end the Session."
+        )
+    elif not source_accepted:
+        status = "rejected"
+        runtime_action = (
+            "Repair the cited final-source policy violations, commit the repair, run a "
+            "full Evaluate for that exact commit, then revise this Submission by supplying "
+            "its submission_id with the repaired kernel_commit_id."
+        )
+    elif evidence_status == "failed":
+        status = "rejected"
+        if (
+            isinstance(evaluation_evidence, Mapping)
+            and evaluation_evidence.get("reason_code")
+            == "performance_result_incomplete"
+        ):
+            runtime_action = (
+                "The saved full Evaluate passed correctness but its performance result is "
+                "incomplete or unparseable. Rerun a standard full Evaluate for this same "
+                "commit, then retry this exact Submission revision."
+            )
+        else:
+            runtime_action = (
+                "The saved full Evaluate for this exact commit did not pass correctness or "
+                "could not be parsed. Repair and commit the candidate when needed, run a "
+                "complete passing full Evaluate, then revise this Submission."
+            )
+    else:
+        status = "needs_evaluation"
+        runtime_action = (
+            "Run a full Evaluate for this exact commit, then retry this exact Submission "
+            "revision."
+        )
+    result = {
+        "status": status,
+        "submission_id": reviewed.get("submission_id"),
+        "revision": int(reviewed.get("revision", 1)),
+        "kernel_commit_id": reviewed.get("kernel_commit_id"),
+        "accepted": accepted,
+        "source_contract": source_contract,
+        "review": deepcopy(reviewed.get("review", {})),
+        "diagnostics": deepcopy(reviewed.get("diagnostics", [])),
+        "evaluation_evidence": evaluation_evidence,
+        "runtime_action": runtime_action,
+    }
+    if idempotent:
+        result["idempotent"] = True
+    return result
+
+
 def _prune_managed_projection(
     root: Path,
     expected_files: AbstractSet[str],
@@ -5292,43 +5388,145 @@ class SupervisorJournalService:
             require_fields(
                 dict(body),
                 {"kernel_commit_id"},
+                optional={"submission_id"},
                 label="Kernel submission",
             )
             commit_id = body.get("kernel_commit_id")
-            if not isinstance(commit_id, str) or KERNEL_RECORD_ID_RE.fullmatch(commit_id) is None:
+            if (
+                not isinstance(commit_id, str)
+                or KERNEL_RECORD_ID_RE.fullmatch(commit_id) is None
+            ):
                 raise field_error(
                     "kernel_commit_id",
                     "kernel_commit_id must be one full Agent Git commit ID",
                 )
             if review_kernel is None:
                 raise RuntimeStateError("Kernel submission review is unavailable")
-            submission_id = "submission-" + uuid.uuid4().hex
+            from aka.light.workflow.submissions import (
+                SUBMISSION_ID_RE,
+                append_submission,
+                next_submission_revision,
+                submission_for_commit,
+                submission_revision_root,
+                submission_versions,
+            )
+
+            requested_submission_id = body.get("submission_id")
+            if (
+                requested_submission_id is not None
+                and (
+                    not isinstance(requested_submission_id, str)
+                    or SUBMISSION_ID_RE.fullmatch(requested_submission_id) is None
+                )
+            ):
+                raise field_error(
+                    "submission_id",
+                    "submission_id must be one Runtime-issued Submission ID",
+                )
+            existing = submission_for_commit(
+                self.submissions_root,
+                lineage=self.lineage,
+                kernel_commit_id=commit_id,
+                submission_id=requested_submission_id,
+            )
+            if existing is not None and requested_submission_id is None:
+                return _kernel_submission_result(existing, idempotent=True)
+            if existing is not None:
+                from aka.light.experiment.frontier import (
+                    kernel_full_evaluation_evidence,
+                )
+
+                current_evidence = kernel_full_evaluation_evidence(
+                    MeasurementStore(self.measurement_root), commit_id
+                )
+                if current_evidence == existing.get("evaluation_evidence"):
+                    return _kernel_submission_result(existing, idempotent=True)
+
+            if requested_submission_id is None:
+                submission_id = "submission-" + uuid.uuid4().hex
+                revision = 1
+                previous = None
+            else:
+                submission_id = requested_submission_id
+                versions = submission_versions(
+                    self.submissions_root, submission_id
+                )
+                if not versions:
+                    raise AgentRequestError(
+                        "submission_id does not identify an existing Submission",
+                        code="submission_not_found",
+                        submission_id=submission_id,
+                        next_action=(
+                            "Omit submission_id to create a new Submission, or copy the exact "
+                            "submission_id returned by an earlier submit-kernel call."
+                        ),
+                    )
+                revision, previous = next_submission_revision(
+                    self.submissions_root,
+                    submission_id,
+                    lineage=self.lineage,
+                )
+            resume_session_id = None
+            if previous is not None:
+                previous_revision = int(previous.get("revision", 1))
+                previous_review = (
+                    submission_revision_root(
+                        self.submissions_root,
+                        submission_id,
+                        previous_revision,
+                    )
+                    / "review"
+                    / "result.json"
+                )
+                try:
+                    previous_review_value = json.loads(
+                        previous_review.read_text(encoding="utf-8")
+                    )
+                except (
+                    FileNotFoundError,
+                    OSError,
+                    UnicodeError,
+                    json.JSONDecodeError,
+                ):
+                    previous_review_value = None
+                if isinstance(previous_review_value, Mapping):
+                    candidate_session_id = previous_review_value.get("session_id")
+                    if isinstance(candidate_session_id, str) and candidate_session_id:
+                        resume_session_id = candidate_session_id
             try:
-                review_parameters = inspect.signature(review_kernel).parameters.values()
+                review_parameters = inspect.signature(
+                    review_kernel
+                ).parameters.values()
             except (TypeError, ValueError):
                 review_parameters = ()
-            accepts_submission_id = any(
+            accepts_varargs = any(
                 parameter.kind in {
                     inspect.Parameter.VAR_POSITIONAL,
                     inspect.Parameter.VAR_KEYWORD,
                 }
-                or parameter.name == "submission_id"
                 for parameter in review_parameters
-            ) or sum(
+            )
+            positional_count = sum(
                 parameter.kind
                 in {
                     inspect.Parameter.POSITIONAL_ONLY,
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                 }
                 for parameter in review_parameters
-            ) >= 2
-            reviewed = (
-                review_kernel(commit_id, submission_id)
-                if accepts_submission_id
-                else review_kernel(commit_id)
+            )
+            review_arguments = (
+                commit_id,
+                submission_id,
+                revision,
+                resume_session_id,
+            )
+            reviewed = review_kernel(
+                *(review_arguments if accepts_varargs else review_arguments[:positional_count])
             )
             if not isinstance(reviewed, dict):
-                raise RuntimeStateError("Kernel submission review returned invalid state")
+                raise RuntimeStateError(
+                    "Kernel submission review returned invalid state"
+                )
             evaluation_evidence = deepcopy(
                 reviewed.get("evaluation_evidence", {"status": "missing"})
             )
@@ -5339,6 +5537,7 @@ class SupervisorJournalService:
             submitted_at = _now()
             audit = {
                 "submission_id": submission_id,
+                "revision": revision,
                 "lineage": self.lineage,
                 "episode": self.episode,
                 "kernel_commit_id": commit_id,
@@ -5348,7 +5547,7 @@ class SupervisorJournalService:
             if accepted:
                 checkpoint = self.record_token_checkpoint(
                     event="accepted-submit-kernel",
-                    checkpoint_id=submission_id,
+                    checkpoint_id=f"{submission_id}-v{revision}",
                     occurred_at=submitted_at,
                     identity={
                         "kernel_commit_id": commit_id,
@@ -5359,59 +5558,13 @@ class SupervisorJournalService:
                 )
                 if checkpoint is not None:
                     audit["token_checkpoint"] = checkpoint
-            from aka.light.workflow.submissions import append_submission
-
+            result = _kernel_submission_result(audit)
+            audit.update({
+                "status": result["status"],
+                "source_contract": result["source_contract"],
+                "runtime_action": result["runtime_action"],
+            })
             append_submission(self.submissions_root, audit)
-            review_status = reviewed.get("review", {})
-            source_accepted = (
-                not bool(reviewed.get("diagnostics"))
-                and isinstance(review_status, Mapping)
-                and "fail" not in review_status.values()
-            )
-            evidence_status = evaluation_evidence.get("status")
-            if accepted:
-                status = "reviewed"
-                runtime_action = (
-                    "The exact commit has a passing full Evaluate and passed final-source "
-                    "review. Continue development or end the Session."
-                )
-            elif not source_accepted:
-                status = "rejected"
-                runtime_action = (
-                    "Repair the cited final-source policy violations, commit the repair, "
-                    "run a full Evaluate for that exact commit, and submit it again."
-                )
-            elif evidence_status == "failed":
-                status = "rejected"
-                if (
-                    evaluation_evidence.get("reason_code")
-                    == "performance_result_incomplete"
-                ):
-                    runtime_action = (
-                        "The saved full Evaluate passed correctness but its performance result "
-                        "is incomplete or unparseable. Rerun a standard full Evaluate for this "
-                        "same commit, then submit it again."
-                    )
-                else:
-                    runtime_action = (
-                        "The saved full Evaluate for this exact commit did not pass correctness "
-                        "or could not be parsed. Repair and commit the candidate when needed, run "
-                        "a complete passing full Evaluate, then submit that commit."
-                    )
-            else:
-                status = "needs_evaluation"
-                runtime_action = (
-                    "Run a full Evaluate for this exact commit, then submit the same commit again."
-                )
-            result = {
-                "status": status,
-                "kernel_commit_id": commit_id,
-                "accepted": accepted,
-                "review": deepcopy(reviewed.get("review", {})),
-                "diagnostics": deepcopy(reviewed.get("diagnostics", [])),
-                "evaluation_evidence": evaluation_evidence,
-                "runtime_action": runtime_action,
-            }
             if accepted:
                 self._fanout_asynchronous_catalog()
                 return self._publish_after_mutation(

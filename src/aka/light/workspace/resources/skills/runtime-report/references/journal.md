@@ -8,6 +8,10 @@ Commit the complete SourceProvider candidate, then write:
 {"kernel_commit_id":"0123456789abcdef0123456789abcdef01234567"}
 ```
 
+The first call returns a stable `submission_id` and `revision: 1`. After repairing and fully
+evaluating a new commit, include that `submission_id` with the new `kernel_commit_id` to create the
+next immutable revision. Omit it only for an unrelated Submission. Identical replays are idempotent.
+
 Submit it with:
 
 ```bash

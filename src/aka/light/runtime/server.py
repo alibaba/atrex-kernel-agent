@@ -1730,17 +1730,26 @@ class SupervisorRuntime:
                         if binding.view is not None
                         else AgentGit(binding.service.workspace)
                     )
-                value = binding.service.execute(
-                    request,
-                    review_kernel=(
-                        lambda commit_id, submission_id: self._review_submitted_kernel(
+                review_kernel = None
+                if agent_git is not None and request.get("operation") == "kernel_submit":
+                    def review_kernel(
+                        commit_id,
+                        submission_id,
+                        submission_revision,
+                        resume_session_id,
+                    ):
+                        return self._review_submitted_kernel(
                             capability,
                             binding,
                             agent_git,
                             commit_id,
                             submission_id,
+                            submission_revision,
+                            resume_session_id,
                         )
-                    ) if agent_git is not None and request.get("operation") == "kernel_submit" else None,
+                value = binding.service.execute(
+                    request,
+                    review_kernel=review_kernel,
                 )
             except (AgentRequestError, RuntimeStateError):
                 raise
@@ -1765,6 +1774,8 @@ class SupervisorRuntime:
         agent_git,
         commit_id: str,
         submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
     ) -> dict:
         """Review one exact Agent commit and its saved full-Evaluate evidence."""
         from aka.light.workspace.sources import from_git
@@ -1792,6 +1803,13 @@ class SupervisorRuntime:
         implementation_review: dict[str, object] = {
             "availability": "not_applicable",
         }
+        source_contract = "pass"
+        review: dict[str, object] = {
+            "verdict": "not_applicable",
+            "checks": [],
+            "dependencies": [],
+            "summary": "No independent final-source Review applies.",
+        }
         if production_applicable and policy_validator is not None:
             policy_result = policy_validator(
                 binding.service.git_workspace,
@@ -1799,6 +1817,8 @@ class SupervisorRuntime:
                 parent=capability,
                 require_gluon=binding.require_gluon,
                 submission_id=submission_id,
+                submission_revision=submission_revision,
+                resume_session_id=resume_session_id,
             )
             if isinstance(policy_result, Mapping):
                 raw_violations = policy_result.get("violations", [])
@@ -1813,23 +1833,15 @@ class SupervisorRuntime:
                     if isinstance(raw_review, Mapping)
                     else {"availability": "unavailable"}
                 )
+                raw_source_contract = policy_result.get("source_contract")
+                if raw_source_contract in {"pass", "fail"}:
+                    source_contract = str(raw_source_contract)
+                raw_policy_review = policy_result.get("review")
+                if isinstance(raw_policy_review, Mapping):
+                    review = dict(raw_policy_review)
             else:
                 violations = list(policy_result)
                 implementation_review = {"availability": "unavailable"}
-        review = {"source_contract": "pass"}
-        if production_applicable:
-            from aka.light.acceptance.policy_modes import review_fields
-
-            verdict = "fail" if violations else "pass"
-            review.update({
-                name: verdict
-                for name in review_fields(
-                    self.config.optimization_mode,
-                    specify_dsl=bool(
-                        getattr(self, "submission_specify_dsl", True)
-                    ),
-                )
-            })
         evaluation_evidence = kernel_full_evaluation_evidence(
             self.measurements,
             commit_id,
@@ -1839,6 +1851,7 @@ class SupervisorRuntime:
                 not violations
                 and evaluation_evidence.get("status") == "passed"
             ),
+            "source_contract": source_contract,
             "review": review,
             "implementation_review": implementation_review,
             "diagnostics": violations,

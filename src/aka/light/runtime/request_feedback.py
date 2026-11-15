@@ -68,7 +68,15 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                 "kernel_commit_id": {
                     "type": "string",
                     "pattern": "^[0-9a-f]{40}([0-9a-f]{24})?$",
-                }
+                },
+                "submission_id": {
+                    "type": "string",
+                    "pattern": "^submission-[0-9a-f]{32}$",
+                    "description": (
+                        "Omit to create a new Submission. Supply a Runtime-issued local "
+                        "Submission ID to review the next immutable revision."
+                    ),
+                },
             },
             {"kernel_commit_id"},
         )

@@ -132,9 +132,12 @@ from aka.light.workflow.episode import LongHorizonCampaign, SegmentBinding
 from aka.light.workflow.search import SearchOptions
 from aka.light.workflow.session_io import _evaluation_performance_timeout
 from aka.light.workspace.sources import (
+    Artifact,
     default_tree,
     install,
     instructions,
+    measurement_contracts,
+    measurement_paths,
     pack,
     snapshot as source_snapshot,
 )
@@ -2309,14 +2312,14 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
         self.assertEqual(defaults.trajectories, 3)
         self.assertEqual(defaults.max_parallel_episodes, 3)
         self.assertEqual(defaults.episodes_per_trajectory, 1)
-        self.assertEqual(defaults.synchronization, "synchronous")
+        self.assertEqual(defaults.synchronization, "asynchronous")
         self.assertFalse(defaults.role_specialization)
         self.assertEqual(WORKFLOW_PLUGIN_DEFAULTS["search"], {
             "epochs": 10,
             "trajectories": 3,
             "episodes_per_trajectory": 1,
             "max_parallel_episodes": 3,
-            "synchronization": "synchronous",
+            "synchronization": "asynchronous",
             "role_specialization": False,
         })
         self.assertIsNone(WorkflowOptions(search={}).search)
@@ -2665,6 +2668,28 @@ class RuntimeOwnedCorrectnessPolicyTests(unittest.TestCase):
             "--kind", "command", "--no-sync", "--", "true",
         ])
         self.assertEqual(requested_sync_paths(args), ())
+
+    def test_runtime_abba_baseline_is_private_but_still_measured(self):
+        with tempfile.TemporaryDirectory(dir=Path.cwd()) as temporary:
+            workspace = Path(temporary)
+            policy, files = default_tree({"kernel.py": b"VALUE = 2\n"})
+            candidate = pack(files, policy)
+            install(workspace, candidate)
+
+            baseline_files = {"kernel.py": b"VALUE = 1\n"}
+            baseline = pack(baseline_files, policy)
+            baseline_path = ".atrex_request/abba-baseline"
+            Artifact(baseline).export(workspace / baseline_path)
+
+            # Candidate identity must never include Runtime-private ABBA files.
+            self.assertEqual(source_snapshot(workspace), candidate)
+
+            # The measurement builder still adds the baseline explicitly.
+            paths, snapshots = measurement_paths(workspace, baseline_path)
+            contracts = measurement_contracts(workspace, baseline_path)
+            self.assertEqual(paths, {"kernel.py", f"{baseline_path}/kernel.py"})
+            self.assertEqual(snapshots["baseline"], Artifact(baseline).digest)
+            self.assertEqual(contracts["baseline"], policy)
 
     def test_gateway_request_schemas_describe_each_command_route_accurately(self):
         parser = build_parser()
