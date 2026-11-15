@@ -249,8 +249,12 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
         "main_session_silence_seconds": 14.2,
         "active_session_count": 1,
         "active_sessions": [
-          {"phase": "waiting_agate", "tool": "evaluate", "activity_state": "recent_activity"}
+          {"phase": "waiting_agate", "tool": "evaluate", "activity_state": "recent_activity", "conversation_path": "/campaign/lineages/t0001/segments/episodes/e00000002/sessions/run-00000001/conversation.jsonl"}
         ],
+        "latest_session": {
+          "session_id": "session-example",
+          "conversation_path": "/campaign/lineages/t0001/segments/episodes/e00000002/sessions/run-00000001/conversation.jsonl"
+        },
         "active_supervisor_activity_count": 1,
         "supervisor_activity": {
           "phase": "claim_review",
@@ -296,6 +300,8 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
   Provider 事件的原 `thinking` 会显示为 `provider_wait_unknown`，避免把未知等待误称为持续思考。
 - `main_session_silence_seconds`：主 Agent Session 距最后事件的时间；即使 Supervisor 正在
   Review 也保留，便于区分“Session 静默”和“整个 lineage 无活动”。
+- `active_sessions[].conversation_path` 与 `latest_session.conversation_path`：主 Agent 捕获对话
+  的权威路径；分析“最近在优化什么”时默认只读取该 JSONL 的最后 100 条事件。
 - `supervisor_activity`：最近或当前的权威 Runtime 请求。`active=true` 时包含 operation、
   state 和已运行时间；`record-experiment` / `update-direction` 的长请求会投影为
   `claim_review`。已完成的后台 Runtime 请求也会更新 lineage 的最近活动时间。

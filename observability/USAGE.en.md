@@ -262,8 +262,12 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
         "main_session_silence_seconds": 14.2,
         "active_session_count": 1,
         "active_sessions": [
-          {"phase": "waiting_agate", "tool": "evaluate", "activity_state": "recent_activity"}
+          {"phase": "waiting_agate", "tool": "evaluate", "activity_state": "recent_activity", "conversation_path": "/campaign/lineages/t0001/segments/episodes/e00000002/sessions/run-00000001/conversation.jsonl"}
         ],
+        "latest_session": {
+          "session_id": "session-example",
+          "conversation_path": "/campaign/lineages/t0001/segments/episodes/e00000002/sessions/run-00000001/conversation.jsonl"
+        },
         "active_supervisor_activity_count": 1,
         "supervisor_activity": {
           "phase": "claim_review",
@@ -312,6 +316,9 @@ python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" [options]
   `provider_wait_unknown` rather than claiming continuous reasoning.
 - `main_session_silence_seconds` preserves the main Agent Session's time since its last event even
   while the Supervisor is reviewing, separating Session silence from whole-lineage inactivity.
+- `active_sessions[].conversation_path` and `latest_session.conversation_path` are the authoritative
+  main-Agent capture paths. To explain current optimization work, read only the last 100 JSONL
+  events by default.
 - `supervisor_activity` is the latest or current authoritative Runtime request. Active entries carry
   the operation, state, and elapsed time; long `record-experiment` / `update-direction` requests are
   projected as `claim_review`. A completed background Runtime request also advances the lineage's

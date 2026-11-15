@@ -181,6 +181,13 @@ def test_lineage_status_hides_generation_metadata(monkeypatch, tmp_path):
                     "trajectory": None,
                     "workspace": str(tmp_path),
                     "liveness": "not_running",
+                    "sessions": [
+                        {
+                            "session_id": "session-example",
+                            "conversation_path": str(tmp_path / "conversation.jsonl"),
+                            "updated_at": "2026-11-15T00:00:00+00:00",
+                        }
+                    ],
                 }
             ],
         },
@@ -201,6 +208,11 @@ def test_lineage_status_hides_generation_metadata(monkeypatch, tmp_path):
     assert "scheduler_checkpoint" not in value
     assert "detail_selection" not in value
     assert value["campaign_configuration"]["search"] == {"trajectories": 3}
+    assert value["lineages"][0]["runtime"]["latest_session"] == {
+        "session_id": "session-example",
+        "conversation_path": str(tmp_path / "conversation.jsonl"),
+        "updated_at": "2026-11-15T00:00:00+00:00",
+    }
 
 
 def test_submission_acceptance_uses_central_store_and_exact_eval(monkeypatch, tmp_path):
@@ -615,6 +627,7 @@ def test_runtime_status_treats_running_claim_review_as_supervisor_activity(
     assert row["main_session_silence_seconds"] > 600
     assert row["active_session_count"] == 1
     assert row["active_sessions"][0]["phase"] == "provider_wait_unknown"
+    assert row["active_sessions"][0]["conversation_path"] == str(conversation)
     assert row["active_supervisor_activity_count"] == 1
     assert row["supervisor_activity"]["phase"] == "claim_review"
     assert row["supervisor_activity"]["operation"] == "record-experiment"

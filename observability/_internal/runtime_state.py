@@ -139,6 +139,7 @@ def _session_rows(scope) -> list[dict]:
         value = read_json(usage_path, default={})
         if not isinstance(value, dict):
             continue
+        conversation = usage_path.with_name("conversation.jsonl")
         try:
             episode = int(usage_path.parents[2].name[1:])
         except (ValueError, IndexError):
@@ -146,6 +147,7 @@ def _session_rows(scope) -> list[dict]:
         rows.append(
             {
                 "session_id": value.get("session_id") or usage_path.parent.name,
+                "conversation_path": str(conversation),
                 "runtime": value.get("backend"),
                 "episode": episode,
                 "status": value.get("state"),
@@ -320,6 +322,7 @@ def _active_session_rows(scope, *, current_episode: int | None, writer_active: b
                 "stage": "episode",
                 "capture_run": usage_path.parent.name,
                 "session_id": value.get("session_id") or usage_path.parent.name,
+                "conversation_path": str(conversation),
                 "backend": value.get("backend"),
                 "state": value.get("state"),
                 "phase": phase,
@@ -437,6 +440,7 @@ def _active_startup_session_rows(scope, *, stale_after: float) -> list[dict]:
                 "stage": startup_stage(scope.workspace),
                 "capture_run": usage_path.parent.name,
                 "session_id": value.get("session_id") or usage_path.parent.name,
+                "conversation_path": str(conversation),
                 "backend": value.get("backend"),
                 "state": value.get("state"),
                 "phase": phase,

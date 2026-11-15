@@ -76,6 +76,16 @@ def snapshot(
         experiments = board.get("experiments", [])
         visible_directions = directions if research_limit is None else directions[:research_limit]
         visible_experiments = experiments if research_limit is None else experiments[-research_limit:]
+        recorded_sessions = [
+            session
+            for session in (row.get("sessions") or [])
+            if isinstance(session, dict)
+        ]
+        latest_session = max(
+            recorded_sessions,
+            key=lambda session: str(session.get("updated_at") or ""),
+            default=None,
+        )
         lineage_rows.append(
             {
                 "lineage": scope,
@@ -99,7 +109,7 @@ def snapshot(
                         "active_supervisor_activity_count",
                         "supervisor_activity",
                     )
-                },
+                } | {"latest_session": latest_session},
                 "runtime_configuration": row.get("runtime_configuration"),
                 "research": {
                     "enabled_modules": board.get("enabled_modules"),

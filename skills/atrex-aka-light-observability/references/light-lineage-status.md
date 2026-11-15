@@ -124,6 +124,44 @@ Continue only when evidence requires it:
 - Campaign process died but activity still says running: report stale observability and inspect
   process/OOM evidence; do not describe the orphan request as healthy progress.
 
+## Inspect what the Agent is optimizing now
+
+Use this only when the user asks what the Agent is doing, requests Session-friction analysis, or
+the status summary cannot explain recent activity. Do not read every conversation in a matrix.
+
+First run lineage status with JSON and select the affected lineage. Each entry in
+`runtime.active_sessions` includes the authoritative `conversation_path`; when nothing is active,
+`runtime.latest_session` identifies the most recently updated captured Session.
+For a normal current Episode it has this form:
+
+```text
+CAMPAIGN/lineages/t0001/segments/episodes/e00000001/sessions/run-00000001/conversation.jsonl
+```
+
+Startup captures may live in the Supervisor-private startup trace directory; use the returned
+`conversation_path` instead of reconstructing that path. The file is JSON Lines, one captured event
+per line. Read only the last 100 complete events by default:
+
+```bash
+CONVERSATION=/exact/path/from/light_lineage_status.json
+tail -n 100 "$CONVERSATION"
+```
+
+If raw events are hard to scan, parse those same 100 lines locally; do not load the full file into
+the model. From the bounded tail, report:
+
+- the current optimization hypothesis or bottleneck;
+- the candidate/source change most recently attempted;
+- the latest probe, Evaluate, Profile, Check, or submit-kernel result;
+- whether the Agent is editing, measuring, waiting on Runtime/Agate/Review, or thinking;
+- the concrete next step the Agent stated or implied;
+- any repeated confusion, rejected request, missing evidence, or framework friction.
+
+Distinguish Agent speculation from immutable Gateway Record evidence. A command launch without its
+result is pending, not successful. Do not quote secrets, complete prompts, large stdout, NCU counter
+catalogs, or unrelated historical content. If the last 100 events end mid-operation, say so and
+correlate the operation with Runtime/Agate observability rather than reading the entire history.
+
 ## Report format
 
 Lead with the overall outcome, then provide a compact row per lineage or configuration:

@@ -15,6 +15,7 @@ remains the final CLI authority.
 | User intent | Read | Primary tool |
 |---|---|---|
 | “状态如何”, “跑得怎么样”, lineage/Session/Direction/Experiment/token progress | [Lineage status](references/light-lineage-status.md) | `light_lineage_status.py` |
+| “最近在优化什么”, inspect current Agent work or Session friction | Run lineage status, then follow its [bounded conversation-tail procedure](references/light-lineage-status.md#inspect-what-the-agent-is-optimizing-now) | `light_lineage_status.py` + last 100 events from its `conversation_path` |
 | Evaluated Kernels, submission decisions, latency and token cost over time | `observability/USAGE.md` section 4 | `light_kernel_history.py` |
 | Accepted global or per-Shape winner | `observability/USAGE.md` section 5 | `light_kernel_best.py` |
 | Runtime tool success/failure/pending counts, latency, or recent calls | `observability/USAGE.md` section 6 | `light_runtime_calls.py` |

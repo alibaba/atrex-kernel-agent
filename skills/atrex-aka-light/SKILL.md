@@ -228,6 +228,13 @@ or evidence-export views only when the question requires them. Do not repeatedly
 walk the whole Campaign tree, or infer health from the launcher process alone when the supported
 observability views are available.
 
+When the user asks what the Agent is optimizing, use lineage status to select the active lineage
+and obtain its exact `conversation_path`. Read only the last 100 complete JSONL events by default,
+then summarize the current hypothesis, latest source change and measurement, present wait/operation,
+next step, and any repeated friction. Current Episode captures normally live under
+`lineages/tNNNN/segments/episodes/eNNNNNNNN/sessions/run-NNNNNNNN/conversation.jsonl`; always prefer
+the path returned by observability because startup captures use a different private location.
+
 For an end-to-end Native input and launch command based on Vector Add, read
 [the Vector Add launch example](examples/native-atrex-bench-vector-add/README.md). It uses the
 user-provided Atrex-Bench root and platform and assumes `AGATE_AK`/`AGATE_SK` are already present
