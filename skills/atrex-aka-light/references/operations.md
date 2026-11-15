@@ -4,6 +4,55 @@ Read this file when starting, explaining, resuming or stopping a Light campaign.
 
 ## Preflight
 
+### Required user input
+
+Before every new launch, explain the mode choices and explicitly ask the user for:
+
+- a safe way to make Agate `AGATE_AK` and `AGATE_SK` available to the Supervisor process;
+- the canonical Atrex-Bench checkout root containing `scripts/run_eval.py` and `src/atrex_bench/`;
+- the target GPU/platform token, for example `L20N` or `L20D`.
+- the optimization mode: Fast, Performance or Ultra; when Ultra is selected, also require its DSL.
+- whether to run the Agent with Bubblewrap Sandbox (`light-sandbox`) or without it (`light`); when
+  Sandbox is selected, ask for `private` or `host` proc mode.
+
+Explain the modes as follows:
+
+| Mode | What the user is choosing |
+|---|---|
+| Fast | Agent-selected DSL; declared reproducible libraries or prebuilt implementations may perform core computation |
+| Performance | Agent-selected DSL; final core computation must be self-authored |
+| Ultra | User-pinned DSL plus self-authored core computation; launch is invalid without the DSL |
+
+Explain the Agent boundary separately from optimization mode:
+
+| Choice | Meaning |
+|---|---|
+| With Sandbox (`light-sandbox`) | Linux Bubblewrap isolates the Agent from Supervisor-private filesystem/process state while retaining Light capture and persistent Session/Git; it does not create an Aone Sandbox |
+| Without Sandbox (`light`) | Agent runs natively as the coordinator's current OS user; Light persistence/capture remain, but Bubblewrap isolation is absent |
+
+`light-sandbox` requires Linux and Bubblewrap. Native macOS must use `light` or run
+`light-sandbox` inside Lima. An Aone Sandbox is an outer execution environment; selecting
+`light-sandbox` inside it still refers to the inner Agent boundary.
+
+When Sandbox is selected, explain and require one proc-mode choice:
+
+| Proc mode | Isolation and supported environment |
+|---|---|
+| `private` | New PID namespace and procfs; unrelated coordinator processes are hidden. Default/recommended on ordinary Linux and Lima. |
+| `host` | Shares the outer PID namespace and complete `/proc`; filesystem allowlist and dropped capabilities remain, but process visibility is not isolated. |
+
+**Aone Sandbox supports only `host`.** Its container policy rejects the nested procfs mount used by
+`private`; do not try `private`, compatibility shims, or projected `/proc` there. Apply the complete
+host-proc agent composition patch described in [installation](installation.md), and use a dedicated
+Aone Sandbox because the Agent can see every process in it. Without Agent Sandbox (`light`), proc
+mode is not applicable and must not be requested.
+
+Do not reuse these values from an older Campaign or silently select a nearby checkout. Do not ask
+the user to paste AK/SK values into chat. Credentials must already be present in the launch
+environment or come from an existing secure credential source; verify presence without printing
+values. Ask separately for `--sandbox-hardware` only when its Agate worker token differs from the
+logical platform.
+
 Resolve before launch:
 
 - AKA checkout and commit matching installed wheels;
@@ -16,6 +65,9 @@ Resolve before launch:
 - durable workspace, search topology and budgets.
 
 Inspect `git status` before syncing code. Preserve user changes. Verify `aka`, Python, the Agent CLI and Agate access without printing secrets.
+
+For a complete smoke example, including a minimal operator, checkout validation and launch
+command, use [the Native Vector Add example](../examples/native-atrex-bench-vector-add/README.md).
 
 ## Launch command
 

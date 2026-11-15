@@ -14,10 +14,34 @@ AKA Light runs persistent GPU-kernel optimization Sessions and sends GPU work to
 | Install/update Light | Run `scripts/install_light.sh AKA_REPO_ROOT`; read [installation](references/installation.md) |
 | Validate an operator | Check [problem inputs](references/problem-inputs.md) |
 | Start/resume/stop | Follow [operations](references/operations.md) |
+| Run a minimal functional launch | Follow the [Native Vector Add example](examples/native-atrex-bench-vector-add/README.md) after completing the required launch intake below |
 | Configure CLI or composition | Read [configuration](references/configuration.md) |
 | Inspect a live campaign or export evidence | Prefer the dedicated `atrex-aka-light-observability` skill; otherwise read [observability](references/observability.md) |
 
 Do not use this skill for the Legacy `workflow` Profile or standalone Aone Sandbox lifecycle.
+
+## Required launch intake
+
+Before constructing or executing a new Light launch, explain the optimization modes and Agent execution boundaries, then explicitly ask the user for all five inputs below. Do not infer them from an older Campaign, shell history, another Sandbox, or a nearby checkout:
+
+1. **Agate AK/SK availability and safe injection source.** Ask the user to make `AGATE_AK` and `AGATE_SK` available to the Supervisor process, or to identify an already configured secure credential source. Never ask the user to paste either secret into chat, and never print, copy, log, commit, or place them in argv, notes, patches, workspace files, or manifests. Verify only that both values are present.
+2. **Canonical Atrex-Bench checkout root.** This is the path containing `scripts/run_eval.py` and `src/atrex_bench/`; it is not merely the operator directory.
+3. **Target GPU/platform token.** Require an explicit value such as `L20N` or `L20D`. If the Agate worker alias differs, ask for that separately and pass it through `--sandbox-hardware`.
+4. **Optimization mode.** Present the following choices before asking the user to select one:
+   - **Fast:** the Agent chooses any evaluator-supported DSL or mixture; explicitly declared reproducible libraries or prebuilt implementations may perform core computation. Use it for the fastest path to a working/high-performance result when external implementation reuse is acceptable.
+   - **Performance:** the Agent chooses the DSL using expertise and measurements, but the final core computation must be self-authored; prebuilt or third-party core compute is not allowed. Use it to pursue strong performance without pinning a DSL.
+   - **Ultra:** the final core computation must be self-authored and one user-selected DSL is mandatory and enforced, such as `Cuda`, `Triton`, or `CuteDSL`. If the user selects Ultra, also require the DSL; refuse launch when it is missing.
+5. **Agent Sandbox choice.** Explain that this controls the local Agent process boundary, not whether Agate uses remote GPUs and not whether an Aone Sandbox is created:
+   - **With Sandbox (`--profile light-sandbox`):** run the Agent inside a Bubblewrap filesystem/process boundary while retaining Light capture, persistent Session, workspace and Agent Git. Supervisor-private credentials and state stay outside the Agent view. This requires Linux with Bubblewrap; on macOS use a Lima Linux VM. When the user selects this option, require one further choice:
+     - **`private`:** create a private PID namespace and mount a new procfs. The Agent cannot see unrelated coordinator processes. This is the default and recommended mode on ordinary Linux and Lima.
+     - **`host`:** share the outer environment's PID namespace and bind its complete `/proc`. Filesystem allowlisting and dropped capabilities remain, but process visibility is not isolated. Use a dedicated outer environment. **Aone Sandbox can only use `host`; reject `private` there because Aone does not permit the nested procfs mount required by `private`.**
+   - **Without Sandbox (`--profile light`):** run the Agent as a normal process under the coordinator's current OS user, without Bubblewrap isolation. Light capture, persistent Session, workspace and Agent Git still work. This is compatible with native macOS but gives the Agent the host access permitted to that user, so use it only when that trust boundary is acceptable.
+
+When any required value is missing, pause the launch and ask one concise question containing the missing fields. A suitable prompt is:
+
+> AKA Light 提供三种优化模式：Fast（Agent 自选 DSL，允许声明清楚的库或预制实现承担核心计算）、Performance（Agent 自选 DSL，但核心计算必须自行实现）、Ultra（核心计算自行实现，并强制使用用户指定 DSL）。Agent 也有两种运行边界：使用 Sandbox（`light-sandbox`，Linux Bubblewrap 隔离，不等于创建 Aone Sandbox）和不使用 Sandbox（`light`，Agent 以当前系统用户直接运行，兼容原生 macOS但隔离较弱）。Sandbox 又分为 `private`（私有 PID namespace 和 procfs，普通 Linux/Lima 推荐）与 `host`（共享外层 PID namespace 和完整 `/proc`，不提供进程可见性隔离）；如果运行在 Aone Sandbox 中，只能选择 `host`。启动前请提供：① Agate AK/SK 的安全注入方式（请将 `AGATE_AK`、`AGATE_SK` 预先放入 Supervisor 环境，不要在聊天中粘贴明文）；② canonical `atrex-bench` 根目录；③ 目标 GPU，例如 `L20N` 或 `L20D`；④ 选择 `fast`、`performance` 还是 `ultra`，如选 `ultra` 请同时指定 DSL；⑤ 选择使用 Sandbox 还是不使用 Sandbox，如使用请再选择 `private` 或 `host`。
+
+After the user answers, validate the checkout markers, supported operator input, non-empty credential presence, target platform, mode, any Ultra DSL, and whether the selected host supports the chosen Agent boundary and proc mode before creating remote work or a Campaign workspace. Never start `private` proc mode inside an Aone Sandbox.
 
 ## Supported problem inputs
 
@@ -31,6 +55,12 @@ Light accepts exactly two problem families:
 An arbitrary `reference.py`, custom evaluator script, or setup command is not a Light problem. Convert it to a supported layout or intentionally use Legacy. The Native V0 is derived from `reference.py`; an adjacent candidate tree is not treated as the initial source.
 
 ## Install matching packages
+
+In addition to the three matching AKA distributions, install
+`atrex-gateway-client==0.14.31` from the internal ArtLab release index in the Supervisor
+environment. Obtain the canonical Atrex-Bench source checkout from
+`https://github.com/alibaba/atrex-bench`; do not substitute an Atrex-Bench wheel for that checkout.
+Read [installation](references/installation.md) for the exact commands.
 
 ```bash
 python3 -m venv /path/to/aka-venv
@@ -141,6 +171,11 @@ aka optimize --repo-root /path/to/atrex-kernel-agent \
   --workspace /path/to/campaign-root
 ```
 
+For an end-to-end Native input and launch command based on Vector Add, read
+[the Vector Add launch example](examples/native-atrex-bench-vector-add/README.md). It uses the
+user-provided Atrex-Bench root and platform and assumes `AGATE_AK`/`AGATE_SK` are already present
+in the Supervisor environment.
+
 Omit `--profile` for native Light. `light-sandbox` isolates the Agent on the coordinator; it does not provision an Aone Sandbox.
 
 Resolve before launch:
@@ -149,7 +184,7 @@ Resolve before launch:
 - supported problem input;
 - logical platform and any distinct Agate worker alias;
 - explicit framework for Ultra, or intentional Agent-selected DSL for Fast/Performance;
-- authenticated Agent and Agate configuration;
+- authenticated Agent and user-confirmed Agate AK/SK injection;
 - mode, Shape visibility and candidate layout;
 - durable workspace, search topology and budgets.
 
