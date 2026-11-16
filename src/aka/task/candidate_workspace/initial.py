@@ -176,6 +176,9 @@ def initialize_kernel(workspace, content, *, runtime_files, context_directories=
     readme = (WorkspaceFile("README.md", text=content.readme),) if content.readme is not None else ()
     selected = selected_file_bytes(workspace, (*content.files, *runtime_files, *readme),
                                    reserved=(".atrex_context.json", ".gitignore", "memory", "plans", "profiles"))
+    # Validate the workspace leaf and descendants before resolving ancestor
+    # aliases such as macOS /var; later filesystem operations require that path.
+    workspace = workspace.resolve()
     if "CLAUDE.md" not in selected:
         raise ValueError("kernel initialization requires explicit CLAUDE.md constraints")
     if history:
@@ -214,6 +217,7 @@ def prepare_sol(ws, content, *, problem_files, harness, runtime_files, context_d
     config = (WorkspaceFile("config.json", text=SOL_CONFIG),)
     selected = selected_file_bytes(ws, (*content.files, *problem_files, harness, *runtime_files, *readme, *config),
                                    reserved=(".atrex_context.json", ".gitignore", "memory", "plans", "profiles"))
+    ws = ws.resolve()  # selected_file_bytes has rejected workspace/child links.
     if "profile_driver.py" not in selected:
         raise ValueError("SOL preparation requires an explicit profile_driver.py")
     groups = (("problem", problem_files), ("harness", (harness,)), ("runtime", runtime_files),

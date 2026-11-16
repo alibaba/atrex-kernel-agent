@@ -58,6 +58,11 @@ manifest, then writes the complete manifest and atomically replaces it. A
 different transaction is preserved and reported. Manifest locking is kept in
 Git management storage rather than the candidate source tree.
 
+Workspace initialization accepts aliases in the workspace's parent path, such
+as macOS `/var` or `/tmp`. It rejects workspace and descendant symlinks before
+canonicalizing the root for publication and source validation. Checkpoint
+destinations retain their separate original, absolute, canonical-path contract.
+
 These are process-crash recovery rules. They do not make arbitrary concurrent
 mutation by non-cooperating processes safe, or promise recovery after storage
 corruption or unsupported filesystem durability semantics. A process killed
