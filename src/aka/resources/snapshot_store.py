@@ -13,6 +13,7 @@ import uuid
 from contextlib import contextmanager
 
 from aka.contracts.agent_resources import ResourcesSnapshot
+from aka.core.publication import publish_immutable
 
 FORMAT = "aka.resources.snapshot-content.v1"
 STORE_FORMAT = "aka.resources.content-store.v1"
@@ -324,44 +325,11 @@ def _sync_directory(path):
 
 
 def _write_immutable(path, payload):
-    """Publish complete ordinary content without replacing any existing identity."""
+    """Publish through the shared, recoverable immutable file boundary."""
     path = _absolute(path)
-    parent = _open_directory(path.parent, create=True)
-    temporary = ".resource-write-" + uuid.uuid4().hex
-    created = False
-    try:
-        try:
-            existing = _read_at(parent, path.name, immutable=True)[0]
-        except FileNotFoundError:
-            existing = None
-        if existing is not None:
-            if existing != payload:
-                raise ValueError("existing Resources content object is corrupt")
-            _assert_directory(path.parent, parent)
-            return
-        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600, dir_fd=parent)
-        created = True
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-            stream.flush()
-            os.fchmod(stream.fileno(), 0o444)
-            os.fsync(stream.fileno())
-        _assert_directory(path.parent, parent)
-        try:
-            os.link(temporary, path.name, src_dir_fd=parent, dst_dir_fd=parent, follow_symlinks=False)
-        except FileExistsError:
-            if _read_at(parent, path.name, immutable=True)[0] != payload:
-                raise ValueError("existing Resources content object is corrupt")
-        os.unlink(temporary, dir_fd=parent)
-        created = False
-        os.fsync(parent)
-        if _read_at(parent, path.name, immutable=True)[0] != payload:
-            raise ValueError("published Resources object differs from complete content")
-        _assert_directory(path.parent, parent)
-    finally:
-        if created:
-            os.unlink(temporary, dir_fd=parent)
-        os.close(parent)
+    publish_immutable(path, payload)
+    if _read_file(path, immutable=True)[0] != payload:
+        raise ValueError("published Resources object differs from complete content")
 
 
 def _publish_directory(source, destination):
