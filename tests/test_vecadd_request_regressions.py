@@ -108,3 +108,22 @@ def test_concurrent_lineages_share_one_measurement_reservation(tmp_path):
                 return 'waiting'
         with ThreadPoolExecutor(max_workers=2) as pool:
             assert sorted(pool.map(reserve, stores)) == ['owner', 'waiting']
+
+
+def test_transport_exception_keeps_original_receipt_in_measurement_store(tmp_path):
+    from aka.workflow.light.measurements import SharedMeasurements
+    from aka.experiment.measurement_store import MeasurementStore
+    from aka.contracts.execution import ExecutionUnavailable, ExecutionCause
+    owner = SharedMeasurements.__new__(SharedMeasurements)
+    owner.store = MeasurementStore(tmp_path)
+    result = JobResult(75, stderr='service temporarily unavailable', transport_status='infrastructure',
+        facts=ExecutionFacts(disposition='not_submitted'),
+        diagnostics=(ExecutionDiagnostic('infrastructure', 'gateway-http-rejection', {'http_status':503}),),
+        causes=(ExecutionCause('infrastructure','gateway_unavailable',details={'reason':'backend unavailable'}),))
+    owner._execute = Mock(side_effect=ExecutionUnavailable('GPU validation transport unavailable',result))
+    response = owner.execute(None,identity={'operation':'evaluate','options':{}},kernels={})
+    agent = response['agent_result']
+    assert agent['result']['error']['code'] == 'gateway_unavailable'
+    assert agent['result']['error']['http_status'] == 503
+    assert agent['result']['error']['details'] == {'reason':'backend unavailable'}
+    assert owner.store.read(agent['gateway_record_id'])['response'] == response

@@ -416,6 +416,16 @@ class SharedMeasurements(RecordedMeasurements):
                         "agent_result": {"operation": identity["operation"], "status": "failed",
                             "result": {"error": {"code": "execution_failed", "type": type(error).__name__,
                                 "message": str(error)}}}}
+                    from aka.contracts.execution import JobResult
+                    outcome = getattr(error, "outcome", None)
+                    if isinstance(outcome, JobResult):
+                        # require_transport() may raise after the public owner
+                        # has captured an exact upstream failure. Preserve that
+                        # receipt instead of replacing it with a generic outage.
+                        from aka.evaluation.tool_results import with_execution_error, canonical_result
+                        response = with_execution_error({"exit_code": outcome.returncode,
+                            "stdout": outcome.stdout, "stderr": outcome.stderr}, outcome)
+                        response["agent_result"] = canonical_result(response, identity)
                 agent = response.get("agent_result", {})
                 agent.pop("identity", None)
                 agent["gateway_record_id"] = task.record_id
