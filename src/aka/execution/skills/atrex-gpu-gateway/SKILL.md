@@ -20,7 +20,9 @@ Submit jobs through the workspace's `tools/sandbox.py`; the Supervisor owns envi
 **Stop here for invocation syntax in AKA:** use `skills/gpu-measurement/SKILL.md` and its
 `tools/sandbox.py` examples. The direct `agate` commands, credentials, endpoint selection, job
 queries and capacity operations below are standalone/operator documentation only. They are not
-available Agent operations and must not be used to bypass AKA Runtime.
+available Agent operations and must not be used to bypass AKA Runtime. Native Agate options are
+subcommand-specific and must not be copied into a different `tools/sandbox.py --kind`; notably,
+raw Dev's `--intent` and `--note` are never Evaluate/Profile options.
 
 ## Choose a standalone Gateway command
 

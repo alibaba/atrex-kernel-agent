@@ -2,7 +2,7 @@
 """Session-scoped Agent tool client; GPU/Wiki authority stays in the Supervisor.
 
 Preferred typed GPU commands select their managed evaluator inputs automatically:
-  python3 tools/sandbox.py --kind run --no-sync
+  python3 tools/sandbox.py --kind evaluate --no-sync
   python3 tools/sandbox.py --kind profile --no-sync
 An explicit command after ``--`` is an operation-specific override; use it only when the installed
 GPU-measurement Skill documents that exact form.
@@ -13,8 +13,8 @@ Use module form for Python Command scripts below scratch/ so the uploaded worksp
 on Python's import path and root modules such as kernel.py stay importable.
 Additional typed operations: check, disassemble, env; Wiki: wiki-query, wiki-search,
 wiki-hardware. Use --kind OPERATION --help for the operation's request options.
-Successful terminal measurement calls print a compact receipt. Env is read-only discovery and
-prints the complete redacted capability response directly; the observation is retained privately.
+Runtime calls print the complete canonical operation/status/result receipt. Env is read-only
+discovery; its complete redacted observation uses the same receipt and is retained privately.
 Read saved measurement results with ordinary file or JSON operations on
 ``records/GATEWAY_ID.json`` and inspect exact Kernel source with local Git commits and refs. ABBA
 accepts --baseline-commit FULL_GIT_COMMIT; Runtime exports it internally.
@@ -53,7 +53,6 @@ def client_error(code: str, message: str, instruction: str, *, repairable=False,
         "ok": False, "repairable": repairable, "detail": message,
         "error": {"code": code, "message": message, "next_action": instruction, **details},
         "issues": [{"path": path, "code": code, "message": message}],
-        "recovery": [{"instruction": instruction}],
     }), file=sys.stderr)
 
 
@@ -155,17 +154,7 @@ def proxy_command(path: str, payload: dict) -> int:
             ):
                 return 75
             return 0 if result["status"] == "completed" and detail.get("correct") is not False else 1
-        if not isinstance(result, dict) or type(result.get("exit_code")) is not int:
-            raise ValueError("response omitted exit_code")
-        for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
-            value = result.get(key, "")
-            if not isinstance(value, str):
-                raise ValueError(f"invalid {key}")
-            if value:
-                print(value, end="" if value.endswith("\n") else "\n", file=stream)
-        if result.get("truncated"):
-            print("[sandbox] output shortened by Supervisor; ask the operator to inspect request diagnostics.", file=sys.stderr)
-        return result["exit_code"]
+        raise ValueError("response omitted the canonical operation/status/result receipt")
     except (ValueError, UnicodeError) as error:
         client_error("invalid_runtime_response", f"Invalid Runtime response ({error}); outcome may be unknown.",
                      "Inspect saved records and ask the operator to reconcile the request. Do not resubmit blindly.")

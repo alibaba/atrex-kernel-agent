@@ -9,6 +9,11 @@ this guide explains what the options and results mean.
 
 ## 1. Scope and safety boundary
 
+These tools read the merged Light Campaign layout and use public owners such as `aka.agent`,
+`aka.evaluation`, and `aka.execution`, with orchestration under `aka.workflow.light`. Legacy is
+not required. Skills and scripts are checkout resources; update them from the same checkout as
+the Python packages.
+
 Always pass the top-level Campaign workspace:
 
 ```bash
@@ -442,6 +447,11 @@ the values in the `Implementation` column.
 the two events, not values inferred from the final Campaign total. A `missing_checkpoint` keeps the
 event but means its exact token cost is unavailable. Rejected submissions currently have no
 submission milestone and report `submit_token_usage_availability=not_recorded`.
+
+A submission may reuse a peer's full Evaluate from the central Measurement Store. Its verified
+performance is shown, but the consuming lineage has no local Evaluate token checkpoint:
+`evaluate_token_usage=null`, with availability `shared_evidence_no_local_evaluate`. The tool does
+not attribute the peer's Evaluate tokens to the consumer.
 
 ## 5. `light_kernel_best.py`
 
@@ -944,3 +954,19 @@ accepted submit-kernel receipt for exact Agent commit
 ∩ passing standard full Evaluate for that commit
 ∩ complete per-Shape performance evidence
 ```
+
+## 15. Read-only dashboard
+
+`light_dashboard.py` renders the same snapshots as the eight tools: status, Research, tokens, Kernels, calls, and evidence.
+
+```bash
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" --port 8765
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" --capture /tmp/dashboard.json
+python3 "$AKA_REPO/observability/light_dashboard.py" /tmp/dashboard.json --port 8765
+```
+
+The default address is `127.0.0.1:8765`; `--port 0` selects a free port and `--refresh-ms` defaults
+to 5000 milliseconds. For remote Campaigns, run `--capture` remotely and download the JSON.
+The local viewer preserves liveness at `captured_at` without rechecking local PIDs or locks.
+There are no launch, retry, cancellation, or submission controls. See the
+[Dashboard documentation](../docs/optimization-dashboard.md) for options and HTTP behavior.

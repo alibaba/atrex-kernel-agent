@@ -61,8 +61,8 @@ namespace.
 These commands run **inside an active agent draft**:
 
 ```bash
-python3 tools/sandbox.py --kind run --no-sync
-python3 tools/sandbox.py --kind run --mode correctness_only --no-sync
+python3 tools/sandbox.py --kind evaluate --no-sync
+python3 tools/sandbox.py --kind evaluate --mode correctness_only --no-sync
 python3 tools/sandbox.py --kind profile --profile-shape-id SHAPE_ID --no-sync
 python3 tools/sandbox.py --kind dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py
 python3 tools/sandbox.py --kind command -- python3 -m scratch.experiment
@@ -76,8 +76,8 @@ uploaded correctly.
 
 | Operation | Meaning |
 | --- | --- |
-| Evaluate (`run`) | Full or correctness-only evaluator request; native candidate checks use five cases per Shape |
-| ABBA (`run --baseline-commit ...`) | Native comparison against an exact reachable baseline Git commit; Runtime exports its source privately |
+| Evaluate (`evaluate`) | Full or correctness-only evaluator request; native candidate checks use five cases per Shape |
+| ABBA (`evaluate --baseline-commit ...`) | Native comparison against an exact reachable baseline Git commit; Runtime exports its source privately |
 | Profile | Profiler evidence for a selected shape; not correctness or promotion evidence |
 | Dev | Bounded exploratory commands; a source-bound record does not prove the command measured that source |
 | Check / Disassemble | Supported source diagnostics, subject to layout and worker capabilities |
@@ -110,10 +110,9 @@ CLI outcomes. Legacy marker streams are private executor evidence, not the Agent
 
 Feedback retains compiler/runner errors, rank-local checks, output identity, numerical errors,
 tolerances, and failing-case seeds. Private dimensions and credentials are redacted.
-The terminal receives a compact receipt with actionable diagnostics and explicit Record paths.
-Complete redacted output is saved in the Record; it is not trimmed to a serialized length budget.
-Dev/Command receipts include bounded previews and the fields containing the full streams.
-Env returns the complete capability output.
+The terminal receives the complete canonical `operation/status/result` receipt with its Record path.
+The same redacted result is saved in the Record, without serialized-length clipping or stream previews.
+Env uses this contract and archives its complete observation; no GPU Job is created.
 
 Malformed agent requests return field-level repair guidance. A confirmed candidate-source
 rejection returns `candidate_source_rejected` with known-not-submitted evidence.

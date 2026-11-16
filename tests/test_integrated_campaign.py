@@ -45,6 +45,11 @@ class ComposedCampaignTest(unittest.TestCase):
             stdout='probe-result\n'
             if command.operation == 'run':
                 request=json.loads(command.submission)['request']
+                self.assertIs(request['lock_clocks'],True)
+                self.assertNotIn('lock_clocks',request['options'])
+                for values in (request,request['options'],request.get('runner_overrides',{})):
+                    self.assertNotIn('gpu_clock_mhz',values)
+                    self.assertNotIn('graphics_mhz',values)
                 shapes=request['options'].get('shape_ids') or list(request['reference']['shapes'])
                 stdout=json.dumps({'job_id':'ev-offline-test','status':'succeeded','result':{
                     'passed':{'compile':{'status':'passed'},'correctness':{shape:{'status':'passed'} for shape in shapes}},
@@ -73,16 +78,16 @@ class ComposedCampaignTest(unittest.TestCase):
                 cwd=cwd,env={**os.environ,**env,'PYTHONPATH':str(ROOT/'src')},capture_output=True,text=True)
             self.assertEqual(process.returncode,0,process.stderr)
             receipt=json.loads(process.stdout)
-            self.assertEqual(receipt['result']['stdout_preview'],'probe-result\n',receipt)
+            self.assertEqual(receipt['result']['stdout'],'probe-result\n',receipt)
             self.assertTrue((cwd/receipt['record_path']).exists())
             tool_replies.append(receipt)
             if evaluate:
-                measured=invoke('workflow.gateway',{'argv':['--kind','run']})
+                measured=invoke('workflow.gateway',{'argv':['--kind','evaluate']})
                 self.assertTrue(measured['result'].get('correct'),measured)
                 self.assertEqual(measured['status'],'completed',measured)
                 commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=cwd,text=True).strip()
                 submission=invoke('workflow.journal',{'operation':'kernel_submit','request':{'kernel_commit_id':commit}})
-                accepted=json.loads(submission['stdout'])
+                accepted=submission['result']
                 self.assertTrue(accepted['accepted'],accepted)
                 self.assertIn(commit,(cwd/'PROGRESS.md').read_text())
             direction=None
@@ -92,21 +97,22 @@ class ComposedCampaignTest(unittest.TestCase):
                     'objective':'Reduce memory and launch overhead','applicability':'All supported vector sizes',
                     'expected_benefit':'Reduce full-workload latency','plan':['Compare launch families','Measure occupancy regimes'],
                     'stop_conditions':['All promising families measured']}})
-                direction=json.loads(result['stdout'])['direction_id']
+                direction=result['result']['direction_id']
             if 'experiments' in modules:
                 result=invoke('workflow.journal',{'operation':'experiment_record','request':{
                     'name':'Probe output','intent':'Check the command transport','interpretation':'The script printed probe-result.',
                     'gateway_record_ids':[receipt['gateway_record_id']], 'references':['scratch/probe.py'],
                     **({'direction_id':direction} if direction else {})}})
-                self.assertIn('supported',result['stdout'])
+                self.assertIn('supported',json.dumps(result['result']))
             # Errors must traverse the same scoped ToolHost, not collapse into transport errors.
             bad=json.loads(call_tool('workflow.gateway',b'{"argv":["--kind","invalid"]}',workspace=cwd,environment=env))
             self.assertEqual(bad['status'],400,bad)
-            invalid=json.loads(call_tool('workflow.gateway',b'{"argv":["--kind","run","--warmup","-1"]}',workspace=cwd,environment=env))
+            invalid=json.loads(call_tool('workflow.gateway',b'{"argv":["--kind","evaluate","--warmup","-1"]}',workspace=cwd,environment=env))
             self.assertEqual(invalid['status'],400,invalid)
             self.assertTrue((cwd/invalid['result']['record_path']).exists())
             environment=invoke('workflow.gateway',{'argv':['--kind','env']})
-            self.assertIn('counters',environment['stdout'])
+            self.assertEqual(environment['operation'],'env')
+            self.assertIn('counters',json.dumps(environment['result']))
             self.assertTrue((cwd/environment['record_path']).exists())
             return json.dumps({'type':'result','subtype':'success','usage':{'input_tokens':12,'output_tokens':3}})+'\n','',0,False
         config={'tool_modules':list(modules),**({'search':search} if search else {})}

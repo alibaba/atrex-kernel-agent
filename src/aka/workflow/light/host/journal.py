@@ -372,6 +372,7 @@ class _VisibleHistory:
     experiments_by_id: dict[str, dict[str, Any]]
     shared_direction_ids: frozenset[str]
     shared_experiment_ids: frozenset[str]
+    shared_queue: tuple[str, ...]
 
 
 
@@ -748,7 +749,10 @@ def _shared_research(campaign_root: Path) -> dict[str, Any]:
 
 
 def shared_research_queue(campaign_root: Path) -> list[str]:
-    value = _shared_research(campaign_root)
+    return _shared_queue(_shared_research(campaign_root))
+
+
+def _shared_queue(value: Mapping[str, object]) -> list[str]:
     queue = value.get("research_queue", [])
     if (
         not isinstance(queue, list)
@@ -857,6 +861,7 @@ def _visible_history(
             experiments_by_id=experiments_by_id,
             shared_direction_ids=frozenset(shared_direction_ids),
             shared_experiment_ids=frozenset(shared_experiment_ids),
+            shared_queue=tuple(_shared_queue(shared)),
         )
     root = campaign_root.resolve()
     shared = _shared_research(root)
@@ -939,6 +944,7 @@ def _visible_history(
             experiments_by_id=index.experiments_by_id,
             shared_direction_ids=frozenset(index.shared_direction_ids),
             shared_experiment_ids=frozenset(index.shared_experiment_ids),
+            shared_queue=tuple(_shared_queue(shared)),
         )
 
 
@@ -4254,7 +4260,7 @@ class SupervisorJournalService:
             outcome["result"] = deepcopy(dict(result))
         if error is None:
             if reference_snapshot is not None and reference_snapshot.is_dir():
-                shutil.rmtree(reference_snapshot.parent.parent)
+                shutil.rmtree(reference_snapshot.parent)
             return
         if error is not None:
             response = getattr(error, "response", None)
@@ -4309,7 +4315,7 @@ class SupervisorJournalService:
                             attempt_root / "references",
                             symlinks=False,
                         )
-                        shutil.rmtree(reference_snapshot.parent.parent)
+                        shutil.rmtree(reference_snapshot.parent)
                     return
         # Validation errors without a stable reviewed identity are already
         # preserved by the Runtime request audit. Experiment files need their
@@ -4328,7 +4334,7 @@ class SupervisorJournalService:
                 unbound / "references",
                 symlinks=False,
             )
-            shutil.rmtree(reference_snapshot.parent.parent)
+            shutil.rmtree(reference_snapshot.parent)
 
     def _observe_direction(self, direction_id: str) -> int:
         direction = _direction_views(self._research_state, self.campaign_root).get(direction_id)
@@ -4401,7 +4407,7 @@ class SupervisorJournalService:
             if visible.get("status") == "in_progress" and not visible.get("owner"):
                 visible["owner"] = self.lineage
             self.research.observe_direction(visible, origin=self.origin)
-        for experiment in _visible_experiments(self._research_state, self.campaign_root):
+        for experiment in _visible_experiments(self._research_state, self.campaign_root, history=history):
             visible = deepcopy(experiment)
             experiment_id = visible.get("experiment_id")
             if experiment_id in history.shared_experiment_ids:
@@ -4415,8 +4421,9 @@ class SupervisorJournalService:
                 visible.pop("recorded_by", None)
                 visible["access"] = "local_writable"
             self.research.observe_experiment(visible, origin=self.origin)
-        queue = shared_research_queue(self.campaign_root)
-        self.research.synchronize_shared_queue(queue, origin=self.origin)
+        # A peer may publish between reads. Use the same frozen view as the
+        # imported claims so its queue cannot reference a newer unseen ID.
+        self.research.synchronize_shared_queue(list(history.shared_queue), origin=self.origin)
 
     def observe_measurement(self, agent_result: Mapping[str, object]) -> None:
         """Checkpoint a Kernel-bound operation in the current lineage.

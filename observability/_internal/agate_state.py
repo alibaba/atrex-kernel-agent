@@ -160,6 +160,30 @@ def _pending_seconds(job: object, checkpoint_updated_at: object) -> float | None
     return age_seconds(checkpoint_updated_at)
 
 
+def _logical_call_outcome(
+    *, complete: bool, cacheable: object, response: object, error: object
+) -> str:
+    """Classify the logical Runtime request, not an intermediate Agate attempt."""
+    if not complete:
+        return "running_or_interrupted"
+    agent_result = (
+        response.get("agent_result")
+        if isinstance(response, dict)
+        and isinstance(response.get("agent_result"), dict)
+        else {}
+    )
+    terminal_success = str(agent_result.get("status") or "").casefold() in {
+        "completed", "succeeded"
+    }
+    if cacheable is True:
+        return "completed"
+    if terminal_success:
+        return "completed_not_cacheable"
+    if error is not None:
+        return "failed"
+    return "completed_not_cacheable"
+
+
 def _deduplicate_states(rows: list[dict]) -> tuple[list[dict], int]:
     """Collapse multiple checkpoint references to the same physical Agate Job."""
     grouped: dict[tuple, list[dict]] = {}
@@ -331,14 +355,12 @@ def snapshot(workspace: Path) -> dict:
                               and item.get("error")]
             primary_error = attempt_errors[-1] if attempt_errors else errors[-1] if errors else job_error_details(None, response)
             cacheable = record.get("cacheable") if isinstance(record, dict) else None
-            if not row["complete"]:
-                outcome = "running_or_interrupted"
-            elif primary_error is not None:
-                outcome = "failed"
-            elif cacheable is True:
-                outcome = "completed"
-            else:
-                outcome = "completed_not_cacheable"
+            outcome = _logical_call_outcome(
+                complete=row["complete"],
+                cacheable=cacheable,
+                response=response,
+                error=primary_error,
+            )
             call = {
                 "scope": scope.label,
                 "trajectory": scope.trajectory,
@@ -354,7 +376,7 @@ def snapshot(workspace: Path) -> dict:
                 "submission_reference_count": raw_attempt_count,
                 "historical_retry_attempt_count": max(0, len(attempts) - len(jobs)),
                 "retry_count": retries,
-                "error": primary_error,
+                "error": primary_error if outcome == "failed" else None,
                 "batch": _batch_progress(record, jobs) if isinstance(record, dict) else None,
             }
             calls.append(call)

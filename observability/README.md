@@ -23,6 +23,37 @@ originating lineage from Runtime audits instead of treating shared evidence as c
 
 Implementation shared by these commands lives under `_internal/` and is not a supported CLI.
 
+## Read-only dashboard
+
+The Light dashboard renders the same snapshots as the supported commands; it does not maintain a
+second index or reinterpret Campaign files. It binds only to loopback and exposes no mutation
+routes:
+
+```bash
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" --port 8765
+```
+
+Use `--port 0` to select an available port and `--refresh-ms N` to change the foreground refresh
+interval. The page shows lineage/Research/token state, evaluated and submitted Kernels, accepted
+winners, Runtime and Agate summaries with drill-down call details, and Gateway Record to Agate
+Job tracing. It intentionally has no start, stop, retry, cancel, submit, or cleanup controls.
+Env calls have no Agate Job; their observations are retained in the central Store. Their actual SDK method, parameters and
+redacted synchronous response are shown through the owning Runtime request's service exchange.
+Wiki calls likewise record the actual provider request/response. Exact Wiki cache reuse is labeled
+`wiki_cache`, rather than being rendered as a new provider call.
+
+For a remote Campaign, collect beside the running Campaign, download only the JSON, and render that
+file locally:
+
+```bash
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" \
+  --capture /tmp/light-dashboard.json
+python3 "$AKA_REPO/observability/light_dashboard.py" /tmp/light-dashboard.json --port 8765
+```
+
+Captured lineage liveness is authoritative at `captured_at`. The local renderer does not reopen
+the Campaign, validate remote PIDs or locks, or replace captured liveness with local state.
+
 ## Quick start
 
 ```bash

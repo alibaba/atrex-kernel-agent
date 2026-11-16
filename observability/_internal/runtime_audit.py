@@ -43,6 +43,20 @@ def _tool(operation: object, argv: object) -> str:
     return str(operation or "unknown")
 
 
+def _display_tool(value: dict) -> str:
+    """Expose logical Runtime operations, not private/retired CLI selectors."""
+    argv = value.get("argv")
+    values = [str(item) for item in argv] if isinstance(argv, list) else []
+    if "--help" in values or "-h" in values:
+        return "help"
+    tool = str(value.get("tool") or _tool(value.get("operation"), argv))
+    if tool in {"run", "evaluate"}:
+        if "--baseline-commit" in values or "--baseline-path" in values:
+            return "abba"
+        return "evaluate"
+    return tool
+
+
 def _duration(value: object) -> float | None:
     if isinstance(value, dict):
         for key in ("duration_seconds", "elapsed_seconds", "total_latency_seconds"):
@@ -116,7 +130,7 @@ def _audit_calls(scope) -> list[dict]:
                 "started_at": started_at,
                 "updated_at": value.get("updated_at") or value.get("finished_at") or started_at,
                 "finished_at": value.get("finished_at"),
-                "tool": value.get("tool") or _tool(value.get("operation"), value.get("argv")),
+                "tool": _display_tool(value),
                 "operation_family": value.get("operation"),
                 "status": state,
                 "success": success,

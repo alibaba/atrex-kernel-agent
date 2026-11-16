@@ -16,7 +16,7 @@
 | 模块 | 负责的能力 | 本地能力接入方式 |
 | --- | --- | --- |
 | `aka.agent` | Agent 调用、Session、进程与会话证据 | 接入持久 Session、完整对话与独立 token 审计、private/host 隔离 |
-| `aka.evaluation` | 评测准备、结果解析、完整性和目标聚合 | 接入本地 Native/SOL 评测、紧凑 receipt、完整原始证据、ABBA 兼容层 |
+| `aka.evaluation` | 评测准备、结果解析、完整性和目标聚合 | 接入本地 Native/SOL 评测、完整统一回执、原始证据、ABBA 兼容层 |
 | `aka.execution` | 执行、路由、Job 生命周期与传输 | 接入本地 Gateway 策略；Agate 统一 SDK-only，显式 SSH 保留独立传输 |
 | `aka.experiment` | 测量身份、证据、去重、复用、重试 | 接入 Campaign 中央 Measurement Store，避免恢复每条 lineage 独立副本 |
 | `aka.task` | 题目、源码结构与工作区契约 | 接入持久 Agent Git、可编辑 `kernel.py` 与可选 `impl/` |
@@ -42,7 +42,7 @@ Light 不恢复 Framework Baseline、`episode-report`、handoff、promotion 或�
 | 重试 | 保留本地策略。有 Job ID 时在预算内短轮询同一个 Job；无 ID 只有具备持久幂等保证才能重放。普通已确认终态基础设施失败/Job deadline 最多额外两次重提 |
 | Gateway | Agate 全部通过 SDK，接入公共 Execution；不恢复 CLI/direct HTTP fallback。SSH 保留独立执行路径 |
 | 验收与目标 | `submit-kernel` 检查同一 commit 的完整 Evaluate 正确性与可解析、完整性能结果。winner 按题目目标从 accepted submissions 中选取，不恢复 promotion/自动回滚 |
-| 错误 | 吸收主线结构化错误与 SDK verdict 校验；行级成功不能覆盖 SDK 拒绝。完整原因归档，紧凑 receipt 保留可操作诊断 |
+| 错误 | 吸收主线结构化错误与 SDK verdict 校验；行级成功不能覆盖 SDK 拒绝。完整原因归档，Agent 回执保留完整结果及诊断，不再做长度裁剪 |
 | Shape 与源码 | 默认公开 Shape，`kernel.py` 可编辑、`impl/` 可选。请求隐藏但无法建立真实隐藏投影时明确拒绝，不允许静默暴露 |
 
 ## 初始源码与全部测量
@@ -103,3 +103,17 @@ Campaign 只保留一个 `measurements/`。以下结果不论是否通过、是�
 两个发行包的 sdist/wheel 构建成功，并在独立临时虚拟环境安装验证。新 CLI help、公共模块/资源加载，以及安装版完整 Evaluate → submit Campaign 测试通过。源码编译、静态未定义名称检查、安装脚本语法检查及 Git whitespace 检查通过。
 
 这些验证不包含真实 Agate GPU 作业、模型 Provider、Linux Bubblewrap namespace 或 SSH 主机连接；没有启动或修改任何远端沙箱。代码已按用户确认的取舍完成整合，目前没有待用户决定的冲突。
+
+## 后续本地更新：`fdb22d3e`
+
+已按当前公共模块边界移植 Runtime 审计与可观测性更新，而非恢复原 `aka.light` 执行栈：
+
+- Agent CLI 使用 `--kind evaluate`；内部 Execution 的 `run` 仍是私有传输选择。
+- 所有 Runtime 工具使用 `operation/status/result` 统一回执。返回完整规范化结果，保留 Record ID 和路径；Dev/Command 输出不再裁剪为预览。
+- Runtime 请求审计保存 Agent 请求、服务请求/返回及 Agent 实际收到的回执。Env 的 SDK 交换通过公共 Core 请求上下文采集；Wiki、Claim、Final Source 和专项数值 Review 也接入同一审计链。
+- Env 观察继续写入中央 Measurement Store，保留合并分支“所有测量/观察入库”的设计，不采用旧分支“Env 无 Record”的说明。
+- 可观测性区分最终逻辑调用状态与已恢复的物理尝试错误；Dashboard 支持调用详情、SDK 请求、服务返回、Agent 回执和 token/latency 曲线。
+- 保留持久 Campaign/Session/Git、中央库及 accepted submission 语义。删除旧分支引入的 Baseline/验收恢复代码；Claim Review 仍跟随用户所选 sandbox。
+- 组合测试发现并修复异步共享的快照竞态：Direction、Experiment 与共享排序读取同一版本，避免并发发布的新排序引用本次尚未导入的 Direction。
+
+本次验证：101 项测试、18 个子测试通过，覆盖完整组合 Campaign、同步/异步共享、中央测量、SDK、三类 Review 审计、可观测性导出和 Dashboard；两份 Skill 格式校验、改动 Python 文件语法检查及 `git diff --check` 通过。Agent/GPU/Provider 使用离线替身，未进行实卡或远端沙箱验证。本次更新尚未提交。

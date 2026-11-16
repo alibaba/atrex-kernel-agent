@@ -20,19 +20,21 @@ the Supervisor performs independent submission review.
    diagnostic unless the report contract explicitly says otherwise.
 4. Run the request in the foreground and wait for the same invocation. Do not add shell timeouts,
    background it, edit the candidate while it runs, or submit parallel duplicates.
-5. For a measurement, inspect the compact receipt, then read or query
-   `records/<gateway_record_id>.json` directly for
-   only the saved fields or Shape needed for the decision. Do not dump a complete Record or long
-   stream into the Session. `stdout_location` and `stderr_location` identify the exact Record field
-   for each complete stream when present. A completed job can still contain a correctness failure.
+5. For a measurement, inspect the complete canonical Runtime result. The identical durable result is
+   saved at `records/<gateway_record_id>.json`; open it only when later work needs the persisted
+   evidence. A completed job can still contain a correctness failure.
 
 Dev and Command are fresh, stateless remote jobs. Use Dev only for a self-contained single-file
 probe that reads no candidate or other workspace file, and declare that probe explicitly. Use
 Command whenever custom code reads the candidate, helpers, prior artifacts, or other workspace
 state. Neither creates a persistent GPU workspace. Typed operations select managed evaluator inputs
 automatically, so use explicit command overrides only when the reference documents them.
-Env is read-only discovery rather than a measurement. It prints the complete redacted Agate
-capability response directly and does not create a Gateway Record.
+Runtime options are operation-scoped. Never copy a flag from one `--kind` to another merely because
+Agate or a previous Runtime call accepted it. In particular, `--intent` and `--note` are Dev-only
+metadata when the current `--kind dev --help` advertises them; never pass them to Evaluate, Profile,
+Check, Disassemble, Command, or Env. Read the selected operation's help before adding optional flags.
+Env is read-only discovery. Its complete redacted capability response uses the same canonical
+receipt and is archived in the central Store, without becoming correctness/performance evidence.
 
 ## Results and failures
 

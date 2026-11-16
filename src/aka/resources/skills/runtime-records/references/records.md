@@ -3,10 +3,9 @@
 Runtime projects every visible result as `records/<gateway_record_id>.json`. Read and search those
 flat files normally. Exact Kernel source is ordinary reachable Git history.
 
-Runtime measurement calls print a compact receipt rather than the complete result. Env is the
-exception: it prints its redacted Agate response directly and creates no Record. Query a full saved
-measurement Record locally without another GPU request. Use ordinary read/search tools or a short
-local JSON query; for example:
+Runtime measurement calls print the complete canonical public result and save the same result as a
+Record. Env prints its complete redacted response directly and creates no Record. Query a saved
+measurement Record locally without another GPU request when later work needs persisted evidence:
 
 ```bash
 RECORD="records/${GATEWAY_RECORD_ID}.json"
@@ -14,10 +13,8 @@ python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"]["corre
 python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))["result"]))' "$RECORD"
 ```
 
-Read large text with bounded line or byte ranges. Do not use `cat`, a full `json.dumps`, or an
-equivalent command that copies a complete Record, per-Shape table, source, stdout, or stderr into
-the Session. A receipt with stream output includes `stdout_location` and/or `stderr_location`, whose
-`path` names this Record and whose `field` is `result.stdout` or `result.stderr`.
+Complete streams use the stable `result.stdout` and `result.stderr` fields in both the returned result
+and the saved Record.
 
 | ID | Meaning | Use |
 | --- | --- | --- |
@@ -33,8 +30,8 @@ Each projected file contains the same public result returned by a new measuremen
 ABBA uses `operation: evaluate` with `result.comparison`, `candidate_kernel_commit_id`, and
 `baseline_kernel_commit_id`.
 Other operation names are `profile`, `dev`, `check`, and `disassemble`.
-Parse a measurement command's whole stdout as one compact receipt. Env stdout is the direct
-redacted Agate capability response and is not a receipt.
+Parse a measurement command's whole stdout as one canonical Runtime result. Env stdout is the direct
+redacted Agate capability response and creates no Record.
 Dev preserves probe text in `result.stdout`/`result.stderr` and its process `exit_code`.
 Its Kernel is the workspace snapshot, not proof the probe measured it.
 

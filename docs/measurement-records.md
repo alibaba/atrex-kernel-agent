@@ -54,7 +54,7 @@ Moving the campaign root changes its storage scope. No automatic retention clean
 Run these commands in an active managed draft, using IDs returned by the campaign:
 
 ```bash
-python3 tools/sandbox.py --kind run --no-sync
+python3 tools/sandbox.py --kind evaluate --no-sync
 # Read records/*.json, root PROGRESS.md, and the corresponding local/shared Git commits.
 ```
 

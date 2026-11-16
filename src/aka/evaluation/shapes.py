@@ -147,9 +147,9 @@ def shape_batch_request(
     batched["options"] = options
     # Every outer Eval batch, including native ABBA batches, requests Agate-
     # managed locked-clock measurement.
-    batched["lock_clocks"] = True
     if timeout_s is not None:
         if type(timeout_s) is not int or timeout_s <= 0:
             raise ValueError("Shape batch timeout must be a positive integer")
         options["timeout_s"] = timeout_s
-    return batched
+    from .measurement_policy import agate_managed_clocks
+    return agate_managed_clocks(batched)

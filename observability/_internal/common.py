@@ -19,7 +19,6 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.workflow.legacy.export import RetainedWorkflowExport  # noqa: E402
 from aka.evaluation.response import result_from_response  # noqa: E402
 from aka.experiment.measurement_store import (  # noqa: E402
     MeasurementStore,
@@ -149,10 +148,6 @@ def discover_scopes(workspace: Path) -> list[Scope]:
             )
             scopes.append(Scope(path.resolve(), audit_root, path.name, number))
     return scopes
-
-
-def load_snapshot(scope: Scope):
-    return RetainedWorkflowExport().read(scope.workspace)
 
 
 def existing_store(scope: Scope) -> MeasurementStore | None:

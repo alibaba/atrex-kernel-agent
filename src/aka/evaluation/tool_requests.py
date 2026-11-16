@@ -23,7 +23,7 @@ class _Parser(argparse.ArgumentParser):
 
 def tool_argument_parser():
     parser = _Parser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--kind", choices=("auto", "run", "profile", "dev", "command", "check", "disassemble", "env"), default="auto")
+    parser.add_argument("--kind", choices=("auto", "evaluate", "profile", "dev", "command", "check", "disassemble", "env"), default="auto")
     for flag in ("--version", "--baseline-commit", "--input-path", "--shapes-path",
                  "--kernel-name", "--kernel-regex", "--profile-shape-id", "--arch", "--sanitize", "--deps-mode", "--env-gpu"):
         parser.add_argument(flag)
@@ -89,7 +89,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         if not args.input:
             args.input = [p.name for p in Path(workspace).iterdir() if not p.name.startswith(".")]
     from aka.execution.gateway.native_options import values as native_values, apply_request
-    selected_kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
+    selected_kind = "run" if args.kind == "auto" and not args.command else requested_operation("run" if args.kind == "evaluate" else args.kind, args.command)
     native = native_values(args, selected_kind)
     from aka.execution.configuration import selected_ssh
     if selected_ssh():
@@ -107,17 +107,17 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         import math
         if not math.isfinite(args.correctness_max_rel_l2) or args.correctness_max_rel_l2 <= 0:
             raise ValueError("correctness threshold must be finite and positive")
-        if args.kind not in {"auto", "run"} or args.command:
+        if args.kind not in {"auto", "evaluate"} or args.command:
             raise ValueError("correctness threshold requires an implicit Evaluate request")
     workspace = Path(workspace)
     defaults = dict(defaults or {})
-    kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
+    kind = "run" if args.kind == "auto" and not args.command else requested_operation("run" if args.kind == "evaluate" else args.kind, args.command)
     if args.baseline_commit and (kind != "run" or args.evaluation_mode == "correctness_only"):
-        raise ValueError("baseline comparison requires full run")
+        raise ValueError("baseline comparison requires full Evaluate")
     if args.command and (any(value is not None for value in (args.version, args.multi_seed, args.timed_runs, args.warmup, args.candidate_timeout_s, args.perf_timeout_s)) or args.shape_id):
         raise ValueError("top-level evaluator controls require an implicit canonical command")
     if kind != "run" and any(value is not None for value in (args.warmup, args.candidate_timeout_s, args.perf_timeout_s)):
-        raise ValueError("timing controls require a Run request")
+        raise ValueError("timing controls require an Evaluate request")
     command = tuple(args.command)
     sol = evaluation_input is not None and evaluation_input.adapter == "legacy-sol-v1"
     if not command and kind == "run" and sol:
@@ -247,8 +247,6 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             request["options"]["correctness_max_rel_l2"] = args.correctness_max_rel_l2
         from .measurement_policy import runner_overrides
         request["runner_overrides"].update(runner_overrides(command, explicit, defaults.get("runner_overrides")))
-        if "lock_clocks" in defaults:
-            request["options"]["lock_clocks"] = defaults["lock_clocks"]
         if args.baseline_commit:
             if baseline_source is None:
                 raise ValueError("ABBA baseline commit must be resolved from the bound Agent Git repository")
@@ -293,6 +291,9 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             else:
                 request["fmt"] = args.disassembly_format
     request = apply_request(request, args, kind)
+    if kind == "run":
+        from .measurement_policy import agate_managed_clocks
+        request = agate_managed_clocks(request)
     submission = json.dumps({"schema_version": 1, "kind": kind, "request": request,
         "reference_files": {name: item.decode() for name, item in references.items() if Path(name).name == name}}, allow_nan=False).encode()
     return ToolRequest(operation, replace(provisional, operation=operation, submission=submission,

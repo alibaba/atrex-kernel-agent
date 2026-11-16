@@ -359,7 +359,15 @@ class ResearchStore:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         with open_private_directory(self.root) as directory:
-            fd = os.open("lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            try:
+                fd = os.open(
+                    "lock", os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                    0o600, dir_fd=directory,
+                )
+            except FileExistsError:
+                # Concurrent first readers must not both create the lock.
+                # Some filesystems return ENOENT for racing O_CREAT opens.
+                fd = os.open("lock", os.O_RDWR | os.O_NOFOLLOW, dir_fd=directory)
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX)
                 yield

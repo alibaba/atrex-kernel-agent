@@ -1,11 +1,11 @@
 """Canonical Gateway Record and physical Agate-attempt projections."""
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any
 
-from aka.evaluation.public_result import compact_receipt
-
+from aka.evaluation.tool_results import compact_receipt
 from observability._internal.common import (
     discover_scopes,
     existing_store,
@@ -49,23 +49,20 @@ def backend_agate_job_ids(job: object) -> list[str]:
 
 
 def agent_visible_response(response: object) -> dict | None:
-    """Reconstruct the exact JSON body exposed at the Runtime HTTP boundary."""
+    """Project saved evidence using the current receipt contract as a fallback."""
     if not isinstance(response, dict):
         return None
     agent_result = response.get("agent_result")
     if not isinstance(agent_result, dict):
         # Legacy Records persisted the already-public response directly.
         return response
-    if agent_result.get("operation") == "env":
-        public = dict(response)
-        public.pop("agent_result", None)
-        return public
     return compact_receipt(agent_result)
 
 
 def project_attempt(state: dict[str, Any]) -> dict[str, Any]:
     job = state.get("job")
     identity = state.get("identity")
+    sdk_payload = identity.get("payload") if isinstance(identity, dict) else None
     reused = (
         state.get("submission") == 0
         and isinstance(identity, dict)
@@ -86,6 +83,7 @@ def project_attempt(state: dict[str, Any]) -> dict[str, Any]:
         "retry_counters": state.get("retries") or {},
         "error": job_error_details(job),
         "snapshot_path": state.get("path"),
+        "agate_sdk_submission_payload": sdk_payload,
         "agate_response": job,
         "raw_process": state.get("process"),
     }
@@ -113,7 +111,7 @@ def gateway_record_locations(
         record_path = directory / "record.json"
         record: dict[str, Any] = {}
         record_read_error = None
-        store = existing_store(scope)
+        store = existing_store(source_scopes[0])
         if record_path.is_file() and store is not None:
             try:
                 stored = store.read(record_id)

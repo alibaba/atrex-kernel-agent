@@ -235,21 +235,23 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
 def gateway_schema(kind, parser):
     """Read option types/choices from the real parser; never expose its defaults."""
     groups = {
-        "run": {"--mode", "--version", "--shape-id", "--timed-runs", "--baseline-commit",
-                "--comparison-repeats", "--comparison-run-timeout", "--input-path", "--shapes-path"},
+        "evaluate": {"--mode", "--version", "--shape-id", "--timed-runs", "--baseline-commit",
+                "--comparison-repeats", "--comparison-run-timeout", "--input-path", "--shapes-path",
+                "--warmup", "--candidate-timeout-s", "--perf-timeout-s", "--multi-seed",
+                "--correctness-max-rel-l2"},
         "profile": {"--kernel-name", "--kernel-regex", "--profile-source", "--launch-skip", "--launch-count",
                     "--profile-shape-id", "--requirement", "--deps-mode", "--profile-level", "--profiler",
                     "--profile-counter", "--top-kernels", "--include-raw-profile"},
         "check": {"--arch", "--sanitize", "--requirement", "--deps-mode"},
         "disassemble": {"--format", "--requirement", "--deps-mode"},
         "dev": set(), "command": set(),
-        # Managed Runtime injects the Campaign hardware and capability view.
-        "env": set(),
+        "env": {"--env-gpu", "--env-capabilities", "--env-force", "--force",
+                "--frameworks", "--limits", "--counters"},
     }
     if kind not in groups:
         return {"supported_kinds": list(groups), "instruction": "Use an explicit --kind and full option names."}
     allowed = groups[kind] | {"--kind"}
-    if kind in {"run", "profile", "dev", "command", "check", "disassemble"}:
+    if kind in {"evaluate", "profile", "dev", "command", "check", "disassemble"}:
         allowed |= {"--input", "--sync", "--no-sync", "--env", "--inline-output", "--keep-pod", "--dry-run"}
     options = {}
     from aka.execution.gateway.native_options import COMMAND_BY_KIND
@@ -279,7 +281,7 @@ def gateway_schema(kind, parser):
     required = ["--kind"]
     schema = {"cli_options": options, "required_options": required}
     command_contract = {
-        "run": (
+        "evaluate": (
             "Optional argv after --; without it Runtime executes the trusted "
             "private evaluator."
         ),
@@ -407,10 +409,12 @@ def augment_error(response, *, route, request, research_records=False, direction
         tool = next((item for item in catalog if item["name"] == name), None)
         if tool is not None:
             result["request_schema"] = deepcopy(tool["input_schema"])
-        result["recovery"].append({"command": "python3 tools/plugin.py list",
-                                    "instruction": "Use the enabled tool's declared input schema; do not bypass the Runtime."})
+        result.setdefault("recovery", []).append({
+            "command": "python3 tools/plugin.py list",
+            "instruction": "Use the enabled tool's declared input schema; do not bypass the Runtime.",
+        })
     elif route == "/v1/wiki/query":
-        result["recovery"].append({"instruction":
+        result.setdefault("recovery", []).append({"instruction":
             "Use python3 tools/sandbox.py --kind wiki-query --help (or wiki-search/wiki-hardware). "
             "Pass only workspace-relative input files and bounded max-bytes/max-records; "
             "do not specify private Wiki stores."})

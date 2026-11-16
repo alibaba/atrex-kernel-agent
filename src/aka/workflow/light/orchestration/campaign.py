@@ -517,12 +517,8 @@ class Campaign:
         boundary_environment = self.agent_boundary_environment(
             "research-claim-review"
         )
-        # Independent claim review is a security boundary, not an optimizer
-        # convenience setting.  Always use Bubblewrap even when the selected
-        # optimizer profile deliberately runs without a sandbox.  If bwrap is
-        # unavailable, launch fails closed and the caller archives a
-        # review_unavailable receipt instead of executing the reviewer natively.
-        boundary_environment["ATREX_AGENT_SANDBOX"] = "bwrap"
+        # The public Agent owner applies the selected Campaign sandbox to
+        # this independent evidence workspace, just as for other Reviews.
         base_environment = {
             **boundary_environment,
             "ANTHROPIC_MODEL": model,
@@ -563,6 +559,22 @@ class Campaign:
         for attempt in range(1, _CLAIM_REVIEW_MAX_ATTEMPTS + 1):
             response = evidence_root / "review.json"
             response.unlink(missing_ok=True)
+            if runtime is not None and hasattr(runtime, "audit_service_exchange"):
+                try:
+                    target = json.loads(read_regular_bytes(
+                        evidence_root / "submissions" / "target.json",
+                        limit=2 * 1024 * 1024,
+                    ))
+                except (FileNotFoundError, UnicodeError, json.JSONDecodeError):
+                    target = None
+                runtime.audit_service_exchange(
+                    service="independent_claim_reviewer",
+                    attempt=attempt,
+                    request={
+                        "target": target,
+                        "evidence_manifest": evidence_manifest,
+                    },
+                )
             attempt_capture = capture_base / f"attempt-{attempt}"
             environment = {
                 **base_environment,
@@ -685,6 +697,12 @@ class Campaign:
                 if response.stat().st_size > 128 * 1024:
                     raise ValueError("research claim review exceeds 128 KiB")
                 review = validate_review(value)
+                if runtime is not None and hasattr(runtime, "audit_service_exchange"):
+                    runtime.audit_service_exchange(
+                        service="independent_claim_reviewer",
+                        attempt=attempt,
+                        response=review,
+                    )
                 if archive is not None and archive_root is not None:
                     from aka.workflow.light.orchestration.session_tail import read_regular_bytes
                     from aka.experiment.measurement_store import private_write_bytes
@@ -1232,6 +1250,21 @@ class Campaign:
                 "submission_id": submission_id,
                 "submission_revision": submission_revision,
             }
+            review_exchange_id = uuid.uuid4().hex
+            if runtime is not None and hasattr(runtime, "audit_service_exchange"):
+                runtime.audit_service_exchange(
+                    service="independent_final_source_reviewer",
+                    exchange_id=review_exchange_id,
+                    request={
+                        "review_request": request,
+                        "candidate_manifest": {
+                            "files": [
+                                {"path": path, "sha256": source_hashes[path]}
+                                for path in sorted(source_hashes)
+                            ],
+                        },
+                    },
+                )
             (review_workspace / "review_request.json").write_text(
                 json.dumps(request, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
@@ -1277,6 +1310,15 @@ class Campaign:
                     )
                 check_review_service(result)
             except ValueError as exc:
+                if runtime is not None and hasattr(runtime, "audit_service_exchange"):
+                    runtime.audit_service_exchange(
+                        service="independent_final_source_reviewer",
+                        exchange_id=review_exchange_id,
+                        response={
+                            "status": "unavailable",
+                            "error": {"type": type(exc).__name__, "message": str(exc)},
+                        },
+                    )
                 return [f"independent final-source policy review failed: {exc}"]
             changed = []
             for relative, expected_hash in source_hashes.items():
@@ -1287,41 +1329,47 @@ class Campaign:
                     != expected_hash
                 ):
                     changed.append(relative)
-            if changed:
-                errors = [
-                    "independent final-source policy review modified candidate evidence: "
-                    + ", ".join(sorted(changed))
-                ]
-            else:
-                review_path = review_workspace / "dependency_review.json"
-                try:
-                    review_payload = json.loads(
-                        review_path.read_text(encoding="utf-8")
+            review_path = review_workspace / "dependency_review.json"
+            try:
+                review_payload = json.loads(
+                    review_path.read_text(encoding="utf-8")
+                )
+                if runtime is not None and hasattr(runtime, "audit_service_exchange"):
+                    runtime.audit_service_exchange(
+                        service="independent_final_source_reviewer",
+                        exchange_id=review_exchange_id,
+                        response=review_payload,
                     )
+                if changed:
+                    errors = [
+                        "independent final-source policy review modified candidate evidence: "
+                        + ", ".join(sorted(changed))
+                    ]
+                else:
                     errors, review_summary, policy_result = validate_light_production_review(
                         review_payload,
                         candidate_files=frozenset(source_hashes),
                         dsl_policy=effective_dsl_policy,
                     )
-                except (
-                    OSError,
-                    UnicodeError,
-                    json.JSONDecodeError,
-                    ValueError,
-                ) as exc:
-                    from aka.workflow.light.orchestration.infrastructure_retry import ReviewerOutputUnavailable
+            except (
+                OSError,
+                UnicodeError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as exc:
+                from aka.workflow.light.orchestration.infrastructure_retry import ReviewerOutputUnavailable
 
-                    raise ReviewerOutputUnavailable(
-                        "independent final-source policy review produced no valid verdict: "
-                        f"{type(exc).__name__}: {exc}"
-                    ) from exc
-                else:
-                    status = "accepted" if not errors else "rejected"
-                    print(
-                        f"[final-source-policy] independent full-candidate review {status}: "
-                        f"{review_summary}",
-                        flush=True,
-                    )
+                raise ReviewerOutputUnavailable(
+                    "independent final-source policy review produced no valid verdict: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            else:
+                status = "accepted" if not errors else "rejected"
+                print(
+                    f"[final-source-policy] independent full-candidate review {status}: "
+                    f"{review_summary}",
+                    flush=True,
+                )
 
         try:
             reviewed_digest = _production_review_digest(
@@ -1545,9 +1593,9 @@ class Campaign:
             return (
                 "## Evaluation contract: Atrex-Bench\n\n" + public +
                 "The Supervisor supplies the official evaluator. Minimize latency_us_geomean; "
-                "performance_score is a reference-relative diagnostic, not the promotion criterion. "
-                "Use --kind run --mode full --no-sync for the complete workload. "
-                "Correctness-only, custom-input or subset results do not satisfy an Episode report. "
+                "performance_score is a reference-relative diagnostic. "
+                "Use --kind evaluate --mode full --no-sync for the complete workload. "
+                "Correctness-only, custom-input or subset results do not qualify as full Evaluate evidence for submit-kernel. "
                 "For diagnostic Profile, use --kind profile --profile-shape-id ID --no-sync "
                 "with a Shape ID from a saved result. " + profile_shapes + " The same option selects the "
                 "privately supplied case in Typed Profile or a compatible Dev fallback. "
@@ -1558,7 +1606,7 @@ class Campaign:
                 "## Evaluation contract: SOL-ExecBench\n\n"
                 "The Supervisor runs the official evaluator over workload.jsonl. "
                 "Minimize GeoMean workload latency. performance_score relative to "
-                "the SOL reference is diagnostic only. Use --kind run --no-sync; never replace the evaluator. "
+                "the SOL reference is diagnostic only. Use --kind evaluate --no-sync; never replace the evaluator. "
                 "Atrex-Bench typed --mode controls do not apply to SOL-ExecBench."
             )
         raise ValueError("A canonical Atrex-Bench or SOL evaluator is required")

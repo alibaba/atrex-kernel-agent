@@ -85,7 +85,7 @@ An arbitrary `reference.py`, custom evaluator script, or setup command is not a 
 
 ## Install matching packages
 
-In addition to the three matching AKA distributions, install
+In addition to the two matching AKA distributions (`atrex-aka-framework` and `atrex-aka-light`), install
 `atrex-gateway-client==0.14.31` from the internal ArtLab release index in the Supervisor
 environment. Obtain the canonical Atrex-Bench source checkout from
 `https://github.com/alibaba/atrex-bench`; do not substitute an Atrex-Bench wheel for that checkout.

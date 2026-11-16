@@ -250,4 +250,7 @@ def prepare_request(
             request["kernel_regex"] = kernel_regex
         if top_kernels is not None:
             request["top_kernels"] = top_kernels
+    if kind == "run":
+        from .measurement_policy import agate_managed_clocks
+        request = agate_managed_clocks(request)
     return request

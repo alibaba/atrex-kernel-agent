@@ -19,6 +19,7 @@ from typing import Any
 
 
 COMMAND_BY_KIND = {
+    "evaluate": "eval",
     "run": "eval",
     "profile": "profile",
     "dev": "dev",

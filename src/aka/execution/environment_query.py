@@ -89,7 +89,8 @@ def _snapshot(backend, endpoint, query, detail, capabilities, errors, operations
     source = str(capabilities.get("source", detail.get("source", "unknown")))
     return EnvironmentSnapshot(backend, safe_endpoint(endpoint), str(detail.get("gpu", capabilities.get("gpu", query.hardware))),
         identity, declarations, observed, source,
-        capabilities.get("probed_at", detail.get("probed_at")), tuple(dict.fromkeys(errors)))
+        capabilities.get("probed_at", detail.get("probed_at")), tuple(dict.fromkeys(errors)),
+        raw={"environment": detail, "capabilities": capabilities})
 
 
 class BackendEnvironment:

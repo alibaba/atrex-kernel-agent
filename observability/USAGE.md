@@ -8,6 +8,10 @@
 
 ## 1. 使用范围与安全边界
 
+当前脚本适配合并后的 Light Campaign：公共模块使用 `aka.agent`、`aka.evaluation`、
+`aka.execution` 等命名空间，Workflow 位于 `aka.workflow.light`。无需安装 Legacy。
+Skill 和脚本属于 checkout 资源；更新 Python 包后也要同步同一 checkout 的这两部分。
+
 输入始终是顶层 Campaign workspace：
 
 ```bash
@@ -431,6 +435,10 @@ python3 "$AKA_REPO/observability/light_kernel_history.py" "$CAMPAIGN" [options]
 累计 checkpoint，不是用 Campaign 最终总量倒推。对应 availability 为
 `missing_checkpoint` 时仍保留事件，但不能声称其精确 Token 成本。未接受的提交目前不会
 生成提交里程碑，因而显示 `submit_token_usage_availability=not_recorded`。
+
+提交也可以复用中央 Measurement Store 中同伴的完整 Evaluate。此时展示已核验的性能，
+但消费方没有本地 Evaluate Token checkpoint：`evaluate_token_usage=null`，availability 为
+`shared_evidence_no_local_evaluate`；不会将同伴的 Evaluate Token 算给消费方。
 
 ## 5. `light_kernel_best.py`
 
@@ -957,3 +965,18 @@ accepted submit-kernel receipt for exact Agent commit
 ∩ passing standard full Evaluate for that commit
 ∩ complete per-Shape performance evidence
 ```
+
+## 15. 只读 Dashboard
+
+`light_dashboard.py` 使用以上八个工具的同一套快照，展示状态、Research、Token、Kernel、调用和证据。
+
+```bash
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" --port 8765
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" --capture /tmp/dashboard.json
+python3 "$AKA_REPO/observability/light_dashboard.py" /tmp/dashboard.json --port 8765
+```
+
+默认仅绑定 `127.0.0.1:8765`；`--port 0` 自动选择端口，`--refresh-ms` 默认 5000 毫秒。
+远端 Campaign 必须在远端执行 `--capture`，下载 JSON 后本地展示；存活状态以
+`captured_at` 为准，不会用本地 PID/锁重新判断。页面没有启动、重试、取消或提交入口。
+参数与 HTTP 说明见 [Dashboard 文档](../docs/optimization-dashboard.md)。

@@ -64,7 +64,7 @@ fall back to the upstream repository. Do not put credentials in JSON.
 Use the normal managed measurement tool, for example:
 
 ```bash
-python3 tools/sandbox.py --kind run --no-sync
+python3 tools/sandbox.py --kind evaluate --no-sync
 ```
 
 The controller supplies the hardware, environment and evaluator. A full Evaluate

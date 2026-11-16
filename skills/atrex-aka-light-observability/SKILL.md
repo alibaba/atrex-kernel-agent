@@ -10,6 +10,10 @@ checkout (`AKA_REPO`) and the top-level Campaign workspace (`CAMPAIGN`), not a t
 subdirectory. Read only the reference for the user's current use case; each script's `--help`
 remains the final CLI authority.
 
+Use the merged Light checkout (`aka.workflow.light` and public shared modules). These scripts do
+not require Legacy or its export adapter. Skill files and scripts must be updated together;
+installing the Python wheels alone does not update `observability/` or this Skill.
+
 ## Route by use case
 
 | User intent | Read | Primary tool |
@@ -23,6 +27,11 @@ remains the final CLI authority.
 | Export one Agent commit and all bound evidence | `observability/USAGE.md` section 8 | `export_light_kernel.py` |
 | Expand one Gateway Record into physical Agate Jobs | `observability/USAGE.md` section 9 | `light_gateway_jobs.py` |
 | Export one logical Runtime request, raw Agate attempts, and Agent receipt | `observability/USAGE.md` section 10 | `export_light_gateway_record.py` |
+| Open one local read-only Campaign dashboard using the same snapshots | `observability/README.md` | `light_dashboard.py` |
+
+For a Dashboard over a remote Campaign, run `light_dashboard.py CAMPAIGN --capture FILE` in the
+remote execution environment, download `FILE`, and serve that JSON locally. Do not download the
+Campaign and recompute liveness: captured liveness is authoritative at `captured_at`.
 
 The remaining seven script guides are still in the bilingual monolithic manual and should be
 split into one reference per script as they are revised. Do not load the complete manual for a
@@ -38,3 +47,5 @@ status-only request.
 - Use bounded JSON fields; do not print complete stdout, NCU catalogs, source trees, or Session
   histories unless the selected use case requires them.
 - Export commands create only a new user-selected destination and must not overwrite it.
+- The dashboard binds to `127.0.0.1`, exposes only read-only GET APIs, and must not grow workflow
+  controls. Its summaries are the same observability snapshots used by the CLIs.

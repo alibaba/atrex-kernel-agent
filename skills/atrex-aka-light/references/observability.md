@@ -24,6 +24,15 @@ python3 "$AKA_REPO/observability/light_gateway_jobs.py" "$CAMPAIGN" \
   --gateway-record-id gateway-0123456789abcdef0123456789abcdef --json
 ```
 
+For a continuously refreshed local view of the same snapshots:
+
+```bash
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" --port 8765
+```
+
+The Light dashboard is loopback-only and read-only. It has no workflow, Runtime, Agate, submission,
+retry, cancellation, or cleanup controls.
+
 `light_runtime_calls.py` and `light_agate_calls.py` retain a Campaign-wide
 summary by kind while `--kind`, `--status` and `--last N` select bounded
 details. Agate waiting averages use only durable `created_at -> started_at`
@@ -124,9 +133,9 @@ Eligible shared records are read-only evidence. A trajectory must explicitly abs
 
 ## Runtime output and Records
 
-Runtime terminal output should be a compact receipt: outcome/correctness, aggregate latency, actionable error summary, Gateway Record ID/path, and bounded stdout/stderr preview where applicable. Complete results live in `records/<gateway-id>.json`.
+Runtime terminal output is the complete canonical `operation/status/result` receipt, including correctness, performance, diagnostics and complete streams where applicable. The same result is saved in `records/<gateway-id>.json`; no second read is required to recover omitted fields.
 
-For truncated Dev/Command output, the receipt should identify both path and field, for example `result.stdout`. Read only the required bounded field instead of printing the complete Record into the conversation. Env is intentionally returned without the Dev/Command preview truncation when the current checkout defines it that way.
+Dev/Command streams are in `result.stdout` and `result.stderr`. For later inspection, read only the needed fields from the saved Record. Env also returns its complete redacted observation; it creates no GPU Job.
 
 Gateway Record IDs use the public `gateway-...` identity. Physical `ev_...` job IDs remain private transport evidence and must not be substituted into Agent-facing research records.
 

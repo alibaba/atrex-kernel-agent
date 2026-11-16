@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 from aka.bootstrap.workflow_request import register_request_options, request_arguments
 from aka.contracts.evaluation import EvaluationConfiguration
@@ -65,6 +66,8 @@ class MeasurementPolicyTest(unittest.TestCase):
         self.assertEqual(payload["runner_overrides"]["warmup_iters"], 10)
         self.assertEqual(payload["runner_overrides"]["candidate_timeout_s"], 60)
         self.assertEqual(payload["runner_overrides"]["perf_timeout_s"], 60)
+        self.assertTrue(payload["lock_clocks"])
+        self.assertNotIn("lock_clocks", payload["options"])
         explicit = self.request(runtime, ("--warmup", "7", "--timed-runs", "91", "--perf-timeout-s", "222"))
         self.assertEqual(explicit["options"]["bench_iters"], 91)
         self.assertEqual(explicit["runner_overrides"]["warmup_iters"], 7)
@@ -90,6 +93,69 @@ class MeasurementPolicyTest(unittest.TestCase):
         self.assertTrue(abba["lock_clocks"])
         self.assertNotIn("gpu_clock_mhz", abba["runner_overrides"])
         self.assertEqual(payload, original)
+
+    def assert_managed_clocks(self, payload):
+        self.assertIs(payload['lock_clocks'], True)
+        for values in (payload, payload.get('options', {}), payload.get('runner_overrides', {})):
+            self.assertNotIn('gpu_clock_mhz', values)
+            self.assertNotIn('graphics_mhz', values)
+        self.assertNotIn('lock_clocks', payload.get('options', {}))
+        self.assertNotIn('lock_clocks', payload.get('runner_overrides', {}))
+
+    def test_runtime_eval_and_abba_sdk_payloads_request_managed_clocks(self):
+        from aka.contracts.execution import BackendCapabilities
+        from aka.contracts.workspace import RevisionContent
+        from aka.evaluation.gateway_command import GatewayCommandEvaluator
+        from aka.evaluation.tool_requests import request_from_argv
+        from aka.execution.gateway import sdk
+        from aka.execution.gateway.requests import operation_request
+        from aka.workflow.light.measurement_policy import measurement_defaults
+        source=RevisionContent({'kernel.py':(self.root/'kernel.py').read_bytes()})
+        workspace=Mock()
+        workspace.read_source.return_value=source
+        workspace.read_working.return_value=RevisionContent({'solution.json':None})
+        capabilities=BackendCapabilities(operations=frozenset({'run','same_allocation_abba'}),
+            prepared_requests=True,source_archives=True,output_options=True)
+        config=EvaluationConfiguration(hardware='L20N',shape_batch_size=10,evaluation_step_timeout=60)
+        defaults=measurement_defaults(gpu_clock_mhz=1350)
+        evaluator=GatewayCommandEvaluator(execution_capabilities=capabilities,shape_batch_size=10)
+        for shapes in (1,12):
+            (self.root/'shapes.json').write_text(json.dumps({str(i):{'N':i+1} for i in range(shapes)}))
+            for mode,extra in [('full',[]),('correctness_only',['--mode','correctness_only']),
+                               ('abba',['--baseline-commit','a'*40])]:
+                with self.subTest(mode=mode,shapes=shapes):
+                    tool=request_from_argv(['--kind','evaluate',*extra],workspace=self.root,evaluation_input=None,
+                        configuration=config,workspace_provider=workspace,defaults=defaults,baseline_source=source)
+                    self.assert_managed_clocks(json.loads(tool.request.submission)['request'])
+                    prepared=evaluator.prepare(tool.request)
+                    self.assertEqual(len(prepared.steps),1 if shapes==1 else 2)
+                    for step,identity in zip(prepared.steps,prepared.measurement_identities):
+                        payload=json.loads(step.submission)['request']
+                        api=Mock()
+                        with patch.object(sdk,'client',return_value=api):
+                            sdk.request('endpoint','POST','/v1/jobs/eval',operation_request(payload,'run'),30)
+                        self.assert_managed_clocks(api.submit_job.call_args.args[1])
+                        self.assertIs(identity.parameters['lock_clocks'],True)
+
+    def test_prepared_requests_remove_stale_clock_fields_without_mutation(self):
+        from aka.evaluation.gateway_measurement import GatewayMeasurement
+        from aka.evaluation.measurement import gateway_identity
+        payload=self.request(CampaignRuntimeSettings())
+        payload.update(lock_clocks=False,gpu_clock_mhz=1350,graphics_mhz=1350)
+        payload['options'].update(lock_clocks=True,graphics_mhz=1350)
+        payload['runner_overrides'].update(gpu_clock_mhz=1350,lock_clocks=True)
+        original=copy.deepcopy(payload)
+        measurement=GatewayMeasurement(payload,workspace=self.root,hardware='L20N',private=False,batch_size=10)
+        for request in (measurement.request_for(0),shape_batch_request(payload,['0'],timeout_s=123),
+                        full_reference_abba_batch_request(payload,['0'])):
+            self.assert_managed_clocks(request)
+        self.assertEqual(shape_batch_request(payload,['0'],timeout_s=123)['options']['timeout_s'],123)
+        self.assertNotEqual(gateway_identity(payload,{}).digest,
+                            gateway_identity(measurement.request_for(0),{}).digest)
+        self.assertEqual(payload,original)
+        # Profiling is a separate route, not an Eval/ABBA policy override.
+        profile=GatewayMeasurement(payload,workspace=self.root,hardware='L20N',private=False,batch_size=1,profiling=True)
+        self.assertEqual(profile.request_for(0),original)
 
     def test_complete_shape_union_uses_task_objective(self):
         metadata = {"performance_objective": "shape_latency_geometric_mean"}

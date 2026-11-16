@@ -233,7 +233,6 @@ def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
             "a Kernel correctness verdict. If the submission outcome is uncertain, ask the "
             "operator to reconcile it; do not resubmit blindly."
         )
-    result["recovery"] = [{"instruction": result["next_action"]}]
     return result
 
 

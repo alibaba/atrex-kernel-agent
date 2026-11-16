@@ -147,13 +147,24 @@ def snapshot(
         identity = (scope, commit_id, record_id)
         result = result_by_identity.get(identity)
         if result is None:
+            # A submission may bind a peer's central Evaluate without a local
+            # evaluate call. Keep the verified performance, but never charge
+            # the peer's Evaluate token checkpoint to this lineage.
+            shared_evidence = submission.get("evidence_status") == "verified"
             result = {
                 "kernel_commit_id": commit_id,
                 "gateway_record_id": record_id,
-                "evaluated_at": None,
-                "performance": None,
+                "evaluated_at": submission.get("evaluated_at") if shared_evidence else None,
+                "performance": ({
+                    "latency_us_geomean": submission.get("latency_us_geomean"),
+                    "latency_us_arith_mean": submission.get("latency_us_arith_mean"),
+                    "shape_count": submission.get("shape_count"),
+                    "latency_us_by_shape": submission.get("latency_us_by_shape") or {},
+                } if shared_evidence else None),
                 "evaluate_token_usage": None,
-                "evaluate_token_usage_availability": "not_available",
+                "evaluate_token_usage_availability": (
+                    "shared_evidence_no_local_evaluate" if shared_evidence else "not_available"
+                ),
                 "submissions": [],
             }
             item["kernel_results"].append(result)

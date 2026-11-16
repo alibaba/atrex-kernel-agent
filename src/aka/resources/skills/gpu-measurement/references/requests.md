@@ -10,9 +10,9 @@ not replace a passing ordinary full Evaluate for the exact selected source.
 
 | Question | CLI kind / controls | What it establishes |
 | --- | --- | --- |
-| Is the current candidate correct and faster? | `run --no-sync` | Official correctness and end-to-end timing across the contract. Inspect correctness before using latency. |
-| Does a numerical repair work without timing? | Atrex-Bench `run --mode correctness_only --no-sync` | Correctness evidence only; missing latency is not zero latency. |
-| How do candidate and baseline compare in one allocation? | `run --baseline-commit COMMIT --comparison-repeats 2 --no-sync` | Paired ABBA evidence. Runtime exports the exact reachable Git commit privately; this does not replace ordinary full Evaluate. |
+| Is the current candidate correct and faster? | `evaluate --no-sync` | Official correctness and end-to-end timing across the contract. Inspect correctness before using latency. |
+| Does a numerical repair work without timing? | Atrex-Bench `evaluate --mode correctness_only --no-sync` | Correctness evidence only; missing latency is not zero latency. |
+| How do candidate and baseline compare in one allocation? | `evaluate --baseline-commit COMMIT --comparison-repeats 2 --no-sync` | Paired ABBA evidence. Runtime exports the exact reachable Git commit privately; this does not replace ordinary full Evaluate. |
 | Which GPU resource or Kernel needs attention? | `profile --profile-level sol --no-sync` | Structured counters, not an algorithmic optimality verdict. Narrow to a Kernel/launch for `deep`. |
 | Does compilation or a sanitizer reveal a defect? | `check --no-sync`, optionally `--sanitize memcheck` | Diagnostic results; inspect inner errors even if transport completed. |
 | What code did the compiler generate? | `disassemble --format ptx --no-sync` | Generated device code, not correctness or performance validation. |
@@ -32,8 +32,14 @@ shows them under their original Agate spellings (for example `--profiler acu`,
 `--cluster-label KEY=VALUE` or `--shape-shards N`). Updating Agate and restarting the
 Supervisor refreshes those options and enum values. Runtime-owned credentials, sources,
 uploads, waits, timeouts and evaluator selection are deliberately omitted.
+Every option is scoped to the selected operation: the authoritative allowed set is the
+`cli_options` returned by that exact `--kind OPERATION --help`. Do not transfer optional flags
+between operations. `--intent` and `--note`, when advertised, describe a raw Dev probe only;
+they are invalid for `evaluate`, `profile`, `check`, `disassemble`, `command`, and `env`.
 Known Agate result and error schemas receive the Runtime's operation-specific summary and
-recovery guidance. Unrecognized response markers, error classes and envelope fields are
+one canonical `next_action`. A separate `recovery` array appears only when it adds structured
+information such as a Record path or an executable repair command; it never repeats
+`next_action`. Unrecognized response markers, error classes and envelope fields are
 returned unchanged so a newer Agate client remains diagnosable; only credentials, private
 Supervisor paths and oversized-output truncation are applied universally.
 The injected task/evaluator contract and actual Runtime validation take precedence over
@@ -49,14 +55,12 @@ The session Prompt states whether Runtime request suspension is enabled. When en
 pause the Agent/subagents and do not consume the Agent active-time budget; when disabled, they
 remain active time. Every request remains subject to its own deadline. A quiet CLI is not a failure.
 
-Measurement commands print one compact receipt; the complete result is already saved under the
-receipt's `record_path`. Env instead prints the complete redacted Agate capability response directly
-to stdout and creates no Gateway Record. When a measurement has stdout or stderr, the receipt's
-`stdout_location` or `stderr_location` names both the Record file and exact JSON field containing
-the complete stream. Save a measurement receipt separately only when needed:
+Measurement commands print the complete canonical public result; the same result is saved under its
+`record_path`. Env uses the same canonical result contract and archives its observation in the central Store. Save a
+measurement result separately only when needed:
 
 ```bash
-python3 tools/sandbox.py --kind run --no-sync > scratch/evaluate.json 2> scratch/evaluate.stderr
+python3 tools/sandbox.py --kind evaluate --no-sync > scratch/evaluate.json 2> scratch/evaluate.stderr
 ```
 
 Check the exit status and both files after the invocation ends. Do not use `2>&1` or a
@@ -73,19 +77,21 @@ not a custom probe.
 
 ```bash
 # Full workload: Atrex-Bench or SOL-ExecBench.
-python3 tools/sandbox.py --kind run --no-sync
+python3 tools/sandbox.py --kind evaluate --no-sync
 # Optional explicit version label (both evaluators).
-python3 tools/sandbox.py --kind run --no-sync --version v2
+python3 tools/sandbox.py --kind evaluate --no-sync --version v2
 # Atrex-Bench only: correctness-only diagnostic, not a full Evaluate.
-python3 tools/sandbox.py --kind run --mode correctness_only --no-sync
+python3 tools/sandbox.py --kind evaluate --mode correctness_only --no-sync
 # Generic AB/BA example; use the injected acceptance command for reuse.
-python3 tools/sandbox.py --kind run --baseline-commit <full-git-commit> --comparison-repeats 2 --no-sync
+python3 tools/sandbox.py --kind evaluate --baseline-commit <full-git-commit> --comparison-repeats 2 --no-sync
 # Atrex-Bench Typed NCU/rocprof profile; use a Shape ID returned by Runtime.
 python3 tools/sandbox.py --kind profile --profile-level sol --no-sync
 python3 tools/sandbox.py --kind profile --profile-shape-id 0 --no-sync
 python3 tools/sandbox.py --kind profile --profile-level deep --kernel-name my_kernel --profile-source --launch-count 1 --no-sync
 # Custom remote probe: explicitly declare files opened dynamically.
 python3 tools/sandbox.py --kind dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py
+# Optional Dev metadata may be used only when `--kind dev --help` advertises it.
+# Never copy `--intent` or `--note` into an Evaluate or another operation.
 # Diagnostics and available environments (Gateway or SSH).
 python3 tools/sandbox.py --kind check --sanitize memcheck --no-sync
 python3 tools/sandbox.py --kind disassemble --format ptx --no-sync
@@ -95,7 +101,7 @@ python3 tools/sandbox.py --kind env
 Managed `env` takes no target, capability, or refresh override. Runtime supplies the Campaign's
 hardware identity and requests its capability view; use the returned architecture/features rather
 than querying a different product or guessing from a marketing name. The stdout payload is the
-complete redacted Agate Env response, not a compact measurement receipt.
+complete redacted Agate Env response through the canonical result contract.
 
 For ABBA, optional `--comparison-run-timeout SECONDS` controls each run. Runtime uses an explicit
 positive value unchanged and expands the ABBA allocation to fit the complete schedule. Without
@@ -139,14 +145,14 @@ For Atrex-Bench evaluator controls, choose one spelling:
 
 ```bash
 # Shorthand: no explicit command.
-python3 tools/sandbox.py --kind run --timed-runs 100 --no-sync
+python3 tools/sandbox.py --kind evaluate --timed-runs 100 --no-sync
 # Evaluator controls belong to the Runtime request; its private harness is not
 # part of the Agent workspace.
-python3 tools/sandbox.py --kind run --no-sync --timed-runs 100
+python3 tools/sandbox.py --kind evaluate --no-sync --timed-runs 100
 ```
 
 Top-level `--version`, `--shape-id` and `--timed-runs` require
-`--kind run` without an explicit command. Mixing these top-level controls with a
+`--kind evaluate` without an explicit command. Mixing these top-level controls with a
 command is rejected before execution; they are not merged or silently ignored.
 `--multi-seed` is Runtime-owned and is rejected in either spelling.
 Explicit shorthand controls require a compatible typed evaluation route and
@@ -215,8 +221,8 @@ ABBA keeps the per-side aggregate metrics, not raw schedules or repetition array
 A completed evaluator can have `result.correct: false`; completion does not mean the Kernel passed.
 Search `records/*.json` by commit ID to find its measurements. Use `git show`, `git diff`, `git log`
 or a local branch to inspect source; imported peer history uses refs such as `atrex/T2`.
-Dev and Command receipts show bounded stdout/stderr previews and byte counts. Their complete redacted
-streams remain in the saved Record and can be read directly in bounded ranges.
+Dev and Command results include their complete redacted stdout/stderr. The same streams remain in the
+saved Record.
 Dev probes also produce Record IDs even when their output is not an evaluation.
 When an identical completed task already has a valid cached Record, Runtime returns that Record
 through the same normal completed receipt and does not submit another Agate task. Cache reuse is a
@@ -233,7 +239,7 @@ Do not infer unavailable counters or missing measurements as zero.
 | Full Evaluate completed, `result.correct: true` | Compare the measured latency and per-Shape changes with your expected effect. Keep, refine or restore based on evidence; use `submit-kernel` only when you want this exact commit included in winner selection. |
 | Evaluate completed, `result.correct: false` | Inspect correctness diagnostics and Shape/case/output identifiers. On generalized hidden-Shape tasks, treat IDs as opaque; on exposed tasks, use `shapes.json`. Repair the candidate; do not call it a Gateway outage or use its timings as a valid speedup. |
 | Dev/Check/Profile/Disassemble failure | Read `result.error` and available `stdout`/`stderr` or diagnostic fields. Compiler/import/file errors require source or declared-input repair. A successful Dev probe is not automatically a passing Evaluate. |
-| Request rejected with `issues`, `request_schema`, `recovery` or `error.next_action` | Correct the named field/path or evidence reference. Follow the supplied operation-specific guidance, not guessed flags or IDs. |
+| Request rejected with `issues`, `request_schema`, optional structured `recovery`, or `error.next_action` | Correct the named field/path or evidence reference. Follow the supplied operation-specific guidance, not guessed flags or IDs. |
 | `gateway_task_running` | The same call is still executing; this request did not submit another Agate task. Wait for the original response. `remaining_seconds` is its remaining Runtime request budget, not a guaranteed successful completion ETA; null means unknown, and zero means the deadline has elapsed and cleanup is still in progress. No complete Record is available to read yet. |
 | `request_not_started`, explicitly `repairable: true` | No executor started. Wait at least `retry_after_seconds` and retry unchanged with backoff; this exception does not authorize retries for other failures. |
 | Infrastructure recovery exhausted | Runtime already applied the configured terminal/non-terminal retry policy. Follow its final `next_action`; report a genuine blocker instead of declaring the Kernel incorrect or building another retry loop. |

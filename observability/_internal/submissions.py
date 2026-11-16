@@ -182,6 +182,7 @@ def _join_submission_evidence(scope: Scope, submission: dict[str, Any]) -> dict[
         row["evidence_status"] = "kernel_identity_mismatch"
         return row
     row.update({"evidence_status": "verified", "latency_us_geomean": _latency(result),
+                "evaluated_at": record.get("created_at"),
                 "latency_us_arith_mean": finite_positive(result.get("latency_us_arith_mean")),
                 "shape_count": len(result.get("latency_us_by_shape") or {}),
                 "latency_us_by_shape": dict(result.get("latency_us_by_shape") or {}),

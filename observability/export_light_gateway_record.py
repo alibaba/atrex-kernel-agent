@@ -5,10 +5,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import shutil
 import sys
 import tempfile
+from pathlib import Path
 from typing import Any
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -17,8 +17,8 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.experiment.measurement_store import RECORD_ID  # noqa: E402
-from observability._internal.common import (  # noqa: E402
+from aka.experiment.measurement_store import RECORD_ID
+from observability._internal.common import (
     discover_scopes,
     job_attempt_rows,
     observed_at,
@@ -26,8 +26,10 @@ from observability._internal.common import (  # noqa: E402
     resolve_workspace,
     runtime_audit_paths,
 )
-from observability._internal.gateway_record import (  # noqa: E402
+from observability._internal.gateway_record import (
     gateway_record_locations,
+)
+from observability._internal.gateway_record import (
     runtime_request_ids as location_runtime_request_ids,
 )
 
@@ -71,6 +73,12 @@ def _location(location: dict[str, Any]) -> dict:
         for row in audits
         if isinstance(row.get("request_id"), str) and row.get("request_id")
     )
+    # The creation request's persisted response is authoritative, including for
+    # older campaigns whose receipt contract differs from the current one.
+    creation_request = location.get("runtime_request_id")
+    actual_response = next((row["agent_response"] for row in audits
+        if row.get("request_id") == creation_request
+        and isinstance(row.get("agent_response"), dict)), None)
     return {
         "scope": location["scope_name"],
         "trajectory": location["trajectory"],
@@ -80,7 +88,7 @@ def _location(location: dict[str, Any]) -> dict:
         "runtime_request": location["request"],
         "runtime_audits": audits,
         "gateway_record": location["record"],
-        "agent_response": location["agent_response"],
+        "agent_response": actual_response if actual_response is not None else location["agent_response"],
         "agate_attempts": [
             {
                 key: attempt[key]
@@ -94,6 +102,7 @@ def _location(location: dict[str, Any]) -> dict:
                     "backend_agate_job_ids",
                     "status",
                     "retry_counters",
+                    "agate_sdk_submission_payload",
                     "agate_response",
                     "raw_process",
                     "snapshot_path",
@@ -223,13 +232,11 @@ def _merged_agate_attempts(matches: list[dict]) -> list[dict]:
     )
 
 
-def export_gateway_record(workspace: Path, record_id: str, output: Path) -> dict:
+def snapshot(workspace: Path, record_id: str) -> dict:
+    """Return the complete immutable Runtime → Agate → Agent evidence chain."""
     workspace = resolve_workspace(workspace)
     if RECORD_ID.fullmatch(record_id) is None:
         raise ValueError("--gateway-record-id must be a complete gateway- ID")
-    output = output.expanduser().absolute()
-    if output.exists() or output.is_symlink():
-        raise ValueError(f"Output already exists: {output}")
     matches = _matches(workspace, record_id)
     if not matches:
         raise ValueError("Gateway Record is not available in this Campaign")
@@ -239,6 +246,66 @@ def export_gateway_record(workspace: Path, record_id: str, output: Path) -> dict
     agent_response = _canonical_value(matches, "agent_response")
     runtime_audits = _merged_runtime_audits(matches)
     agate_attempts = _merged_agate_attempts(matches)
+    primary_ids = sorted(
+        {
+            attempt["agate_job_id"]
+            for attempt in agate_attempts
+            if attempt["agate_job_id"]
+        }
+    )
+    backend_ids = sorted(
+        {
+            backend_agate_job_id
+            for attempt in agate_attempts
+            for backend_agate_job_id in attempt["backend_agate_job_ids"]
+        }
+    )
+    runtime_request_ids = sorted(
+        {
+            runtime_request_id
+            for match in matches
+            for runtime_request_id in match["runtime_request_ids"]
+        }
+    )
+    return {
+        "schema_version": 1,
+        "observed_at": observed_at(),
+        "campaign_workspace": str(workspace),
+        "gateway_record_id": record_id,
+        "runtime_request_ids": runtime_request_ids,
+        "agate_job_ids": primary_ids,
+        "backend_agate_job_ids": backend_ids,
+        "runtime_request": runtime_request,
+        "runtime_audits": runtime_audits,
+        "gateway_record": gateway_record,
+        "agent_response": agent_response,
+        "agate_attempts": agate_attempts,
+        "source_locations": [
+            {
+                "scope": match["scope"],
+                "trajectory": match["trajectory"],
+                "workspace": match["workspace"],
+                "record_directory": match["record_directory"],
+                "runtime_request_ids": match["runtime_request_ids"],
+                "runtime_audit_count": len(match["runtime_audits"]),
+                "agate_attempt_count": len(match["agate_attempts"]),
+            }
+            for match in matches
+        ],
+    }
+
+
+def export_gateway_record(workspace: Path, record_id: str, output: Path) -> dict:
+    workspace = resolve_workspace(workspace)
+    output = output.expanduser().absolute()
+    if output.exists() or output.is_symlink():
+        raise ValueError(f"Output already exists: {output}")
+    evidence = snapshot(workspace, record_id)
+    runtime_request = evidence["runtime_request"]
+    gateway_record = evidence["gateway_record"]
+    agent_response = evidence["agent_response"]
+    runtime_audits = evidence["runtime_audits"]
+    agate_attempts = evidence["agate_attempts"]
 
     output.parent.mkdir(parents=True, exist_ok=True)
     temporary = Path(tempfile.mkdtemp(prefix=".aka-gateway-export-", dir=output.parent))
@@ -249,51 +316,22 @@ def export_gateway_record(workspace: Path, record_id: str, output: Path) -> dict
         _write(temporary / "agent-response.json", agent_response)
         _write(temporary / "agate-attempts.json", agate_attempts)
 
-        primary_ids = sorted(
-            {
-                attempt["agate_job_id"]
-                for attempt in agate_attempts
-                if attempt["agate_job_id"]
-            }
-        )
-        backend_ids = sorted(
-            {
-                backend_agate_job_id
-                for attempt in agate_attempts
-                for backend_agate_job_id in attempt["backend_agate_job_ids"]
-            }
-        )
-        runtime_request_ids = sorted(
-            {
-                runtime_request_id
-                for match in matches
-                for runtime_request_id in match["runtime_request_ids"]
-            }
-        )
+        primary_ids = evidence["agate_job_ids"]
+        backend_ids = evidence["backend_agate_job_ids"]
+        runtime_request_ids = evidence["runtime_request_ids"]
         manifest = {
             "schema_version": 2,
             "exported_at": observed_at(),
             "campaign_workspace": str(workspace),
             "gateway_record_id": record_id,
-            "source_location_count": len(matches),
+            "source_location_count": len(evidence["source_locations"]),
             "runtime_request_ids": runtime_request_ids,
             "agate_job_ids": primary_ids,
             "backend_agate_job_ids": backend_ids,
             "runtime_audit_count": len(runtime_audits),
             "agate_attempt_count": len(agate_attempts),
             "agent_response_available": agent_response is not None,
-            "source_locations": [
-                {
-                    "scope": match["scope"],
-                    "trajectory": match["trajectory"],
-                    "workspace": match["workspace"],
-                    "record_directory": match["record_directory"],
-                    "runtime_request_ids": match["runtime_request_ids"],
-                    "runtime_audit_count": len(match["runtime_audits"]),
-                    "agate_attempt_count": len(match["agate_attempts"]),
-                }
-                for match in matches
-            ],
+            "source_locations": evidence["source_locations"],
         }
         _write(temporary / "manifest.json", manifest)
         os.replace(temporary, output)

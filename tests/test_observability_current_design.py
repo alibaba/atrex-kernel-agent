@@ -1,11 +1,17 @@
 import json
 import os
 from pathlib import Path
+from threading import Thread
 from types import SimpleNamespace
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
+from aka.experiment.measurement_store import private_write
+from aka.workflow.light.orchestration.supervisor_runtime import SupervisorRuntime
 from observability import (
     export_light_gateway_record,
     light_agate_calls,
+    light_dashboard,
     light_gateway_jobs,
     light_kernel_history,
     light_lineage_status,
@@ -13,16 +19,320 @@ from observability import (
 )
 from observability._internal import (
     agate_state as light_agate_status,
+)
+from observability._internal import (
     common,
-    research_state as light_research_status,
-    runtime_audit as light_tool_usage,
-    runtime_state as light_runtime_status,
-    source_export as export_light_source,
     submissions,
     view_helpers,
 )
-from aka.light.experiment.store import private_write
-from aka.light.runtime.server import SupervisorRuntime
+from observability._internal import (
+    research_state as light_research_status,
+)
+from observability._internal import (
+    runtime_audit as light_tool_usage,
+)
+from observability._internal import (
+    runtime_state as light_runtime_status,
+)
+from observability._internal import (
+    source_export as export_light_source,
+)
+
+
+def test_runtime_audit_uses_logical_evaluate_names():
+    assert light_tool_usage._display_tool(
+        {"operation": "gateway", "argv": ["--kind", "evaluate"]}
+    ) == "evaluate"
+    assert light_tool_usage._display_tool(
+        {
+            "operation": "gateway",
+            "argv": ["--kind", "evaluate", "--baseline-commit", "a" * 40],
+        }
+    ) == "abba"
+    assert light_tool_usage._display_tool(
+        {"operation": "gateway", "argv": ["--kind", "evaluate", "--help"]}
+    ) == "help"
+
+
+def _dashboard_snapshots(monkeypatch):
+    monkeypatch.setattr(
+        light_dashboard,
+        "lineage_snapshot",
+        lambda *_args, **_kwargs: {
+            "schema_version": 1,
+            "lineages": [{"lineage": "t0001", "runtime": {"liveness": "running"}}],
+        },
+    )
+    monkeypatch.setattr(
+        light_dashboard,
+        "history_snapshot",
+        lambda *_args, **_kwargs: {
+            "schema_version": 2,
+            "lineages": [],
+        },
+    )
+    monkeypatch.setattr(
+        light_dashboard,
+        "best_snapshot",
+        lambda *_args, **_kwargs: {
+            "schema_version": 1,
+            "accepted_submission_count": 0,
+            "geomean_best": None,
+            "shape_best": {},
+        },
+    )
+    monkeypatch.setattr(
+        light_dashboard,
+        "runtime_snapshot",
+        lambda *_args, **kwargs: {
+            "schema_version": 1,
+            "summary": [],
+            "calls": [],
+            "selected_last": kwargs.get("last"),
+        },
+    )
+    monkeypatch.setattr(
+        light_dashboard,
+        "agate_snapshot",
+        lambda *_args, **kwargs: {
+            "schema_version": 1,
+            "summary": [],
+            "calls": [],
+            "selected_last": kwargs.get("last"),
+        },
+    )
+    monkeypatch.setattr(
+        light_dashboard,
+        "gateway_evidence_snapshot",
+        lambda _workspace, record_id: {
+            "schema_version": 1,
+            "gateway_record_id": record_id,
+            "attempts": [],
+        },
+    )
+    monkeypatch.setattr(
+        light_dashboard,
+        "_runtime_request_detail",
+        lambda _workspace, request_id: {
+            "schema_version": 1,
+            "runtime_request_id": request_id,
+            "runtime_audit": {"state": "failed"},
+        },
+    )
+
+
+def _dashboard_request(url, *, method="GET"):
+    with urlopen(Request(url, method=method), timeout=5) as response:
+        return response.status, response.headers, response.read()
+
+
+def test_light_dashboard_serves_snapshot_api_and_gateway_trace(monkeypatch, tmp_path):
+    _dashboard_snapshots(monkeypatch)
+    server = light_dashboard.create_server(tmp_path, "127.0.0.1", 0, 4321)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        status, headers, page = _dashboard_request(base + "/")
+        assert status == 200
+        assert b"AKA LIGHT" in page
+        assert b'id="token-latency-chart"' in page
+        assert b'id="token-latency-tooltip"' in page
+        assert b"Kernel latency over token usage" in page
+        assert b"Full Evaluate candidate" in page
+        assert b"accepted submit-kernel" in page
+        assert b"evaluate_token_usage?.all_paths?.total_tokens" in page
+        assert b'id="kernel-detail"' in page
+        assert b"latency_us_by_shape" in page
+        assert b"tr.addEventListener('click',()=>renderKernelDetail" not in page
+        assert b"detailButton.addEventListener('click'" in page
+        assert b'id="copy-toast"' in page
+        assert b"Gateway Record ID copied" in page
+        assert b'id="call-browser"' in page
+        assert b"function callCountCell(tr,layer,kind,status,count)" in page
+        assert b"count-button ${status||'all'}" in page
+        assert b".count-button.succeeded" in page
+        assert b".count-button.failed" in page
+        assert b".count-button.pending" in page
+        assert b"openCallBrowser(layer,kind,status=null)" in page
+        assert b"callCountCell(tr,'Runtime',x.kind,'succeeded',x.succeeded)" in page
+        assert b"callCountCell(tr,'Agate',x.kind,'pending',x.pending)" in page
+        assert b"Agent \xe2\x86\x92 Runtime" in page
+        assert b"Runtime \xe2\x86\x92 Service" in page
+        assert b"Service \xe2\x86\x92 Runtime" in page
+        assert b"Runtime \xe2\x86\x92 Agent" in page
+        assert b'id="call-detail-service-request-panel"' in page
+        assert b'id="call-detail-service-response-panel"' in page
+        assert b"function setServicePanels(requests,responses)" in page
+        assert b"setServicePanels(serviceRequests,serviceResponses)" in page
+        assert b"legacyRuntimeReceipt" in page
+        assert b"evidence?.agent_receipt||legacyRuntimeReceipt(audit)" in page
+        assert b"Runtime call is still pending; no Agent-visible result exists yet." in page
+        assert b"['pending','running'].includes(String(audit.state||'').toLowerCase())" in page
+        assert b"runtimeRawStreams=backendRawResponses.length?[]" in page
+        assert b"['STDOUT',audit?.stdout],['STDERR',audit?.stderr]" in page
+        assert b'id="runtime-receipt-tab"' not in page
+        assert b'id="runtime-stdout-tab"' not in page
+        assert b'id="runtime-stderr-tab"' not in page
+        assert b"serviceRequests=reviewRequests.length?reviewRequests:attempts.map" in page
+        assert b"audit?.agent_request" in page
+        assert b"audit?.agent_response" in page
+        assert b"runtimeStreams={stdout:audit?.stdout" not in page
+        assert b"Agent-visible Runtime record (full record on disk)" not in page
+        assert "no-store" in headers["Cache-Control"]
+
+        status, _headers, raw = _dashboard_request(base + "/api/summary")
+        payload = json.loads(raw)
+        assert status == 200
+        assert payload["refresh_ms"] == 4321
+        assert payload["lineages"]["lineages"][0]["lineage"] == "t0001"
+        assert payload["runtime_calls"]["selected_last"] == 50
+
+        record_id = "gateway-" + "a" * 32
+        status, _headers, raw = _dashboard_request(
+            base + "/api/gateway-records/" + record_id
+        )
+        assert status == 200
+        assert json.loads(raw)["gateway_record_id"] == record_id
+
+        request_id = "b" * 32
+        status, _headers, raw = _dashboard_request(
+            base + "/api/runtime-requests/" + request_id
+        )
+        assert status == 200
+        assert json.loads(raw)["runtime_request_id"] == request_id
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_dashboard_derives_exact_agent_receipt_from_gateway_record():
+    record_id = "gateway-" + "c" * 32
+    evidence = light_dashboard._with_agent_receipt({
+        "gateway_record": {
+            "response": {
+                "agent_result": {
+                    "operation": "check",
+                    "status": "failed",
+                    "gateway_record_id": record_id,
+                    "result": {"passed": False, "error": "compile failed"},
+                }
+            }
+        }
+    })
+
+    assert evidence["agent_receipt"]["record_path"] == f"records/{record_id}.json"
+    assert evidence["agent_receipt"]["result"]["error"] == "compile failed"
+
+
+def test_light_dashboard_rejects_mutation_and_unbounded_details(monkeypatch, tmp_path):
+    _dashboard_snapshots(monkeypatch)
+    server = light_dashboard.create_server(tmp_path, "127.0.0.1", 0, 5000)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_port}"
+    try:
+        try:
+            _dashboard_request(base + "/api/summary", method="POST")
+        except HTTPError as exc:
+            assert exc.code == 405
+            assert json.loads(exc.read())["error"] == "AKA Light dashboard is read-only"
+        else:
+            raise AssertionError("POST unexpectedly succeeded")
+
+        try:
+            _dashboard_request(base + "/api/runtime-calls?last=501")
+        except HTTPError as exc:
+            assert exc.code == 400
+            assert json.loads(exc.read())["code"] == "invalid_request"
+        else:
+            raise AssertionError("unbounded detail request unexpectedly succeeded")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_light_dashboard_capture_preserves_remote_liveness(monkeypatch, tmp_path):
+    _dashboard_snapshots(monkeypatch)
+    campaign = tmp_path / "campaign"
+    campaign.mkdir()
+    captured = tmp_path / "dashboard.json"
+
+    light_dashboard.write_snapshot(campaign, captured, refresh_ms=4321)
+    saved = json.loads(captured.read_text())
+    assert saved["schema"] == light_dashboard.SNAPSHOT_SCHEMA
+    assert saved["source_mode"] == "captured_observability"
+    assert saved["lineages"]["lineages"][0]["runtime"]["liveness"] == "running"
+
+    monkeypatch.setattr(
+        light_dashboard,
+        "lineage_snapshot",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("local snapshot must not be recomputed")
+        ),
+    )
+    server = light_dashboard.create_server(captured, "127.0.0.1", 0, 9999)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, _headers, raw = _dashboard_request(
+            f"http://127.0.0.1:{server.server_port}/api/summary"
+        )
+        payload = json.loads(raw)
+        assert status == 200
+        assert payload["captured_at"] == saved["captured_at"]
+        assert payload["refresh_ms"] == 4321
+        assert payload["lineages"]["lineages"][0]["runtime"]["liveness"] == "running"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+
+
+def test_light_dashboard_correlates_current_agate_work_by_runtime_request():
+    lineages = {
+        "lineages": [
+            {
+                "lineage": "t0001",
+                "runtime": {
+                    "liveness": "running_supervisor_activity",
+                    "supervisor_activity": {
+                        "active": True,
+                        "state": "running",
+                        "operation": "evaluate",
+                        "runtime_request_id": "request-1",
+                    },
+                },
+            }
+        ]
+    }
+    agate = {
+        "calls": [
+            {
+                "kind": "evaluate",
+                "status": "pending",
+                "execution_phase": "running",
+                "pending_age_seconds": 42.5,
+                "runtime_request_ids": ["request-1"],
+                "agate_job_id": "ev_123",
+                "gateway_record_id": "gateway-" + "a" * 32,
+            }
+        ]
+    }
+
+    light_dashboard._annotate_current_work(lineages, agate)
+
+    assert lineages["lineages"][0]["runtime"]["current_work"] == {
+        "layer": "agate",
+        "operation": "evaluate",
+        "state": "running_on_gpu",
+        "elapsed_seconds": 42.5,
+        "agate_job_id": "ev_123",
+        "gateway_record_id": "gateway-" + "a" * 32,
+        "runtime_request_id": "request-1",
+    }
 
 
 def test_kernel_history_nests_submissions_without_repeating_performance(
@@ -123,6 +433,25 @@ def test_kernel_history_nests_submissions_without_repeating_performance(
     assert "triton" in light_kernel_history.render(value)
 
 
+def test_kernel_history_reads_shared_submission_performance_without_peer_tokens(monkeypatch, tmp_path):
+    submission = {
+        "scope": "t0002", "trajectory": 2, "accepted": True,
+        "kernel_commit_id": "a" * 40, "gateway_record_id": "gateway-" + "b" * 32,
+        "evidence_status": "verified", "evaluated_at": "2026-01-01T00:00:00Z",
+        "latency_us_geomean": 4.0, "latency_us_arith_mean": 4.2,
+        "shape_count": 2, "latency_us_by_shape": {"0": 3.0, "1": 5.0},
+    }
+    monkeypatch.setattr(light_kernel_history, "campaign_submission_snapshot", lambda *_: {
+        "full_evaluations": [], "submissions": [submission], "accepted_submissions": [submission],
+    })
+    monkeypatch.setattr(light_kernel_history, "token_snapshot", lambda *_: {"token_checkpoints": []})
+    result = light_kernel_history.snapshot(tmp_path)["lineages"][0]["kernel_results"][0]
+    assert result["performance"]["latency_us_geomean"] == 4.0
+    assert result["evaluated_at"] == submission["evaluated_at"]
+    assert result["evaluate_token_usage"] is None
+    assert result["evaluate_token_usage_availability"] == "shared_evidence_no_local_evaluate"
+
+
 def test_kernel_history_keeps_submission_without_eligible_evaluate(
     monkeypatch, tmp_path
 ):
@@ -155,9 +484,7 @@ def test_kernel_history_keeps_submission_without_eligible_evaluate(
         lambda *_args: {"token_checkpoints": []},
     )
 
-    result = light_kernel_history.snapshot(tmp_path)["lineages"][0][
-        "kernel_results"
-    ][0]
+    result = light_kernel_history.snapshot(tmp_path)["lineages"][0]["kernel_results"][0]
 
     assert result["performance"] is None
     assert result["submissions"][0]["accepted"] is False
@@ -221,20 +548,25 @@ def test_submission_acceptance_uses_central_store_and_exact_eval(monkeypatch, tm
     workspace = tmp_path / "agent"
     audit = tmp_path / "private"
     workspace.mkdir()
-    from aka.light.workflow.submissions import append_submission
+    from aka.workflow.light.long_horizon.submissions import append_submission
+
     submission_root = submissions.supervisor_submission_root(workspace)
-    append_submission(submission_root, {
-        "revision": 1,
-        "submission_id": "submission-" + "c" * 32,
-        "lineage": "T1",
-        "episode": 2,
-        "kernel_commit_id": commit, "accepted": True,
-        "evaluation_evidence": {"status": "passed", "gateway_record_id": record_id},
-        "implementation_review": {
-            "availability": "available",
-            "technologies": ["cuda"],
+    append_submission(
+        submission_root,
+        {
+            "revision": 1,
+            "submission_id": "submission-" + "c" * 32,
+            "lineage": "T1",
+            "episode": 2,
+            "kernel_commit_id": commit,
+            "accepted": True,
+            "evaluation_evidence": {"status": "passed", "gateway_record_id": record_id},
+            "implementation_review": {
+                "availability": "available",
+                "technologies": ["cuda"],
+            },
         },
-        })
+    )
 
     class Store:
         def read(self, value):
@@ -250,9 +582,15 @@ def test_submission_acceptance_uses_central_store_and_exact_eval(monkeypatch, tm
     )
     monkeypatch.setattr(submissions, "discover_scopes", lambda _: [scope])
     monkeypatch.setattr(submissions, "existing_store", lambda _: Store())
-    monkeypatch.setattr(submissions, "eligible_full_eval", lambda _: {
-        "all_pass": True, "latency_us_geomean": 4.0, "latency_us_by_shape": {"0": 4.0},
-    })
+    monkeypatch.setattr(
+        submissions,
+        "eligible_full_eval",
+        lambda _: {
+            "all_pass": True,
+            "latency_us_geomean": 4.0,
+            "latency_us_by_shape": {"0": 4.0},
+        },
+    )
     monkeypatch.setattr(submissions, "full_eval_rows", lambda _: [])
     result = submissions.campaign_submission_snapshot(workspace)
     assert result["submissions"][0]["accepted"] is True
@@ -276,7 +614,9 @@ def test_source_export_reads_agent_commit_from_measurement_store(monkeypatch, tm
         lambda *_: [(tmp_path / "agent", Store())],
     )
     monkeypatch.setattr(export_light_source, "measurement_workspaces", lambda *_: [])
-    located = export_light_source.locate_git_commit(tmp_path, tmp_path / "private", commit)
+    located = export_light_source.locate_git_commit(
+        tmp_path, tmp_path / "private", commit
+    )
     assert located.snapshot == source
     assert located.identity == {"kernel_commit_id": commit}
 
@@ -337,9 +677,7 @@ def test_research_status_reads_progress_from_persistent_agent_workspace(
     private = tmp_path / "private"
     agent = private / "agent-workspace"
     agent.mkdir(parents=True)
-    (private / "state.json").write_text(
-        '{"workspace_mode":"persistent"}\n'
-    )
+    (private / "state.json").write_text('{"workspace_mode":"persistent"}\n')
     (agent / "PROGRESS.md").write_text("# Research Board\n")
     scope = common.Scope(controller, private, "campaign", None)
     monkeypatch.setattr(common, "supervisor_campaign_root", lambda _: private)
@@ -501,10 +839,7 @@ def test_runtime_audit_keeps_agent_facing_structured_error(tmp_path):
 
     value = json.loads(
         (
-            tmp_path
-            / "runtime-audit"
-            / "requests"
-            / f"request-{request_id}.json"
+            tmp_path / "runtime-audit" / "requests" / f"request-{request_id}.json"
         ).read_text()
     )
     assert value["state"] == "failed"
@@ -519,14 +854,7 @@ def test_runtime_status_applies_campaign_writer_lease_to_lineages(
     campaign = tmp_path / "campaign"
     lineage = campaign / "lineages" / "t0001"
     agent_workspace = lineage / "agent-workspace"
-    session = (
-        lineage
-        / "segments"
-        / "episodes"
-        / "e0001"
-        / "sessions"
-        / "run-example"
-    )
+    session = lineage / "segments" / "episodes" / "e0001" / "sessions" / "run-example"
     agent_workspace.mkdir(parents=True)
     session.mkdir(parents=True)
     (campaign / "campaign.json").write_text("{}\n")
@@ -583,9 +911,7 @@ def test_runtime_status_treats_running_claim_review_as_supervisor_activity(
         '{"trajectory":1,"segment_status":"active","completed_episodes":0}\n'
     )
     active_episode = lineage / "segments" / "active_episode.json"
-    active_episode.write_text(
-        '{"episode":1,"phase":"running"}\n'
-    )
+    active_episode.write_text('{"episode":1,"phase":"running"}\n')
     usage = session / "token-usage.json"
     conversation = session / "conversation.jsonl"
     usage.write_text(
@@ -618,7 +944,9 @@ def test_runtime_status_treats_running_claim_review_as_supervisor_activity(
     monkeypatch.setattr(
         light_runtime_status, "campaign_runtime_configuration", lambda _: None
     )
-    monkeypatch.setattr(light_runtime_status, "writer_active", lambda path: Path(path) == campaign)
+    monkeypatch.setattr(
+        light_runtime_status, "writer_active", lambda path: Path(path) == campaign
+    )
 
     row = light_runtime_status.snapshot(campaign, stale_after=600)["scopes"][1]
 
@@ -697,9 +1025,7 @@ def test_runtime_status_does_not_call_stale_provider_gap_thinking(
         '{"trajectory":1,"segment_status":"active","completed_episodes":0}\n'
     )
     active_episode = lineage / "segments" / "active_episode.json"
-    active_episode.write_text(
-        '{"episode":1,"phase":"running"}\n'
-    )
+    active_episode.write_text('{"episode":1,"phase":"running"}\n')
     usage = session / "token-usage.json"
     conversation = session / "conversation.jsonl"
     usage.write_text(
@@ -720,7 +1046,9 @@ def test_runtime_status_does_not_call_stale_provider_gap_thinking(
     monkeypatch.setattr(
         light_runtime_status, "campaign_runtime_configuration", lambda _: None
     )
-    monkeypatch.setattr(light_runtime_status, "writer_active", lambda path: Path(path) == campaign)
+    monkeypatch.setattr(
+        light_runtime_status, "writer_active", lambda path: Path(path) == campaign
+    )
 
     row = light_runtime_status.snapshot(campaign, stale_after=600)["scopes"][1]
 
@@ -731,16 +1059,20 @@ def test_runtime_status_does_not_call_stale_provider_gap_thinking(
     audit = lineage / "runtime-audit" / "requests" / "request-background.json"
     audit.parent.mkdir(parents=True)
     finished_at = light_runtime_status.observed_at()
-    audit.write_text(json.dumps({
-        "state": "succeeded",
-        "operation": "journal",
-        "tool": "record-experiment",
-        "created_at": "2020-01-01T00:00:00Z",
-        "started_at": "2020-01-01T00:00:00Z",
-        "updated_at": finished_at,
-        "finished_at": finished_at,
-        "duration_seconds": 3600.0,
-    }))
+    audit.write_text(
+        json.dumps(
+            {
+                "state": "succeeded",
+                "operation": "journal",
+                "tool": "record-experiment",
+                "created_at": "2020-01-01T00:00:00Z",
+                "started_at": "2020-01-01T00:00:00Z",
+                "updated_at": finished_at,
+                "finished_at": finished_at,
+                "duration_seconds": 3600.0,
+            }
+        )
+    )
 
     refreshed = light_runtime_status.snapshot(campaign, stale_after=600)["scopes"][1]
 
@@ -839,6 +1171,17 @@ def test_agate_status_deduplicates_checkpoint_references_to_one_job():
     assert len(unique[0]["checkpoint_references"]) == 2
 
 
+def test_agate_status_logical_success_overrides_failed_retry_attempt():
+    outcome = light_agate_status._logical_call_outcome(
+        complete=True,
+        cacheable=True,
+        response={"agent_result": {"status": "completed"}},
+        error={"reason": "logs_unavailable"},
+    )
+
+    assert outcome == "completed"
+
+
 def test_agate_status_default_projection_returns_only_compact_issues():
     successful_job = {
         "scope": "campaign",
@@ -895,7 +1238,10 @@ def test_agate_status_default_projection_returns_only_compact_issues():
         failed_job["gateway_record_id"]
     ]
     assert projected["current_jobs"] == [
-        {field: failed_job.get(field) for field in light_agate_status._COMPACT_JOB_FIELDS}
+        {
+            field: failed_job.get(field)
+            for field in light_agate_status._COMPACT_JOB_FIELDS
+        }
     ]
     assert "checkpoint_references" not in projected["current_jobs"][0]
     assert projected["detail_selection"]["omitted_counts"] == {
@@ -1055,7 +1401,8 @@ def test_research_review_summary_reads_audit_outcome_result(tmp_path):
     audit_root = tmp_path / "private"
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    from aka.light.runtime.paths import supervisor_research_catalog_root
+    from aka.workflow.light.support.paths import supervisor_research_catalog_root
+
     outcome = (
         supervisor_research_catalog_root(workspace)
         / "reviews"
@@ -1069,9 +1416,7 @@ def test_research_review_summary_reads_audit_outcome_result(tmp_path):
         outcome,
         {
             "status": "archived",
-            "result": {
-                "review": {"claim_review_quality": "partially_supported"}
-            },
+            "result": {"review": {"claim_review_quality": "partially_supported"}},
         },
     )
     summary = light_research_status._claim_review_summary(
@@ -1100,12 +1445,9 @@ def test_runtime_status_reads_episode_zero_attempt_from_private_segments(
         '"status":"candidate_ready","accepted":true}]}\n'
     )
     (episode / "attempt.json").write_text(
-        '{"episode":0,"memory_version":1,"status":"candidate_ready",'
-        '"accepted":true}\n'
+        '{"episode":0,"memory_version":1,"status":"candidate_ready","accepted":true}\n'
     )
-    (tmp_path / "trace-retention-manifest.json").write_text(
-        '{"status":"completed"}\n'
-    )
+    (tmp_path / "trace-retention-manifest.json").write_text('{"status":"completed"}\n')
     monkeypatch.setattr(
         light_runtime_status,
         "discover_scopes",
@@ -1168,11 +1510,11 @@ def test_job_attempt_rows_retains_failed_retry_and_success(tmp_path):
         (1, "ev_failed"),
         (2, "ev_ok"),
     ]
-    assert [common.normalized_job_status(row) for row in rows] == ["failed", "succeeded"]
-    assert (
-        common.job_error_details(rows[0]["job"])["reason"]
-        == "job_deadline_exceeded"
-    )
+    assert [common.normalized_job_status(row) for row in rows] == [
+        "failed",
+        "succeeded",
+    ]
+    assert common.job_error_details(rows[0]["job"])["reason"] == "job_deadline_exceeded"
 
 
 def test_gateway_jobs_snapshot_reports_status_and_error(monkeypatch, tmp_path):
@@ -1252,9 +1594,7 @@ def test_gateway_record_export_preserves_runtime_jobs_and_agent_receipt(
     )
     (audit / "request-req1.json").write_text(
         '{"request_id":"req1","operation":"gateway",'
-        '"argv":["--kind","evaluate"],"gateway_record_id":"'
-        + record_id
-        + '"}\n'
+        '"argv":["--kind","evaluate"],"gateway_record_id":"' + record_id + '"}\n'
     )
     scope = SimpleNamespace(
         label="t0001",
@@ -1367,16 +1707,20 @@ def test_evidence_health_resolves_central_record_creator_audit_across_lineages(
     owner_audit.parent.mkdir(parents=True)
     consumer_audit.parent.mkdir(parents=True)
     owner_audit.write_text(
-        json.dumps({
-            "request_id": "req-owner",
-            "gateway_record_id": record_id,
-        })
+        json.dumps(
+            {
+                "request_id": "req-owner",
+                "gateway_record_id": record_id,
+            }
+        )
     )
     consumer_audit.write_text(
-        json.dumps({
-            "request_id": "req-consumer",
-            "gateway_record_id": record_id,
-        })
+        json.dumps(
+            {
+                "request_id": "req-consumer",
+                "gateway_record_id": record_id,
+            }
+        )
     )
     owner = SimpleNamespace(
         label="t0001",
@@ -1429,10 +1773,12 @@ def test_evidence_health_still_reports_a_truly_missing_creator_audit(
     consumer_audit = tmp_path / "t0002" / "request-req-consumer.json"
     consumer_audit.parent.mkdir(parents=True)
     consumer_audit.write_text(
-        json.dumps({
-            "request_id": "req-consumer",
-            "gateway_record_id": record_id,
-        })
+        json.dumps(
+            {
+                "request_id": "req-consumer",
+                "gateway_record_id": record_id,
+            }
+        )
     )
     consumer = SimpleNamespace(
         label="t0002",
@@ -1453,9 +1799,7 @@ def test_evidence_health_still_reports_a_truly_missing_creator_audit(
         "iter_records",
         lambda _scope, include_incomplete=False: iter([dict(item)]),
     )
-    monkeypatch.setattr(
-        common, "runtime_audit_paths", lambda _scope: [consumer_audit]
-    )
+    monkeypatch.setattr(common, "runtime_audit_paths", lambda _scope: [consumer_audit])
     monkeypatch.setattr(common, "existing_store", lambda _scope: None)
 
     health = view_helpers.evidence_health(
@@ -1465,12 +1809,14 @@ def test_evidence_health_still_reports_a_truly_missing_creator_audit(
 
     missing = health["gateway_records_missing_runtime_audit"]
     assert health["complete"] is False
-    assert missing == [{
-        "scope": "t0002",
-        "visible_scopes": ["t0002"],
-        "gateway_record_id": record_id,
-        "runtime_request_id": "req-owner",
-    }]
+    assert missing == [
+        {
+            "scope": "t0002",
+            "visible_scopes": ["t0002"],
+            "gateway_record_id": record_id,
+            "runtime_request_id": "req-owner",
+        }
+    ]
     assert health["unlinked_runtime_audits"] == []
 
 
@@ -1530,10 +1876,12 @@ def test_agate_timing_uses_persisted_phase_observation_without_guessing():
         "total_seconds_source": "agate_created_finished",
     }
 
-    historical = light_agate_status._timing({
-        "created_at": "2026-01-01T00:00:00Z",
-        "finished_at": "2026-01-01T00:00:40Z",
-    })
+    historical = light_agate_status._timing(
+        {
+            "created_at": "2026-01-01T00:00:00Z",
+            "finished_at": "2026-01-01T00:00:40Z",
+        }
+    )
     assert historical["queue_seconds"] is None
     assert historical["execution_seconds"] is None
     assert historical["total_seconds"] == 40.0
@@ -1589,15 +1937,9 @@ def test_agate_calls_reports_timing_source_coverage(monkeypatch, tmp_path):
 
     assert summary["queue_seconds_samples"] == 1
     assert summary["queue_seconds_coverage"] == 0.5
-    assert summary["queue_seconds_source_counts"] == {
-        "runtime_observed_running": 1
-    }
-    assert summary["execution_seconds_source_counts"] == {
-        "runtime_observed_running": 1
-    }
-    assert summary["total_seconds_source_counts"] == {
-        "agate_created_finished": 2
-    }
+    assert summary["queue_seconds_source_counts"] == {"runtime_observed_running": 1}
+    assert summary["execution_seconds_source_counts"] == {"runtime_observed_running": 1}
+    assert summary["total_seconds_source_counts"] == {"agate_created_finished": 2}
 
 
 def test_runtime_calls_exposes_only_canonical_request_identity(monkeypatch, tmp_path):

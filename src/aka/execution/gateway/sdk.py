@@ -200,9 +200,24 @@ def request(endpoint, method, path, payload, timeout, *, environment=None, allow
             if method == 'POST' and len(bits)==4 and bits[3]=='cancel':
                 return api.cancel_job(bits[2])
         if bits[:2] == ['v1','env'] and method == 'GET':
-            if len(bits)==2:return api.list_env(force=force)
-            if len(bits)==3:return api.get_env(bits[2],force=force)
-            if len(bits)==4 and bits[3]=='capabilities':return api.get_capabilities(bits[2],force=force)
+            from aka.core.service_audit import audit_service_exchange
+            import uuid
+            name = ('list_env' if len(bits) == 2 else 'get_env' if len(bits) == 3
+                    else 'get_capabilities' if len(bits) == 4 and bits[3] == 'capabilities' else None)
+            if name is not None:
+                exchange_id = uuid.uuid4().hex
+                arguments = {"force": force, **({"gpu": bits[2]} if len(bits) > 2 else {})}
+                audit_service_exchange(service="agate", exchange_id=exchange_id,
+                    request={"method": name, **arguments})
+                try:
+                    result = getattr(api, name)(*([bits[2]] if len(bits) > 2 else []), force=force)
+                except Exception as error:
+                    audit_service_exchange(service="agate", exchange_id=exchange_id,
+                        response={"status": "error", "http_status": getattr(error, "status", None),
+                            "payload": getattr(error, "payload", None), "error_type": type(error).__name__})
+                    raise
+                audit_service_exchange(service="agate", exchange_id=exchange_id, response=result)
+                return result
         raise ValueError(f"No supported Agate SDK operation for {method} {parsed.path}")
     except GatewayError as error:
         response = _sdk_error_process(error, stage="request")

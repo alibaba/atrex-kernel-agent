@@ -48,16 +48,13 @@ operations and request schemas. Do not infer a different workflow from unrelated
 - Keep Runtime calls in the foreground and wait for the same invocation. Do not add shell timeouts,
   background a call, or edit the candidate while it is pending. The Session Prompt states whether
   waiting pauses Agent active time. A lost client does not prove that no job ran.
-- Runtime measurement calls return a compact receipt and project the complete immutable measurement as
-  `records/<gateway_record_id>.json`. Read or query that JSON file directly with ordinary file
-  operations. Select only the fields, Shape, or bounded text needed for the next decision; do not
-  print an entire Record, stdout, table, or source into the Session.
-  When stdout or stderr exists, the receipt's `stdout_location` or `stderr_location` gives both the
-  Record path and exact JSON field containing the complete stream.
+- Runtime measurement calls return the complete canonical public result and persist the same result as
+  `records/<gateway_record_id>.json`. The file is durable evidence, not a second source that must be
+  opened to recover fields omitted from the Runtime response.
   Completion does not imply correctness. Reuse matching Records, follow `error.next_action`, and
   do not add independent retry loops or resubmit an unknown outcome.
-- Env is not a measurement and creates no Gateway Record. It prints the complete redacted Agate
-  capability response directly to stdout; inspect that response in place.
+- Env is read-only discovery. Its complete redacted capability data uses the same canonical
+  Runtime result contract and is archived in the central Store; it is not correctness/performance evidence.
 - Root `PROGRESS.md` is a compact read-only index of the incumbent, measured frontier, and enabled
   research state that Runtime regenerates after accepted state changes. Direction and Experiment files contain fallible hypotheses and interpretations;
   Gateway Records remain measurement authority.

@@ -20,7 +20,7 @@ import time
 import traceback
 from concurrent.futures import CancelledError
 
-from aka.task.problem.resources import native_harness_script
+from aka.evaluation.resources import native_harness_script
 from aka.evaluation.drivers import numerical_inputs as probe_algorithms
 from aka.workflow.light.measurement_policy import CANDIDATE_TIMEOUT
 from aka.workflow.light.host.workspace import read_input, publish
@@ -222,6 +222,25 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
                 shutil.copy2(source, target)
             request = {"evidence_digest": digest, "previous_validation": previous,
                        "world_size": _world_size(workspace)}
+            review_exchange_id = uuid.uuid4().hex
+            runtime = getattr(campaign, "_supervisor_runtime", None)
+            if runtime is not None and hasattr(runtime, "audit_service_exchange"):
+                runtime.audit_service_exchange(
+                    service="supplemental_numerical_reviewer",
+                    exchange_id=review_exchange_id,
+                    request={
+                        "review_request": request,
+                        "evidence_manifest": {
+                            "files": [
+                                {
+                                    "path": name,
+                                    "sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+                                }
+                                for name, source in sorted(files.items())
+                            ],
+                        },
+                    },
+                )
             (root / "review_request.json").write_text(json.dumps(request, indent=2))
             capture_root = state_root / "sessions" / uuid.uuid4().hex
             result = campaign._run_session(
@@ -271,6 +290,12 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
                 check_review_service(result)
             try:
                 value = json.loads(read_regular_bytes(response, limit=128 * 1024 + 1))
+                if runtime is not None and hasattr(runtime, "audit_service_exchange"):
+                    runtime.audit_service_exchange(
+                        service="supplemental_numerical_reviewer",
+                        exchange_id=review_exchange_id,
+                        response=value,
+                    )
                 if response.stat().st_size > 128 * 1024:
                     raise ValueError("numerical plan exceeds 128 KiB")
                 record["response"] = value

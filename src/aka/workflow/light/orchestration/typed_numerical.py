@@ -40,7 +40,7 @@ def run(campaign, workspace, suite, shapes, schedule, directory, *, cancel):
                     publish(probe, "input.py", input_source(read_input(workspace, "input.py"), case, seed))
                     publish(probe, "shapes.json", json.dumps({shape_id: shapes[shape_id]}).encode())
                     response = campaign.measure_for_acceptance(probe, [
-                        "--kind", "run", "--no-sync", "--", "python3", "test_kernel.py",
+                        "--kind", "evaluate", "--no-sync", "--", "python3", "test_kernel.py",
                         "--correctness-only", "--multi-seed", "0",
                     ], execution_timeout=600, parent=cancel.parent, reference_snapshot=probe,
                         terminal_validation=True)

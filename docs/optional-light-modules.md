@@ -46,3 +46,5 @@ Campaign store; projections are not independent authorities.
 
 See [design](design.md), [runtime](supervisor-runtime.md), and the
 [launch Skill](../skills/atrex-aka-light/SKILL.md) for lifecycle and operator intake.
+
+Request errors expose `error.next_action` and field-level `issues`. A `recovery` array is used only for additional structured data such as a Record path or command, without duplicating that instruction.

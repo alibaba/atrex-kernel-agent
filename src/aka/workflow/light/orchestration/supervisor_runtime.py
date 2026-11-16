@@ -242,18 +242,103 @@ class _OperationCancellation:
             self.capability.deadline is not None and time.monotonic() >= self.capability.deadline)
 
 
+def agent_gateway_response(result: dict) -> tuple[dict, int | None]:
+    """Return the full canonical result and its executor exit classification.
+
+    Gateway observations, including Env, are archived by the Runtime and carry
+    a Record path. Normalization/redaction happens before this boundary.
+    """
+    from aka.evaluation.tool_results import compact_receipt
+    agent_result = result.get("agent_result")
+    if not isinstance(agent_result, dict):
+        return result, None
+    return compact_receipt(agent_result), result["exit_code"]
+
+def _runtime_operation(route: str, request: dict) -> str:
+    if route == "/v1/gateway/execute":
+        argv = request.get("argv", [])
+        if not isinstance(argv, list):
+            return "gateway"
+        words = argv[:argv.index("--")] if "--" in argv else argv
+        kind = "auto"
+        for index, word in enumerate(words):
+            if word == "--kind" and index + 1 < len(words):
+                kind = words[index + 1]
+            elif isinstance(word, str) and word.startswith("--kind="):
+                kind = word.split("=", 1)[1]
+        if not isinstance(kind, str):
+            return "gateway"
+        if kind in {"auto", "evaluate"}:
+            if any(isinstance(word, str) and word.split("=", 1)[0] == "--baseline-commit" for word in words):
+                return "same_allocation_abba"
+            return "evaluate"
+        return kind if kind in {"profile", "dev", "command", "check", "disassemble", "env"} else "gateway"
+    return {
+        "/v1/journal/execute": str(request.get("operation") or "journal"),
+        "/v1/wiki/query": str(request.get("tool") or "wiki"),
+        "/v1/plugins/execute": str(request.get("tool") or request.get("action") or "plugin"),
+    }.get(route, "runtime")
+
+def agent_runtime_response(route: str, request: dict, result: dict) -> tuple[dict, int | None]:
+    """Expose one canonical receipt contract for every Agent Runtime operation."""
+    if route == "/v1/gateway/execute" and isinstance(result.get("agent_result"), dict):
+        return agent_gateway_response(result)
+    if (
+        isinstance(result.get("operation"), str)
+        and result.get("status") in {"completed", "failed", "cancelled"}
+        and isinstance(result.get("result"), dict)
+    ):
+        return result, None
+    if type(result.get("exit_code")) is not int:
+        return result, None
+    operation = _runtime_operation(route, request)
+    exit_code = result["exit_code"]
+    stdout = result.get("stdout", "")
+    stderr = result.get("stderr", "")
+    detail: dict[str, object] = {}
+    if isinstance(stdout, str) and stdout:
+        try:
+            value = json.loads(stdout)
+        except (ValueError, TypeError):
+            detail["stdout"] = stdout
+        else:
+            detail.update(value if isinstance(value, dict) else {"value": value})
+    if isinstance(stderr, str) and stderr:
+        detail["stderr"] = stderr
+    if exit_code:
+        detail["exit_code"] = exit_code
+        if "error" not in detail:
+            detail["error"] = {
+                "code": "runtime_operation_failed",
+                "message": stderr.strip() if isinstance(stderr, str) and stderr.strip()
+                else f"Runtime operation exited with code {exit_code}",
+            }
+    return {
+        "operation": operation,
+        "status": "completed" if exit_code == 0 else "failed",
+        "result": detail,
+    }, exit_code
+
+
 class _OperationHandler:
     """Workflow operation adapter; the selected Agent owns transport authority."""
     def __init__(self, owner, capability, route):
         self.owner, self.capability, self.route = owner, capability, route
 
     def handle(self, payload, context):
+        from functools import partial
+        from aka.core.service_audit import capture_service_exchanges
+        request_id = uuid.uuid4().hex
+        with capture_service_exchanges(partial(self.owner._record_service_exchange, request_id)):
+            return self._handle(payload, context, request_id)
+
+    def _handle(self, payload, context, request_id):
         from dataclasses import replace
         owner = self.owner
         capability = replace(self.capability, parent=self.capability,
                              cancel_event=context.cancel_event, filesystem_access=context.filesystem_access)
         request, status, exit_code = None, 200, None
-        request_id, started = uuid.uuid4().hex, time.monotonic()
+        started = time.monotonic()
         capability.request_id = request_id
         owner.audit_request_started(request_id, route=self.route)
         try:
@@ -279,10 +364,7 @@ class _OperationHandler:
                     if not owner._live(capability):
                         raise SessionRevokedError("Tool binding revoked")
                     result = owner.execute(capability, self.route, request)
-            if self.route == "/v1/gateway/execute" and isinstance(result.get("agent_result"), dict):
-                exit_code, result = result["exit_code"], result["agent_result"]
-                from aka.evaluation.tool_results import compact_receipt
-                result = compact_receipt(result)
+            result, exit_code = agent_runtime_response(self.route, request, result)
         except AgentRequestError as error:
             status, result = 400, error.response
         except RuntimeStateError as error:
@@ -312,6 +394,8 @@ class _OperationHandler:
                     str(owner.config.private_reference_dir or ""), owner.config.url,
                     str(owner.config.atrex_bench_root or "")),
                 private_values=credential_values(owner.environment))
+            result = {"operation": _runtime_operation(self.route, request or {}),
+                      "status": "failed", "result": {"error": result}}
         if self.route == "/v1/gateway/execute" and isinstance(request, dict) and not result.get("gateway_record_id"):
             result = owner.archive_gateway_response(capability, request, result, status=status, exit_code=exit_code)
         owner.audit_request_finished(request_id, http_status=status, result=result,
@@ -404,8 +488,10 @@ class SupervisorRuntime:
             args = parse_tool_arguments(request.get("argv", []))
         except (ValueError, TypeError):
             return result  # No recognized measurement operation was requested.
+        if "--help" in request.get("argv", []) or "-h" in request.get("argv", []):
+            return result
         kind = args.kind
-        operation = "evaluate" if kind in {"auto", "run"} else kind
+        operation = "evaluate" if kind in {"auto", "evaluate"} else kind
         identity = {"operation": operation, "runtime_request_id": capability.request_id,
                     "options": {"argv": request.get("argv", [])}, "hardware": self.config.hardware}
         response = {"exit_code": exit_code if exit_code is not None else (0 if status < 400 else 2),
@@ -580,11 +666,14 @@ class SupervisorRuntime:
     @contextmanager
     def request_lock(self, capability, deadline, request_id):
         self._acquire(capability.lock, capability, deadline)
+        previous = capability.deadline, capability.request_id
         capability.deadline, capability.request_id = deadline, request_id
         try:
             yield
         finally:
-            capability.deadline, capability.request_id = None, ""
+            # Archival and audit completion still belong to this request after
+            # execution releases the lock (including Env and early failures).
+            capability.deadline, capability.request_id = previous
             capability.lock.release()
 
     def run_executor(self, command, cwd, environment, capability, *, deadline=None):
@@ -755,13 +844,22 @@ class SupervisorRuntime:
             argv = validated_argv(request["argv"])
         if route == "/v1/gateway/execute" and any(arg in {"--help", "-h"} for arg in argv[:argv.index("--") if "--" in argv else len(argv)]):
             from aka.evaluation.tool_requests import tool_argument_parser
-            return {"exit_code": 0, "stdout": tool_argument_parser().format_help() +
-                f"\nCampaign defaults: warmup={self.evaluation_configuration.warmup_iters}, "
-                f"bench={self.evaluation_configuration.bench_iters}, "
-                f"step_timeout={self.config.evaluation_step_timeout}s. "
-                "Omitted timing options inherit the Campaign policy. "
-                "ABBA run timeout is derived from its schedule; explicit values are not clipped.\n",
-                "stderr": ""}
+            from aka.workflow.light.host.request_feedback import gateway_schema
+            parser = tool_argument_parser()
+            words = argv[:argv.index("--")] if "--" in argv else argv
+            kinds = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "--kind"]
+            kinds += [word.split("=", 1)[1] for word in words if word.startswith("--kind=")]
+            kind = kinds[0] if len(kinds) == 1 else None
+            with _validating_request():
+                schema = gateway_schema(kind, parser)
+                if "supported_kinds" in schema:
+                    raise ValueError(f"--help requires one supported --kind ({', '.join(schema['supported_kinds'])}); got {kind!r}")
+            return {"operation": "help", "status": "completed", "result": {
+                "kind": kind, "request_schema": schema,
+                "campaign_defaults": {"warmup": self.evaluation_configuration.warmup_iters,
+                    "bench": self.evaluation_configuration.bench_iters,
+                    "step_timeout_seconds": self.config.evaluation_step_timeout},
+                "timing_policy": "Omitted timing options inherit Campaign policy. ABBA run timeout is derived from its schedule; explicit values are not clipped."}}
 
         environment = dict(self.environment)
         environment.update(capability.context)
@@ -838,6 +936,10 @@ class SupervisorRuntime:
                             requirements.source.read_text(encoding="utf-8")
                             if requirements.source is not None else requirements.text
                         )
+                    from aka.workflow.light.host.projection import credential_values, redact_diagnostics
+                    environment_facts = redact_diagnostics(environment_facts,
+                        private_paths=(str(staged), str(self.root), str(self.audit_root or "")),
+                        private_values=credential_values(environment))
                     return {"exit_code": 0, "stdout": json.dumps(environment_facts, allow_nan=False)+"\n", "stderr": ""}
                 if args.dry_run:
                     return {"exit_code": 0, "stdout": json.dumps({"operation": converted.kind, "prepared": True})+"\n", "stderr": ""}
@@ -1323,9 +1425,65 @@ class SupervisorRuntime:
             "operation": operation,
             "tool": tool or operation,
             "argv": audited_argv,
+            "agent_request": {**request, "argv": audited_argv} if operation == "gateway" else json.loads(json.dumps(request)),
             "updated_at": datetime.now(timezone.utc).isoformat(),
         })
         self._publish_request_audit(path, value)
+    def audit_service_exchange(self, **exchange):
+        from aka.core.service_audit import audit_service_exchange
+        audit_service_exchange(**exchange)
+
+    def _record_service_exchange(
+        self, request_id: str, *, service: str, request: object | None = None,
+        response: object | None = None, attempt: int | None = None,
+        exchange_id: str | None = None,
+    ) -> None:
+        """Attach one exact Runtime-to-service exchange to the active request audit."""
+        if not self.audit_root or not request_id:
+            return
+        from aka.workflow.light.host.projection import credential_values, redact_diagnostics
+        redaction = {"private_paths": (str(self.root), str(self.audit_root), str(ROOT),
+            str(self.config.private_reference_dir or ""), self.config.url),
+            "private_values": credential_values(self.environment)}
+        request = redact_diagnostics(request, **redaction)
+        response = redact_diagnostics(response, **redaction)
+        # Final-source and supplemental reviewers can run concurrently.  Keep
+        # each read/modify/write atomic so one completed exchange cannot erase
+        # another one that finished at nearly the same time.
+        with self.lock:
+            path = self._request_audit_path(request_id)
+            value = self._read_request_audit(path)
+            exchanges = value.get("service_exchanges")
+            if not isinstance(exchanges, list):
+                exchanges = []
+            row = next(
+                (
+                    item for item in reversed(exchanges)
+                    if isinstance(item, dict)
+                    and item.get("service") == service
+                    and (
+                        item.get("exchange_id") == exchange_id
+                        if exchange_id is not None
+                        else item.get("attempt") == attempt
+                    )
+                ),
+                None,
+            )
+            if row is None:
+                row = {"service": service}
+                exchanges.append(row)
+            if exchange_id is not None:
+                row["exchange_id"] = exchange_id
+            if attempt is not None:
+                row["attempt"] = attempt
+            if request is not None:
+                row["request"] = json.loads(json.dumps(request))
+            if response is not None:
+                row["response"] = json.loads(json.dumps(response))
+            value["service_exchanges"] = exchanges
+            value["updated_at"] = datetime.now(timezone.utc).isoformat()
+            self._publish_request_audit(path, value)
+
     def audit_request_finished(
         self,
         request_id: str,
@@ -1348,7 +1506,9 @@ class SupervisorRuntime:
         failed = http_status >= 400 or (
             type(execution_exit_code) is int and execution_exit_code != 0
         )
-        nested_error = response.get("error")
+        response_detail = response.get("result")
+        response_detail = response_detail if isinstance(response_detail, dict) else {}
+        nested_error = response_detail.get("error", response.get("error"))
         error = dict(nested_error) if isinstance(nested_error, dict) else {}
         # Retain compatibility with executor responses that still put error
         # identity at the top level, while treating the Agent-facing structured

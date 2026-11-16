@@ -17,6 +17,9 @@ from .transport_results import (
 
 class GatewayMeasurement:
     def __init__(self, request, *, workspace, hardware, private, batch_size, profiling=False, baseline=None):
+        if not profiling:
+            from .measurement_policy import agate_managed_clocks
+            request = agate_managed_clocks(request)
         self.baseline = baseline
         self.request = request
         self.workspace = workspace

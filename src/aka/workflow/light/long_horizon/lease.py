@@ -21,6 +21,31 @@ def _lock_path(workspace: Path) -> Path:
     return workspace.parent / f".aka-campaign-{digest}.lock"
 
 
+def writer_active(workspace: Path) -> bool:
+    """Observe the live Campaign lease without creating or changing any files.
+
+    Persisted state and lock-file existence do not establish process liveness.
+    Only an exclusive lease held by a running coordinator does.
+    """
+    try:
+        descriptor = os.open(
+            _lock_path(workspace), os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        )
+    except FileNotFoundError:
+        return False
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise ValueError("AKA Light Campaign writer lock must be a regular file")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(descriptor)
+
+
 @contextmanager
 def campaign_writer_lease(workspace: Path):
     """Reject a second writer without mutating the Campaign workspace."""
