@@ -7,9 +7,13 @@ import math
 import statistics
 
 from aka.light.evaluation.response_policy import known_gateway_error
+from aka.light.evaluation.result_json import (
+    LEGACY_TEST_RESULT_PREFIX,
+    parse_evaluation_result_line,
+)
 
 PREFIXES = {
-    "evaluate": "[test_kernel] RESULT_JSON=",
+    "evaluate": LEGACY_TEST_RESULT_PREFIX,
     "same_allocation_abba": "[sandbox] ABBA_JSON=",
     "profile": "[sandbox] PROFILE_JSON=",
     "check": "[sandbox] CHECK_JSON=",
@@ -17,76 +21,313 @@ PREFIXES = {
     "env": "[sandbox] ENV_JSON=",
 }
 ERROR_PREFIXES = ("[sandbox] SOURCE_ERROR_JSON=", "[sandbox] GATEWAY_ERROR_JSON=")
-IDENTITIES = ("gateway_record_id", "kernel_id", "baseline_kernel_id")
-MAX_RESPONSE_BYTES = 8 * 1024 * 1024
+PRIVATE_IDENTITIES = ("gateway_record_id", "kernel_id", "baseline_kernel_id")
+PUBLIC_IDENTITIES = (
+    "gateway_record_id",
+    "kernel_commit_id",
+    "candidate_kernel_commit_id",
+    "baseline_kernel_commit_id",
+)
+IDENTITIES = (*PRIVATE_IDENTITIES, *PUBLIC_IDENTITIES)
+RECEIPT_TEXT_PREVIEW_BYTES = 2048
+RECEIPT_ACTIONABLE_DIAGNOSTIC_LIMIT = 4
+RECEIPT_DIAGNOSTIC_SHAPE_LIMIT = 16
+RECEIPT_VALIDATION_ERROR_LIMIT = 16
+RECEIPT_VALIDATION_LOCATION_LIMIT = 16
+_RECEIPT_RESULT_FIELDS = (
+    "correct",
+    "passed",
+    "exit_code",
+    "mode",
+    "input_scope",
+    "latency_us_geomean",
+    "latency_us_arith_mean",
+    "performance_score",
+    "speedup",
+    "speedup_vs_ref_geomean",
+    "improvement_pct",
+    "measured_shape_count",
+    "outcome",
+    "reason",
+    "http_status",
+)
+_RECEIPT_ERROR_FIELDS = (
+    "code",
+    "reason",
+    "error_class",
+    "message",
+    "timeout_s",
+    "stage",
+    "http_status",
+    "outcome",
+    "candidate_repairable",
+)
+
+
+def _receipt_validation_error(value: object) -> dict | None:
+    """Project one bounded request-validation diagnostic without its input."""
+    if isinstance(value, str):
+        return {"message": _receipt_string(value, limit=1024)}
+    if not isinstance(value, dict):
+        return None
+    summary = {}
+    for key in ("type", "code", "msg", "message", "field", "path"):
+        item = value.get(key)
+        if isinstance(item, str):
+            summary[key] = _receipt_string(item, limit=1024)
+        elif type(item) in {int, float} and math.isfinite(item):
+            summary[key] = item
+    location = value.get("loc")
+    if isinstance(location, (list, tuple)):
+        summary["loc"] = [
+            _receipt_string(str(item), limit=256)
+            for item in location[:RECEIPT_VALIDATION_LOCATION_LIMIT]
+            if isinstance(item, (str, int)) and not isinstance(item, bool)
+        ]
+        if len(location) > RECEIPT_VALIDATION_LOCATION_LIMIT:
+            summary["loc_truncated"] = True
+    return summary or None
+
+
+def _receipt_error_details(value: object) -> dict | None:
+    if not isinstance(value, dict):
+        return None
+    errors = value.get("validation_errors")
+    if not isinstance(errors, list):
+        return None
+    projected = []
+    count = 0
+    for error in errors:
+        item = _receipt_validation_error(error)
+        if item is None:
+            continue
+        count += 1
+        if len(projected) < RECEIPT_VALIDATION_ERROR_LIMIT:
+            projected.append(item)
+    if not projected:
+        return None
+    return {
+        "validation_errors": projected,
+        "validation_errors_count": count,
+        "validation_errors_truncated": count > len(projected),
+    }
+
+
+def _receipt_text(value: str, *, limit: int = RECEIPT_TEXT_PREVIEW_BYTES) -> dict:
+    raw = value.encode("utf-8")
+    if len(raw) <= limit:
+        preview = value
+        truncated = False
+    else:
+        marker = b"\n... [receipt preview omitted middle bytes] ...\n"
+        remaining = max(0, limit - len(marker))
+        left = remaining // 2
+        right = remaining - left
+        preview = (
+            raw[:left] + marker + (raw[-right:] if right else b"")
+        ).decode("utf-8", errors="replace")
+        truncated = True
+    return {"bytes": len(raw), "preview": preview, "truncated": truncated}
+
+
+def _receipt_string(
+    value: str, *, limit: int = RECEIPT_TEXT_PREVIEW_BYTES
+) -> str:
+    preview = _receipt_text(value, limit=limit)
+    return preview["preview"]
+
+
+def _receipt_error(value: object) -> dict | None:
+    if isinstance(value, str):
+        return {"message": _receipt_string(value)}
+    if not isinstance(value, dict):
+        return None
+    summary = {}
+    for key in _RECEIPT_ERROR_FIELDS:
+        item = value.get(key)
+        if isinstance(item, str):
+            summary[key] = _receipt_string(item)
+        elif type(item) is bool or item is None:
+            if key in value:
+                summary[key] = item
+        elif type(item) in {int, float} and math.isfinite(item):
+            summary[key] = item
+    details = _receipt_error_details(value.get("details"))
+    if details is not None:
+        summary["details"] = details
+    return summary or {"message": "Full error details are available in the saved Gateway Record."}
+
+
+def _receipt_metrics(value: object) -> dict:
+    if not isinstance(value, dict):
+        return {}
+    summary = {}
+    for key in _RECEIPT_RESULT_FIELDS:
+        item = value.get(key)
+        if isinstance(item, str):
+            summary[key] = _receipt_string(item)
+        elif type(item) is bool or item is None:
+            if key in value:
+                summary[key] = item
+        elif type(item) in {int, float} and math.isfinite(item):
+            summary[key] = item
+    correctness = value.get("correctness")
+    if isinstance(correctness, dict):
+        summary["correctness"] = {
+            key: item
+            for key, item in correctness.items()
+            if key in {"status", "rel_err", "max_abs_err", "max_rel_err"}
+            and (
+                isinstance(item, str)
+                or type(item) is bool
+                or item is None
+                or (type(item) in {int, float} and math.isfinite(item))
+            )
+        }
+    return summary
+
+
+def _receipt_actionable_diagnostic(value: object) -> dict | None:
+    """Return one bounded diagnostic while preserving the actionable tail."""
+    if not isinstance(value, dict):
+        return None
+    summary = {}
+    for key in ("stage", "shape_id"):
+        item = value.get(key)
+        if isinstance(item, str):
+            summary[key] = _receipt_text(item, limit=256)["preview"]
+    shape_ids = value.get("shape_ids")
+    if isinstance(shape_ids, list):
+        summary["shape_ids"] = [
+            _receipt_text(str(item), limit=256)["preview"]
+            for item in shape_ids[:RECEIPT_DIAGNOSTIC_SHAPE_LIMIT]
+        ]
+        if len(shape_ids) > RECEIPT_DIAGNOSTIC_SHAPE_LIMIT:
+            summary["shape_ids_truncated"] = True
+    message = value.get("message")
+    if isinstance(message, str):
+        preview = _receipt_text(message)
+        summary["message"] = preview["preview"]
+        summary["message_bytes"] = preview["bytes"]
+        summary["message_truncated"] = preview["truncated"]
+    return summary or None
+
+
+def compact_receipt(agent_result: dict) -> dict:
+    """Return bounded terminal feedback while the full result stays in records/."""
+    result = agent_result.get("result")
+    result = result if isinstance(result, dict) else {}
+    receipt = {
+        key: deepcopy(agent_result[key])
+        for key in (
+            "operation",
+            "status",
+            "gateway_record_id",
+            "kernel_commit_id",
+            "candidate_kernel_commit_id",
+            "baseline_kernel_commit_id",
+        )
+        if key in agent_result
+    }
+    record_id = receipt.get("gateway_record_id")
+    if isinstance(record_id, str):
+        receipt["record_path"] = f"records/{record_id}.json"
+    research_next_action = agent_result.get("research_next_action")
+    if isinstance(research_next_action, dict):
+        operation = research_next_action.get("operation")
+        instruction = research_next_action.get("instruction")
+        gateway_record_ids = research_next_action.get("gateway_record_ids")
+        direction_id = research_next_action.get("direction_id")
+        projected_action: dict[str, object] = {}
+        if isinstance(operation, str):
+            projected_action["operation"] = _receipt_string(operation, limit=128)
+        if isinstance(instruction, str):
+            projected_action["instruction"] = _receipt_string(
+                instruction, limit=1024
+            )
+        if isinstance(gateway_record_ids, list):
+            projected_action["gateway_record_ids"] = [
+                str(value)[:128]
+                for value in gateway_record_ids[:8]
+                if isinstance(value, str)
+            ]
+        if isinstance(direction_id, str):
+            projected_action["direction_id"] = direction_id[:128]
+        if projected_action:
+            receipt["research_next_action"] = projected_action
+    summary = _receipt_metrics(result)
+    for side in ("baseline", "candidate"):
+        metrics = _receipt_metrics(result.get(side))
+        if metrics:
+            summary[side] = metrics
+    error = _receipt_error(result.get("error"))
+    if error is not None:
+        summary["error"] = error
+    errors = result.get("errors")
+    if isinstance(errors, list) and errors:
+        summary["error_count"] = len(errors)
+        if "error" not in summary:
+            summary["error"] = _receipt_error(errors[0]) or {
+                "message": "Full error details are available in the saved Gateway Record."
+            }
+    for key in ("next_action", "scientific_next_check"):
+        value = result.get(key)
+        if isinstance(value, str):
+            summary[key] = _receipt_string(value)
+    for stream in ("stdout", "stderr"):
+        value = result.get(stream)
+        if isinstance(value, str):
+            preview = _receipt_text(value)
+            summary[f"{stream}_bytes"] = preview["bytes"]
+            summary[f"{stream}_preview"] = preview["preview"]
+            summary[f"{stream}_truncated"] = preview["truncated"]
+            if "record_path" in receipt:
+                receipt[f"{stream}_location"] = {
+                    "path": receipt["record_path"],
+                    "field": f"result.{stream}",
+                }
+    diagnostics = result.get("actionable_diagnostics")
+    if isinstance(diagnostics, list):
+        bounded_diagnostics = []
+        diagnostic_count = 0
+        for diagnostic in diagnostics:
+            projected = _receipt_actionable_diagnostic(diagnostic)
+            if projected is None:
+                continue
+            diagnostic_count += 1
+            if len(bounded_diagnostics) < RECEIPT_ACTIONABLE_DIAGNOSTIC_LIMIT:
+                bounded_diagnostics.append(projected)
+        if bounded_diagnostics:
+            receipt["actionable_diagnostics"] = bounded_diagnostics
+            receipt["actionable_diagnostics_count"] = diagnostic_count
+            receipt["actionable_diagnostics_truncated"] = (
+                diagnostic_count > len(bounded_diagnostics)
+            )
+            if "record_path" in receipt:
+                receipt["actionable_diagnostics_location"] = {
+                    "path": receipt["record_path"],
+                    "field": "result.actionable_diagnostics",
+                }
+    receipt["result"] = summary
+    receipt["result_fields"] = sorted(str(key) for key in result)[:128]
+    receipt["details"] = (
+        f"Full result: {receipt['record_path']}. Read or query that JSON file directly and "
+        "select only the fields or Shape needed for the next decision. Complete stream and "
+        "actionable diagnostic locations are listed explicitly when present."
+        if "record_path" in receipt
+        else "No Agent-visible Gateway Record path is available for this response."
+    )
+    return receipt
 
 
 def bound_diagnostic_response(response: dict) -> dict:
-    """Bound embedded diagnostics using their ASCII JSON storage size.
+    """Preserve complete redacted diagnostics at the Agent boundary.
 
-    Only oversized responses are compacted. Verdicts and non-diagnostic numeric evidence stay
-    intact; the private executor receipt remains the source for omitted text.
-    This is diagnostic truncation, not incomplete execution/transport evidence.
+    Redaction and schema projection happen before this function.  A serialized
+    length limit is intentionally not applied: compiler diagnostics often put
+    the only actionable root cause after a large repeated template trace.
     """
-    def size(value):
-        return len(json.dumps(value, ensure_ascii=True, separators=(",", ":")))
-
-    source = {key: value for key, value in response.items() if key != "agent_result"}
-    original_bytes = size(source)
-    if original_bytes <= MAX_RESPONSE_BYTES:
-        return response
-    # agent_result is derived from these streams; do not retain a stale copy.
-    text_limit, entry_limit = 1024 * 1024, 4096
-    while True:
-        omitted_chars, omitted_entries = 0, 0
-
-        def compact(value, field=""):
-            nonlocal omitted_chars, omitted_entries
-            if isinstance(value, str) and len(value) > text_limit:
-                omitted_chars += len(value) - text_limit
-                return value[:text_limit] + "\n<diagnostic text truncated>"
-            if isinstance(value, dict):
-                return {key: compact(item, key) for key, item in value.items()}
-            if isinstance(value, list):
-                if field in {"diagnostics", "actionable_diagnostics", "failures"}:
-                    omitted_entries += max(0, len(value) - entry_limit)
-                    value = value[:entry_limit]
-                return [compact(item, field) for item in value]
-            return value
-
-        lines, note_chars = [], 0
-        for line in source.get("stdout", "").splitlines():
-            marker = next((p for p in (*PREFIXES.values(), *ERROR_PREFIXES,
-                                      "__ATREX_NUMERICAL_RESULT__=") if line.startswith(p)), None)
-            if marker:
-                try:
-                    value = json.loads(line[len(marker):])
-                except ValueError:
-                    lines.append(compact(line))
-                else:
-                    lines.append(marker + json.dumps(compact(value), ensure_ascii=False))
-            else:
-                remaining = max(0, text_limit - note_chars)
-                kept = line[:remaining]
-                omitted_chars += len(line) - len(kept) + (0 if kept else 1)
-                if kept:
-                    lines.append(kept)
-                if len(line) > remaining and note_chars <= text_limit:
-                    lines.append("<diagnostic stdout truncated>")
-                note_chars += len(line) + 1
-        result = dict(source, stdout="\n".join(lines), stderr=compact(source.get("stderr", "")))
-        result["diagnostic_truncation"] = {
-            "reason": "Oversized diagnostic response; original executor evidence retained privately",
-            "original_response_bytes": original_bytes, "limit_bytes": MAX_RESPONSE_BYTES,
-            "omitted_text_chars": omitted_chars, "omitted_diagnostic_entries": omitted_entries,
-        }
-        if size(result) <= MAX_RESPONSE_BYTES:
-            return result
-        if text_limit == 256 and entry_limit == 1:
-            # Numeric/structural evidence must not be dropped to fit a verdict.
-            # The caller retains its running reservation and original job IDs.
-            raise ValueError("Non-diagnostic measurement evidence exceeds the response size limit")
-        text_limit, entry_limit = max(256, text_limit // 2), max(1, entry_limit // 2)
+    return response
 
 
 def finite_number(value):
@@ -150,12 +391,27 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
     rewritten. New records seal this object alongside the controller's streams.
     """
     if isinstance(response.get("agent_result"), dict):
-        return deepcopy(response["agent_result"])
+        result = deepcopy(response["agent_result"])
+        # Historical immutable records used ``kernel_id`` for a value that has
+        # always been the full Agent Git commit.  Keep that storage compatible,
+        # but expose the precise name at the Agent boundary.
+        if "kernel_id" in result:
+            result["kernel_commit_id"] = result.pop("kernel_id")
+        if "baseline_kernel_id" in result:
+            result["baseline_kernel_commit_id"] = result.pop("baseline_kernel_id")
+        if "baseline_kernel_commit_id" in result and "kernel_commit_id" in result:
+            result["candidate_kernel_commit_id"] = result.pop("kernel_commit_id")
+        return result
     operation = request["operation"]
     options = request.get("options", {})
     prefix = PREFIXES.get(operation)
     sample, errors, notes = None, [], []
     for line in response.get("stdout", "").splitlines():
+        if operation == "evaluate":
+            direct = parse_evaluation_result_line(line)
+            if direct is not None:
+                sample = direct
+                continue
         marker = next((p for p in (*ERROR_PREFIXES, prefix) if p and line.startswith(p)), None)
         if marker:
             try:
@@ -173,10 +429,35 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             notes.append(line)
     has_sample = sample is not None
     sample = sample or {}
-    identity = {key: sample[key] for key in IDENTITIES if key in sample}
+    identity = {}
+    if "gateway_record_id" in sample:
+        identity["gateway_record_id"] = sample["gateway_record_id"]
+    candidate_commit = sample.get(
+        "candidate_kernel_commit_id",
+        sample.get("kernel_commit_id", sample.get("kernel_id")),
+    )
+    baseline_commit = sample.get(
+        "baseline_kernel_commit_id", sample.get("baseline_kernel_id")
+    )
+    if candidate_commit is not None:
+        identity[
+            "candidate_kernel_commit_id"
+            if operation == "same_allocation_abba"
+            else "kernel_commit_id"
+        ] = candidate_commit
+    if baseline_commit is not None:
+        identity["baseline_kernel_commit_id"] = baseline_commit
     if record_id:
         identity["gateway_record_id"] = record_id
-    for side, key in (("candidate", "kernel_id"), ("baseline", "baseline_kernel_id")):
+    for side, key in (
+        (
+            "candidate",
+            "candidate_kernel_commit_id"
+            if operation == "same_allocation_abba"
+            else "kernel_commit_id",
+        ),
+        ("baseline", "baseline_kernel_commit_id"),
+    ):
         if kernels and side in kernels:
             identity[key] = kernels[side]["kernel_id"]
     verdict = sample.get("correct", sample.get("all_pass"))
@@ -226,20 +507,15 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
         first_error = errors[0]
         if known_gateway_error(first_error):
             for key in (
-                "error",
-                "next_action",
-                "recovery",
-                "outcome",
-                "job_id",
-                "trace_id",
-                "http_status",
+                "error", "next_action", "recovery", "outcome", "job_id",
+                "trace_id", "http_status",
             ):
                 if key in first_error:
                     result[key] = first_error[key]
         else:
-            # This Runtime version has no policy for the Agate response.  Keep
-            # its full redacted envelope in the canonical Agent result rather
-            # than reducing it to today's known error fields.
+            # Unknown Agate schemas are already redacted at the projection
+            # boundary. Keep the complete envelope so the Agent sees the
+            # actual failure instead of a Runtime-authored generic wrapper.
             result.update(deepcopy(first_error))
         if len(errors) > 1:
             result["errors"] = errors
@@ -247,9 +523,14 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
         result["truncated"] = True
     if response.get("diagnostic_truncation"):
         result["diagnostic_truncation"] = response["diagnostic_truncation"]
-    if missing_result:
+    if missing_result and not (notes or response.get("stderr")):
         result.update(error={"code": "result_unavailable", "message": "No valid structured result was captured."},
                       outcome="unknown", next_action="Inspect the saved Record and ask the operator to reconcile the outcome; do not resubmit blindly.")
+    elif missing_result:
+        # Unknown Agate output is itself the diagnostic. Preserve the redacted
+        # streams and exit code without obscuring them with a synthetic
+        # result_unavailable/outcome_unknown wrapper.
+        result["exit_code"] = response.get("exit_code")
     return {"operation": "evaluate" if operation == "same_allocation_abba" else operation,
             "status": status, "result": result, **identity}
 

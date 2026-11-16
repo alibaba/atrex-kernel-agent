@@ -6,13 +6,14 @@ reservation and idempotency key on recovery.
 """
 from __future__ import annotations
 import hashlib
-import http.client
 import io
 import json
 import os
 from pathlib import Path
 import shlex
 import subprocess
+import tempfile
+import time
 import urllib.parse
 import zipfile
 
@@ -20,15 +21,14 @@ from aka.light.workspace.sources import archive_bytes
 
 ARCHIVES = "__atrex_eval_archives"
 DIAGNOSTIC = "__atrex_source_diagnostic"
-MAX_INLINE_DEV_BYTES = 4 * 1024 * 1024
-
-
-class SourceUploadError(RuntimeError):
-    """Archive preparation failed before the GPU job submission began."""
-
-    def __init__(self, status=None):
-        self.status = status
-        super().__init__("Source archive upload failed" + (f" (HTTP {status})" if status else " (transport)"))
+MAX_INLINE_DEV_BYTES = 120 * 1024
+PROFILES = {
+    "pre": "https://pre-atrex-gateway.alibaba-inc.com",
+    "prod": "https://atrex-gateway.alibaba-inc.com",
+}
+TERMINAL_JOB_STATES = {"succeeded", "failed", "cancelled", "canceled"}
+SHORT_GET_TIMEOUT_SECONDS = 30
+SHORT_POLL_INTERVAL_SECONDS = 2.0
 
 
 def attach(request, workspace, *, side="candidate", source=None):
@@ -118,27 +118,418 @@ def uploaded_request(request, wire_key, *, json_call, upload, kind="eval"):
     return wire
 
 
-def upload_bytes(url, data):
-    # Match Agate's presigned PUT contract. urllib adds an unsigned Content-Type
-    # to byte bodies, which makes OSS reject the signature. Never send Gateway
-    # authorization or follow redirects with the storage credential.
-    parts = urllib.parse.urlsplit(url)
-    if parts.scheme not in {"http", "https"} or not parts.hostname or parts.username or parts.password:
-        raise ValueError("Invalid source archive upload URL")
-    connection = (http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection)(
-        parts.hostname, parts.port, timeout=120)
+def _agate_configuration(environment=None):
+    """Read bounded Agate configuration with CLI-compatible precedence."""
+    from aka.light.agent.session_tail import read_regular_bytes
+
+    environment = os.environ if environment is None else environment
+    configured_home = environment.get("HOME")
+    home = Path(configured_home) if configured_home else Path.home()
     try:
-        target = parts.path + ("?" + parts.query if parts.query else "")
-        connection.request("PUT", target, body=data, headers={"Content-Length": str(len(data))})
-        response = connection.getresponse()
-        response.read(4096)
-        if not 200 <= response.status < 300:
-            raise SourceUploadError(response.status)
-    except (OSError, http.client.HTTPException):
-        # Exception strings may include the temporary credential-bearing URL.
-        raise SourceUploadError() from None
+        value = json.loads(
+            read_regular_bytes(home / ".atrex/config.json", limit=64 * 1024)
+        )
+    except FileNotFoundError:
+        return {}
+    except (OSError, ValueError, UnicodeError) as error:
+        from aka.light.runtime.request_errors import GatewayConfigurationError
+
+        raise GatewayConfigurationError(
+            "Supervisor Agate config is unreadable or invalid.",
+            next_action=(
+                "Ask the operator to repair ~/.atrex/config.json; do not change "
+                "credentials or bypass the Runtime."
+            ),
+        ) from error
+    if not isinstance(value, dict):
+        from aka.light.runtime.request_errors import GatewayConfigurationError
+
+        raise GatewayConfigurationError(
+            "Supervisor Agate config must be a JSON object."
+        )
+    return value
+
+
+def _load_sdk_client(
+    args,
+    environment=None,
+    *,
+    authority_url=None,
+    authority_profile=None,
+):
+    """Construct the public Agate SDK client without exposing credentials."""
+    minimum_agate_version = "0.14.30"
+    try:
+        from aka.light.agent.preflight import (
+            MINIMUM_AGATE_VERSION,
+            check_minimum_agate_version,
+        )
+
+        minimum_agate_version = MINIMUM_AGATE_VERSION
+        check_minimum_agate_version()
+        from atrex_gateway_client import AkSkAuth, Client, NoAuth, TokenAuth
+        from atrex_gateway_client.errors import GatewayError, TransportError
+    except ModuleNotFoundError as error:
+        from aka.light.runtime.request_errors import GatewayConfigurationError
+
+        raise GatewayConfigurationError(
+            "atrex-gateway-client"
+            f">={minimum_agate_version} is required for Gateway operations.",
+            next_action=(
+                "Ask the operator to install the declared Atrex AKA Light dependencies "
+                "and restart the Supervisor; do not change Agent arguments or fall back to Dev."
+            ),
+        ) from error
+    except RuntimeError as error:
+        from aka.light.runtime.request_errors import GatewayConfigurationError
+
+        raise GatewayConfigurationError(
+            str(error),
+            next_action=(
+                f"Ask the operator to install atrex-gateway-client>={minimum_agate_version} "
+                "and restart the Supervisor; do not retry or change Agent arguments."
+            ),
+        ) from error
+
+    environment = os.environ if environment is None else environment
+    config = _agate_configuration(environment)
+    url = (
+        authority_url
+        or getattr(args, "url", None)
+        or PROFILES.get(authority_profile or getattr(args, "gateway_profile", None))
+        or environment.get("AGATE_URL")
+        or config.get("url")
+        or PROFILES["prod"]
+    )
+    parts = urllib.parse.urlsplit(url) if isinstance(url, str) else None
+    if (
+        parts is None
+        or parts.scheme not in {"http", "https"}
+        or not parts.hostname
+        or parts.username
+        or parts.password
+    ):
+        from aka.light.runtime.request_errors import GatewayConfigurationError
+
+        raise GatewayConfigurationError("Agate base URL must be an HTTP(S) origin.")
+
+    token = environment.get("AGATE_TOKEN") or config.get("token")
+    access_key = environment.get("AGATE_AK") or config.get("ak")
+    secret_key = environment.get("AGATE_SK") or config.get("sk")
+    if any(
+        value is not None and not isinstance(value, str)
+        for value in (token, access_key, secret_key)
+    ):
+        from aka.light.runtime.request_errors import GatewayConfigurationError
+
+        raise GatewayConfigurationError("Agate credential fields must be strings.")
+    if token:
+        auth = TokenAuth(token)
+    elif access_key and secret_key:
+        auth = AkSkAuth(access_key, secret_key)
+    elif access_key or secret_key:
+        from aka.light.runtime.request_errors import GatewayConfigurationError
+
+        raise GatewayConfigurationError(
+            "Agate access key and secret key must be configured together."
+        )
+    else:
+        auth = NoAuth()
+
+    class LightAgateClient(Client):
+        @staticmethod
+        def _overload_delay(error, attempt=0):
+            # Runtime owns visible durable retries; do not sleep inside the SDK.
+            return None
+
+    client = LightAgateClient(
+        url.rstrip("/"),
+        auth=auth,
+        timeout=min(600, max(1, int(getattr(args, "timeout", 600)))),
+        transport_retries=0,
+    )
+    return client, url.rstrip("/"), GatewayError, TransportError
+
+
+def validate_gateway_sdk(
+    args,
+    environment,
+    *,
+    authority_url=None,
+    authority_profile=None,
+):
+    """Fail before staging when the configured SDK client is unavailable."""
+    _load_sdk_client(
+        args,
+        environment,
+        authority_url=authority_url,
+        authority_profile=authority_profile,
+    )
+
+
+validate_eval_sdk = validate_gateway_sdk
+
+
+def _sdk_upload(client, url, data):
+    path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            prefix="atrex-light-source-", suffix=".archive", delete=False
+        ) as output:
+            output.write(data)
+            path = output.name
+        client.upload_file(url, path)
     finally:
-        connection.close()
+        if path is not None:
+            Path(path).unlink(missing_ok=True)
+
+
+def _sdk_uploaded_request(client, request, wire_key, *, kind="eval"):
+    def reserve(method, path, body, timeout):
+        if method != "POST" or path != "/v1/uploads":
+            raise ValueError("Unexpected Agate SDK upload reservation request")
+        spec = body.get("spec") if isinstance(body, dict) else None
+        targets = spec.get("target_hardware") if isinstance(spec, dict) else None
+        if (
+            not isinstance(targets, list)
+            or len(targets) != 1
+            or not isinstance(targets[0], str)
+        ):
+            raise ValueError("Agate SDK upload requires exactly one target hardware")
+        return client.prepare_uploads(
+            targets[0],
+            body["files"],
+            kind=body["kind"],
+            num_gpus=spec.get("num_gpus", 1),
+            placement=request.get("placement"),
+        )
+
+    return uploaded_request(
+        request,
+        wire_key,
+        kind=kind,
+        json_call=reserve,
+        upload=lambda url, data: _sdk_upload(client, url, data),
+    )
+
+
+def _sdk_error_process(error, *, stage):
+    payload = getattr(error, "payload", None)
+    if not isinstance(payload, dict):
+        payload = {
+            "reason": "transport_failed",
+            "error_class": "infra",
+            "message": "Agate SDK transport failed",
+        }
+    status = getattr(error, "status", None)
+    envelope = {"status": "failed", "error": payload}
+    if isinstance(status, int):
+        envelope["http_status"] = status
+    stderr = f"agate-sdk: {stage} failed"
+    if isinstance(status, int):
+        stderr += f" (HTTP {status})"
+    return subprocess.CompletedProcess(
+        ["agate-sdk", stage], 1, json.dumps(envelope), stderr
+    )
+
+
+def run_sdk_job(
+    gateway,
+    args,
+    request,
+    sdk_kind,
+    queue_wait_grace,
+    *,
+    identity_extra=None,
+    eval_semantics=False,
+):
+    """Submit and collect one public Gateway job through the Agate SDK."""
+    from aka.light.execution.gateway_jobs import (
+        SubmissionRejected,
+        SubmissionUncertain,
+        annotate_deadline_timeout,
+        configured_max_deadline_retries,
+        configured_max_infra_retries,
+        eval_retry_kind,
+        execute_job,
+        payload_identity,
+        private_value_fingerprint,
+        retry_kind,
+    )
+    from aka.light.experiment.store import EvidenceUnavailable
+
+    client, url, GatewayError, TransportError = _load_sdk_client(args)
+    prepared_wires = {}
+
+    def submit(wire_key):
+        try:
+            wire = prepared_wires.get(wire_key)
+            if wire is None:
+                wire = _sdk_uploaded_request(
+                    client, request, wire_key, kind=sdk_kind
+                )
+                prepared_wires[wire_key] = wire
+        except GatewayError as error:
+            process = _sdk_error_process(error, stage="upload")
+            status = getattr(error, "status", None)
+            retryable = (
+                status is None
+                or status in {408, 429}
+                or (isinstance(status, int) and status >= 500)
+            )
+            raise SubmissionRejected(
+                process, 503 if retryable else status
+            ) from None
+        except (OSError, ValueError) as error:
+            raise SubmissionRejected(
+                subprocess.CompletedProcess(
+                    ["agate-sdk", "upload"],
+                    1,
+                    "",
+                    f"source preparation failed: {error}",
+                ),
+                400,
+            ) from None
+
+        try:
+            accepted = client.submit_job(sdk_kind, wire)
+        except TransportError as error:
+            raise SubmissionUncertain(
+                _sdk_error_process(error, stage="submit")
+            ) from None
+        except GatewayError as error:
+            process = _sdk_error_process(error, stage="submit")
+            status = getattr(error, "status", None)
+            if isinstance(status, int) and (status < 500 or status == 503):
+                raise SubmissionRejected(process, status) from None
+            raise SubmissionUncertain(process) from None
+        job_id = accepted.get("job_id") if isinstance(accepted, dict) else None
+        if not isinstance(job_id, str) or not job_id:
+            raise SubmissionUncertain(
+                subprocess.CompletedProcess(
+                    ["agate-sdk", "submit"],
+                    75,
+                    "",
+                    "Agate SDK returned no confirmed job ID",
+                )
+            )
+        return subprocess.CompletedProcess(
+            ["agate-sdk", "submit"], 0, json.dumps(accepted), ""
+        )
+
+    def poll(
+        initial,
+        remaining,
+        *,
+        recovery_probe=False,
+        observation_callback=None,
+    ):
+        _ = recovery_probe
+        accepted = json.loads(initial.stdout)
+        job_id = accepted["job_id"]
+        deadline = time.monotonic() + remaining
+        job = accepted
+        try:
+            while True:
+                if observation_callback is not None:
+                    observation_callback(job)
+                if job.get("status") in TERMINAL_JOB_STATES:
+                    return subprocess.CompletedProcess(
+                        ["agate-sdk", "get", job_id],
+                        0 if job.get("status") == "succeeded" else 1,
+                        json.dumps(job),
+                        "",
+                    )
+                available = deadline - time.monotonic()
+                if available <= 0:
+                    raise EvidenceUnavailable(
+                        "Gateway collection deadline reached; the accepted Job is saved for reconciliation"
+                    )
+                try:
+                    observed = client.get_job(
+                        job_id,
+                        wait=False,
+                        timeout=min(SHORT_GET_TIMEOUT_SECONDS, max(1, available)),
+                    )
+                    if isinstance(observed, dict):
+                        job = observed
+                        if observation_callback is not None:
+                            observation_callback(job)
+                except GatewayError as error:
+                    status = getattr(error, "status", None)
+                    if (
+                        isinstance(status, int)
+                        and status < 500
+                        and status not in {404, 408, 429}
+                    ):
+                        return _sdk_error_process(error, stage="get")
+                    # The accepted Job continues independently of this GET.
+                    # Preserve the same Job ID and spend the remaining
+                    # collection budget on short snapshot polls instead of
+                    # converting one transient transport/visibility failure
+                    # into an Agent-visible timeout.
+                    _ = error
+                if job.get("status") in TERMINAL_JOB_STATES:
+                    continue
+                delay = min(
+                    SHORT_POLL_INTERVAL_SECONDS,
+                    max(0.0, deadline - time.monotonic()),
+                )
+                if delay > 0:
+                    time.sleep(delay)
+        except (KeyboardInterrupt, SystemExit):
+            try:
+                client.cancel_job(job_id)
+            except (GatewayError, OSError, ValueError):
+                pass
+            raise
+
+    identity = {
+        "url_fingerprint": private_value_fingerprint(url),
+        "kind": sdk_kind,
+        "payload": payload_identity(request),
+    }
+    if identity_extra:
+        identity["execution_context"] = identity_extra
+    process = execute_job(
+        identity,
+        submit,
+        poll,
+        wait_budget=args.timeout + queue_wait_grace,
+        retry_classifier=eval_retry_kind if eval_semantics else retry_kind,
+        max_infra_retries=configured_max_infra_retries(),
+        max_deadline_retries=configured_max_deadline_retries(
+            terminal_evaluation=eval_semantics,
+        ),
+        idempotent_submission=True,
+        max_device_retries=10 if eval_semantics else None,
+        device_retry_delay=60 if eval_semantics else None,
+        capture_phase_observations=True,
+    )
+    timeout_s = request.get("timeout_s")
+    if timeout_s is None and isinstance(request.get("options"), dict):
+        timeout_s = request["options"].get("timeout_s")
+    return annotate_deadline_timeout(process, timeout_s)
+
+
+def run_eval_sdk(
+    gateway,
+    args,
+    request,
+    queue_wait_grace,
+    *,
+    identity_extra=None,
+):
+    """Submit inline and source-tree Eval/ABBA through one SDK lifecycle."""
+    return run_sdk_job(
+        gateway,
+        args,
+        request,
+        "eval",
+        queue_wait_grace,
+        identity_extra=identity_extra,
+        eval_semantics=True,
+    )
 
 
 def diagnostic_request(request, workspace, kind, *, timeout=600):
@@ -168,13 +559,29 @@ def diagnostic_request(request, workspace, kind, *, timeout=600):
 
 
 def run(gateway, args, request, kind, queue_wait_grace, *, identity_extra=None):
-    url = gateway._resolved_gateway_url(gateway.find_agate(), url=args.url, profile=args.gateway_profile)
-    if not url:
-        raise ValueError("Whole-tree transport requires a resolvable Agate URL and Supervisor HTTP credentials")
+    """Run typed and source-tree operations through one SDK lifecycle."""
     diagnostic = request.get(DIAGNOSTIC)
-    process = gateway.run_direct_job(url=url, kind="dev" if diagnostic else "profile" if kind == "profile" else "eval", payload=diagnostic or request,
-        timeout=args.timeout, queue_wait_grace=queue_wait_grace, max_device_retries=10,
-        device_retry_delay=60, identity_extra=identity_extra)
+    if kind == "run" and diagnostic is None:
+        return run_eval_sdk(
+            gateway,
+            args,
+            request,
+            queue_wait_grace,
+            identity_extra=identity_extra,
+        )
+    sdk_kind = "dev" if diagnostic is not None else {
+        "check": "compile",
+        "disassemble": "disassemble",
+        "profile": "profile",
+    }.get(kind, kind)
+    process = run_sdk_job(
+        gateway,
+        args,
+        diagnostic or request,
+        sdk_kind,
+        queue_wait_grace,
+        identity_extra=identity_extra,
+    )
     if diagnostic and process.returncode == 0:
         from .source_diagnostics import DIAGNOSTIC_PREFIX
         from aka.light.experiment.store import EvidenceUnavailable

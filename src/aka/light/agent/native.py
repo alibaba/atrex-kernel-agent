@@ -7,7 +7,12 @@ from aka.legacy.agent.native import (
     supports_same_session_resume, session_id_from_stream,
 )
 from aka.contracts.agent import AgentRuntimeCapabilities, NormalizedAgentEvent, TokenUsage
-from aka.light.agent.home import HOST_HOME_ENV, PREPARED_ENV, prepare_agent_environment
+from aka.light.agent.home import (
+    HOST_HOME_ENV,
+    PREPARED_ENV,
+    SESSION_HOME_ROOT_ENV,
+    prepare_agent_environment,
+)
 from aka.light.agent.runtime.adapter import DEFAULT_BACKEND_REGISTRY
 from aka.light.agent.runtime.runtime import (
     build_agent_runtime,
@@ -85,7 +90,7 @@ class NativeSession(LegacyNativeSession):
         "HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "QODER_USER_DATA_DIR",
         "PI_CODING_AGENT_DIR", "DSH_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
         "XDG_DATA_HOME", "XDG_STATE_HOME", HOST_HOME_ENV, PREPARED_ENV,
-        "ATREX_AGENT_SANDBOX",
+        SESSION_HOME_ROOT_ENV, "ATREX_AGENT_SANDBOX",
     )
 
     def __init__(

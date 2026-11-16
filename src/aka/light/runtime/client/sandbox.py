@@ -1,20 +1,29 @@
 #!/usr/bin/env python3
 """Session-scoped HTTP client; GPU/Wiki authority stays in the Supervisor.
 
-Existing GPU command syntax is preserved, for example:
-  python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --no-memory
-  python3 tools/sandbox.py --kind profile --no-sync -- python3 profile_driver.py
+Preferred typed GPU commands select their managed evaluator inputs automatically:
+  python3 tools/sandbox.py --kind run --no-sync
+  python3 tools/sandbox.py --kind profile --no-sync
+An explicit command after ``--`` is an operation-specific override; use it only when the installed
+GPU-measurement Skill documents that exact form.
+Custom execution examples:
   python3 tools/sandbox.py --kind dev --input scratch/probe.py -- python3 scratch/probe.py
+  python3 tools/sandbox.py --kind command -- python3 -m scratch.probe
+Use module form for Python Command scripts below scratch/ so the uploaded workspace root remains
+on Python's import path and root modules such as kernel.py stay importable.
 Additional typed operations: check, disassemble, env; Wiki: wiki-query, wiki-search,
 wiki-hardware. Use --kind OPERATION --help for the operation's request options.
-Read saved results with --kind record-read --record-id gateway-...;
-copy source with --kind kernel-read --kernel-id kernel-... --output-path scratch/kernel.py;
-list a Kernel's measurements with --kind kernel-records --kernel-id kernel-....
-Find each Shape's fastest measured Kernel with --kind kernel-pareto-frontier (no GPU job).
-Journal writes: update-direction, record-experiment, episode-report --request-file FILE.
-Journal indexes: list-directions, list-experiments --output-path scratch/FILE.
-Journal reads: load-direction, load-experiment --record-id ID.
-Journal tools require a registered Long Horizon Episode; see skills/runtime-records/.
+Successful terminal measurement calls print a compact receipt. Env is read-only discovery and
+prints the complete redacted Agate capability response directly; it creates no Gateway Record.
+Read saved measurement results with ordinary file or JSON operations on
+``records/GATEWAY_ID.json`` and inspect exact Kernel source with local Git commits and refs. ABBA
+accepts --baseline-commit FULL_GIT_COMMIT; Runtime exports it internally.
+Root PROGRESS.md includes enabled Direction state and each Shape's fastest measured Kernel;
+complete Experiments are normal files under experiments/ when that module is enabled.
+Possible Runtime mutations include update-direction, prioritize-direction, record-experiment,
+and submit-kernel --request-file FILE. The installed
+runtime-records Skill lists the module-specific subset available in this Episode; disabled calls
+are rejected. Research/report mutation tools require a registered Long Horizon Episode.
 No direct Agate fallback is performed when the Runtime is unavailable.
 """
 from __future__ import annotations
@@ -35,11 +44,13 @@ RUNTIME_CONNECTION_ENV = "ATREX_AKA_RUNTIME_CONNECTION_FILE"
 # Wire contract with the Supervisor; keep this client independent of its modules.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
-MAX_RESPONSE_BYTES = 1024 * 1024
 WIKI_KINDS = {"wiki-query": "query_nl", "wiki-search": "query_wiki", "wiki-hardware": "query_hardware"}
-REQUEST_KINDS = {"update-direction": "direction_update", "record-experiment": "experiment_record", "episode-report": "episode_report"}
-LIST_KINDS = {"list-directions": "directions_list", "list-experiments": "experiments_list"}
-LOAD_KINDS = {"load-direction": ("direction_load", "direction_id"), "load-experiment": ("experiment_load", "experiment_id")}
+REQUEST_KINDS = {
+    "update-direction": "direction_update",
+    "prioritize-direction": "direction_prioritize",
+    "record-experiment": "experiment_record",
+    "submit-kernel": "kernel_submit",
+}
 
 
 def client_error(code: str, message: str, instruction: str, *, repairable=False, path="$", **details) -> None:
@@ -62,42 +73,32 @@ class _ClientParser(argparse.ArgumentParser):
 
 
 def journal_request(kind: str, argv: list[str]) -> dict:
-    parser = _ClientParser(allow_abbrev=False, description="Runtime Journal; request schemas: skills/runtime-records/references/journal.md")
-    parser.add_argument("--kind", choices=[*REQUEST_KINDS, *LIST_KINDS, *LOAD_KINDS], required=True)
-    if kind in REQUEST_KINDS:
-        parser.add_argument(
-            "--request-file",
-            required=True,
-            help=(
-                f"JSON object; at most {MAX_REQUEST_FILE_BYTES} bytes "
-                "(2 MiB minus 4 KiB envelope reserve)"
-            ),
-        )
-    elif kind in LIST_KINDS:
-        parser.add_argument("--output-path", required=True, help="Workspace-relative scratch/ destination")
-    else:
-        parser.add_argument("--record-id", required=True)
+    parser = _ClientParser(allow_abbrev=False, description="Runtime research/report mutations; request schemas: skills/runtime-records/references/journal.md")
+    parser.add_argument("--kind", choices=[*REQUEST_KINDS], required=True)
+    parser.add_argument(
+        "--request-file",
+        required=True,
+        help=(
+            f"JSON object; at most {MAX_REQUEST_FILE_BYTES} bytes "
+            "(2 MiB minus 4 KiB envelope reserve)"
+        ),
+    )
     args = parser.parse_args(argv)
-    if kind in REQUEST_KINDS:
-        try:
-            with Path(args.request_file).open("rb") as source:
-                raw = source.read(MAX_REQUEST_FILE_BYTES + 1)
-            if len(raw) > MAX_REQUEST_FILE_BYTES:
-                raise ValueError(
-                    f"request file exceeds {MAX_REQUEST_FILE_BYTES} bytes "
-                    "(2 MiB minus 4 KiB reserved for the request envelope). "
-                    "Shorten request text or lists before retrying; no request was sent"
-                )
-            value = json.loads(raw)
-            if not isinstance(value, dict):
-                raise ValueError("request file must contain one JSON object")
-        except (OSError, ValueError) as error:
-            parser.error(str(error))
-        return {"operation": REQUEST_KINDS[kind], "request": value}
-    if kind in LIST_KINDS:
-        return {"operation": LIST_KINDS[kind], "file": args.output_path}
-    operation, field = LOAD_KINDS[kind]
-    return {"operation": operation, field: args.record_id}
+    try:
+        with Path(args.request_file).open("rb") as source:
+            raw = source.read(MAX_REQUEST_FILE_BYTES + 1)
+        if len(raw) > MAX_REQUEST_FILE_BYTES:
+            raise ValueError(
+                f"request file exceeds {MAX_REQUEST_FILE_BYTES} bytes "
+                "(2 MiB minus 4 KiB reserved for the request envelope). "
+                "Shorten request text or lists before retrying; no request was sent"
+            )
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("request file must contain one JSON object")
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    return {"operation": REQUEST_KINDS[kind], "request": value}
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -105,7 +106,7 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
+def proxy_command(path: str, payload: dict) -> int:
     url, token = os.environ.get(RUNTIME_URL_ENV, ""), os.environ.get(RUNTIME_TOKEN_ENV, "")
     # DSH intentionally scrubs credential-named ambient variables from shell
     # children. The Agent adapter creates this private, invocation-scoped file;
@@ -164,13 +165,13 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _NoRedirect())
     try:
         with opener.open(request, timeout=None) as response:
-            raw = response.read(MAX_RESPONSE_BYTES + 1)
+            raw = response.read()
             execution_exit_code = response.headers.get("X-Atrex-Execution-Exit-Code")
     except urllib.error.HTTPError as error:
         with error:
-            raw = error.read(MAX_RESPONSE_BYTES + 1)
+            raw = error.read()
         try:
-            value = json.loads(raw) if len(raw) <= MAX_RESPONSE_BYTES else None
+            value = json.loads(raw)
         except (ValueError, UnicodeError):
             value = None
         if isinstance(value, dict):
@@ -187,16 +188,11 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
                      "Inspect saved records and ask the operator to reconcile the request. Do not resubmit blindly.")
         return 75
     try:
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise ValueError("response exceeds limit")
         result = json.loads(raw)
         if (isinstance(result, dict) and isinstance(result.get("operation"), str)
                 and result.get("status") in {"completed", "failed", "cancelled"}
                 and isinstance(result.get("result"), dict)):
             print(json.dumps(result, ensure_ascii=False, allow_nan=False, sort_keys=True))
-            # Reading a failed measurement succeeds; it is not a failed query.
-            if record_read:
-                return 0
             # Preserve the executor's tempfail/candidate exit classification
             # without putting the compatibility stream envelope back in JSON.
             if execution_exit_code is not None:
@@ -239,21 +235,18 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     # Only recognize the full client-side dispatcher; the Supervisor validates
     # every argument using parsers with allow_abbrev=False.
-    record_read = False
     for index, value in enumerate(args):
         if value == "--":
             break
         kind = args[index + 1] if value == "--kind" and index + 1 < len(args) else (
             value.split("=", 1)[1] if value.startswith("--kind=") else None
         )
-        if kind is not None:
-            record_read = kind == "record-read"
-        if kind in {*REQUEST_KINDS, *LIST_KINDS, *LOAD_KINDS}:
+        if kind in REQUEST_KINDS:
             return proxy_command("/v1/journal/execute", journal_request(kind, args))
         if kind in WIKI_KINDS:
             count = 2 if value == "--kind" else 1
             return proxy_wiki(WIKI_KINDS[kind], args[:index] + args[index + count:])
-    return proxy_command("/v1/gateway/execute", {"argv": args}, record_read=record_read)
+    return proxy_command("/v1/gateway/execute", {"argv": args})
 
 
 if __name__ == "__main__":

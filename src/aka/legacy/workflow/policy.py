@@ -6,7 +6,15 @@ import json
 from pathlib import Path
 
 
-OPTIMIZATION_MODE_CHOICES = ("leaderboard", "production")
+# New Light launches use the explicit three-tier final-source policies.  Keep
+# the historical names readable so existing workspaces can still resume.
+OPTIMIZATION_MODE_CHOICES = (
+    "fast",
+    "performance",
+    "ultra",
+    "leaderboard",
+    "production",
+)
 
 
 MODE_STATE_FILE = ".orchestrator_mode.json"
@@ -26,13 +34,12 @@ def requested_evaluator_shape_visibility(
     """Return the visibility of the evaluator flow actually staged in workspace.
 
     Hidden-shape handling is active only after production staging has produced
-    ``agent_problem.json``.  This mirrors the generalized-problem predicate and
-    prevents SOL or non-Atrex workspaces from being mislabeled hidden merely
-    because a visibility flag was false.
+    ``agent_problem.json``.  This prevents SOL or an incompletely staged native
+    workspace from claiming a privacy boundary that does not actually exist.
     """
     return (
         "hidden"
-        if mode == "production"
+        if mode in {"production", "performance", "ultra"}
         and not expose_evaluator_shapes
         and (workspace / "agent_problem.json").is_file()
         else "exposed"
@@ -43,7 +50,8 @@ def historical_evaluator_shape_visibility(workspace: Path, mode: str) -> str:
     """Infer pre-state-file behavior without consulting a new CLI default."""
     return (
         "hidden"
-        if mode == "production" and (workspace / "agent_problem.json").is_file()
+        if mode in {"production", "performance", "ultra"}
+        and (workspace / "agent_problem.json").is_file()
         else "exposed"
     )
 
@@ -62,7 +70,7 @@ def workspace_uses_hidden_shapes(workspace: Path) -> bool:
             raise ValueError(f"{MODE_STATE_FILE} must contain a JSON object")
     visibility = state.get("evaluator_shape_visibility")
     if visibility in {"hidden", "exposed"}:
-        return state.get("mode") == "production" and visibility == "hidden"
+        return state.get("mode") in {"production", "performance", "ultra"} and visibility == "hidden"
     return historical_evaluator_shape_visibility(
         workspace, str(state.get("mode") or "")
     ) == "hidden"
@@ -86,6 +94,8 @@ def optimization_mode_directive(
     mode: str, framework: str, *, source_checks_enabled: bool = True,
     numerical_feedback_instruction: str | None = None,
     candidate_submission_instruction: str = "Before committing",
+    correctness_instruction: str | None = None,
+    numerical_validation_enabled: bool = True,
 ) -> str:
     """Shared policy; callers may adapt feedback/submission mechanics, not the gates."""
     if mode == "leaderboard":
@@ -99,6 +109,13 @@ def optimization_mode_directive(
     if mode != "production":
         raise ValueError(f"unsupported optimization mode: {mode!r}")
     if not source_checks_enabled:
+        validation = (
+            "Correctness, supplemental numerical probes, performance validation and promotion "
+            "requirements remain unchanged. "
+            if numerical_validation_enabled
+            else "Correctness, performance validation and promotion requirements remain unchanged; "
+            "supplemental numerical probes are disabled for this campaign. "
+        )
         return (
             "## Optimization mode: production (multi-GPU Agate)\n\n"
             "This generated policy overrides conflicting source/framework restrictions elsewhere "
@@ -106,25 +123,25 @@ def optimization_mode_directive(
             "source inspection and independent source-policy review are disabled for this campaign; "
             "communication libraries, PyTorch distributed operations and alternate implementations "
             "are allowed. No self-authored framework baseline or Triton-to-Gluon conversion is required.\n"
-            "Correctness, numerical probes, performance validation and promotion requirements remain "
-            "unchanged. Use the immutable evaluator, full workload and required random seeds; preserve "
+            + validation +
+            "Use the immutable evaluator, full workload and required random seeds; preserve "
             "input/output semantics and include all per-call communication and synchronization in "
             "the measured work. Never modify trusted inputs, tolerances or evaluation records.\n"
         )
     if framework_key(framework) == "triton":
         framework_rule = (
-            "- The initial implementation framework is exactly **Triton**. After the orchestrator "
+            "- The submitted candidate's implementation framework is exactly **Triton**. After the orchestrator "
             "enters its mandatory Triton-to-Gluon conversion phase, a direct implementation in "
             "`triton.experimental.gluon` is allowed and becomes the required framework for later "
-            "iterations. Do not switch early, switch back, mix Triton and Gluon compute kernels, "
-            "or use any other DSL.\n"
+            "submitted candidates. Do not submit a candidate that switches early, switches back, "
+            "mixes Triton and Gluon compute kernels, or uses another DSL.\n"
         )
         candidate_framework = "the active Triton/Gluon phase"
     else:
         framework_rule = (
-            f"- The implementation framework is exactly **{framework}**. It is a hard constraint, "
-            "not a recommendation. Do not switch to another DSL, mix another kernel framework "
-            "into the candidate, or replace the implementation with a prebuilt operator.\n"
+            f"- The submitted candidate's implementation framework is exactly **{framework}**. "
+            "This is a hard final-candidate constraint, not a development-method restriction. Do not "
+            "submit another DSL, a mixed-framework compute path, or a prebuilt operator.\n"
         )
         candidate_framework = framework
     if numerical_feedback_instruction is None:
@@ -132,30 +149,52 @@ def optimization_mode_directive(
             "Read verification_artifacts/.atrex_long_horizon_verify/numerical_feedback.json, "
             "fix the implementation, rerun ordinary validation and submit the updated candidate. "
         )
+    if correctness_instruction is None:
+        correctness_instruction = (
+            "Validate correctness with the immutable evaluator's ordinary random input generator "
+            "over the full workload set. Native Atrex-Bench uses allclose for ordinary operators "
+            "and relative L2 error <= 0.2 for NVFP4 operators. Keep the configured allclose "
+            "tolerances and required random-seed coverage; correctness must pass before promotion.\n"
+        )
+    numerical_rule = ""
+    if numerical_validation_enabled:
+        numerical_rule = (
+            "- Numerical review produces targeted supplemental tests, not subjective rejection verdicts. "
+            "The supervisor executes those probes; measured failures return to the coding Agent for repair "
+            "before baseline admission or episode completion. "
+            f"{numerical_feedback_instruction}"
+            "Passing the same probes closes the suggestion. "
+            "Incomplete probes remain validation blockers; never edit trusted inputs, probes or tolerances.\n"
+        )
     return (
         "## Optimization mode: production (hard gate)\n\n"
         "This generated section overrides any conflicting permissive framework or third-party-library "
         "guidance elsewhere in `CLAUDE.md`.\n\n"
         f"{framework_rule}"
-        "- The V0 PyTorch reference wrapper is the only baseline exception. Every optimized candidate "
-        f"committed after V0 must implement the GPU computation directly in **{candidate_framework}**.\n"
-        "- The supervisor sends every production candidate to a separate, read-only policy reviewer. "
+        "- During development, you may use any language or DSL, PyTorch/ATen compute, prebuilt "
+        "kernels/operators/math implementations, third-party compute libraries, hidden or external "
+        "dispatch, dynamically loaded external implementations, compiler probes, microbenchmarks, "
+        "reference implementations, and temporary prototypes to make evidence-backed decisions. "
+        "These are development aids, not production candidates: remove them from the submitted "
+        "Kernel source tree and runtime compute path unless they themselves satisfy the active "
+        "final-candidate policy.\n"
+        "- The V0 PyTorch reference wrapper is the only admitted baseline exception. When the optional "
+        "Framework Baseline stage is enabled, its accepted V1, and every optimized candidate submitted "
+        "through a candidate_ready report, "
+        f"must implement the GPU computation directly in **{candidate_framework}**. Ordinary Git "
+        "checkpoints and temporary probes are not terminal submissions.\n"
+        "- The supervisor sends a Framework Baseline candidate, when that stage is enabled, and each "
+        "candidate_ready production candidate to a separate, read-only policy reviewer. "
         "The reviewer judges the complete candidate by actual use, not package names: compiler bindings, "
         "header discovery, ABI/launch plumbing, and ordinary non-compute support utilities may be accepted "
-        "when they only build or launch the candidate's self-authored kernel. Prebuilt kernels/operators/math "
-        "implementations, alternate DSLs, hidden dispatch, PyTorch compute fallbacks, and external "
-        "implementation loading remain forbidden. Ambiguous evidence is rejected.\n"
-        "- Validate correctness with the immutable evaluator's ordinary random input generator "
-        "over the full workload set. Native Atrex-Bench uses allclose for ordinary operators "
-        "and relative L2 error <= 0.2 for NVFP4 operators. Keep the configured allclose "
-        "tolerances and required random-seed coverage; correctness must pass before promotion.\n"
-        "- Numerical review produces targeted supplemental tests, not subjective rejection verdicts. "
-        "The supervisor executes those probes; measured failures return to the coding Agent for repair "
-        "before baseline admission or episode completion. "
-        f"{numerical_feedback_instruction}"
-        "Passing the same probes closes the suggestion. "
-        "Incomplete probes remain validation blockers; never edit trusted inputs, probes or tolerances.\n"
-        "- Keep `solution.json` consistent with the implementation. "
+        "when they only build or launch the candidate's self-authored kernel. In the submitted candidate, "
+        "prebuilt kernels/operators/math implementations, third-party core computation, alternate DSLs, "
+        "hidden dispatch, PyTorch/ATen compute fallbacks, external implementation loading, and wrapping "
+        "another DSL as the selected framework remain forbidden. Ambiguous evidence is rejected.\n"
+        f"- {correctness_instruction}"
+        f"{numerical_rule}"
+        "- When the active source contract declares `solution.json` as editable candidate metadata, "
+        "keep it consistent with the implementation; otherwise do not edit it. "
         f"{candidate_submission_instruction}, inspect the complete candidate sources "
         "and `solution.json` against these rules. The supervisor will reject a candidate that lacks an "
         "evidence-backed production-policy verdict, even if it is faster and correct.\n"
@@ -250,6 +289,9 @@ def install_workspace_policy(
 
     if state.get("source_checks_enabled") != source_checks_enabled:
         state["source_checks_enabled"] = source_checks_enabled
+        state_changed = True
+    if state.get("evaluator_shape_visibility") != requested_visibility:
+        state["evaluator_shape_visibility"] = requested_visibility
         state_changed = True
     if state_changed:
         state_path.write_text(

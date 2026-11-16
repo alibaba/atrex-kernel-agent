@@ -92,6 +92,8 @@ def _expected_shape_ids(workspace: Path) -> list[str]:
     return sorted((str(shape_id) for shape_id in payload), key=sort_key)
 
 
+# Legacy workflow compatibility. AKA-Light does not call this inference helper;
+# its requests rely exclusively on the benchmark metadata contract.
 def _is_fp4_dtype(value: object) -> bool:
     if not isinstance(value, str):
         return False
@@ -506,9 +508,6 @@ def _parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument("--seed", type=int, default=None, help=argparse.SUPPRESS)
-    parser.add_argument("--atol", type=float, default=1e-2)
-    parser.add_argument("--rtol", type=float, default=0.05)
-    parser.add_argument("--correctness-max-rel-l2", type=float, default=None)
     parser.add_argument("--warmup", type=int, default=10)
     parser.add_argument("--timed-runs", type=int, default=100)
     parser.add_argument("--candidate-timeout-s", type=float, default=300.0)
@@ -561,10 +560,6 @@ def main(argv: list[str] | None = None) -> int:
             str(reference_dir),
             "--output",
             str(output_dir),
-            "--atol",
-            str(args.atol),
-            "--rtol",
-            str(args.rtol),
             "--num-correctness-cases",
             str(1 + args.multi_seed),
             "--warmup-iters",
@@ -576,13 +571,6 @@ def main(argv: list[str] | None = None) -> int:
             "--perf-timeout-s",
             str(args.perf_timeout_s),
         ]
-        correctness_max_rel_l2 = args.correctness_max_rel_l2
-        if correctness_max_rel_l2 is None:
-            correctness_max_rel_l2 = _fp4_correctness_max_rel_l2(workspace)
-        if correctness_max_rel_l2 is not None:
-            command.extend(
-                ["--correctness-max-rel-l2", str(correctness_max_rel_l2)]
-            )
         if correctness_only:
             command.append("--correctness-only")
         completed = subprocess.run(

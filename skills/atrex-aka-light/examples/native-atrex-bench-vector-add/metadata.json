@@ -1,0 +1,63 @@
+{
+  "schema_version": "atrex.collection_operator_metadata.v3",
+  "display_name": "vector add",
+  "description": "Elementwise addition of two contiguous one-dimensional tensors. The public domain covers three floating-point dtypes, short and long vectors, and sizes immediately around common CUDA block boundaries. Exact evaluator cases are a fixed representative sample; no production traffic weights are claimed.",
+  "operator_family": "elementwise",
+  "tags": ["core", "elementwise", "general", "sampled"],
+  "benchmark_contract": {
+    "mutates_inputs": [],
+    "defined_outputs": {
+      "output": {"region": "full_logical_tensor", "alias": "new tensor"}
+    },
+    "scratch_inputs": [],
+    "correctness_min_cases": 1,
+    "correctness_seeds": [2026110301, 2026110303],
+    "preserve_input_storage": true,
+    "iteration_protocol": "fresh_inputs_per_call"
+  },
+  "validation": {
+    "status": "unvalidated",
+    "correctness_scope": "Functional test task; GPU validation is recorded by the runtime.",
+    "evidence": []
+  },
+  "cases": {
+    "0": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "1": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "2": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "3": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "4": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "5": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "6": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "7": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "8": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []},
+    "9": {"frequency_weight": null, "frequency_weight_basis": "general_no_measured_traffic", "real_input_sample_ids": []}
+  },
+  "scoring": {
+    "schema_version": "atrex.collection_scoring.v2",
+    "status": "unscored",
+    "operator_weight": null,
+    "operator_weight_basis": "general_no_measured_traffic",
+    "normalization_scope": "selected_collection_operators",
+    "source_manifest_sha256": null,
+    "limitations": ["No deployment-specific frequency or device-time weight is claimed."]
+  },
+  "real_inputs": {
+    "schema_version": "atrex.collection_real_inputs.v1",
+    "availability": "not_captured",
+    "samples": {},
+    "reason": "Synthetic functional-test workload."
+  },
+  "performance_objective": "shape_speedup_geometric_mean",
+  "shapes": {
+    "0": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "1": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "2": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "3": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "4": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "5": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "6": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "7": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "8": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}},
+    "9": {"production_performance": {"performance_us": 100.0, "basis": "fixed_scoring_normalization", "measured": false}}
+  }
+}

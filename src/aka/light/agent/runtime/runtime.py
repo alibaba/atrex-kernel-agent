@@ -127,9 +127,22 @@ class CliAgentRuntime(SharedCliAgentRuntime):
                 f"unsupported reasoning effort: {request.reasoning_effort!r}"
             )
         session_id = request.session_id or str(uuid.uuid4())
-        command = self.build_command(
-            request.prompt, session_id, request.reasoning_effort
-        )
+        if request.resume_session:
+            if not request.session_id:
+                raise ValueError("resume_session requires an existing session_id")
+            from aka.legacy.agent.native import resume_session_command
+
+            command = resume_session_command(
+                request.prompt,
+                session_id,
+                request.reasoning_effort,
+                self.id,
+                runtime=self,
+            )
+        else:
+            command = self.build_command(
+                request.prompt, session_id, request.reasoning_effort
+            )
         environment = build_session_environment(self.id)
         environment["IS_SANDBOX"] = "1"
         if request.extra_environment:

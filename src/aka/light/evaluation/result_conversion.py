@@ -11,6 +11,14 @@ import math
 import statistics
 
 PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
+SPEEDUP_ARITHMETIC_MEAN = PERFORMANCE_OBJECTIVE
+SPEEDUP_GEOMETRIC_MEAN = "shape_speedup_geometric_mean"
+LATENCY_GEOMETRIC_MEAN = "shape_latency_geometric_mean"
+SUPPORTED_PERFORMANCE_OBJECTIVES = frozenset({
+    SPEEDUP_ARITHMETIC_MEAN,
+    SPEEDUP_GEOMETRIC_MEAN,
+    LATENCY_GEOMETRIC_MEAN,
+})
 
 
 def finite_number(value: object) -> float | None:
@@ -26,29 +34,26 @@ def compile_failures(compile_result: object, shape_ids: list[str]) -> list[str]:
     if "status" in compile_result:
         if compile_result.get("status") == "passed":
             return []
-        return ["compile: " + str(
-            compile_result.get("reason") or compile_result.get("status") or "did not pass"
-        )]
+        return ["compile did not pass; see actionable_diagnostics"]
     failures = []
     for shape_id in shape_ids:
         status = compile_result.get(shape_id)
         status = status if isinstance(status, dict) else {}
         if status.get("status") != "passed":
-            failures.append(
-                f"sid={shape_id}: compile "
-                + str(status.get("reason") or status.get("status") or "missing")
-            )
+            failures.append(f"sid={shape_id}: compile did not pass; see actionable_diagnostics")
     return failures
 
 
-def bounded_actionable_diagnostic(value: object, *, limit: int = 6000) -> str:
-    text = str(value or "").replace("\x00", "").strip()
-    if len(text) <= limit:
-        return text
-    marker = "\n... diagnostic truncated ...\n"
-    head = min(1000, limit // 3)
-    tail = max(0, limit - head - len(marker))
-    return text[:head] + marker + (text[-tail:] if tail else "")
+def actionable_diagnostic(value: object) -> str:
+    """Return the complete diagnostic produced by Agate or the compiler.
+
+    Compiler output is commonly repetitive near the front while the decisive
+    error is at the end.  Length-based head/tail projection therefore changes
+    the meaning of the evidence and is not safe at the Agent boundary.  NULs
+    are removed because they cannot be represented by every downstream text
+    transport; redaction is applied later by the public projection.
+    """
+    return str(value or "").replace("\x00", "").strip()
 
 
 def looks_like_candidate_exception(value: object) -> bool:
@@ -62,39 +67,48 @@ def looks_like_candidate_exception(value: object) -> bool:
 
 
 def compile_diagnostics(compile_result: object,
-                        shape_ids: list[str]) -> list[dict[str, str]]:
+                        shape_ids: list[str]) -> list[dict[str, Any]]:
     if not isinstance(compile_result, dict):
         return []
     if "status" in compile_result:
         if compile_result.get("status") == "passed":
             return []
-        message = bounded_actionable_diagnostic(
+        message = actionable_diagnostic(
             compile_result.get("reason") or compile_result.get("status")
         )
         return ([{"stage": "compile_import", "shape_id": "", "message": message}]
                 if message else [])
     diagnostics = []
-    seen = set()
+    seen: dict[str, dict[str, Any]] = {}
     for shape_id in shape_ids:
         status = compile_result.get(shape_id)
         status = status if isinstance(status, dict) else {}
         if status.get("status") == "passed":
             continue
-        message = bounded_actionable_diagnostic(
+        message = actionable_diagnostic(
             status.get("reason") or status.get("status") or "missing"
         )
-        if message and message not in seen:
-            seen.add(message)
-            diagnostics.append({"stage": "compile_import", "shape_id": shape_id,
-                                "message": message})
+        if not message:
+            continue
+        if message in seen:
+            item = seen[message]
+            item.setdefault("shape_ids", [item["shape_id"]]).append(shape_id)
+            continue
+        item = {
+            "stage": "compile_import",
+            "shape_id": shape_id,
+            "message": message,
+        }
+        seen[message] = item
+        diagnostics.append(item)
     return diagnostics
 
 
 def candidate_exception_diagnostics(correctness_status: dict[str, Any],
                                     correctness_shapes: dict[str, Any],
-                                    shape_ids: list[str]) -> list[dict[str, str]]:
+                                    shape_ids: list[str]) -> list[dict[str, Any]]:
     diagnostics = []
-    seen = set()
+    seen: dict[str, dict[str, Any]] = {}
     for shape_id in shape_ids:
         status = correctness_status.get(shape_id)
         status = status if isinstance(status, dict) else {}
@@ -108,12 +122,22 @@ def candidate_exception_diagnostics(correctness_status: dict[str, Any],
         for reason in reasons:
             if not looks_like_candidate_exception(reason):
                 continue
-            message = bounded_actionable_diagnostic(reason)
-            if not message or message in seen:
+            message = actionable_diagnostic(reason)
+            if not message:
                 continue
-            seen.add(message)
-            diagnostics.append({"stage": "candidate_runtime", "shape_id": shape_id,
-                                "message": message})
+            if message in seen:
+                item = seen[message]
+                known_shapes = item.setdefault("shape_ids", [item["shape_id"]])
+                if shape_id not in known_shapes:
+                    known_shapes.append(shape_id)
+                continue
+            item = {
+                "stage": "candidate_runtime",
+                "shape_id": shape_id,
+                "message": message,
+            }
+            seen[message] = item
+            diagnostics.append(item)
     return diagnostics
 
 
@@ -138,12 +162,64 @@ def metadata_shape_latency_us(metadata: object, shape_id: str) -> float | None:
     return nested[0] if len(nested) == 1 else None
 
 
-def metadata_speedup_mean(metadata: object, shape_ids: list[str],
-                          latency_by_shape: dict[str, float]) -> tuple[float | None, list[str]]:
+def metadata_performance_objective(metadata: object) -> str:
+    """Return the task's declared objective, retaining the legacy default.
+
+    Older tasks predate ``metadata.performance_objective`` and used the
+    arithmetic mean of per-Shape speedups.  An explicit value is never
+    rewritten to that compatibility default.
+    """
+    if isinstance(metadata, dict):
+        objective = metadata.get("performance_objective")
+        if isinstance(objective, str) and objective.strip():
+            return objective.strip()
+    return PERFORMANCE_OBJECTIVE
+
+
+def metadata_performance_metrics(
+    metadata: object,
+    shape_ids: list[str],
+    latency_by_shape: dict[str, float],
+) -> tuple[dict[str, float | str | None], list[str]]:
+    """Aggregate a complete Shape set according to the task metadata.
+
+    This function is intentionally a whole-request operation.  Callers must
+    first merge all outer Shape shards and pass the complete requested Shape
+    set; averaging shard-level scores changes geometric objectives.
+    """
+    objective = metadata_performance_objective(metadata)
+    metrics: dict[str, float | str | None] = {
+        "performance_objective": objective,
+        "performance_score": None,
+        "speedup_vs_ref_mean": None,
+        "speedup_vs_ref_geomean": None,
+    }
+    if objective not in SUPPORTED_PERFORMANCE_OBJECTIVES:
+        return metrics, [
+            "unsupported metadata.performance_objective: " + objective
+        ]
     if any(shape_id not in latency_by_shape for shape_id in shape_ids):
-        return None, []
-    speedups = []
-    failures = []
+        return metrics, []
+    latencies = [latency_by_shape[shape_id] for shape_id in shape_ids]
+    if not latencies:
+        return metrics, []
+    if any(
+        isinstance(value, bool)
+        or not isinstance(value, (int, float))
+        or not math.isfinite(float(value))
+        or float(value) <= 0.0
+        for value in latencies
+    ):
+        return metrics, ["performance aggregation received an invalid latency"]
+
+    latency_geomean = math.exp(
+        sum(math.log(float(value)) for value in latencies) / len(latencies)
+    )
+    if objective == LATENCY_GEOMETRIC_MEAN:
+        metrics["performance_score"] = latency_geomean
+
+    speedups: list[float] = []
+    failures: list[str] = []
     for shape_id in shape_ids:
         reference_us = metadata_shape_latency_us(metadata, shape_id)
         if reference_us is None:
@@ -153,13 +229,39 @@ def metadata_speedup_mean(metadata: object, shape_ids: list[str],
             )
         else:
             speedups.append(reference_us / latency_by_shape[shape_id])
-    if failures or len(speedups) != len(shape_ids) or not speedups:
-        return None, failures
-    return sum(speedups) / len(speedups), []
+    if not failures and len(speedups) == len(shape_ids) and speedups:
+        arithmetic = sum(speedups) / len(speedups)
+        geometric = math.exp(
+            sum(math.log(value) for value in speedups) / len(speedups)
+        )
+        metrics["speedup_vs_ref_mean"] = arithmetic
+        metrics["speedup_vs_ref_geomean"] = geometric
+        if objective == SPEEDUP_ARITHMETIC_MEAN:
+            metrics["performance_score"] = arithmetic
+        elif objective == SPEEDUP_GEOMETRIC_MEAN:
+            metrics["performance_score"] = geometric
+    elif objective == LATENCY_GEOMETRIC_MEAN:
+        # Reference speedups are optional diagnostics for a latency objective.
+        failures = []
+    return metrics, failures
+
+
+def metadata_speedup_mean(
+    metadata: object,
+    shape_ids: list[str],
+    latency_by_shape: dict[str, float],
+) -> tuple[float | None, list[str]]:
+    """Compatibility adapter returning the metadata-selected score."""
+    metrics, failures = metadata_performance_metrics(
+        metadata, shape_ids, latency_by_shape
+    )
+    score = metrics.get("performance_score")
+    return (float(score) if isinstance(score, (int, float)) else None), failures
 
 
 def optimizer_result_from_eval(payload: dict[str, Any], shape_ids: list[str],
-                               metadata: object, *, require_performance: bool = True) -> dict[str, Any]:
+                               metadata: object, *, require_performance: bool = True,
+                               finalize_performance: bool = True) -> dict[str, Any]:
     failures = []
     if payload.get("error"):
         failures.append("evaluation: " + str(payload["error"]))
@@ -232,23 +334,31 @@ def optimizer_result_from_eval(payload: dict[str, Any], shape_ids: list[str],
     geomean = (math.exp(sum(math.log(value) for value in latencies) / len(latencies))
                if complete and latencies else 0.0)
     arithmetic = sum(latencies) / len(latencies) if complete and latencies else 0.0
-    speedup_mean, _ = (metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
-                       if require_performance else (None, []))
+    performance_metrics, _ = (
+        metadata_performance_metrics(metadata, shape_ids, latency_by_shape)
+        if require_performance and finalize_performance
+        else (
+            {
+                "performance_objective": metadata_performance_objective(metadata),
+                "performance_score": None,
+                "speedup_vs_ref_mean": None,
+                "speedup_vs_ref_geomean": None,
+            },
+            [],
+        )
+    )
     return {
         "all_pass": not failures,
         "failures": failures,
         "latency_us_geomean": geomean,
         "latency_us_arith_mean": arithmetic,
         "latency_us_by_shape": latency_by_shape,
-        "speedup_vs_ref_mean": speedup_mean,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": speedup_mean,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
+        **performance_metrics,
         "max_abs_err": max_abs,
         "max_rel_err": max_rel,
         "evaluator": "atrex-gpu-gateway/run",
         "eval_id": payload.get("eval_id"),
-        "actionable_diagnostics": diagnostics[:8],
+        "actionable_diagnostics": diagnostics,
     }
 
 
@@ -262,7 +372,7 @@ def merge_optimizer_results(results: list[dict[str, Any]], shape_ids: list[str],
     latencies = [latency_by_shape[sid] for sid in shape_ids if sid in latency_by_shape]
     complete = not require_performance or len(latencies) == len(shape_ids)
     diagnostics = []
-    seen = set()
+    seen: dict[tuple[str, str], dict[str, Any]] = {}
     for result in results:
         for diagnostic in result.get("actionable_diagnostics") or []:
             if not isinstance(diagnostic, dict):
@@ -273,15 +383,40 @@ def merge_optimizer_results(results: list[dict[str, Any]], shape_ids: list[str],
                 "message": str(diagnostic.get("message") or ""),
             }
             key = (item["stage"], item["message"])
-            if item["message"] and key not in seen:
-                seen.add(key)
-                diagnostics.append(item)
-            if len(diagnostics) >= 8:
-                break
-        if len(diagnostics) >= 8:
-            break
-    speedup_mean, _ = (metadata_speedup_mean(metadata, shape_ids, latency_by_shape)
-                       if require_performance else (None, []))
+            raw_shape_ids = diagnostic.get("shape_ids")
+            shape_ids_for_item = (
+                [str(value) for value in raw_shape_ids]
+                if isinstance(raw_shape_ids, list)
+                else [item["shape_id"]]
+            )
+            if not item["message"]:
+                continue
+            if key in seen:
+                existing = seen[key]
+                existing_shapes = existing.setdefault(
+                    "shape_ids", [existing["shape_id"]]
+                )
+                for shape_id in shape_ids_for_item:
+                    if shape_id not in existing_shapes:
+                        existing_shapes.append(shape_id)
+                continue
+            if len(shape_ids_for_item) > 1:
+                item["shape_ids"] = shape_ids_for_item
+            seen[key] = item
+            diagnostics.append(item)
+    performance_metrics, _metadata_failures = (
+        metadata_performance_metrics(metadata, shape_ids, latency_by_shape)
+        if require_performance
+        else (
+            {
+                "performance_objective": metadata_performance_objective(metadata),
+                "performance_score": None,
+                "speedup_vs_ref_mean": None,
+                "speedup_vs_ref_geomean": None,
+            },
+            [],
+        )
+    )
     failures = [str(failure) for result in results
                 for failure in (result.get("failures") or [])]
     return {
@@ -295,10 +430,7 @@ def merge_optimizer_results(results: list[dict[str, Any]], shape_ids: list[str],
             sum(latencies) / len(latencies) if complete and latencies else 0.0
         ),
         "latency_us_by_shape": latency_by_shape,
-        "speedup_vs_ref_mean": speedup_mean,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": speedup_mean,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
+        **performance_metrics,
         "max_abs_err": max(float(result.get("max_abs_err") or 0.0) for result in results),
         "max_rel_err": max(float(result.get("max_rel_err") or 0.0) for result in results),
         "evaluator": "atrex-gpu-gateway/run/batched",

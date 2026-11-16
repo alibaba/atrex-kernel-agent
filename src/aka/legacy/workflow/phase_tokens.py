@@ -29,6 +29,7 @@ def usage_dict(usage: TokenUsage) -> dict[str, Any]:
         "output_tokens": usage.output_tokens,
         "cache_read_tokens": usage.cache_read_tokens,
         "cache_write_tokens": usage.cache_write_tokens,
+        "reasoning_tokens": usage.reasoning_tokens,
         "total_tokens": usage.total_tokens,
         "measurement": usage.measurement,
     }
@@ -271,9 +272,10 @@ def _usage_from_dict(payload: object) -> TokenUsage:
         total_tokens=value("total_tokens"),
         measurement=(
             str(measurement)
-            if measurement in {"exact", "partial", "unavailable"}
+            if measurement in {"exact", "estimated", "partial", "unavailable"}
             else "unavailable"
         ),
+        reasoning_tokens=value("reasoning_tokens"),
     )
 
 
@@ -302,6 +304,7 @@ def aggregate_attempt_tokens(attempts: Sequence[Mapping[str, Any]]) -> dict[str,
             terminal.cache_write_tokens,
             terminal.total_tokens,
             "partial",
+            terminal.reasoning_tokens,
         )
 
     phases: dict[str, Any] = {}
@@ -343,6 +346,7 @@ def aggregate_attempt_tokens(attempts: Sequence[Mapping[str, Any]]) -> dict[str,
                 aggregate.cache_write_tokens,
                 aggregate.total_tokens,
                 "partial",
+                aggregate.reasoning_tokens,
             )
         phase_aggregates.append(aggregate)
         phases[phase] = {

@@ -10,6 +10,7 @@ KNOWN_GATEWAY_ERROR_CLASSES = frozenset({
     "compilation",
     "correctness",
     "infra",
+    "timeout",
     "validation",
 })
 
@@ -22,6 +23,12 @@ def known_gateway_error(value: dict[str, Any]) -> bool:
     }:
         return True
     error = value.get("error")
+    if (
+        isinstance(error, dict)
+        and isinstance(error.get("message"), str)
+        and "job deadline exceeded" in error["message"].casefold()
+    ):
+        return True
     return (
         isinstance(error, dict)
         and error.get("error_class") in KNOWN_GATEWAY_ERROR_CLASSES

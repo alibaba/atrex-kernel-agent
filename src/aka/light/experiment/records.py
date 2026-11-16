@@ -4,14 +4,14 @@ from aka.light.evaluation.policy import CORRECTNESS_CASES
 
 import json
 import logging
+import re
 import subprocess
-from pathlib import Path
-
 from aka.light.execution.gateway_jobs import cacheable_job, job_from_process
 from aka.light.experiment.store import (
     ABBA_BATCH_ROOT_ENV,
     BATCH_ROOT_ENV,
     JOB_ROOT_ENV,
+    RUNTIME_REQUEST_ID_ENV,
     DuplicateTask,
     RecordNotFound,
     digest,
@@ -19,14 +19,9 @@ from aka.light.experiment.store import (
     private_write_bytes,
     read_json,
 )
-from aka.light.workspace.files import MAX_FILE_BYTES, publish, relative_path
-from aka.light.agent.session_tail import read_regular_bytes
-
 from aka.light.evaluation.provider import PREFIXES, result_from_response
 from aka.light.evaluation.public_result import cacheable_evaluation, seal_response
-from aka.light.runtime.request_errors import AgentRequestError, RuntimeStateError, error_response, field_error
-from aka.light.experiment.identifiers import GATEWAY_RECORD_ID_RE, KERNEL_RECORD_ID_RE
-QUERY_KINDS = {"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier"}
+from aka.light.runtime.request_errors import AgentRequestError, error_response
 
 
 def _completed_abba_timeout(sample: object, states: list[dict], *, truncated: bool) -> bool:
@@ -43,28 +38,46 @@ def _completed_abba_timeout(sample: object, states: list[dict], *, truncated: bo
 
 
 def _abba_acceptance_states(states: list[dict]) -> list[dict]:
-    """Use completed replacement batches while retaining old receipts on disk."""
+    """Use a complete exact replacement batch without deleting old evidence.
+
+    Gateway replacement may leave an accepted state that can no longer be
+    collected.  A successful terminal receipt from a different endpoint is a
+    valid replacement only when the complete typed batch payload -- including
+    source, evaluator, hardware, Shapes and ABBA schedule -- has the same
+    digest.  All original state files remain available for audit.
+    """
     if not any(state.get("phase") == "accepted" for state in states):
         return states
 
-    def batch_identity(state):
+    def batch_identity(state: dict) -> tuple[str, str] | None:
         identity = state.get("identity", {})
         payload = identity.get("payload")
         endpoint = identity.get("url_fingerprint")
-        if identity.get("kind") == "eval" and endpoint and isinstance(payload, dict) and payload.get("abba"):
+        if (
+            identity.get("kind") == "eval"
+            and isinstance(endpoint, str)
+            and endpoint
+            and isinstance(payload, dict)
+            and payload.get("abba")
+        ):
             return digest(payload), endpoint
         return None
 
-    completed = {}
+    completed: dict[str, set[str]] = {}
     for state in states:
         batch = batch_identity(state)
         if batch is None or state.get("phase") != "terminal":
             continue
-        process = state["process"]
+        process = state.get("process", {})
         job = job_from_process(subprocess.CompletedProcess(
-            [], process["returncode"], process["stdout"], process["stderr"]
+            [],
+            process.get("returncode", 1),
+            process.get("stdout", ""),
+            process.get("stderr", ""),
         ))
-        if job and job.get("status") == "succeeded" and cacheable_job(job, state["identity"]):
+        if job and job.get("status") == "succeeded" and cacheable_job(
+            job, state.get("identity")
+        ):
             request_digest, endpoint = batch
             completed.setdefault(request_digest, set()).add(endpoint)
 
@@ -73,57 +86,14 @@ def _abba_acceptance_states(states: list[dict]) -> list[dict]:
         batch = batch_identity(state) if state.get("phase") == "accepted" else None
         if batch is not None:
             request_digest, endpoint = batch
-            # An exact replacement from another Gateway can supply evidence.
-            # This does not assert cancellation or change job replay policy.
             if completed.get(request_digest, set()) - {endpoint}:
                 continue
         current.append(state)
     return current
 
 
-def _read_record(reader, identifier, *, field, pattern):
-    if not isinstance(identifier, str) or pattern.fullmatch(identifier) is None:
-        raise field_error(field, f"{field} must be a complete ID returned by this Campaign")
-    try:
-        return reader(identifier)
-    except (FileNotFoundError, RecordNotFound) as error:
-        raise field_error(field, "Record is not available in this Campaign; check the original tool result for its exact ID",
-                          code="record_not_found") from error
-    except (OSError, ValueError, KeyError, TypeError) as error:
-        raise RuntimeStateError("Saved evidence is unreadable or inconsistent; ask the operator to restore it",
-                                code="record_unavailable") from error
-
-
-def query(store, args, workspace: Path) -> dict:
-    if args.command or args.input or args.baseline_path:
-        raise ValueError("Record queries take IDs, not commands or GPU inputs")
-    if args.kind == "record-read":
-        record = _read_record(store.read, args.record_id, field="record_id", pattern=GATEWAY_RECORD_ID_RE)
-        return seal_response(record["response"], record["request"],
-                             record_id=record["gateway_record_id"], kernels=record["kernels"])
-    if args.kind == "kernel-pareto-frontier":
-        if args.kernel_id or args.record_id or args.output_path:
-            raise ValueError("kernel-pareto-frontier takes no IDs or output path; it queries this Campaign")
-        from .frontier import kernel_pareto_frontier
-        result = kernel_pareto_frontier(store)
-    elif args.kind == "kernel-records":
-        result = {"kernel_id": args.kernel_id, "gateway_records": _read_record(
-            store.kernel_records, args.kernel_id, field="kernel_id", pattern=KERNEL_RECORD_ID_RE)}
-    else:
-        path = relative_path(args.output_path or "")
-        if len(path.parts) < 2 or path.parts[0] != "scratch":
-            raise ValueError("--output-path must name a file (or tree directory) inside scratch/")
-        source = _read_record(store.read_kernel, args.kernel_id, field="kernel_id", pattern=KERNEL_RECORD_ID_RE)
-        from aka.light.workspace.sources import Artifact
-        exported = Artifact(source).export(workspace / path)
-        result = {"ok": True, "kernel_id": args.kernel_id, "file": str(path), "bytes": len(source)}
-        if exported:
-            result.update(exported, directory=str(path))
-    return {"exit_code": 0, "stdout": json.dumps(result) + "\n", "stderr": ""}
-
-
 def correctness_identity(request: dict) -> dict | None:
-    """A narrow equivalence: full/untimed six-case evaluation of the same inputs.
+    """A narrow equivalence: full/untimed five-case evaluation of the same inputs.
 
     Only mode, performance repetitions and timing iterations may differ. All
     evaluator bytes, input/source hashes, tolerances, dependencies, target and
@@ -227,8 +197,27 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
         raise AgentRequestError(str(error)) from error
     operation = request["operation"]
     from aka.light.workspace.sources import measurement_artifacts
-    kernels = {side: store.kernel(artifact.snapshot)
-               for side, artifact in measurement_artifacts(request, inputs).items()}
+    kernels = {}
+    preferred = effects.kernel_ids or {}
+    for side, artifact in measurement_artifacts(request, inputs).items():
+        kernel_id = preferred.get(side)
+        if kernel_id is None:
+            try:
+                kernel_id = store.find_kernel_id(artifact.snapshot)
+            except RecordNotFound as error:
+                raise AgentRequestError(
+                    f"{side.capitalize()} Kernel has no recorded Git commit identity.",
+                    code="kernel_commit_unknown",
+                    next_action=(
+                        "Commit the Kernel source before invoking Runtime tools. For an ABBA "
+                        "baseline, materialize a Kernel previously returned by this Campaign."
+                    ),
+                ) from error
+        kernels[side] = store.kernel(artifact.snapshot, kernel_id)
+    request = dict(
+        request,
+        kernel_ids={side: identity["kernel_id"] for side, identity in sorted(kernels.items())},
+    )
     if reuse_correctness and reuse_completed and "candidate" in kernels:
         response = reuse_correctness_result(store, request, kernels["candidate"]["kernel_id"])
         if response is not None:
@@ -249,6 +238,8 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     JOB_ROOT_ENV: str(directory),
                     "ATREX_AKA_IDENTITY_KEY": store.identity_key.hex(),
                 }
+                if effects.request_id:
+                    env[RUNTIME_REQUEST_ID_ENV] = effects.request_id
                 if operation in {"evaluate", "same_allocation_abba"}:
                     # A task may finish only a subset of Shape batches before
                     # an infrastructure outage. Keep completed batches at a
@@ -277,7 +268,10 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                     pinned = directory / "runtime-requirements.txt"
                     private_write_bytes(pinned, ("\n".join(plan.runtime_pins["requirements"]) + "\n").encode())
                     env["ATREX_SANDBOX_REQUIREMENTS_FILE"] = str(pinned)
-                if effects.private_reference_dir is not None:
+                if (
+                    effects.evaluator_reference_dir is not None
+                    or effects.private_reference_dir is not None
+                ):
                     env["ATREX_PRIVATE_REFERENCE_DIR"] = str(task.directory / "inputs")
                 try:
                     process = effects.run(command, staged, env)
@@ -375,38 +369,60 @@ def execute(store, evaluation, effects, staged, args, argv, environment, command
                 raise InfrastructureUnavailable(
                     "Acceptance measurement is incomplete or uncertain; inspect its private Gateway Record"
                 )
-            if operation == "evaluate" and repetitions > 1 and samples:
-                from aka.light.evaluation.gateway import EPISODE_EVALUATIONS_PATH
-                # The old report compiler must see the same aggregate as the
-                # Agent, not whichever repetition happened to finish last.
-                log = read_regular_bytes(staged / EPISODE_EVALUATIONS_PATH, limit=MAX_FILE_BYTES + 1)
-                if len(log) > MAX_FILE_BYTES:
-                    raise ValueError("Evaluation log exceeds the size limit")
-                if log.strip():
-                    row = json.loads(log.splitlines()[-1])
-                    row["result"] = result_from_response(response, operation)
-                    row["gateway_record_id"] = task.record_id
-                    publish(staged, str(EPISODE_EVALUATIONS_PATH), (json.dumps(row) + "\n").encode())
-            # Record publication precedes legacy-output publication: a later
-            # filesystem error cannot cause a completed GPU task to run again.
-            effects.publish_log(staged)
+            # The immutable Measurement Store is the only evaluation authority.
+            # Do not mirror results into an Agent-workspace episode log.
+            from aka.light.runtime.errors import ResultPublicationError
             if response["exit_code"] == 0:
-                effects.publish_outputs(staged, args)
+                try:
+                    effects.publish_outputs(staged, args)
+                except ResultPublicationError as error:
+                    error.bind_record(task.record_id)
+                    raise
+                except Exception as error:
+                    message = str(error)
+                    code = "output_synchronization_failed"
+                    details = {}
+                    if "exceeds per-file size limit" in message:
+                        code = "output_synchronization_limit_exceeded"
+                        match = re.search(
+                            r"file '([^']+)' exceeds per-file size limit of (\d+) bytes; "
+                            r"(\d+) bytes remain",
+                            message,
+                        )
+                        if match:
+                            details = {
+                                "output_path": match.group(1),
+                                "limit_type": "per_file_bytes",
+                                "limit_bytes": int(match.group(2)),
+                                "remaining_sync_budget_bytes": int(match.group(3)),
+                            }
+                    elif "exceeds cumulative size limit" in message:
+                        code = "output_synchronization_limit_exceeded"
+                    raise ResultPublicationError(
+                        f"GPU operation completed and was recorded, but requested output synchronization failed: {error}",
+                        code=code,
+                        phase="output_synchronization",
+                        gateway_record_id=task.record_id,
+                        **details,
+                    ) from error
             return response
     except DuplicateTask as error:
-        if reuse_completed and error.record_id:
-            # reserve() has already validated the exact task identity and its
-            # cacheability. This switch is never accepted from HTTP/Agent argv.
+        if error.record_id:
+            # reserve() has already validated the complete task identity and
+            # cacheability. A completed exact match is therefore the normal
+            # result of this call, regardless of which lineage created the
+            # canonical Record. Keep the reuse marker private to Runtime; the
+            # Agent-facing compact receipt is identical to a fresh completion.
             return dict(store.read(error.record_id)["response"], reused=True)
         return task_conflict_response(error)
 
 
 def task_conflict_response(error: DuplicateTask) -> dict:
+    if error.record_id:
+        raise RuntimeError(
+            "Completed exact Gateway tasks must be returned through normal Record reuse"
+        )
     info = error.response()
-    recovery = ([{"tool": "record-read", "request": {"record_id": error.record_id},
-                  "command": "python3 tools/sandbox.py --kind record-read --record-id " + error.record_id,
-                  "instruction": "Reuse the completed result; do not resubmit this exact Kernel task."}]
-                if error.record_id else [{"instruction": info["next_action"]}])
+    recovery = [{"instruction": info["next_action"]}]
     response = error_response(info.pop("message"), repairable=False, recovery=recovery, **info)
-    response["previous_gateway_record_id"] = error.record_id
     return {"exit_code": 2, "stdout": "", "stderr": json.dumps(response) + "\n"}

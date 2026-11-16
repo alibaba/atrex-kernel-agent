@@ -1,48 +1,32 @@
-"""Single-operator optimization campaign: baseline setup, episode loop, promotion policy."""
+"""Single-operator optimization campaign: V0 setup and persistent Session segments."""
 
 from __future__ import annotations
 from functools import cached_property
-
-from contextvars import copy_context
 
 import hashlib
 import json
 import math
 import os
-import shlex
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
-from concurrent.futures import ThreadPoolExecutor
+import threading
+import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
 from aka.light.workspace.resource_catalog import resource
 
 from aka.light.workflow.constants import (
-    SUPPLEMENTAL_PENDING_PREFIX,
-    SUPPLEMENTAL_REPAIR_PREFIX,
     AGENT_PROBLEM_GENERATION_PROMPT,
-    ATREX_BENCH_HARNESS,
     ATREX_PRIVATE_REFERENCE_ENV,
-    DEFAULT_CONVERT_AFTER,
-    DEFAULT_HANDOFF_RESUMES,
     DEFAULT_VERIFY_REPEATS,
-    DEFAULT_VERIFY_RUN_TIMEOUT,
     DEPENDENCY_REVIEW_PROMPT,
+    RESEARCH_CLAIM_REVIEW_PROMPT,
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
-    DEPENDENCY_REVIEW_TIMEOUT_S,
-    FRAMEWORK_BASELINE_CATEGORY,
-    FRAMEWORK_BASELINE_FILE,
-    FRAMEWORK_BASELINE_TIMEOUT_S,
-    FRAMEWORK_BASELINE_VERSION,
-    IMMUTABLE_BASELINE_PATHS,
     DEFAULT_PROBLEM_GENERATION_TIMEOUT_S,
-    PROFILE_DRIVER,
-    PROMPTS_DIR,
-    REPO_ROOT,
     SOL_SEED,
     WORKSPACE_INIT,
 )
@@ -51,18 +35,13 @@ from aka.light.execution.recovery import (
     EnvironmentUnavailable,
     environment_state_file,
 )
-from aka.light.workflow.baseline_progress import (capture_unexpected_exit as capture_framework_baseline_exit)
-from aka.light.workflow.baseline_progress import (load_progress as load_framework_baseline_progress)
-from aka.light.workflow.baseline_progress import (mark_accepted as mark_framework_baseline_accepted)
-from aka.light.workflow.baseline_progress import (progress_path as framework_baseline_progress_path)
-from aka.light.workflow.baseline_progress import (restore_latest_candidate as restore_latest_framework_baseline_candidate)
-from aka.light.workflow.baseline_progress import (save_supervisor_recovery as save_framework_baseline_recovery)
-from aka.light.evaluation.hardware import hardware_directive, hardware_vendor, kernel_is_gluon
-from aka.light.workspace.versions import (
-    STATE_DIRECTORY,
-    save_version_record,
-    version_commit_paths,
-    version_record_path,
+from aka.light.evaluation.hardware import hardware_vendor, kernel_is_gluon
+from aka.light.evaluation.policy import SHAPE_BATCH_SIZE
+from aka.light.agent.dependency_policy import DEPENDENCY_GUARD_ENV
+from aka.contracts.evaluation import DEFAULT_EVALUATION_STEP_TIMEOUT
+from aka.light.workspace.baseline import (
+    baseline_measurement_spec,
+    read_baseline_record,
 )
 from aka.legacy.task.problem.layout import (
     AGENT_PROBLEM_FILENAME,
@@ -78,57 +57,37 @@ from aka.light.acceptance.source_policy import (
     optimization_mode_directive,
     production_kernel_violations,
     production_structure_violations,
+    workspace_policy_block,
 )
+from aka.light.acceptance.policy_modes import (
+    canonical_submission_policy,
+    dsl_policy,
+    permits_hidden_shapes,
+    requires_explicit_dsl,
+)
+from aka.light.acceptance.review import validate_light_production_review
 from aka.light.workflow.session_io import (
     SessionResult,
     _production_review_candidate_paths,
     _production_review_digest,
-    _record_local_test_result,
+    _local_test_record,
     _render,
     _sandbox_command,
     _test_result_from_stdout,
-    _validate_production_review,
-    run_session,
     sandbox_directive,
 )
-from aka.light.workspace.assets import (_agent_runtime_directive, link_runtime)
 from aka.light.workspace.state import (
     git_head,
     git_path_blob,
-    git_worktree_blob,
-    head_kernel_is_initial_baseline,
-    latest_version,
     read_memory,
-    resolve_framework_baseline_commit,
     v0_baseline_commit,
-    write_stall,
 )
 
 
 _WIKI_PROFILE_ROOT_ENV = "ATREX_WIKI_PROFILE_ROOT"
 _WIKI_TASK_ID_ENV = "ATREX_WIKI_TASK_ID"
+_CLAIM_REVIEW_MAX_ATTEMPTS = 2
 
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 4
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
-    ".atrex_long_horizon/framework_baseline/correctness_guidance.json"
-)
-_FRAMEWORK_BASELINE_CORRECTNESS_CONTEXT_PATHS = (
-    "README.md",
-    "reference.py",
-    "input.py",
-    "agent_problem.json",
-    "shapes.json",
-    "definition.json",
-    "workload.jsonl",
-)
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS = (
-    "SEMANTIC_CHECKLIST:",
-    "EDGE_CASES:",
-    "CUDA_IMPLEMENTATION_RISKS:",
-    "PRE_SMOKE_CHECKS:",
-    "RECOMMENDED_CORRECTNESS_FIRST_DESIGN:",
-)
 
 
 def _runtime_timeout_from_environment(name: str, default: float | None = None) -> float | None:
@@ -153,6 +112,8 @@ class Campaign:
     kernel_demo: str
     platform: str
     framework: str
+    specify_dsl: bool = True
+    expose_evaluator_shapes: bool = True
     notes: str = "none"
     arch: str = ""  # real runtime GPU arch e.g. "sm_103" / "gfx942"; auto-detected
     work_dir: str = ""  # explicit working directory; "" = Path.cwd() (backward compat)
@@ -161,10 +122,6 @@ class Campaign:
     token_budget: int = 0  # 0 = no token cap (max-iters still bounds the run)
     target_util: float = 90.0
     problem_generation_timeout: int = DEFAULT_PROBLEM_GENERATION_TIMEOUT_S  # per authoring attempt
-    max_stall: int = 0  # 0 = disabled; >0 = stop after N unpromoted episodes
-    convert_after: int = (
-        DEFAULT_CONVERT_AFTER  # triton-only: mandatory Gluon conversion threshold
-    )
     sandbox_hardware: str = (
         ""  # agate scheduler token, e.g. REMOTE_GPU (may differ from platform)
     )
@@ -176,39 +133,55 @@ class Campaign:
     agent_sandbox: str = "none"  # opt-in coordinator isolation, independent of GPU transport
     bwrap_executable: str = "bwrap"
     agent_read_only_paths: tuple[str, ...] = ()
-    optimization_mode: str = (
-        "leaderboard"  # permissive contest flow or strict production gate
-    )
+    agent_reference_paths: tuple[tuple[str, str], ...] = ()
+    optimization_mode: str = "fast"
     expose_evaluator_shapes: bool = True
-    framework_baseline: str = (
-        "auto"  # auto = production only; always | never override it
-    )
-    framework_baseline_timeout: int = FRAMEWORK_BASELINE_TIMEOUT_S
-    handoff_resumes: int = DEFAULT_HANDOFF_RESUMES
-    production_review_timeout: int = DEPENDENCY_REVIEW_TIMEOUT_S
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
-    verify_run_timeout: int = DEFAULT_VERIFY_RUN_TIMEOUT
+    # One Runtime-owned per-Shape budget shared by Eval and ABBA. The legacy
+    # ``verify_run_timeout`` accessor below remains a structural compatibility
+    # alias for upstream v0.4 call sites.
+    evaluation_step_timeout: int = DEFAULT_EVALUATION_STEP_TIMEOUT
+    shape_batch_size: int = SHAPE_BATCH_SIZE
+    gpu_clock_mhz: int | None = None
     min_improvement_pct: float = 0.0
-    v1_ask_codex: bool = False
-    v1_ask_qoder: bool = False
     sandbox_ssh: str = ""  # standard OpenSSH target, e.g. user@gpu-host
     sandbox_ssh_init: str = ""  # remote environment activation command
-    sandbox_ssh_gpu: int | None = None  # assigned physical GPU index
+    sandbox_ssh_gpu: int | None = None  # assigned physical NVIDIA GPU index
     sandbox_health_command: str = ""  # remote GPU readiness probe
     tokens_spent: int = field(default=0, init=False)
+    _account_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        init=False,
+        repr=False,
+        compare=False,
+    )
     _production_review_cache: dict[str, tuple[tuple[str, ...], dict[str, object]]] = (
         field(default_factory=dict, init=False, repr=False, compare=False)
     )
     _generated_agent_problem_digest: str = field(
         default="", init=False, repr=False, compare=False
     )
+    _measurement_store_root: Path | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     def __post_init__(self) -> None:
+        if type(self.specify_dsl) is not bool:
+            raise TypeError("specify_dsl must be a boolean")
+        if self.optimization_mode in {"fast", "performance"}:
+            self.specify_dsl = False
+        elif self.optimization_mode == "ultra":
+            if not self.specify_dsl or not self.framework.strip():
+                raise ValueError(
+                    "ultra mode requires one explicit framework and does not support open DSL"
+                )
+        if type(self.expose_evaluator_shapes) is not bool:
+            raise TypeError("expose_evaluator_shapes must be a boolean")
         if self.sandbox_timeout is None:
             from aka.contracts.evaluation import derived_evaluation_timeout
             self.sandbox_timeout = derived_evaluation_timeout(
                 repeats=self.verify_repeats,
-                per_run_timeout=self.verify_run_timeout,
+                step_timeout=self.evaluation_step_timeout,
             )
         if sum(
             bool(value)
@@ -219,10 +192,12 @@ class Campaign:
             )
         if self.problem_generation_timeout <= 0:
             raise ValueError("problem_generation_timeout must be positive")
-        if self.production_review_timeout <= 0:
-            raise ValueError("production_review_timeout must be positive")
-        if type(self.expose_evaluator_shapes) is not bool:
-            raise TypeError("expose_evaluator_shapes must be a boolean")
+        if type(self.shape_batch_size) is not int or self.shape_batch_size <= 0:
+            raise ValueError("shape_batch_size must be a positive integer")
+        if self.gpu_clock_mhz is not None and (
+            type(self.gpu_clock_mhz) is not int or self.gpu_clock_mhz <= 0
+        ):
+            raise ValueError("gpu_clock_mhz must be a positive integer")
 
     @property
     def campaign_name(self) -> str:
@@ -230,17 +205,71 @@ class Campaign:
         return f"{self.name}{suffix}"
 
     @property
+    def verify_run_timeout(self) -> int:
+        return self.evaluation_step_timeout
+
+    @property
+    def dsl_context(self) -> str:
+        if self.optimization_mode == "leaderboard":
+            return (
+                f"- Recommended candidate DSL: `{self.framework}`"
+                if self.specify_dsl
+                else ""
+            )
+        policy = canonical_submission_policy(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        )
+        if policy == "fast":
+            return "- Final-source DSL: Agent-selected from evaluator-supported implementations."
+        if policy == "performance":
+            return (
+                "- Final-source DSL: Agent-selected using the supplied expert guidance and "
+                "measurement evidence; recommendations are not hard submission constraints."
+            )
+        if requires_explicit_dsl(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        ):
+            return (
+                f"- Required final candidate DSL: `{self.framework}`. Development probes and "
+                "temporary prototypes may use any language or DSL; they must not remain in the "
+                "submitted Kernel source tree or runtime compute path unless compliant."
+            )
+        return ""
+
+    @property
+    def dsl_query_context(self) -> str:
+        return f", DSL `{self.framework}`" if self.specify_dsl else ""
+
+    @property
     def private_reference_dir(self) -> Path | None:
         """Return evaluator-only native inputs behind a generalized public problem."""
-        op_dir = Path(self.kernel_demo).resolve().parent
-        use_generalized = (
-            self.optimization_mode == "production"
-            and not self.expose_evaluator_shapes
-            and not is_sol_op(op_dir)
-            and (op_dir / "shapes.json").is_file()
-        )
-        if not self.atrex_bench_root or not use_generalized:
+        if self.expose_evaluator_shapes:
             return None
+        op_dir = Path(self.kernel_demo).resolve().parent
+        if not permits_hidden_shapes(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        ):
+            raise ValueError(
+                "--no-expose-evaluator-shapes is supported only for performance/ultra "
+                "Native Atrex-Bench tasks"
+            )
+        if is_sol_op(op_dir):
+            raise ValueError(
+                "--no-expose-evaluator-shapes is incompatible with SOL tasks: "
+                "SOL has no generalized agent_problem.json projection"
+            )
+        if not (op_dir / "shapes.json").is_file():
+            raise ValueError(
+                "--no-expose-evaluator-shapes requires Native Atrex-Bench shapes.json"
+            )
+        if not self.atrex_bench_root:
+            raise ValueError(
+                "--no-expose-evaluator-shapes requires the canonical Native Atrex-Bench "
+                "runtime so Light can create agent_problem.json"
+            )
         shapes_path = op_dir / "shapes.json"
         validate_private_shapes(shapes_path)
         if has_agent_problem(op_dir):
@@ -249,6 +278,15 @@ class Campaign:
                 private_shapes_path=shapes_path,
             )
         return op_dir
+
+    @property
+    def evaluator_reference_dir(self) -> Path | None:
+        """Return the trusted Native evaluator contract for Runtime only."""
+        if not self.atrex_bench_root:
+            return None
+        op_dir = Path(self.kernel_demo).resolve().parent
+        required = ("reference.py", "input.py", "shapes.json")
+        return op_dir if all((op_dir / name).is_file() for name in required) else None
 
     def _ensure_agent_problem(self) -> None:
         """Materialize the public contract before any production optimization session.
@@ -285,9 +323,12 @@ class Campaign:
                 flush=True,
             )
             return
-        if self.optimization_mode != "production":
+        if not permits_hidden_shapes(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        ):
             raise RuntimeError(
-                "a generalized non-production campaign requires a user-provided "
+                "a generalized fast-mode campaign requires a user-provided "
                 f"{AGENT_PROBLEM_FILENAME}"
             )
 
@@ -352,15 +393,18 @@ class Campaign:
                 )
                 return
 
+    @property
+    def shape_ids_are_opaque(self) -> bool:
+        """Whether evaluator Shape parameters are hidden from the Agent."""
+        return self.private_reference_dir is not None
 
-    def _framework_baseline_correctness_reviewers(self) -> tuple[str, ...]:
-        return tuple(
-            reviewer
-            for reviewer, enabled in (
-                ("codex", self.v1_ask_codex),
-                ("qodercli", self.v1_ask_qoder),
-            )
-            if enabled
+    def _shape_disclosure_prompt(self) -> str:
+        private_dir = self.private_reference_dir
+        if private_dir is None:
+            return ""
+        return (
+            "For this generalized native task, exact evaluator Shape parameters are private. "
+            "Shape IDs in Runtime results are opaque; do not try to reconstruct hidden inputs."
         )
 
     def agent_boundary_environment(self, role: str = "optimizer") -> dict[str, str]:
@@ -368,11 +412,35 @@ class Campaign:
             "ATREX_AGENT_SANDBOX": self.agent_sandbox,
             "ATREX_BWRAP_EXECUTABLE": self.bwrap_executable,
             "ATREX_AGENT_READ_ONLY_PATHS": json.dumps(self.agent_read_only_paths),
+            "ATREX_AGENT_REFERENCE_PATHS": json.dumps(dict(self.agent_reference_paths)),
             "ATREX_AGENT_WORKSPACE_ROLE": role,
         }
 
+    def reference_knowledge_prompt(self) -> str:
+        if not self.agent_reference_paths:
+            return ""
+        entries = "\n".join(
+            f"- `references/{name}/`" for name, _ in self.agent_reference_paths
+        )
+        access = (
+            "These Supervisor-mounted directories are read-only engineering references. "
+            if self.agent_sandbox == "bwrap"
+            else "These Supervisor-linked directories are optional engineering references. "
+            "The native Agent boundary cannot enforce read-only access: do not modify them, "
+            "and the operator must retain an independent copy of the original knowledge. "
+        )
+        return (
+            "## Reference knowledge\n\n"
+            f"{entries}\n\n"
+            f"{access}"
+            "Use them selectively for architecture facts, implementation patterns, and probe design. "
+            "They are not the task contract, measurement evidence, or candidate source. Verify "
+            "applicability on the target hardware through Runtime. Do not execute or import them, "
+            "make the final Kernel depend on them, or copy them blindly."
+        )
+
     def start_runtime(self) -> None:
-        from aka.light.runtime.server import RuntimeConfig, SupervisorRuntime
+        from aka.light.runtime.server import RuntimeConfig
 
         if getattr(self, "_supervisor_runtime", None) is not None:
             return
@@ -383,27 +451,401 @@ class Campaign:
             raise SystemExit(f"orchestrator: {error}") from None
         self._supervisor_runtime = self.tool_runtime.open(RuntimeConfig(
             hardware=self.sandbox_hardware or self.platform, timeout=self.sandbox_timeout,
+            evaluation_step_timeout=self.evaluation_step_timeout,
+            shape_batch_size=self.shape_batch_size,
+            gpu_clock_mhz=self.gpu_clock_mhz,
             url=self.sandbox_url, profile=self.sandbox_profile, ssh=self.sandbox_ssh,
             ssh_init=self.sandbox_ssh_init, ssh_gpu=self.sandbox_ssh_gpu,
             health_command=self.sandbox_health_command, private_reference_dir=self.private_reference_dir,
+            evaluator_reference_dir=self.evaluator_reference_dir,
             atrex_bench_root=Path(self.atrex_bench_root).resolve() if self.atrex_bench_root else None,
             wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
             optimization_mode=self.optimization_mode,
+            workspace_policy=workspace_policy_block(
+                self.optimization_mode,
+                self.framework,
+                source_checks_enabled=self.source_checks_enabled,
+                specify_dsl=self.specify_dsl,
+                numerical_validation_enabled=self.module_options.numerical_validation,
+            ),
             workspace=self.workspace,
+            measurement_root=self._measurement_store_root,
+            research_synchronization=(
+                str(self.search_coordinate.get("synchronization"))
+                if isinstance(getattr(self, "search_coordinate", None), dict)
+                and self.search_coordinate.get("cross_trajectory_sharing") is True
+                else "independent"
+            ),
             request_timeout=request_timeout,
             queue_timeout=queue_timeout,
         ), workspace_provider=self.candidate_workspace)
+        self._supervisor_runtime.production_policy_validator = self.production_policy_feedback
+        self._supervisor_runtime.production_review_required = (
+            self.source_checks_enabled
+        )
+        self._supervisor_runtime.submission_specify_dsl = self.specify_dsl
         self._supervisor_runtime.numerical_validator = self.supplemental_numerical_feedback
+        self._supervisor_runtime.research_claim_reviewer = self.review_research_claim
 
-    def supplemental_numerical_feedback(self, workspace: Path, source: bytes | None = None, *, parent=None,
-                                        flow: str = "episode") -> str:
+    def review_research_claim(
+        self,
+        evidence_root: Path,
+        *,
+        resume_session_id: str | None = None,
+        archive_root: Path | None = None,
+    ) -> dict[str, object]:
+        """Run the strict three-tier reviewer with the Qwen-only provider policy."""
+        from aka.light.agent.session_tail import read_regular_bytes
+        from aka.light.execution.retry import check_review_service
+        from aka.light.workflow.claim_review import validate_review
+
+        evidence_root = Path(evidence_root).resolve(strict=True)
+        claim_type = None
+        try:
+            evidence_manifest = json.loads(
+                read_regular_bytes(
+                    evidence_root / "evidence-manifest.json",
+                    limit=1024 * 1024,
+                )
+            )
+        except (FileNotFoundError, UnicodeError, json.JSONDecodeError):
+            evidence_manifest = None
+        if isinstance(evidence_manifest, dict):
+            candidate_type = evidence_manifest.get("claim_type")
+            if candidate_type in {"direction", "experiment"}:
+                claim_type = candidate_type
+        # Valid Runtime evidence always identifies the claim type. Keep the
+        # legacy bucket only for old/manual review bundles that predate that
+        # manifest field; it remains visible when such receipts are present.
+        review_kind = (
+            f"{claim_type}_claim_review"
+            if claim_type is not None
+            else "research_claim_review"
+        )
+        model = "qwen3.8-max"
+        boundary_environment = self.agent_boundary_environment(
+            "research-claim-review"
+        )
+        # Independent claim review is a security boundary, not an optimizer
+        # convenience setting.  Always use Bubblewrap even when the selected
+        # optimizer profile deliberately runs without a sandbox.  If bwrap is
+        # unavailable, launch fails closed and the caller archives a
+        # review_unavailable receipt instead of executing the reviewer natively.
+        boundary_environment["ATREX_AGENT_SANDBOX"] = "bwrap"
+        base_environment = {
+            **boundary_environment,
+            "ANTHROPIC_MODEL": model,
+            "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+        }
+        from aka.light.agent.home import SESSION_HOME_ROOT_ENV
+        from aka.light.runtime.paths import supervisor_campaign_root
+
+        campaign_workspace = Path(getattr(self, "workspace", evidence_root.parent))
+        base_environment[SESSION_HOME_ROOT_ENV] = str(
+            supervisor_campaign_root(campaign_workspace)
+            / "research-review-session-homes"
+        )
+        runtime = getattr(self, "_supervisor_runtime", None)
+        runtime_root = getattr(runtime, "root", None)
+        capture_base = (
+            Path(runtime_root) / "review-capture" / "claims" / evidence_root.name
+            if runtime_root is not None
+            else Path(tempfile.gettempdir())
+            / "atrex-light-review-capture"
+            / "claims"
+            / f"{evidence_root.name}-{uuid.uuid4().hex}"
+        )
+        archive_root = Path(archive_root).resolve() if archive_root is not None else None
+        session_attempts: list[dict[str, object]] = []
+
+        def session_audit() -> dict[str, object]:
+            return {
+                "schema": "atrex.research-claim-review-session.v2",
+                "attempts": [dict(row) for row in session_attempts],
+            }
+
+        last_error: Exception | None = None
+        # One initial attempt plus one automatic retry.  Only after both fail
+        # does Journal projection expose ``review_unavailable``.
+        for attempt in range(1, _CLAIM_REVIEW_MAX_ATTEMPTS + 1):
+            response = evidence_root / "review.json"
+            response.unlink(missing_ok=True)
+            attempt_capture = capture_base / f"attempt-{attempt}"
+            environment = {
+                **base_environment,
+                "ATREX_SESSION_CAPTURE_DIR": str(attempt_capture),
+            }
+            resumed = attempt == 1 and bool(resume_session_id)
+            try:
+                result = self._run_session(
+                    evidence_root,
+                    RESEARCH_CLAIM_REVIEW_PROMPT.read_text(encoding="utf-8"),
+                    # Claim review is part of the durable research record, not
+                    # an optimization Episode or an acceptance-side advisory.
+                    # Let it finish without an active-time deadline.  The
+                    # Provider/session may still fail explicitly, which is
+                    # captured below for audit and retry.
+                    timeout=None,
+                    agent_cli="claude",
+                    reasoning_effort="high",
+                    agent_plugins=False,
+                    extra_environment=environment,
+                    session_id=resume_session_id if resumed else None,
+                    resume_session=resumed,
+                )
+            except Exception as error:  # noqa: BLE001 - audit every launch-boundary failure
+                # A launch-boundary failure has no Provider result or capture to
+                # inspect. Preserve it as a Supervisor-private attempt so the
+                # public receipt can stay bounded without erasing the cause.
+                last_error = error
+                session_attempts.append({
+                    "attempt": attempt,
+                    "session_id": resume_session_id if resumed else "",
+                    "status": "capture_missing",
+                    "exit_status": None,
+                    "timed_out": False,
+                    "conversation_path": None,
+                    "token_usage_path": None,
+                    "resumed": resumed,
+                    "error": {
+                        "type": type(error).__name__,
+                        "message": str(error)[:2000],
+                    },
+                })
+                continue
+            from aka.light.workflow.review_usage import account_review
+            account_review(
+                self,
+                result,
+                review_kind=review_kind,
+                label=(
+                    f"Qwen {claim_type}-claim review attempt {attempt}"
+                    if claim_type is not None
+                    else f"Qwen research-claim review attempt {attempt}"
+                ),
+                backend="claude",
+                model=model,
+                persist_separate_receipt=False,
+            )
+            from aka.light.agent.session_capture import latest_complete_session_archive
+
+            archive = latest_complete_session_archive(attempt_capture)
+            if archive is not None and archive_root is not None:
+                from aka.light.agent.session_tail import read_regular_bytes
+                from aka.light.experiment.store import private_write_bytes
+
+                attempt_root = archive_root / "attempts" / f"a{attempt}"
+                conversation_data = read_regular_bytes(
+                    archive.conversation.resolve(strict=True),
+                    limit=64 * 1024 * 1024 + 1,
+                )
+                token_data = read_regular_bytes(
+                    archive.token_usage.resolve(strict=True),
+                    limit=64 * 1024 * 1024 + 1,
+                )
+                if len(conversation_data) > 64 * 1024 * 1024 or len(token_data) > 64 * 1024 * 1024:
+                    raise ValueError("research claim Review archive exceeds 64 MiB")
+                private_write_bytes(
+                    attempt_root / "conversation.jsonl",
+                    conversation_data,
+                )
+                private_write_bytes(
+                    attempt_root / "token-usage.json",
+                    token_data,
+                )
+                conversation_path = f"attempts/a{attempt}/conversation.jsonl"
+                token_usage_path = f"attempts/a{attempt}/token-usage.json"
+            else:
+                conversation_path = (
+                    archive.conversation.relative_to(evidence_root.parent).as_posix()
+                    if archive is not None else None
+                )
+                token_usage_path = (
+                    archive.token_usage.relative_to(evidence_root.parent).as_posix()
+                    if archive is not None else None
+                )
+            attempt_audit: dict[str, object] = {
+                "attempt": attempt,
+                "session_id": result.session_id,
+                "status": "capture_missing" if conversation_path is None else "invalid",
+                "exit_status": result.exit_status,
+                "timed_out": result.timed_out,
+                "conversation_path": conversation_path,
+                "token_usage_path": token_usage_path,
+                "resumed": resumed,
+            }
+            session_attempts.append(attempt_audit)
+            if archive is None:
+                from aka.light.execution.retry import ReviewerOutputUnavailable
+
+                last_error = ReviewerOutputUnavailable(
+                    "research claim reviewer did not persist a complete "
+                    "conversation.jsonl and token-usage.json archive"
+                )
+                attempt_audit["error"] = {
+                    "type": type(last_error).__name__,
+                    "message": str(last_error),
+                }
+                continue
+            try:
+                value = json.loads(read_regular_bytes(response, limit=128 * 1024 + 1))
+                if response.stat().st_size > 128 * 1024:
+                    raise ValueError("research claim review exceeds 128 KiB")
+                review = validate_review(value)
+                if archive is not None and archive_root is not None:
+                    from aka.light.agent.session_tail import read_regular_bytes
+                    from aka.light.experiment.store import private_write_bytes
+
+                    conversation_data = read_regular_bytes(
+                        archive.conversation.resolve(strict=True),
+                        limit=64 * 1024 * 1024 + 1,
+                    )
+                    token_data = read_regular_bytes(
+                        archive.token_usage.resolve(strict=True),
+                        limit=64 * 1024 * 1024 + 1,
+                    )
+                    if len(conversation_data) > 64 * 1024 * 1024 or len(token_data) > 64 * 1024 * 1024:
+                        raise ValueError("research claim Review archive exceeds 64 MiB")
+                    private_write_bytes(
+                        archive_root / "conversation.jsonl",
+                        conversation_data,
+                    )
+                    private_write_bytes(
+                        archive_root / "token-usage.json",
+                        token_data,
+                    )
+                if result.timed_out:
+                    print(
+                        "[research-review] recovered a valid review from a timed-out reviewer",
+                        flush=True,
+                    )
+                else:
+                    check_review_service(result)
+                if conversation_path is not None:
+                    attempt_audit["status"] = "accepted"
+                return {
+                    **review,
+                    "_review_session_audit": session_audit(),
+                }
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                last_error = error
+                attempt_audit["error"] = {
+                    "type": type(error).__name__,
+                    "message": str(error)[:2000],
+                }
+                if not result.timed_out:
+                    try:
+                        check_review_service(result)
+                    except ValueError as service_error:
+                        last_error = service_error
+                        attempt_audit["error"] = {
+                            "type": type(service_error).__name__,
+                            "message": str(service_error)[:2000],
+                        }
+        failure = RuntimeError(
+            "Qwen research-claim reviewer produced no valid strict review"
+        )
+        failure.review_session_audit = session_audit()
+        raise failure from last_error
+
+    def production_policy_feedback(
+        self,
+        workspace: Path,
+        source: bytes,
+        *,
+        parent=None,
+        require_gluon: bool = False,
+        submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
+    ) -> dict[str, object] | list[str]:
+        """Review exact frozen candidate bytes and preserve observed implementation facts."""
+        if not self.source_checks_enabled:
+            return []
+        from aka.light.workspace.sources import install
+
+        review_records: list[dict[str, object]] = []
+        with tempfile.TemporaryDirectory(prefix="atrex-production-candidate-") as directory:
+            frozen = Path(directory)
+            install(frozen, source)
+            review_kwargs = {
+                "require_gluon": require_gluon,
+                "review_record_sink": review_records.append,
+            }
+            if submission_id is not None:
+                review_kwargs["submission_id"] = submission_id
+                review_kwargs["submission_revision"] = submission_revision
+                review_kwargs["resume_session_id"] = resume_session_id
+            violations = self._production_kernel_violations(
+                frozen, **review_kwargs
+            )
+        policy = canonical_submission_policy(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        )
+        implementation_review: dict[str, object] = {
+            "availability": (
+                "not_applicable" if policy == "fast" else "unavailable"
+            ),
+        }
+        policy_review: dict[str, object] = {
+            "verdict": "not_applicable" if policy == "fast" else "unavailable",
+            "checks": [],
+            "dependencies": [],
+            "summary": (
+                "Fast does not run the independent final-source Reviewer."
+                if policy == "fast"
+                else "The independent final-source Review is unavailable."
+            ),
+        }
+        if review_records:
+            record = review_records[-1]
+            policy_result = record.get("policy_result")
+            policy_result = (
+                policy_result if isinstance(policy_result, dict) else {}
+            )
+            if policy_result:
+                policy_review = dict(policy_result)
+            implementation_review = {
+                "availability": "available",
+                "dsl_policy": record.get("dsl_policy"),
+                "configured_dsl": record.get("framework"),
+                "required_phase": record.get("required_phase"),
+            }
+        return {
+            "violations": violations,
+            "source_contract": (
+                "pass" if not violations or review_records else "fail"
+            ),
+            "review": policy_review,
+            "implementation_review": implementation_review,
+        }
+
+    def supplemental_numerical_feedback(
+        self,
+        workspace: Path,
+        source: bytes | None = None,
+        *,
+        parent=None,
+        flow: str = "episode",
+        standard_correctness_passed=None,
+    ) -> str:
         """Validate frozen candidate bytes using private plans and recorded GPU probes."""
         from aka.light.acceptance.numerical import validate_candidate
 
         if not self.module_options.numerical_validation:
             return ""
         self.start_runtime()
-        return validate_candidate(self, workspace, source=source, parent=parent, flow=flow)
+        return validate_candidate(
+            self,
+            workspace,
+            source=source,
+            parent=parent,
+            flow=flow,
+            standard_correctness_passed=standard_correctness_passed,
+        )
 
     @property
     def plugin_registry(self):
@@ -413,7 +855,7 @@ class Campaign:
     def plugin_directive(self, phase: str) -> str:
         return self.plugin_registry.instructions(
             phase, PLATFORM=self.platform, ARCH=self.arch or "<exact runtime architecture>",
-            FRAMEWORK=self.framework,
+            FRAMEWORK=(self.framework if self.specify_dsl else "Agent-selected supported GPU DSL"),
             OPERATOR=self.name,
         )
 
@@ -422,60 +864,35 @@ class Campaign:
         return self.plugin_registry.wiki_prompt(slot) if self.tool_runtime.wiki else None
 
     def measure_for_acceptance(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
-                               parent=None, reference_snapshot: Path | None = None) -> dict:
+                               parent=None, reference_snapshot: Path | None = None,
+                               terminal_validation: bool = False,
+                               kernel_ids: dict[str, str] | None = None,
+                               journal_workspace: Path | None = None) -> dict:
         self.start_runtime()
         return self._supervisor_runtime.execute_trusted(workspace, argv, execution_timeout=execution_timeout,
-                                                       parent=parent, reference_snapshot=reference_snapshot)
+                                                       parent=parent, reference_snapshot=reference_snapshot,
+                                                       terminal_validation=terminal_validation,
+                                                       kernel_ids=kernel_ids,
+                                                       journal_workspace=journal_workspace)
 
     def recorded_kernel(self, kernel_id: str) -> bytes:
         self.start_runtime()
         return self._supervisor_runtime.measurements.read_kernel(kernel_id)
 
-    def republish_episode_report(self, episode: int, worktree: Path, *, base_commit: str,
-                                 branch: str) -> bool:
-        """Recover a finalized private report whose compatibility handoff was lost."""
-        from aka.light.workflow.journal_service import SupervisorJournalService
-
+    def acceptance_measurement_context(
+        self, agent_workspace: Path, incumbent_source: bytes
+    ) -> dict:
+        """Return the exact Agent-visible incumbent identity and frozen policy."""
         self.start_runtime()
         runtime = self._supervisor_runtime
-        path = runtime.episode_journal_path(episode)
-        if not path.is_file():
-            return False
-        private = runtime.read_episode_journal(episode)
-        if not private.get("finalized_at"):
-            return False
-        if (private.get("episode") != episode or private.get("base_commit") != base_commit
-                or private.get("episode_branch") != branch
-                or private.get("state") not in {"candidate_ready", "pivot", "blocked"}):
-            raise RuntimeError("Finalized private report does not match the recovering Episode")
-        service = runtime.journal_factory.open(
-            workspace=worktree, git_workspace=worktree,
-            campaign_root=runtime.journals_root, evidence_root=path.parent,
-            supervisor_git=True,
-        )
-        service._publish_report(private)
-        return True
-
-    def acceptance_measurement_context(self, incumbent_source: bytes) -> dict:
-        """Public Kernel identity and frozen Runtime policy, without private inputs."""
-        self.start_runtime()
-        runtime = self._supervisor_runtime
+        baseline_kernel_id = runtime.baseline_kernel_commit(agent_workspace)
+        # Bind source under the Agent-visible commit. Runtime-private source
+        # archives never replace or leak a second Git identity into requests.
+        runtime.measurements.kernel(incumbent_source, baseline_kernel_id)
         return {
-            "baseline_kernel_id": runtime.measurements.kernel(incumbent_source)["kernel_id"],
+            "baseline_kernel_id": baseline_kernel_id,
             "measurement_repetitions": runtime.measurement_repetitions,
         }
-
-    def acceptance_verifier(self, **options):
-        self.start_runtime()
-        return self._supervisor_runtime.acceptance.verifier(**options)
-
-    def selected_episode_evaluation(self, episode: int, source: bytes) -> dict:
-        from aka.light.workflow.journal_service import selected_evaluation
-        self.start_runtime()
-        path = self._supervisor_runtime.episode_journal_path(episode)
-        return selected_evaluation(
-            path, journals_root=self._supervisor_runtime.journals_root, source=source,
-        )
 
     def register_runtime_episode(
         self,
@@ -485,9 +902,13 @@ class Campaign:
         base_commit: str,
         branch: str,
         memory_version: int,
-        supervisor_git: bool = True,
+        baseline_kernel_commit_id: str | None = None,
+        managed_agent_workspace: bool = True,
+        require_gluon: bool = False,
+        origin: dict[str, int] | None = None,
+        session_capture_root: Path | None = None,
     ) -> Path:
-        """Start Runtime if needed and bind an Episode from trusted controller state."""
+        """Start Runtime if needed and bind an audit segment to Agent Git."""
         self.start_runtime()
         return self._supervisor_runtime.register_episode(
             workspace,
@@ -495,13 +916,17 @@ class Campaign:
             base_commit=base_commit,
             branch=branch,
             memory_version=memory_version,
-            supervisor_git=supervisor_git,
+            baseline_kernel_commit_id=baseline_kernel_commit_id,
+            managed_agent_workspace=managed_agent_workspace,
+            require_gluon=require_gluon,
+            session_capture_root=session_capture_root,
+            origin=(origin or getattr(self, "search_coordinate", None) or {
+                "epoch": episode,
+                "trajectory": 1,
+                "episode": episode,
+            }),
         )
 
-    def read_runtime_episode_journal(self, episode: int) -> dict:
-        """Read existing private state without registering or creating an Episode."""
-        self.start_runtime()
-        return self._supervisor_runtime.read_episode_journal(episode)
 
     def close_runtime(self) -> None:
         runtime = getattr(self, "_supervisor_runtime", None)
@@ -511,7 +936,9 @@ class Campaign:
 
     def agent_environment(self) -> dict[str, str]:
         private_dir = self.private_reference_dir
-        environment = {}
+        # Final-candidate policy is enforced by the Supervisor. Development
+        # sessions may use temporary probes without an early local hook veto.
+        environment = {DEPENDENCY_GUARD_ENV: "0"}
         environment.update(self.agent_boundary_environment())
         self.start_runtime()
         from aka.light.runtime.server import OWNER_ENV
@@ -547,7 +974,7 @@ class Campaign:
 
 
     def _generalized_memory_coverage_problem(self, memory: dict | None) -> str:
-        """Require successful canonical memory to cover every private shape by opaque id."""
+        """Require the private evaluation result to cover every shape by opaque id."""
         private_dir = self.private_reference_dir
         if private_dir is None or memory is None:
             return ""
@@ -563,18 +990,18 @@ class Campaign:
         measured_ids = {str(value) for value in measured}
         if measured_ids != expected_ids:
             return (
-                "canonical memory lacks complete real-shape performance coverage "
+                "evaluation result lacks complete real-shape performance coverage "
                 f"({len(measured_ids)}/{len(expected_ids)})"
             )
         return ""
 
     def _generalized_contract_commit_problem(self) -> str:
-        """Require the public problem to be part of the immutable V0 history."""
+        """Keep the public evaluator contract outside Kernel-only Agent Git."""
         if self.private_reference_dir is None:
             return ""
         head = git_head(self.workspace)
-        if head and not git_path_blob(self.workspace, head, AGENT_PROBLEM_FILENAME):
-            return "agent_problem.json is not tracked by the V0 baseline commit"
+        if head and git_path_blob(self.workspace, head, AGENT_PROBLEM_FILENAME):
+            return "agent_problem.json must not be tracked by the V0 Kernel commit"
         return ""
 
     def _assert_generalized_inputs_are_private(self) -> None:
@@ -619,7 +1046,7 @@ class Campaign:
             ) from exc
         leaked = [
             name
-            for name in ("shapes.json", "metadata.json", "roofline.json", "valid.py")
+            for name in ("shapes.json", "roofline.json", "valid.py")
             if (self.workspace / name).exists()
         ]
         if leaked:
@@ -635,10 +1062,12 @@ class Campaign:
         return base / f"kernel_opt_{self.campaign_name}"
 
     def _account(self, res: SessionResult, label: str) -> None:
-        self.tokens_spent += res.tokens
+        with self._account_lock:
+            self.tokens_spent += res.tokens
+            cumulative = self.tokens_spent
         print(
             f"[orchestrator] {label}: exit={res.exit_status} timed_out={res.timed_out} "
-            f"tokens={res.tokens} cum_tokens={self.tokens_spent}",
+            f"tokens={res.tokens} cum_tokens={cumulative}",
             flush=True,
         )
         if res.exit_status != 0 or res.timed_out:
@@ -651,26 +1080,32 @@ class Campaign:
     @staticmethod
     def _persist_production_review_record(
         workspace: Path,
-        candidate_digest: str,
+        submission_id: str,
+        submission_revision: int,
         review_record: dict[str, object],
+        *,
+        conversation: Path | None = None,
+        token_usage: Path | None = None,
     ) -> list[str]:
-        record_path = (
-            workspace
-            / ".atrex_long_horizon"
-            / "production_reviews"
-            / f"{candidate_digest}.json"
-        )
+        from aka.light.runtime.paths import supervisor_submission_root
+        from aka.light.workflow.submissions import submission_revision_root
+        from aka.light.workflow.review_archive import archive_review
+
+        record_path = submission_revision_root(
+            supervisor_submission_root(workspace),
+            submission_id,
+            submission_revision,
+        ) / "review"
         try:
-            record_path.parent.mkdir(parents=True, exist_ok=True)
-            temporary_path = record_path.with_suffix(".json.tmp")
-            temporary_path.write_text(
-                json.dumps(review_record, indent=2, ensure_ascii=False) + "\n",
-                encoding="utf-8",
+            archive_review(
+                record_path,
+                result=review_record,
+                conversation=conversation,
+                token_usage=token_usage,
             )
-            temporary_path.replace(record_path)
-        except OSError as exc:
+        except (OSError, ValueError) as exc:
             return [
-                "could not persist production policy verdict: "
+                "could not persist final-source policy verdict: "
                 f"{type(exc).__name__}: {exc}"
             ]
         return []
@@ -682,24 +1117,89 @@ class Campaign:
         require_gluon: bool,
         *,
         candidate_digest: str,
+        submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
+        record_workspace: Path | None = None,
+        review_record_sink=None,
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
         from aka.light.execution.retry import check_review_service
+        from aka.light.runtime.paths import supervisor_submission_root
 
         cache_key = candidate_digest + ":" + self.agent_cli
         cached = self._production_review_cache.get(cache_key)
+        if (
+            cached is not None
+            and submission_id is not None
+            and not isinstance(cached[1].get("submission_id"), str)
+        ):
+            # An advisory caller may have populated the in-memory verdict
+            # without a durable Review archive. A formal submission needs its
+            # own co-located conversation and token receipt, so rerun it.
+            cached = None
         if cached is not None:
             cached_errors, review_record = cached
+            if review_record_sink is not None:
+                review_record_sink(dict(review_record))
+            if submission_id is None:
+                return list(cached_errors)
+            previous_submission_id = review_record.get("submission_id")
+            previous_revision = review_record.get("submission_revision", 1)
+            from aka.light.workflow.submissions import submission_revision_root
+
+            previous_root = submission_revision_root(
+                supervisor_submission_root(self.workspace),
+                str(previous_submission_id),
+                int(previous_revision),
+            ) / "review"
+            reused_record = {
+                **review_record,
+                "submission_id": submission_id,
+                "submission_revision": submission_revision,
+                "review_execution": "reused",
+                "reused_from_submission_id": previous_submission_id,
+                "reused_from_submission_revision": previous_revision,
+            }
             persistence_errors = self._persist_production_review_record(
-                workspace,
-                candidate_digest,
-                review_record,
+                self.workspace,
+                submission_id,
+                submission_revision,
+                reused_record,
+                conversation=previous_root / "conversation.jsonl",
+                token_usage=previous_root / "token-usage.json",
             )
             return list(dict.fromkeys([*cached_errors, *persistence_errors]))
 
         errors: list[str]
         review_payload: object | None = None
+        policy_result: dict[str, object] | None = None
         review_summary = ""
+        effective_dsl_policy = dsl_policy(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        )
+        pinned_dsl = effective_dsl_policy == "pinned"
+        from aka.light.agent.home import SESSION_HOME_ROOT_ENV
+        from aka.light.runtime.paths import supervisor_campaign_root
+
+        supervisor_root = supervisor_campaign_root(self.workspace)
+        runtime = getattr(self, "_supervisor_runtime", None)
+        runtime_root = getattr(runtime, "root", None)
+        capture_root = (
+            (
+                Path(runtime_root)
+                if runtime_root is not None
+                else supervisor_root
+            )
+            / "review-capture"
+            / "final-source"
+            / (
+                f"{submission_id}-v{submission_revision}"
+                if submission_id is not None
+                else uuid.uuid4().hex
+            )
+        )
         with tempfile.TemporaryDirectory(
             prefix="atrex-production-review-"
         ) as directory:
@@ -717,30 +1217,76 @@ class Campaign:
 
             request = {
                 "schema_version": DEPENDENCY_REVIEW_SCHEMA_VERSION,
-                "framework": framework,
-                "required_phase": "gluon" if require_gluon else "selected_framework",
-                "optimization_mode": "production",
+                "framework": framework if pinned_dsl else None,
+                "recommended_framework": (
+                    framework
+                    if effective_dsl_policy == "guided" and framework
+                    else None
+                ),
+                "dsl_policy": effective_dsl_policy,
+                "compute_policy": "self_authored_only",
+                "required_phase": (
+                    "gluon"
+                    if require_gluon and pinned_dsl
+                    else "selected_framework"
+                    if pinned_dsl
+                    else "open_dsl"
+                ),
+                "optimization_mode": canonical_submission_policy(
+                    self.optimization_mode,
+                    specify_dsl=self.specify_dsl,
+                ),
                 "candidate_digest": candidate_digest,
                 "candidate_files": sorted(source_hashes),
+                "submission_id": submission_id,
+                "submission_revision": submission_revision,
             }
             (review_workspace / "review_request.json").write_text(
                 json.dumps(request, indent=2, ensure_ascii=False) + "\n",
                 encoding="utf-8",
             )
             try:
+                review_environment = {
+                    **self.agent_boundary_environment("production-review"),
+                    "ATREX_SESSION_CAPTURE_DIR": str(capture_root),
+                    SESSION_HOME_ROOT_ENV: str(
+                        supervisor_root
+                        / "review-session-homes"
+                        / "final_source_policy_review"
+                    ),
+                }
                 result = self._run_session(
                     review_workspace,
                     DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
-                    timeout=self.production_review_timeout,
+                    timeout=None,
                     agent_cli=self.agent_cli,
                     reasoning_effort="high",
                     agent_plugins=False,
-                    extra_environment=self.agent_boundary_environment("production-review"),
+                    extra_environment=review_environment,
+                    session_id=resume_session_id,
+                    resume_session=bool(resume_session_id),
                 )
-                self._account(result, "independent production policy review")
+                from aka.light.workflow.review_usage import account_review
+                account_review(
+                    self,
+                    result,
+                    review_kind="final_source_policy_review",
+                    label="independent final-source policy review",
+                    backend=self.agent_cli,
+                    persist_separate_receipt=False,
+                )
+                from aka.light.agent.session_capture import latest_complete_session_archive
+                from aka.light.execution.retry import ReviewerOutputUnavailable
+
+                session_archive = latest_complete_session_archive(capture_root)
+                if session_archive is None:
+                    raise ReviewerOutputUnavailable(
+                        "independent final-source policy reviewer did not persist "
+                        "a complete conversation.jsonl and token-usage.json archive"
+                    )
                 check_review_service(result)
             except ValueError as exc:
-                return [f"independent production policy review failed: {exc}"]
+                return [f"independent final-source policy review failed: {exc}"]
             changed = []
             for relative, expected_hash in source_hashes.items():
                 candidate_path = candidate_root / relative
@@ -752,7 +1298,7 @@ class Campaign:
                     changed.append(relative)
             if changed:
                 errors = [
-                    "independent production policy review modified candidate evidence: "
+                    "independent final-source policy review modified candidate evidence: "
                     + ", ".join(sorted(changed))
                 ]
             else:
@@ -761,9 +1307,10 @@ class Campaign:
                     review_payload = json.loads(
                         review_path.read_text(encoding="utf-8")
                     )
-                    errors, review_summary = _validate_production_review(
+                    errors, review_summary, policy_result = validate_light_production_review(
                         review_payload,
                         candidate_files=frozenset(source_hashes),
+                        dsl_policy=effective_dsl_policy,
                     )
                 except (
                     OSError,
@@ -771,21 +1318,30 @@ class Campaign:
                     json.JSONDecodeError,
                     ValueError,
                 ) as exc:
-                    errors = [
-                        "independent production policy review produced no valid verdict: "
+                    from aka.light.execution.retry import ReviewerOutputUnavailable
+
+                    raise ReviewerOutputUnavailable(
+                        "independent final-source policy review produced no valid verdict: "
                         f"{type(exc).__name__}: {exc}"
-                    ]
+                    ) from exc
                 else:
                     status = "accepted" if not errors else "rejected"
                     print(
-                        f"[production-policy] independent full-candidate review {status}: "
+                        f"[final-source-policy] independent full-candidate review {status}: "
                         f"{review_summary}",
                         flush=True,
                     )
 
         try:
             reviewed_digest = _production_review_digest(
-                workspace, framework, require_gluon
+                workspace,
+                framework,
+                require_gluon,
+                pinned_dsl,
+                canonical_submission_policy(
+                    self.optimization_mode,
+                    specify_dsl=self.specify_dsl,
+                ),
             )
         except OSError as exc:
             errors = [
@@ -798,21 +1354,44 @@ class Campaign:
         review_record = {
             "schema_version": DEPENDENCY_REVIEW_SCHEMA_VERSION,
             "candidate_digest": candidate_digest,
-            "framework": framework,
-            "required_phase": "gluon" if require_gluon else "selected_framework",
+            "framework": framework if pinned_dsl else None,
+            "dsl_policy": effective_dsl_policy,
+            "compute_policy": "self_authored_only",
+            "required_phase": (
+                "gluon"
+                if require_gluon and pinned_dsl
+                else "selected_framework"
+                if pinned_dsl
+                else "open_dsl"
+            ),
             "reviewed_at": datetime.now(timezone.utc).isoformat(),
             "agent_runtime": self.agent_cli,
             "accepted": not errors,
             "errors": errors,
             "summary": review_summary,
             "review": review_payload,
+            "policy_result": policy_result,
+            "review_execution": "executed",
+            "session_id": result.session_id,
         }
-        persistence_errors = self._persist_production_review_record(
-            workspace,
-            candidate_digest,
-            review_record,
-        )
+        if resume_session_id is not None:
+            review_record["resumed_from_session_id"] = resume_session_id
+        if submission_id is not None:
+            review_record["submission_id"] = submission_id
+            review_record["submission_revision"] = submission_revision
+            persistence_errors = self._persist_production_review_record(
+                self.workspace,
+                submission_id,
+                submission_revision,
+                review_record,
+                conversation=session_archive.conversation,
+                token_usage=session_archive.token_usage,
+            )
+        else:
+            persistence_errors = []
         self._production_review_cache[cache_key] = (tuple(errors), review_record)
+        if review_record_sink is not None:
+            review_record_sink(dict(review_record))
         return list(dict.fromkeys([*errors, *persistence_errors]))
 
     def _review_production_candidate(
@@ -820,41 +1399,126 @@ class Campaign:
         workspace: Path,
         framework: str,
         require_gluon: bool,
+        *,
+        review_record_sink=None,
+        submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
     ) -> list[str]:
         """Bound timeout retries across sessions and supervisor restarts."""
         from aka.light.execution.retry import retry_review
+        from aka.light.workspace.sources import seed_baseline_metadata
 
-        digest = _production_review_digest(workspace, framework, require_gluon)
-        stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
+        # Open-DSL single-file workspaces are initialized before the Agent has
+        # selected a DSL. Refresh Supervisor-owned solution.json from the
+        # finished candidate so the fail-closed Production review sees the
+        # implementation's real language and dependencies.
+        seed_baseline_metadata(
+            workspace,
+            framework,
+            self.campaign_name,
+            native_eval=bool(self.atrex_bench_root),
+        )
+
+        digest = _production_review_digest(
+            workspace,
+            framework,
+            require_gluon,
+            dsl_policy(
+                self.optimization_mode,
+                specify_dsl=self.specify_dsl,
+            ) == "pinned",
+            canonical_submission_policy(
+                self.optimization_mode,
+                specify_dsl=self.specify_dsl,
+            ),
+        )
+        stage = f"dependency-review:{digest}:{self.agent_cli}:unbounded"
         try:
             return retry_review(
                 self.workspace, stage,
                 lambda: self._review_production_candidate_once(
-                    workspace, framework, require_gluon, candidate_digest=digest,
+                    workspace,
+                    framework,
+                    require_gluon,
+                    candidate_digest=digest,
+                    submission_id=submission_id,
+                    submission_revision=submission_revision,
+                    resume_session_id=resume_session_id,
+                    review_record_sink=review_record_sink,
                 ),
                 cancel=getattr(self, "search_cancel", None),
             )
         except ValueError as exc:
-            return [f"independent production policy review failed: {exc}"]
+            return [f"independent final-source policy review failed: {exc}"]
 
     def _production_kernel_violations(
         self,
         workspace: Path | None = None,
         *,
         require_gluon: bool = False,
+        review_record_sink=None,
+        submission_id: str | None = None,
+        submission_revision: int = 1,
+        resume_session_id: str | None = None,
     ) -> list[str]:
         if not self.source_checks_enabled:
             return []
+        if canonical_submission_policy(
+            self.optimization_mode,
+            specify_dsl=self.specify_dsl,
+        ) == "fast":
+            return production_structure_violations(
+                workspace or self.workspace,
+                self.framework,
+                require_gluon=False,
+                specify_dsl=False,
+            )
+        production_reviewer = self._review_production_candidate
+        if review_record_sink is not None:
+            production_reviewer = lambda candidate, framework, gluon: (
+                self._review_production_candidate(
+                    candidate,
+                    framework,
+                    gluon,
+                    review_record_sink=review_record_sink,
+                    submission_id=submission_id,
+                    submission_revision=submission_revision,
+                    resume_session_id=resume_session_id,
+                )
+            )
+        elif submission_id is not None:
+            production_reviewer = lambda candidate, framework, gluon: (
+                self._review_production_candidate(
+                    candidate,
+                    framework,
+                    gluon,
+                    submission_id=submission_id,
+                    submission_revision=submission_revision,
+                    resume_session_id=resume_session_id,
+                )
+            )
         return production_kernel_violations(
             workspace or self.workspace,
             self.framework,
             require_gluon=require_gluon,
-            production_reviewer=self._review_production_candidate,
+            specify_dsl=(
+                dsl_policy(
+                    self.optimization_mode,
+                    specify_dsl=self.specify_dsl,
+                ) == "pinned"
+            ),
+            production_reviewer=production_reviewer,
         )
 
     @cached_property
     def source_checks_enabled(self) -> bool:
         """Freeze main's multi-GPU source policy from evaluator-owned metadata."""
+        if self.optimization_mode in {"fast", "performance", "ultra"}:
+            # The three explicit policies define final-source review semantics
+            # independently of GPU count.  Communication/runtime plumbing can
+            # be allowed by the reviewer without disabling provenance review.
+            return True
         from aka.light.execution.config import evaluator_num_gpus
         if self.sandbox_ssh:
             return True
@@ -863,6 +1527,11 @@ class Campaign:
     @property
     def research_records(self) -> bool:
         return self.tool_runtime.research_records
+
+    @property
+    def research_modules(self) -> tuple[str, ...]:
+        """Return the one frozen research-module selection for every layer."""
+        return self.tool_runtime.tool_modules
 
     def _link_runtime(self) -> None:
         from aka.light.workflow.store import CampaignStore
@@ -875,6 +1544,7 @@ class Campaign:
             native_root,
             plugin_registry=self.plugin_registry,
             research_records=self.research_records,
+            research_modules=self.research_modules,
             is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
         )
         install_workspace_policy(
@@ -883,16 +1553,24 @@ class Campaign:
             self.framework,
             agent_runtime=self.agent_cli,
             source_checks_enabled=self.source_checks_enabled,
+            specify_dsl=self.specify_dsl,
+            numerical_validation_enabled=self.module_options.numerical_validation,
             expose_evaluator_shapes=self.expose_evaluator_shapes,
         )
 
     def _evaluator_directive(self) -> str:
         public = (
-            "Use agent_problem.json for the public domain. Exact shapes and metadata remain private; "
-            "result Shape IDs are opaque and must not be reverse-engineered. "
+            "Use agent_problem.json for the public domain. "
+            + self._shape_disclosure_prompt()
+            + " "
             if self.private_reference_dir else "The visible operator contract defines the supported inputs. "
         )
         if self.atrex_bench_root:
+            profile_shapes = (
+                "For generalized tasks, Shape IDs are opaque and exact parameters remain private."
+                if self.private_reference_dir
+                else "For ordinary public-shape tasks, read exact parameters from shapes.json."
+            )
             return (
                 "## Evaluation contract: Atrex-Bench\n\n" + public +
                 "The Supervisor supplies the official evaluator. Minimize latency_us_geomean; "
@@ -900,7 +1578,7 @@ class Campaign:
                 "Use --kind run --mode full --no-sync for the complete workload. "
                 "Correctness-only, custom-input or subset results do not satisfy an Episode report. "
                 "For diagnostic Profile, use --kind profile --profile-shape-id ID --no-sync "
-                "with an opaque Shape ID from a saved result. The same option selects the "
+                "with a Shape ID from a saved result. " + profile_shapes + " The same option selects the "
                 "privately supplied case in Typed Profile or a compatible Dev fallback. "
                 "Never substitute a custom timing/correctness harness for official evaluation."
             )
@@ -914,37 +1592,6 @@ class Campaign:
             )
         raise ValueError("A canonical Atrex-Bench or SOL evaluator is required")
 
-    def _install_native_evaluator(self) -> None:
-        """Seed the immutable adapter used only by native Atrex-Bench shape campaigns."""
-        if not self.atrex_bench_root:
-            return
-        if not ATREX_BENCH_HARNESS.is_file():
-            raise FileNotFoundError(f"missing {ATREX_BENCH_HARNESS}")
-        shutil.copy2(ATREX_BENCH_HARNESS, self.workspace / "test_kernel.py")
-
-    def _install_profile_driver(self) -> None:
-        """Seed the immutable external profiling entry for every campaign layout.
-
-        Both profiler wrappers run ``python <file>``, so profiling needs a runnable script.
-        Keeping it out of ``kernel.py`` means a session that rewrites ``run()``/``Model``
-        cannot silently destroy profiling: an in-kernel ``__main__`` block would vanish with
-        the rewrite and the profiler would still exit 0 having captured nothing.
-        """
-        if not PROFILE_DRIVER.is_file():
-            raise FileNotFoundError(f"missing {PROFILE_DRIVER}")
-        shutil.copy2(PROFILE_DRIVER, self.workspace / "profile_driver.py")
-        # Stage it when a repository already exists so the baseline commit tracks it without
-        # depending on how the setup session stages files; restoring an immutable path needs
-        # a blob in the root commit.
-        if (self.workspace / ".git").exists():
-            subprocess.run(
-                ["git", "add", "profile_driver.py"],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-
     def _sandbox_directive(self) -> str:
         return sandbox_directive(
             self.sandbox_hardware,
@@ -956,7 +1603,9 @@ class Campaign:
 
     def _mode_directive(self) -> str:
         return optimization_mode_directive(self.optimization_mode, self.framework,
-                                           source_checks_enabled=self.source_checks_enabled)
+                                           source_checks_enabled=self.source_checks_enabled,
+                                           specify_dsl=self.specify_dsl,
+                                           numerical_validation_enabled=self.module_options.numerical_validation)
 
     def setup_baseline(self) -> None:
         # SOL-ExecBench op: seed a correct, directly-submittable V0 mechanically
@@ -987,17 +1636,7 @@ class Campaign:
             if source.is_file():
                 shutil.copy2(source, self.workspace / name)
         self._ensure_agent_problem()
-        if generalized:
-            # Seed the immutable public contract into the eventual V0 commit even when the
-            # baseline agent stages only its own implementation files.
-            subprocess.run(
-                ["git", "add", AGENT_PROBLEM_FILENAME],
-                cwd=str(self.workspace),
-                check=True,
-            )
         self._link_runtime()
-        self._install_native_evaluator()
-        self._install_profile_driver()
         # A native Atrex-Bench V0 is already materialized as the verbatim reference
         # wrapper.  Its evaluator and memory schemas are also supervisor-owned, so an
         # Agent session adds no implementation value here.  Commit the sources, run the
@@ -1006,8 +1645,8 @@ class Campaign:
 
     def _native_v0_readme(self, *, generalized: bool) -> str:
         contract = (
-            "`agent_problem.json` is the authoritative public contract. Exact evaluator "
-            "cases remain private; latency-map keys are opaque ids."
+            "`agent_problem.json` is the authoritative public contract. "
+            + self._shape_disclosure_prompt()
             if generalized
             else "`shapes.json` and the other copied operator files define the public workload."
         )
@@ -1021,19 +1660,25 @@ class Campaign:
             "Wiki queries are disabled. Use supplied, attributable hardware evidence; "
             "do not guess missing peak specifications. "
         )
+        dsl_goal = (
+            f"Final submitted Kernels must use `{self.framework}`; development probes may use "
+            "other languages or DSLs."
+            if self.specify_dsl
+            else "The Agent may choose any evaluator-supported GPU implementation DSL."
+        )
+        framework_line = self.framework if self.specify_dsl else "Agent-selected supported GPU DSL"
         return (
             f"# kernel_opt_{self.campaign_name}\n\n"
             "Evidence-backed optimization of one native Atrex-Bench operator.\n\n"
             "## Goal\n\n"
-            "Maximize the arithmetic mean of per-shape speedups against Atrex-Bench metadata "
-            "production performance while every evaluator case remains "
-            "correct. V0 is supplied by the selected SourceProvider; optimized versions must "
-            f"migrate the computation to `{self.framework}`.\n\n"
+            "Minimize full-workload `latency_us_geomean` while every evaluator case remains "
+            "correct. Per-Shape latency and `performance_score` are diagnostic, not the promotion "
+            f"objective. V0 is supplied by the selected SourceProvider. {dsl_goal}\n\n"
             "## Campaign\n\n"
             f"- Target platform: `{self.platform}`\n"
             f"- Runtime architecture: `{runtime_arch}`\n"
             f"- Optimization mode: `{self.optimization_mode}`\n"
-            f"- Target framework: `{self.framework}`\n"
+            f"- Target framework: `{framework_line}`\n"
             f"- Target utilization stop condition: `{self.target_util:g}%`\n"
             f"- Additional notes: {notes}\n\n"
             "## Contract and evaluator\n\n"
@@ -1042,7 +1687,7 @@ class Campaign:
             "supplies the official evaluator and private inputs.\n"
             "- V0 uses exactly one full-workload base-seed evaluator run. It does not profile, "
             "run multi-seed correctness, or perform ABBA.\n"
-            "- Ground-truth operator files and canonical memory are immutable to the Agent.\n\n"
+            "- Ground-truth operator files and Supervisor evaluation evidence are immutable to the Agent.\n\n"
             "## Hardware evidence policy\n\n"
             "V0 records identity only and does not speculate about peak specifications. "
             f"{hardware_evidence}The runtime architecture API is authoritative when a device "
@@ -1055,39 +1700,170 @@ class Campaign:
 
     @staticmethod
     def _print_v0_evaluator_output(test: subprocess.CompletedProcess[str]) -> None:
-        if test.stdout:
-            print(
-                test.stdout, end="" if test.stdout.endswith("\n") else "\n", flush=True
-            )
-        if test.stderr:
-            print(
-                test.stderr,
-                end="" if test.stderr.endswith("\n") else "\n",
-                file=sys.stderr,
-                flush=True,
-            )
-
-    @property
-    def generate_memory(self) -> bool:
-        return bool(getattr(getattr(self, "module_options", None), "generate_memory", False))
-
-    def _run_v0_evaluator(self) -> dict:
-        """Run the sole V0 evaluator and persist its local transport record."""
-        failed_memory_path = self.workspace / STATE_DIRECTORY / "v0.failed.json"
-        failed_memory_path.unlink(missing_ok=True)
-        test = _sandbox_command(
-            self.workspace,
-            self.sandbox_hardware,
-            self.sandbox_profile,
-            self.sandbox_url,
-            self.sandbox_timeout,
-            ["python", "test_kernel.py", "--version", "v0", "--no-memory"],
-            ssh=self.sandbox_ssh,
-            ssh_init=self.sandbox_ssh_init,
-            health_command=self.sandbox_health_command,
-            gateway_kind="run",
-            private_reference_dir=self.private_reference_dir,
+        """Log one bounded evaluator summary without duplicating its full Record."""
+        from aka.light.evaluation.projection import (
+            GATEWAY_ERROR_PREFIX,
+            SOURCE_ERROR_PREFIX,
         )
+
+        def bounded_text(value: object, limit: int = 1000) -> str:
+            raw = " ".join(str(value or "").split()).encode("utf-8")
+            if len(raw) <= limit:
+                return raw.decode("utf-8", errors="replace")
+            marker = b" ... [omitted] ... "
+            remaining = max(0, limit - len(marker))
+            left = remaining // 2
+            right = remaining - left
+            return (raw[:left] + marker + raw[-right:]).decode(
+                "utf-8", errors="replace"
+            )
+
+        def structured_payload(prefixes: tuple[str, ...]) -> tuple[str, dict] | None:
+            from aka.light.evaluation.result_json import parse_evaluation_result_line
+
+            for line in reversed((test.stdout or "").splitlines()):
+                result = parse_evaluation_result_line(line)
+                if result is not None:
+                    return "evaluate", result
+                for prefix in prefixes:
+                    if not line.startswith(prefix):
+                        continue
+                    try:
+                        payload = json.loads(line[len(prefix):])
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        continue
+                    if isinstance(payload, dict):
+                        return prefix, payload
+            return None
+
+        structured = structured_payload(
+            (GATEWAY_ERROR_PREFIX, SOURCE_ERROR_PREFIX)
+        )
+        summary: dict[str, object] = {"exit_code": test.returncode}
+        if structured is not None:
+            prefix, payload = structured
+            if prefix == "evaluate":
+                all_pass = payload.get("all_pass")
+                summary["status"] = (
+                    "passed" if test.returncode == 0 and all_pass is True else "failed"
+                )
+                correctness = payload.get("correctness")
+                if isinstance(correctness, dict) and isinstance(
+                    correctness.get("status"), str
+                ):
+                    summary["correctness"] = correctness["status"]
+                elif isinstance(all_pass, bool):
+                    summary["correctness"] = "PASS" if all_pass else "FAIL"
+                for key in (
+                    "latency_us_geomean",
+                    "latency_us_arith_mean",
+                    "performance_score",
+                ):
+                    value = payload.get(key)
+                    if (
+                        type(value) in {int, float}
+                        and math.isfinite(value)
+                    ):
+                        summary[key] = value
+                measured = payload.get("measured_shape_count")
+                if type(measured) is not int:
+                    latencies = payload.get("latency_us_by_shape")
+                    measured = len(latencies) if isinstance(latencies, dict) else None
+                if type(measured) is int:
+                    summary["measured_shape_count"] = measured
+                for key in ("gateway_record_id", "eval_id"):
+                    if isinstance(payload.get(key), str):
+                        summary[key] = bounded_text(payload[key], 256)
+                failures = payload.get("failures")
+                if isinstance(failures, list) and failures:
+                    summary["failure_count"] = len(failures)
+                    summary["error_summary"] = [
+                        bounded_text(item) for item in failures[:2]
+                    ]
+                diagnostics = payload.get("actionable_diagnostics")
+                if isinstance(diagnostics, list) and diagnostics:
+                    summary["actionable_diagnostic_count"] = len(diagnostics)
+                    messages = [
+                        bounded_text(item.get("message"))
+                        for item in diagnostics[:2]
+                        if isinstance(item, dict) and item.get("message")
+                    ]
+                    if messages:
+                        summary["actionable_diagnostics"] = messages
+            else:
+                error = payload.get("error")
+                error = error if isinstance(error, dict) else payload
+                summary.update({
+                    "status": str(payload.get("status") or "failed"),
+                    "operation": str(payload.get("operation") or "evaluate"),
+                })
+                for key in ("gateway_record_id", "error_class", "reason"):
+                    value = payload.get(key) if key == "gateway_record_id" else error.get(key)
+                    if isinstance(value, str):
+                        summary[key] = bounded_text(value, 256)
+                message = error.get("message")
+                if message is not None:
+                    summary["error_summary"] = bounded_text(message)
+        else:
+            summary["status"] = "failed" if test.returncode else "completed"
+            detail = test.stderr or test.stdout
+            if detail:
+                summary["error_summary"] = bounded_text(detail)
+
+        print(
+            "[orchestrator] evaluator summary: "
+            + json.dumps(summary, ensure_ascii=False, sort_keys=True),
+            file=sys.stderr if test.returncode else sys.stdout,
+            flush=True,
+        )
+
+    def _run_v0_evaluator(self, source_commit: str) -> dict:
+        """Run and immediately seal V0 as a standard Campaign measurement."""
+        from aka.light.experiment.store import DuplicateTask
+
+        store, request, kernels = baseline_measurement_spec(
+            self.workspace, source_commit
+        )
+        try:
+            with store.reserve(request, kernels) as task:
+                test = _sandbox_command(
+                    self.workspace,
+                    self.sandbox_hardware,
+                    self.sandbox_profile,
+                    self.sandbox_url,
+                    self.sandbox_timeout,
+                    [],
+                    ssh=self.sandbox_ssh,
+                    ssh_init=self.sandbox_ssh_init,
+                    health_command=self.sandbox_health_command,
+                    gateway_kind="run",
+                    private_reference_dir=self.private_reference_dir,
+                    evaluation_step_timeout=self.evaluation_step_timeout,
+                    gpu_clock_mhz=self.gpu_clock_mhz,
+                    job_root=task.directory / "repetition-1",
+                    # V0 is mandatory campaign evidence. Keep polling/retrying through
+                    # infrastructure failures exactly like later terminal validation.
+                    terminal_validation=True,
+                )
+                response = {
+                    "exit_code": test.returncode,
+                    "stdout": test.stdout,
+                    "stderr": test.stderr,
+                }
+                # Seal every terminal V0 result, including a correctness rejection.
+                # Infrastructure interruptions that throw before a terminal result
+                # leave this exact reservation and its physical Job checkpoints
+                # available for recovery on the next launch.
+                task.finish(response, cacheable=True)
+        except DuplicateTask as duplicate:
+            saved = store.read(duplicate.record_id)
+            receipt = saved.get("response", {}).get("agent_result", {})
+            saved_result = receipt.get("result", {}) if isinstance(receipt, dict) else {}
+            result = dict(saved_result) if isinstance(saved_result, dict) else {}
+            result["all_pass"] = result.get("correct") is True
+            if result["all_pass"] is not True:
+                raise RuntimeError("saved V0 measurement did not pass correctness")
+            return result
         self._print_v0_evaluator_output(test)
         if test.returncode == ENVIRONMENT_TEMPFAIL:
             raise EnvironmentUnavailable("V0 evaluation infrastructure is unavailable; retain its job evidence for recovery")
@@ -1095,107 +1871,61 @@ class Campaign:
             result = _test_result_from_stdout(test.stdout)
         except (RuntimeError, json.JSONDecodeError) as exc:
             raise RuntimeError(
-                f"sandbox V0 baseline produced no usable result: {exc}"
+                f"sandbox V0 Evaluate produced no usable result: {exc}"
             ) from exc
-        memory_path = _record_local_test_result(
-            self.workspace, "v0", result, generate_memory=self.generate_memory
-        )
         if test.returncode != 0 or not result.get("all_pass"):
-            # Keep diagnostics without making latest_version() treat a failed or
-            # interrupted baseline as canonical. A rerun will retry V0 directly.
-            memory_path.replace(failed_memory_path)
-            if self.generate_memory:
-                summary = self.workspace / "memory/v0.json"
-                summary.replace(summary.with_name("v0.failed.json"))
             raise RuntimeError(
-                "sandbox V0 baseline failed correctness/performance validation"
+                "sandbox V0 Evaluate failed correctness/performance validation"
             )
         return result
-
-    def _run_v0_evaluator_with_correctness_prefetch(self) -> dict:
-        """Measure V0 while prefetching the source-only V1 correctness review.
-
-        The review packet deliberately excludes V0 measurement artifacts, so its
-        digest is stable before and after the evaluator writes canonical memory/v0.json. Review failure remains non-fatal here: the ordinary V1
-        entry point validates the cache and retries synchronously when necessary.
-        """
-        if not self._framework_baseline_correctness_reviewers():
-            return self._run_v0_evaluator()
-        print(
-            "[orchestrator] V0 evaluator: prefetching V1 correctness review in parallel",
-            flush=True,
-        )
-        with ThreadPoolExecutor(max_workers=1) as executor:
-            review_future = executor.submit(
-                    copy_context().run,
-                self._ensure_framework_baseline_correctness_guidance
-            )
-            try:
-                return self._run_v0_evaluator()
-            finally:
-                try:
-                    review_future.result()
-                except Exception as exc:
-                    print(
-                        "[orchestrator] WARNING: V1 correctness review prefetch failed; "
-                        "the V1 stage will retry it: "
-                        f"{type(exc).__name__}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
 
 
     def _finalize_v0_measurement(
         self,
         result: dict,
         source_commit: str,
-        *,
-        extra_paths: tuple[str, ...] = (),
     ) -> None:
-        """Commit V0 measurement metadata without rewriting its source commit SHA."""
-        memory_path = version_record_path(self.workspace, 0, prefer_summary=self.generate_memory)
-        memory = json.loads(memory_path.read_text(encoding="utf-8"))
-        memory["git_commit_hash"] = source_commit
-        optimization = memory.setdefault("optimization", {})
-        optimization["action_category"] = "baseline"
-        optimization["action_description"] = (
-            "selected initial implementation measured by the official full-workload evaluator"
-        )
-        optimization["expected_impact"] = "correctness and latency reference for later versions"
-        optimization["risks_and_rollback"] = "none; immutable V0 reference baseline"
-        memory_path = save_version_record(self.workspace, 0, memory, generate_memory=self.generate_memory)
+        """Validate the V0 Measurement while keeping HEAD at its source commit."""
+        memory = read_baseline_record(self.workspace)
+        if not isinstance(memory, dict):
+            raise RuntimeError("V0 evaluator produced no MeasurementStore record")
+        if memory.get("git_commit_hash") != source_commit:
+            raise RuntimeError("V0 measurement does not point to its source commit")
         coverage_problem = self._generalized_memory_coverage_problem(memory)
         if coverage_problem:
             raise RuntimeError(f"invalid native V0 measurement: {coverage_problem}")
-
-        staged = version_commit_paths(self.workspace, 0, generate_memory=self.generate_memory)
-        staged.extend(
-            path for path in extra_paths if (self.workspace / path).is_file()
-        )
-        subprocess.run(
-            ["git", "add", *staged], cwd=str(self.workspace), check=True
-        )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            == 0
-        ):
-            raise RuntimeError("V0 evaluator produced no measurement metadata to commit")
-        subprocess.run(
-            ["git", "commit", "-m", "V0: record baseline measurement"],
-            cwd=str(self.workspace),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
         recorded = read_memory(self.workspace, 0) or {}
         if recorded.get("git_commit_hash") != source_commit:
             raise RuntimeError("V0 measurement record does not point to the V0 source commit")
         from aka.light.workspace.sources import from_git, snapshot as source_snapshot
-        if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
+        archived_source = from_git(self.workspace, source_commit)
+        if archived_source != source_snapshot(self.workspace):
             raise RuntimeError("V0 candidate source differs from its recorded source commit")
+        if git_head(self.workspace) != source_commit:
+            raise RuntimeError("V0 measurement must not advance Git beyond its source commit")
+
+        # Current managed Campaigns keep exactly one canonical V0 source
+        # archive in MeasurementStore.  campaign.json records only its public
+        # Agent Git identity and content digest; source preparation snapshots
+        # are temporary and never become persistent Campaign state.
+        from aka.light.runtime.paths import (
+            CAMPAIGN_MANIFEST,
+            record_campaign_v0,
+            supervisor_campaign_base_root,
+            supervisor_measurement_root,
+        )
+        campaign_root = supervisor_campaign_base_root(self.workspace)
+        if (campaign_root / CAMPAIGN_MANIFEST).is_file():
+            from aka.light.experiment.store import MeasurementStore
+
+            identity = MeasurementStore(
+                supervisor_measurement_root(self.workspace)
+            ).kernel(archived_source, source_commit)
+            record_campaign_v0(
+                self.workspace,
+                kernel_commit_id=identity["kernel_id"],
+                kernel_artifact_digest=identity["kernel_artifact_digest"],
+            )
 
     def _setup_baseline_native(self, op_dir: Path, *, generalized: bool) -> None:
         """Seed native Atrex-Bench V0 without launching a coding Agent."""
@@ -1212,24 +1942,11 @@ class Campaign:
         (self.workspace / "README.md").write_text(
             self._native_v0_readme(generalized=generalized), encoding="utf-8"
         )
-        source_paths = [
-            ".gitignore",
-            "CLAUDE.md",
-            "README.md",
-            "kernel.py",
-            "test_kernel.py",
-            "profile_driver.py",
-            *agent_visible_operator_files(op_dir, generalized=generalized),
-        ]
-        from aka.light.workspace.sources import snapshot as source_snapshot, read
-        source_paths += list(read(self.workspace).materialized_files)
-        source_paths = list(
-            dict.fromkeys(
-                path for path in source_paths if (self.workspace / path).is_file()
-            )
-        )
+        from aka.light.workspace.sources import commit_paths
+        from aka.light.workspace.sources import snapshot as source_snapshot
+        source_paths = [".gitignore", *commit_paths(self.workspace)]
         subprocess.run(
-            ["git", "add", *source_paths], cwd=str(self.workspace), check=True
+            ["git", "add", "--", *source_paths], cwd=str(self.workspace), check=True
         )
         if (
             subprocess.run(
@@ -1252,7 +1969,7 @@ class Campaign:
         if from_git(self.workspace, source_commit) != source_snapshot(self.workspace):
             raise RuntimeError("native V0 source history does not match the selected source")
 
-        result = self._run_v0_evaluator_with_correctness_prefetch()
+        result = self._run_v0_evaluator(source_commit)
         self._finalize_v0_measurement(result, source_commit)
         self._assert_generalized_inputs_are_private()
         contract_problem = self._generalized_contract_commit_problem()
@@ -1289,1367 +2006,31 @@ class Campaign:
             self.framework,
             "--platform",
             self.platform,
-            # The local step only materializes sources and git state.  GPU
-            # correctness/performance is run below in the remote sandbox.
-            "--no-bench",
         ]
         subprocess.run(cmd, check=True)
         self._link_runtime()
         source_commit = v0_baseline_commit(self.workspace)
         if not source_commit:
             raise RuntimeError("SOL V0 has no committed kernel.py")
-        result = self._run_v0_evaluator_with_correctness_prefetch()
+        result = self._run_v0_evaluator(source_commit)
         self._finalize_v0_measurement(
             result,
             source_commit,
-            extra_paths=("CLAUDE.md", ".gitignore"),
         )
-
-    def ensure_framework_baseline(self) -> None:
-        """Land the campaign's first real framework kernel as v1, exactly once.
-
-        V0 is a PyTorch reference wrapper. This stage pays the framework bring-up cost once
-        before optimization starts from a self-contained implementation.
-
-        Idempotent and resume-safe: a pinned baseline is never rewritten, and a campaign that has
-        already progressed past V0 without a pin is left exactly as it is.
-        """
-        action, reason = self._framework_baseline_decision()
-        if action == "skip":
-            if reason:
-                print(
-                    f"[orchestrator] framework baseline skipped: {reason}", flush=True
-                )
-            return
-        print(f"[orchestrator] framework baseline: {action} ({reason})", flush=True)
-        if action == "pin":
-            baseline_commit = self._v0_baseline_commit()
-            self._pin_framework_baseline(baseline_commit, version=0)
-            return
-
-        n = FRAMEWORK_BASELINE_VERSION
-        baseline_commit = self._v0_baseline_commit()
-        from aka.light.workspace.sources import revision_identity
-        v0_identity = revision_identity(self.workspace, baseline_commit)
-        pre_head = git_head(self.workspace)
-        self._ensure_framework_baseline_solution_manifest()
-
-        if action == "run":
-            self._link_runtime()
-            self._restore_framework_baseline_candidate(v0_identity)
-            self._sync_framework_baseline_live(
-                phase="framework_baseline_correctness_review"
-            )
-            self._ensure_framework_baseline_correctness_guidance()
-            self._sync_framework_baseline_live(phase="framework_baseline")
-            try:
-                res = self._run_framework_baseline_agent(
-                    n=n,
-                    label="framework baseline",
-                )
-            finally:
-                self._warn_restored_baseline_paths(baseline_commit)
-            if res.exit_status != 0 and res.tokens == 0:
-                raise RuntimeError(
-                    "the framework baseline Agent exited without usable output; "
-                    f"inspect {framework_baseline_progress_path(self.workspace)}"
-                )
-            recovery_used = False
-            problem = self._framework_baseline_problem(
-                v0_identity, baseline_commit, include_policy_review=False
-            )
-            if problem:
-                self._recover_framework_baseline(
-                    problem, v0_identity, baseline_commit, pre_head
-                )
-                recovery_used = True
-                self._warn_restored_baseline_paths(baseline_commit)
-                problem = self._framework_baseline_problem(
-                    v0_identity, baseline_commit, include_policy_review=False
-                )
-        else:  # adopt: our own interrupted run already committed the kernel
-            recovery_used = False
-            self._sync_framework_baseline_live(phase="framework_baseline")
-            self._warn_restored_baseline_paths(baseline_commit)
-            problem = self._framework_baseline_problem(
-                v0_identity, baseline_commit, include_policy_review=False
-            )
-        result: Optional[dict] = None
-        if not problem:
-            result, problem = self._framework_baseline_external_gates(n)
-        numerical_repairs = 0
-        while problem and not problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) and (
-            not recovery_used or (problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX) and numerical_repairs < 2)
-        ):
-            # The implementation Agent intentionally runs only a bounded smoke subset.
-            # Give one focused repair turn when the authoritative combined gate finds a
-            # full-domain or policy problem, then rerun the independent gates once.
-            if problem.startswith(SUPPLEMENTAL_REPAIR_PREFIX):
-                numerical_repairs += 1
-            self._recover_framework_baseline(
-                problem, v0_identity, baseline_commit, pre_head
-            )
-            recovery_used = True
-            self._warn_restored_baseline_paths(baseline_commit)
-            problem = self._framework_baseline_problem(
-                v0_identity, baseline_commit, include_policy_review=False
-            )
-            if not problem:
-                result, problem = self._framework_baseline_external_gates(n)
-        if problem:
-            # Undo any session-authored commits while retaining every worktree file.  A hard reset
-            # here used to erase the exact candidate and debugging experience needed by a restart.
-            if pre_head and git_head(self.workspace) != pre_head:
-                subprocess.run(
-                    ["git", "reset", "--mixed", pre_head],
-                    cwd=str(self.workspace),
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-            self._warn_restored_baseline_paths(baseline_commit)
-            self._record_framework_baseline_failure(problem)
-            self._sync_framework_baseline_live(
-                phase="failed",
-                state="blocked",
-                accepted=False,
-                outcome={"summary": problem, "next_directions": []},
-            )
-            outcome = "validation blocked" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "rejected"
-            raise RuntimeError(f"framework baseline v{n} {outcome}: {problem}")
-
-        commit = self._commit_framework_baseline(n, result or {})
-        try:
-            mark_framework_baseline_accepted(
-                self.workspace,
-                commit=commit,
-                latency_us=(result or {}).get("latency_us_geomean"),
-            )
-        except (OSError, RuntimeError) as exc:
-            print(
-                "[orchestrator] WARNING: could not close the V1 crash record after "
-                f"acceptance: {exc}",
-                file=sys.stderr,
-                flush=True,
-            )
-        self._sync_framework_baseline_live(
-            phase="recorded",
-            state="candidate_ready",
-            accepted=True,
-            canonical_memory=(f"memory/v{n}.json" if self.generate_memory else ""),
-            candidate_commit=commit,
-            outcome={
-                "summary": f"accepted self-contained {self.framework} framework baseline",
-                "next_directions": [],
-            },
-        )
-        latency = ((read_memory(self.workspace, n) or {}).get("performance") or {}).get(
-            "latency_us"
-        )
-        print(
-            f"[orchestrator] framework baseline v{n} accepted: {self.framework} "
-            f"@ {commit[:8]} ({latency} us geomean)",
-            flush=True,
-        )
-
-    def _sync_framework_baseline_live(
-        self,
-        *,
-        phase: str,
-        state: str = "in_progress",
-        accepted: bool | None = None,
-        canonical_memory: str = "",
-        candidate_commit: str = "",
-        outcome: dict | None = None,
-    ) -> None:
-        """Best-effort live progress before the Long Horizon supervisor starts."""
-        try:
-            from aka.light.workflow.journal_projection import sync_live_memory
-            from aka.light.workflow.store import CampaignStore
-
-            store = CampaignStore(self.workspace)
-            created_at = datetime.now(timezone.utc).isoformat()
-            try:
-                existing = json.loads(
-                    store.live_memory_path.read_text(encoding="utf-8")
-                )
-                if isinstance(existing, dict) and existing.get("created_at"):
-                    created_at = str(existing["created_at"])
-            except (OSError, UnicodeError, json.JSONDecodeError):
-                pass
-            value = {
-                "schema_version": 1,
-                "episode": 0,
-                "memory_version": FRAMEWORK_BASELINE_VERSION,
-                "base_commit": git_head(self.workspace),
-                "episode_branch": "framework-baseline",
-                "state": state,
-                "experiments": [],
-                "outcome": outcome,
-                "candidate_commit": candidate_commit or None,
-                "created_at": created_at,
-            }
-            sync_live_memory(
-                store.live_memory_path,
-                value,
-                phase=phase,
-                canonical_memory=canonical_memory,
-                accepted=accepted,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            print(
-                "[orchestrator] WARNING: could not update framework-baseline "
-                f"memory/live.json: {type(exc).__name__}",
-                file=sys.stderr,
-                flush=True,
-            )
-
-    def _framework_baseline_decision(self) -> tuple[str, str]:
-        """Resolve what the stage should do: skip | pin | run | adopt, with the reason."""
-        from aka.light.workspace.sources import layout_at
-        if self.framework_baseline == "never":
-            return "skip", ""
-        if latest_version(self.workspace) < 0 or not git_head(self.workspace):
-            raise RuntimeError(
-                "framework baseline requires a committed V0 baseline first"
-            )
-
-        pinned_commit, pinned_version = resolve_framework_baseline_commit(
-            self.workspace
-        )
-        if pinned_commit:
-            return "skip", f"already pinned at {pinned_commit[:8]} (v{pinned_version})"
-
-        from aka.light.workspace.sources import revision_contains_reference
-        known_reference_wrapper = revision_contains_reference(self.workspace, self._v0_baseline_commit())
-        if not layout_at(self.workspace, committed=True).replaceable_baseline and not known_reference_wrapper:
-            return "pin", "source-tree task keeps the pinned package/adapter as its Framework baseline"
-
-        progressed = not head_kernel_is_initial_baseline(self.workspace)
-        from aka.light.workspace.sources import read, from_revision
-        dirty_candidate = read(self.workspace).snapshot != from_revision(self.workspace, "HEAD").snapshot
-        restart_journal = framework_baseline_progress_path(self.workspace).is_file()
-        # A compliant dirty candidate must never cause V0 itself to be pinned.  It is an
-        # interrupted V1 worktree and needs validation/recovery first.
-        if restart_journal:
-            return "run", "resuming the unexpected-exit V1 handoff"
-        if not progressed and dirty_candidate:
-            return "run", "resuming preserved framework-baseline work"
-
-        if self.framework_baseline == "auto" and self.optimization_mode != "production" and self.framework.lower() != "cuda":
-            return (
-                "skip",
-                "leaderboard mode keeps the permissive V0 (use --framework-baseline always)",
-            )
-        if not progressed:
-            if not self.source_checks_enabled:
-                return "pin", "multi-GPU Agate source checks are disabled; retain the validated V0"
-            structural = production_structure_violations(
-                self.workspace, self.framework
-            )
-            if any(
-                value.startswith("unsupported production framework")
-                for value in structural
-            ):
-                return "skip", "; ".join(structural)
-            known_reference_wrapper = known_reference_wrapper or is_sol_op(Path(self.kernel_demo).resolve().parent)
-            if known_reference_wrapper:
-                return (
-                    "run",
-                    f"the supervisor-seeded V0 is the PyTorch reference wrapper, not "
-                    f"a self-contained {self.framework} kernel",
-                )
-            violations = self._production_kernel_violations()
-            if not violations:
-                return (
-                    "pin",
-                    "the V0 kernel is already a compliant framework implementation",
-                )
-            return "run", f"V0 is not a self-contained {self.framework} kernel"
-        if latest_version(self.workspace) == FRAMEWORK_BASELINE_VERSION:
-            return "adopt", "an interrupted framework baseline is already committed"
-        return "skip", (
-            "HEAD has progressed beyond V0 without a framework-baseline pin; "
-            "leaving this campaign on its existing baseline"
-        )
-
-    def _v0_baseline_commit(self) -> str:
-        commit = v0_baseline_commit(self.workspace)
-        if not commit:
-            raise RuntimeError("framework baseline requires a committed V0 kernel.py")
-        return commit
-
-    def _framework_baseline_supervisor_order(self) -> tuple[str, ...]:
-        """Runtime order for the post-exit progress-saving supervisor only."""
-        ordered: list[str] = []
-        for agent_cli in (self.agent_cli, "codex", "qodercli"):
-            if agent_cli not in ordered:
-                ordered.append(agent_cli)
-        return tuple(ordered)
-
-    def _save_framework_baseline_exit_progress(
-        self,
-        *,
-        crash_progress: dict,
-    ) -> None:
-        """Ask a separate read-only Agent to turn crash artifacts into a restart handoff."""
-        exits = crash_progress.get("unexpected_exits")
-        if not isinstance(exits, list) or not exits or not isinstance(exits[-1], dict):
-            return
-        crash_record = exits[-1]
-        snapshot = crash_record.get("snapshot")
-        snapshot_root = (
-            self.workspace / str(snapshot.get("root"))
-            if isinstance(snapshot, dict) and snapshot.get("root")
-            else None
-        )
-        order = self._framework_baseline_supervisor_order()
-        prompt = resource("prompts/framework_baseline_exit_supervisor.md").read_text(
-            encoding="utf-8"
-        )
-        for index, supervisor_cli in enumerate(order):
-            with tempfile.TemporaryDirectory(
-                prefix="atrex-v1-exit-supervisor-"
-            ) as directory:
-                review_workspace = Path(directory)
-                if snapshot_root is not None and snapshot_root.is_dir():
-                    shutil.copytree(snapshot_root, review_workspace / "candidate")
-                (review_workspace / "crash_record.json").write_text(
-                    json.dumps(crash_record, indent=2, ensure_ascii=False) + "\n",
-                    encoding="utf-8",
-                )
-                print(
-                    "[orchestrator] V1 exit progress supervisor: launching "
-                    f"{supervisor_cli} ({index + 1}/{len(order)})",
-                    flush=True,
-                )
-                try:
-                    result = self._run_session(
-                        review_workspace,
-                        prompt,
-                        timeout=600,
-                        agent_cli=supervisor_cli,
-                        reasoning_effort="high",
-                        agent_plugins=False,
-                        extra_environment=self.agent_boundary_environment("baseline-exit-review"),
-                    )
-                except Exception as exc:
-                    print(
-                        "[orchestrator] V1 exit progress supervisor failed: "
-                        f"{supervisor_cli}: {type(exc).__name__}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    continue
-                self._account(
-                    result, f"framework baseline exit supervisor ({supervisor_cli})"
-                )
-                if result.exit_status != 0 or result.timed_out:
-                    continue
-                try:
-                    recovery = json.loads(
-                        (review_workspace / "resume.json").read_text(encoding="utf-8")
-                    )
-                    destination = save_framework_baseline_recovery(
-                        self.workspace, recovery, agent_cli=supervisor_cli
-                    )
-                except (OSError, UnicodeError, json.JSONDecodeError, ValueError) as exc:
-                    print(
-                        "[orchestrator] V1 exit progress supervisor produced an invalid "
-                        f"handoff via {supervisor_cli}: {exc}",
-                        file=sys.stderr,
-                        flush=True,
-                    )
-                    continue
-                print(
-                    f"[orchestrator] V1 restart handoff saved: {destination}",
-                    flush=True,
-                )
-                return
-        print(
-            "[orchestrator] WARNING: no progress supervisor produced a structured V1 "
-            f"handoff; mechanical crash record remains at {framework_baseline_progress_path(self.workspace)}",
-            file=sys.stderr,
-            flush=True,
-        )
-
-    def _capture_framework_baseline_exit(
-        self,
-        *,
-        exit_status: int,
-        timed_out: bool,
-        tokens: int,
-        session_id: str,
-        stdout_tail: str,
-        stderr_tail: str,
-        error: str = "",
-    ) -> None:
-        order = self._framework_baseline_supervisor_order()
-        progress = capture_framework_baseline_exit(
-            self.workspace,
-            agent_cli=self.agent_cli,
-            exit_status=exit_status,
-            timed_out=timed_out,
-            tokens=tokens,
-            session_id=session_id,
-            stdout_tail=stdout_tail,
-            stderr_tail=stderr_tail,
-            error=error,
-            supervisor_order=order,
-        )
-        self._save_framework_baseline_exit_progress(crash_progress=progress)
-
-    def _framework_baseline_correctness_context(self) -> list[Path]:
-        """Return the bounded public packet shown to the two V1 correctness reviewers."""
-        context: list[Path] = []
-        for relative in _FRAMEWORK_BASELINE_CORRECTNESS_CONTEXT_PATHS:
-            path = self.workspace / relative
-            if path.is_file():
-                context.append(path)
-        return context
-
-    def _framework_baseline_correctness_context_digest(self) -> str:
-        digest = hashlib.sha256()
-        digest.update(
-            f"v1-correctness-review-v{_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION}"
-            .encode()
-        )
-        digest.update(b"\0enabled-reviewers\0")
-        digest.update(
-            ",".join(self._framework_baseline_correctness_reviewers()).encode()
-        )
-        for value in (self.framework, self.platform, self.arch):
-            digest.update(b"\0")
-            digest.update(value.encode("utf-8", errors="replace"))
-        for path in self._framework_baseline_correctness_context():
-            relative = path.relative_to(self.workspace).as_posix()
-            contents = path.read_bytes()
-            digest.update(b"\0")
-            digest.update(relative.encode())
-            digest.update(len(contents).to_bytes(8, "big"))
-            digest.update(contents)
-        return digest.hexdigest()
-
-    def _load_framework_baseline_correctness_guidance(
-        self,
-    ) -> dict[str, object] | None:
-        path = self.workspace / _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH
-        try:
-            value = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError):
-            return None
-        if not isinstance(value, dict):
-            return None
-        if (
-            value.get("schema_version")
-            != _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION
-            or value.get("context_digest")
-            != self._framework_baseline_correctness_context_digest()
-        ):
-            return None
-        reviews = value.get("reviews")
-        if not isinstance(reviews, dict):
-            return None
-        enabled_reviewers = self._framework_baseline_correctness_reviewers()
-        if not enabled_reviewers:
-            return None
-        if not any(
-            isinstance(reviews.get(reviewer), dict)
-            and reviews[reviewer].get("status") == "ok"
-            and isinstance(reviews[reviewer].get("guidance"), str)
-            and reviews[reviewer]["guidance"].strip()
-            for reviewer in enabled_reviewers
-        ):
-            return None
-        return value
-
-    def _run_framework_baseline_correctness_reviewer(
-        self,
-        agent_cli: str,
-    ) -> tuple[dict[str, object], SessionResult | None]:
-        """Run one isolated read-only reviewer and return its bounded guidance."""
-        label = "Qoder" if agent_cli == "qodercli" else "Codex"
-        try:
-            with tempfile.TemporaryDirectory(
-                prefix=f"atrex-v1-correctness-{agent_cli}-"
-            ) as directory:
-                review_workspace = Path(directory)
-                context_root = review_workspace / "context"
-                source_hashes: dict[str, str] = {}
-                for source in self._framework_baseline_correctness_context():
-                    relative = source.relative_to(self.workspace)
-                    destination = context_root / relative
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, destination)
-                    source_hashes[relative.as_posix()] = hashlib.sha256(
-                        destination.read_bytes()
-                    ).hexdigest()
-
-                prompt = _render(
-                    PROMPTS_DIR / "framework_baseline_correctness_review.md",
-                    REVIEWER=label,
-                    FRAMEWORK=self.framework,
-                    PLATFORM=self.platform,
-                    ARCH=self.arch or "the runtime GPU architecture",
-                )
-                result = self._run_session(
-                    review_workspace,
-                    prompt,
-                    timeout=_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S,
-                    agent_cli=agent_cli,
-                    reasoning_effort="max",
-                    agent_plugins=False,
-                    extra_environment=self.agent_boundary_environment("baseline-correctness-review"),
-                )
-                if result.exit_status != 0 or result.timed_out:
-                    detail = result.stderr_tail or result.stdout_tail
-                    return (
-                        {
-                            "status": "failed",
-                            "reason": " ".join(detail.split())[:500]
-                            or (
-                                f"exit={result.exit_status}, "
-                                f"timeout={result.timed_out}"
-                            ),
-                            "session_id": result.session_id,
-                        },
-                        result,
-                    )
-
-                changed = []
-                for relative, expected_hash in source_hashes.items():
-                    candidate = context_root / relative
-                    if (
-                        not candidate.is_file()
-                        or hashlib.sha256(candidate.read_bytes()).hexdigest()
-                        != expected_hash
-                    ):
-                        changed.append(relative)
-                if changed:
-                    return (
-                        {
-                            "status": "failed",
-                            "reason": "reviewer modified bounded context: "
-                            + ", ".join(sorted(changed)),
-                            "session_id": result.session_id,
-                        },
-                        result,
-                    )
-
-                output = review_workspace / "correctness_review.md"
-                try:
-                    guidance = output.read_text(encoding="utf-8").strip()
-                except (OSError, UnicodeError) as exc:
-                    return (
-                        {
-                            "status": "failed",
-                            "reason": f"missing correctness_review.md: {type(exc).__name__}",
-                            "session_id": result.session_id,
-                        },
-                        result,
-                    )
-                missing = [
-                    marker
-                    for marker in _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_MARKERS
-                    if guidance.count(marker) != 1
-                ]
-                if missing:
-                    return (
-                        {
-                            "status": "failed",
-                            "reason": "malformed guidance; missing " + ", ".join(missing),
-                            "session_id": result.session_id,
-                        },
-                        result,
-                    )
-                return (
-                    {
-                        "status": "ok",
-                        "guidance": guidance[:16000],
-                        "session_id": result.session_id,
-                    },
-                    result,
-                )
-        except Exception as exc:
-            return (
-                {
-                    "status": "failed",
-                    "reason": f"{type(exc).__name__}: {exc}"[:500],
-                    "session_id": "",
-                },
-                None,
-            )
-
-    def _ensure_framework_baseline_correctness_guidance(self) -> None:
-        """Ask the configured V1 reviewers for correctness-first guidance."""
-        reviewers = self._framework_baseline_correctness_reviewers()
-        labels = [
-            "Qoder" if reviewer == "qodercli" else "Codex" for reviewer in reviewers
-        ]
-        if not reviewers:
-            print(
-                "[orchestrator] V1 pre-implementation correctness review: disabled by "
-                "configuration",
-                flush=True,
-            )
-            return
-        if self._load_framework_baseline_correctness_guidance() is not None:
-            print(
-                "[orchestrator] V1 pre-implementation correctness review: using cached "
-                + "/".join(labels)
-                + " guidance",
-                flush=True,
-            )
-            return
-
-        print(
-            "[orchestrator] V1 pre-implementation correctness review: launching "
-            + " and ".join(labels)
-            + (" in parallel" if len(reviewers) > 1 else ""),
-            flush=True,
-        )
-        with ThreadPoolExecutor(max_workers=len(reviewers)) as executor:
-            futures = {
-                reviewer: executor.submit(
-                    copy_context().run,
-                    self._run_framework_baseline_correctness_reviewer, reviewer
-                )
-                for reviewer in reviewers
-            }
-            completed = {
-                reviewer: future.result() for reviewer, future in futures.items()
-            }
-
-        reviews: dict[str, object] = {}
-        statuses: list[str] = []
-        for reviewer in reviewers:
-            record, result = completed[reviewer]
-            reviews[reviewer] = record
-            if result is not None:
-                self._account(result, f"V1 correctness review ({reviewer})")
-            status = str(record.get("status", "failed"))
-            statuses.append(f"{reviewer}={status}")
-
-        value: dict[str, object] = {
-            "schema_version": _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION,
-            "context_digest": self._framework_baseline_correctness_context_digest(),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "reviews": reviews,
-        }
-        path = self.workspace / _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH
-        path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".json.tmp")
-        temporary.write_text(
-            json.dumps(value, indent=2, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
-        temporary.replace(path)
-        print(
-            "[orchestrator] V1 pre-implementation correctness review: "
-            + "; ".join(statuses),
-            flush=True,
-        )
-        if self._load_framework_baseline_correctness_guidance() is None:
-            print(
-                "[orchestrator] WARNING: no configured reviewer produced valid V1 correctness "
-                "guidance; continuing with the public contract",
-                file=sys.stderr,
-                flush=True,
-            )
-
-    def _framework_baseline_correctness_guidance_text(self) -> str:
-        reviewers = self._framework_baseline_correctness_reviewers()
-        if not reviewers:
-            return (
-                "## External pre-implementation correctness guidance\n\n"
-                "External V1 correctness review is disabled by configuration. Derive every "
-                "correctness requirement directly from the public contract and immutable "
-                "reference before editing.\n"
-            )
-        value = self._load_framework_baseline_correctness_guidance()
-        if value is None:
-            return (
-                "## External pre-implementation correctness guidance\n\n"
-                "No valid guidance from the configured reviewers is available. Derive every "
-                "correctness requirement directly from the public contract and immutable "
-                "reference before editing.\n"
-            )
-        reviews = value["reviews"]
-        assert isinstance(reviews, dict)
-        reviewer_labels = [
-            "Qoder" if reviewer == "qodercli" else "Codex" for reviewer in reviewers
-        ]
-        sections = [
-            "## Mandatory external pre-implementation correctness guidance\n",
-            " and ".join(reviewer_labels)
-            + " reviewed the bounded public packet. Before editing candidate sources, reconcile the "
-            "available guidance against the immutable reference. Shared requirements are "
-            "mandatory; reviewer suggestions never override the public contract.\n",
-        ]
-        for reviewer in reviewers:
-            label = "Qoder" if reviewer == "qodercli" else "Codex"
-            record = reviews.get(reviewer)
-            record = record if isinstance(record, dict) else {}
-            sections.append(f"\n### {label}\n")
-            if record.get("status") == "ok":
-                guidance = str(record.get("guidance", ""))
-                sections.append(guidance + "\n")
-            else:
-                sections.append(
-                    "Reviewer unavailable: "
-                    + str(record.get("reason", "no valid response"))
-                    + "\n"
-                )
-        sections.append(
-            "\nBefore implementation, write a concise internal checklist that resolves any "
-            "disagreement and covers output initialization/padding, paged addressing, causal "
-            "alignment, ragged batches, launch ABI, and numerical stability. Do not create a "
-            "plan file.\n"
-        )
-        return "".join(sections)
-
-    def _run_framework_baseline_agent(
-        self,
-        *,
-        n: int,
-        label: str,
-        rejection: str = "",
-    ) -> SessionResult:
-        """Run the configured outer V1 Agent; other CLIs only summarize an exit."""
-        prompt = self._framework_baseline_prompt(n)
-        if rejection:
-            prompt = (
-                "# Repair the preserved V1 candidate\n\n"
-                f"The supervisor rejected the current candidate:\n\n{rejection}\n\n"
-                "Keep sound work, fix this exact rejection, and finish V1. If a prior targeted "
-                "smoke passed but the supervisor's combined full-workload validation failed, "
-                "you may run exactly one full base-seed evaluator while repairing; do not run "
-                "multi-seed or a separate benchmark because the supervisor will repeat the "
-                "combined authoritative gate.\n\n"
-                + prompt
-            )
-        if framework_baseline_progress_path(self.workspace).is_file():
-            prompt = (
-                "# Resume V1 from an unexpected-exit handoff\n\n"
-                "Do not start over. Read "
-                "`.atrex_long_horizon/framework_baseline/resume.json` when present, then inspect "
-                "the existing candidate and debug files. Continue at the recorded `next_step` and "
-                "avoid repeating completed research.\n\n" + prompt
-            )
-        try:
-            result = self._run_session(
-                self.workspace,
-                prompt,
-                timeout=self.framework_baseline_timeout,
-                agent_cli=self.agent_cli,
-                sandbox_hardware=self.sandbox_hardware,
-                sandbox_profile=self.sandbox_profile,
-                sandbox_url=self.sandbox_url,
-                sandbox_ssh=self.sandbox_ssh,
-                sandbox_ssh_init=self.sandbox_ssh_init,
-                sandbox_health_command=self.sandbox_health_command,
-                sandbox_timeout=self.sandbox_timeout,
-                reasoning_effort="max",
-                extra_environment=self.agent_environment(),
-            )
-        except EnvironmentUnavailable:
-            capture_framework_baseline_exit(
-                self.workspace,
-                agent_cli=self.agent_cli,
-                exit_status=75,
-                timed_out=False,
-                tokens=0,
-                session_id="",
-                stdout_tail="",
-                stderr_tail="remote GPU environment unavailable",
-                error="EnvironmentUnavailable",
-                supervisor_order=self._framework_baseline_supervisor_order(),
-            )
-            raise
-        except KeyboardInterrupt:
-            # Respect an intentional user stop: preserve a mechanical snapshot, but do not
-            # immediately launch another Agent after Ctrl-C.
-            capture_framework_baseline_exit(
-                self.workspace,
-                agent_cli=self.agent_cli,
-                exit_status=130,
-                timed_out=False,
-                tokens=0,
-                session_id="",
-                stdout_tail="",
-                stderr_tail="",
-                error="KeyboardInterrupt",
-                supervisor_order=self._framework_baseline_supervisor_order(),
-            )
-            raise
-        except Exception as exc:
-            self._capture_framework_baseline_exit(
-                exit_status=1,
-                timed_out=False,
-                tokens=0,
-                session_id="",
-                stdout_tail="",
-                stderr_tail="",
-                error=f"{type(exc).__name__}: {exc}",
-            )
-            raise
-        self._assert_generalized_inputs_are_private()
-        self._account(result, f"{label} v{n} ({self.agent_cli})")
-        if result.exit_status != 0 or result.timed_out:
-            self._capture_framework_baseline_exit(
-                exit_status=result.exit_status,
-                timed_out=result.timed_out,
-                tokens=result.tokens,
-                session_id=result.session_id,
-                stdout_tail=result.stdout_tail,
-                stderr_tail=result.stderr_tail,
-            )
-        return result
-
-    def _restore_framework_baseline_candidate(self, v0_identity: str) -> None:
-        """Restore an ignored snapshot only when the worktree fell back to the V0 wrapper."""
-        from aka.light.workspace.sources import workspace_identity
-        if workspace_identity(self.workspace) != v0_identity:
-            return
-        try:
-            progress = load_framework_baseline_progress(self.workspace)
-        except RuntimeError as exc:
-            print(f"[orchestrator] WARNING: {exc}", file=sys.stderr, flush=True)
-            return
-        snapshot = progress.get("latest_snapshot")
-        if not isinstance(snapshot, dict):
-            return
-        restored = restore_latest_framework_baseline_candidate(self.workspace)
-        if restored and workspace_identity(self.workspace) != v0_identity:
-            print(
-                "[orchestrator] restored interrupted V1 candidate from local checkpoint: "
-                + ", ".join(restored),
-                flush=True,
-            )
-
-    def _framework_baseline_smoke_shape_ids(self, *, limit: int = 3) -> list[str]:
-        """Pick fast/median/slow V0 latency ids for bounded native V1 smoke coverage."""
-        memory = read_memory(self.workspace, 0) or {}
-        performance = memory.get("performance")
-        performance = performance if isinstance(performance, dict) else {}
-        by_shape = performance.get("latency_us_by_shape", {})
-        if not isinstance(by_shape, dict):
-            return []
-        measured: list[tuple[str, float]] = []
-        for shape_id, raw_latency in by_shape.items():
-            if isinstance(raw_latency, bool) or not isinstance(raw_latency, (int, float)):
-                continue
-            latency = float(raw_latency)
-            if latency > 0.0 and math.isfinite(latency):
-                measured.append((str(shape_id), latency))
-        if not measured or limit <= 0:
-            return []
-        measured.sort(key=lambda item: item[1])
-        if len(measured) <= limit:
-            return [shape_id for shape_id, _latency in measured]
-        if limit == 1:
-            return [measured[len(measured) // 2][0]]
-        indexes = [round(index * (len(measured) - 1) / (limit - 1)) for index in range(limit)]
-        return [measured[index][0] for index in dict.fromkeys(indexes)]
-
-    def _ensure_framework_baseline_solution_manifest(self) -> None:
-        from aka.light.workspace.sources import seed_baseline_metadata
-        seed_baseline_metadata(self.workspace, self.framework, self.campaign_name,
-                               native_eval=bool(self.atrex_bench_root))
-
-    def _framework_baseline_smoke_command(self, n: int) -> tuple[str, str]:
-        """Return the only ordinary evaluator command the V1 implementation Agent should run."""
-        command = ["python3", "tools/sandbox.py", "--kind", "run", "--no-sync"]
-        if self.atrex_bench_root:
-            command += ["--mode", "full", "--version", f"v{n}"]
-        else:
-            # SOL needs the Dev compatibility route. Top-level --version, like
-            # --mode, requires Typed evaluation; pass the label to its harness.
-            command += ["--", "python3", "test_kernel.py", "--version", f"v{n}", "--no-memory"]
-        shape_ids = (
-            self._framework_baseline_smoke_shape_ids()
-            if self.atrex_bench_root
-            else []
-        )
-        for shape_id in shape_ids:
-            command += ["--shape-id", shape_id]
-        if self.atrex_bench_root:
-            command += ["--timed-runs", "1"]
-        if shape_ids:
-            scope = (
-                f"The supervisor selected {len(shape_ids)} opaque V0 ids spanning the baseline "
-                "latency distribution. This is smoke coverage only; do not infer their private inputs."
-            )
-        else:
-            scope = (
-                "This evaluator route has no safe targeted-case selector, so run this base-seed "
-                "smoke at most once after the final implementation edit."
-            )
-        return shlex.join(command), scope
-
-    def _framework_baseline_sandbox_directive(self) -> str:
-        from aka.light.workflow.session_io import sandbox_boundary_directive
-        return sandbox_boundary_directive(
-            self.sandbox_hardware or self.platform, self.sandbox_profile,
-            self.sandbox_url, self.sandbox_ssh,
-        )
-
-    def _framework_baseline_prompt(self, n: int) -> str:
-        smoke_command, smoke_scope = self._framework_baseline_smoke_command(n)
-        return _render(
-            PROMPTS_DIR / "framework_baseline.md",
-            PLUGINS=self.plugin_directive("framework_baseline"),
-            WORKSPACE=str(self.workspace),
-            N=n,
-            PREV=n - 1,
-            PLATFORM=self.platform,
-            FRAMEWORK=self.framework,
-            ARCH=self.arch or "the runtime GPU arch",
-            NOTES=self.notes,
-            AGENT_RUNTIME=_agent_runtime_directive(
-                self.agent_cli,
-                is_ppu=hardware_vendor(self.platform, self.arch) == "ppu",
-                wiki=self.tool_runtime.wiki,
-                pause_agent_during_requests=self.tool_runtime.pause_agent_during_requests,
-                knowledge_skills=self.plugin_registry.knowledge_skills() if self.tool_runtime.wiki else (),
-            ),
-            KNOWLEDGE_RESEARCH=(
-                (self.wiki_prompt("framework_baseline")
-                 or (PROMPTS_DIR / "baseline_research.md").read_text(encoding="utf-8"))
-                .replace("{{PLATFORM}}", self.platform).replace("{{ARCH}}", self.arch)
-                .replace("{{FRAMEWORK}}", self.framework)
-                if self.tool_runtime.wiki else
-                "Wiki is disabled. Use the supplied public contract and compiler/measurement evidence. "
-                "If an essential fact is unavailable, report the blocker instead of inventing it."
-            ),
-            HARDWARE=hardware_directive(self.platform, self.arch),
-            SANDBOX=self._framework_baseline_sandbox_directive(),
-            EVALUATOR=self._evaluator_directive(),
-            CORRECTNESS_GUIDANCE=self._framework_baseline_correctness_guidance_text(),
-            SMOKE_COMMAND=smoke_command,
-            SMOKE_SCOPE=smoke_scope,
-            MODE_POLICY=self._mode_directive(),
-        )
-
-    def _restore_immutable_baseline_paths(self, baseline_commit: str) -> list[str]:
-        """Put back any ground-truth file the session edited, and report what was restored.
-
-        A session that "fixes" the harness or memory/v0.json is a compliance problem, but a
-        mechanically repairable one — discarding its kernel over it would throw away hours of
-        work for nothing. Acceptance is decided by the kernel itself.
-        """
-        restored: list[str] = []
-        for path in IMMUTABLE_BASELINE_PATHS:
-            original = git_path_blob(self.workspace, baseline_commit, path)
-            if not original or original == git_worktree_blob(self.workspace, path):
-                continue
-            checkout = subprocess.run(
-                ["git", "checkout", baseline_commit, "--", path],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            if checkout.returncode == 0:
-                restored.append(path)
-        return restored
-
-    def _framework_baseline_problem(
-        self,
-        v0_identity: str,
-        baseline_commit: str,
-        *,
-        include_policy_review: bool = True,
-    ) -> str:
-        """Static acceptance checks on the candidate about to be validated and committed.
-
-        Everything is judged from the worktree: that is what the gateway uploads, and it lets a
-        session that wrote the kernel but never committed it still be accepted.
-        """
-        from aka.light.workspace.sources import workspace_identity
-        candidate_blob = workspace_identity(self.workspace)
-        if not candidate_blob or candidate_blob == v0_identity:
-            return "the session left the V0 kernel unchanged; no framework implementation was produced"
-        violations = [] if not self.source_checks_enabled else (
-            self._production_kernel_violations()
-            if include_policy_review
-            else production_structure_violations(self.workspace, self.framework)
-        )
-        if violations:
-            return (
-                f"the candidate is not a self-contained {self.framework} implementation: "
-                + "; ".join(violations)
-            )
-        if (self.source_checks_enabled
-                and self.framework.lower() in {"triton", "gluon"}
-                and kernel_is_gluon(self.workspace)):
-            # A Gluon v1 would permanently disarm the orchestrator's mandatory Triton->Gluon latch.
-            return "the framework baseline must be plain Triton; Gluon is a later orchestrator escalation"
-        mutated = [
-            path
-            for path in IMMUTABLE_BASELINE_PATHS
-            if git_path_blob(self.workspace, baseline_commit, path)
-            and git_path_blob(self.workspace, baseline_commit, path)
-            != git_worktree_blob(self.workspace, path)
-        ]
-        if mutated:
-            return "the session modified immutable ground truth: " + ", ".join(mutated)
-        return ""
-
-    def _framework_baseline_external_gates(
-        self, n: int
-    ) -> tuple[Optional[dict], str]:
-        """Run policy review and the sole authoritative V1 evaluator concurrently."""
-        message = ("running policy review and combined correctness/performance validation in parallel"
-                   if self.source_checks_enabled else
-                   "multi-GPU Agate source review skipped; running correctness/performance validation")
-        print(f"[orchestrator] framework baseline: {message}", flush=True)
-        with ThreadPoolExecutor(max_workers=2) as executor:
-            policy_future = executor.submit(copy_context().run, self._production_kernel_violations)
-            validation_future = executor.submit(copy_context().run, self._validate_framework_baseline, n)
-            try:
-                violations = policy_future.result()
-            except Exception as exc:
-                violations = [
-                    "independent production policy review failed: "
-                    f"{type(exc).__name__}: {exc}"
-                ]
-            try:
-                result, validation_problem = validation_future.result()
-            except Exception as exc:
-                result, validation_problem = (
-                    None,
-                    "combined validation failed: "
-                    f"{type(exc).__name__}: {exc}",
-                )
-        if violations:
-            return None, (
-                f"the candidate is not a self-contained {self.framework} implementation: "
-                + "; ".join(violations)
-            )
-        if not validation_problem:
-            validation_problem = self.supplemental_numerical_feedback(
-                self.workspace, flow="framework_baseline"
-            )
-        return result, validation_problem
-
-    def _validate_framework_baseline(self, n: int) -> tuple[Optional[dict], str]:
-        """Validate V1 once: base-seed performance plus five extra correctness cases."""
-        # V1 does not gate on speedup, but its full measurement uses the same
-        # sampling policy as Bootstrap and ordinary Evaluate.
-        command = [
-            "python",
-            "test_kernel.py",
-            "--version",
-            f"v{n}",
-            "--multi-seed",
-            "4" if self.atrex_bench_root else "5",
-        ]
-        # --timed-runs belongs to the native Atrex-Bench adapter. SOL and
-        # derived legacy harnesses retain their own pinned benchmark settings.
-        if self.atrex_bench_root:
-            command += ["--timed-runs", "100"]
-        command.append("--no-memory")
-        try:
-            test = _sandbox_command(
-                self.workspace,
-                self.sandbox_hardware,
-                self.sandbox_profile,
-                self.sandbox_url,
-                self.sandbox_timeout,
-                command,
-                ssh=self.sandbox_ssh,
-                ssh_init=self.sandbox_ssh_init,
-                health_command=self.sandbox_health_command,
-                gateway_kind="run",
-                private_reference_dir=self.private_reference_dir,
-            )
-        except (OSError, subprocess.SubprocessError) as exc:
-            return None, f"combined validation failed to run: {exc}"
-        self._print_v0_evaluator_output(test)
-        if test.returncode != 0:
-            from aka.light.evaluation.projection import source_error_from_stdout
-            source_error = source_error_from_stdout(test.stdout)
-            if source_error is not None:
-                error = source_error["error"]
-                return None, " ".join((error["message"], "; ".join(error["violations"]), error["next_action"]))
-            return None, f"combined validation command failed (exit={test.returncode})"
-        try:
-            result = _test_result_from_stdout(test.stdout)
-        except (RuntimeError, json.JSONDecodeError) as exc:
-            return None, f"combined validation produced no usable result: {exc}"
-        if result.get("all_pass") is not True:
-            return None, "combined multi-seed correctness validation failed"
-
-        latency = result.get("latency_us_geomean")
-        if (
-            isinstance(latency, bool)
-            or not isinstance(latency, (int, float))
-            or latency <= 0
-            or not math.isfinite(float(latency))
-        ):
-            return None, "validation reported no usable latency_us_geomean"
-        # Light accepts measured latency, not optional reference-relative scores.
-        # Missing metadata must not reject a correct framework implementation.
-        by_shape = result.get("latency_us_by_shape")
-        if not isinstance(by_shape, dict) or not by_shape or any(
-            isinstance(value, bool)
-            or not isinstance(value, (int, float))
-            or value <= 0
-            or not math.isfinite(float(value))
-            for value in by_shape.values()
-        ):
-            return None, "validation reported no usable latency_us_by_shape"
-        # Require the framework baseline to preserve full-workload measurement coverage.
-        baseline_shapes = set(
-            ((read_memory(self.workspace, 0) or {}).get("performance") or {}).get(
-                "latency_us_by_shape", {}
-            )
-        )
-        measured_shapes = set(by_shape)
-        if baseline_shapes and measured_shapes != baseline_shapes:
-            return None, (
-                "latency_us_by_shape does not cover the same workloads as v0 "
-                f"(missing {sorted(baseline_shapes - measured_shapes)}, "
-                f"unexpected {sorted(measured_shapes - baseline_shapes)})"
-            )
-        return result, ""
-
-    def _warn_restored_baseline_paths(self, baseline_commit: str) -> None:
-        restored = self._restore_immutable_baseline_paths(baseline_commit)
-        if restored:
-            print(
-                "[orchestrator] framework baseline session edited immutable ground truth; "
-                f"restored from V0: {', '.join(restored)}",
-                file=sys.stderr,
-                flush=True,
-            )
-
-    def _recover_framework_baseline(
-        self, problem: str, v0_identity: str, baseline_commit: str, pre_head: str
-    ) -> None:
-        """Run one recovery session; unexpected exits invoke the progress supervisor."""
-        print(
-            f"[orchestrator] WARNING: framework baseline rejected ({problem}); "
-            "starting one recovery session",
-            file=sys.stderr,
-            flush=True,
-        )
-        if pre_head and git_head(self.workspace) != pre_head:
-            # Undo the session's commits, keep its files: the recovery session needs to read them.
-            subprocess.run(
-                ["git", "reset", "--mixed", pre_head],
-                cwd=str(self.workspace),
-                check=False,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        try:
-            self._run_framework_baseline_agent(
-                n=FRAMEWORK_BASELINE_VERSION,
-                label="framework baseline recovery",
-                rejection=problem,
-            )
-        finally:
-            self._warn_restored_baseline_paths(baseline_commit)
-
-    def _record_framework_baseline_failure(self, problem: str) -> None:
-        """Persist why the framework baseline was rejected, uncommitted so a reset cannot lose it."""
-        n = FRAMEWORK_BASELINE_VERSION
-        memory_path = version_record_path(self.workspace, n, prefer_summary=self.generate_memory)
-        try:
-            memory = (
-                json.loads(memory_path.read_text(encoding="utf-8"))
-                if memory_path.exists()
-                else {}
-            )
-        except (OSError, json.JSONDecodeError):
-            memory = {}
-        if not isinstance(memory, dict):
-            memory = {}
-        memory["version"] = f"v{n}"
-        memory["masked"] = False
-        memory["git_commit_hash"] = None
-        memory["quality_gate"] = {"result": "FAIL", "failure_reason": problem}
-        memory["correctness"] = {"status": "UNKNOWN" if problem.startswith(SUPPLEMENTAL_PENDING_PREFIX) else "FAIL"}
-        memory["optimization"] = {
-            "action_category": FRAMEWORK_BASELINE_CATEGORY,
-            "action_description": f"rejected {self.framework} baseline attempt",
-        }
-        pitfalls = memory.setdefault("pitfalls_and_fixes", [])
-        if not isinstance(pitfalls, list):
-            pitfalls = []
-            memory["pitfalls_and_fixes"] = pitfalls
-        pitfalls.append(
-            {
-                "error_type": "production_policy"
-                if "self-contained" in problem
-                else "correctness",
-                "error_message": problem,
-                "lesson": f"the next attempt must land a compliant, correctness-passing {self.framework} kernel",
-            }
-        )
-        save_version_record(self.workspace, n, memory, generate_memory=self.generate_memory)
-
-    def _commit_framework_baseline(self, n: int, result: dict) -> str:
-        """Commit the accepted kernel (C1) and then pin it in a metadata-only commit (C2)."""
-        from aka.light.workspace.sources import read, commit_paths
-        artifact = read(self.workspace)
-        source = artifact.snapshot
-        source_files = artifact.files
-        staged = commit_paths(self.workspace, normalize=True)
-        staged += [path for path in (
-            "CLAUDE.md", "README.md",
-            *version_commit_paths(self.workspace, n, generate_memory=self.generate_memory),
-        ) if (self.workspace / path).exists()]
-        staged = list(dict.fromkeys(staged))
-        staged += [
-            str(path.relative_to(self.workspace))
-            for path in sorted(self.workspace.glob(f"plans/v{n}_*.md"))
-        ]
-        subprocess.run(
-            ["git", "add", *staged],
-            cwd=str(self.workspace),
-            check=False,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            != 0
-        ):
-            subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    "-m",
-                    f"v{n}: framework baseline ({self.framework}) replacing the V0 PyTorch wrapper",
-                ],
-                cwd=str(self.workspace),
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
-        kernel_commit = subprocess.run(
-            ["git", "rev-list", "-1", "HEAD", "--", *source_files],
-            cwd=str(self.workspace),
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-        from aka.light.workspace.sources import from_git
-        if from_git(self.workspace, kernel_commit) != read(self.workspace).snapshot:
-            raise RuntimeError(
-                "framework baseline candidate differs between the worktree and the commit"
-            )
-
-        _record_local_test_result(
-            self.workspace, f"v{n}", result, generate_memory=self.generate_memory
-        )
-        memory_path = version_record_path(self.workspace, n, prefer_summary=self.generate_memory)
-        memory = json.loads(memory_path.read_text(encoding="utf-8"))
-        optimization = memory.setdefault("optimization", {})
-        optimization["action_category"] = FRAMEWORK_BASELINE_CATEGORY
-        optimization["action_description"] = (
-            f"first self-contained {self.framework} implementation of the whole operator"
-        )
-        memory["git_commit_hash"] = kernel_commit
-        memory[FRAMEWORK_BASELINE_CATEGORY] = {
-            "framework": self.framework,
-            "validated_stages": ["combined-base-performance+six-cases" if self.atrex_bench_root
-                                 else "combined-base-performance+multi-seed-5"],
-        }
-        save_version_record(self.workspace, n, memory, generate_memory=self.generate_memory)
-        self._pin_framework_baseline(kernel_commit, version=n)
-        return kernel_commit
-
-    def _pin_framework_baseline(self, commit: str, *, version: int) -> None:
-        """Write and commit the framework-baseline marker.
-
-        Deliberately a separate commit rather than an amend: amending would rewrite the very
-        commit whose sha the marker records, leaving a dangling pointer. This commit does not
-        touch kernel.py, so it never registers as an optimization win.
-        """
-        from aka.light.workspace.sources import baseline_marker
-        marker = {
-            "schema_version": 1,
-            "version": f"v{version}",
-            "framework": self.framework,
-            "platform": self.platform,
-            "arch": self.arch,
-            "commit": commit,
-            **baseline_marker(self.workspace, commit),
-            "recorded_at": datetime.now(timezone.utc).isoformat(),
-        }
-        (self.workspace / FRAMEWORK_BASELINE_FILE).write_text(
-            json.dumps(marker, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
-        )
-        paths = [FRAMEWORK_BASELINE_FILE]
-        paths.extend(path for path in version_commit_paths(
-            self.workspace, version, generate_memory=self.generate_memory
-        ) if (self.workspace / path).exists())
-        subprocess.run(
-            ["git", "add", *paths],
-            cwd=str(self.workspace),
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        if (
-            subprocess.run(
-                ["git", "diff", "--cached", "--quiet"],
-                cwd=str(self.workspace),
-                check=False,
-            ).returncode
-            != 0
-        ):
-            subprocess.run(
-                [
-                    "git",
-                    "commit",
-                    "-m",
-                    f"v{version}: pin framework baseline {commit[:8]}",
-                ],
-                cwd=str(self.workspace),
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
-        # The metadata commit must not read as a stalled optimization round on the next resume.
-        write_stall(self.workspace, 0)
 
     def run(self) -> str:
         """Run the native long-horizon episode supervisor for this campaign."""
         from aka.light.workflow.episode import LongHorizonCampaign
         from aka.light.workflow.session import LongSessionRunner
-        from aka.light.acceptance.recorded_verifier import RecordedABBAValidator
 
         # LongHorizonCampaign.run creates/measures V0 before constructing its
         # CampaignStore, which installs the Git excludes. A fresh managed
         # workspace does not exist yet at this application boundary.
 
-        verifier = self.acceptance_verifier(
-            execute=self.measure_for_acceptance,
-            hardware=self.sandbox_hardware,
-            profile=self.sandbox_profile,
-            url=self.sandbox_url,
-            ssh=self.sandbox_ssh,
-            ssh_init=self.sandbox_ssh_init,
-            health_command=self.sandbox_health_command,
-            timeout=self.sandbox_timeout,
-            repeats=self.verify_repeats,
-            per_run_timeout=self.verify_run_timeout,
-            min_improvement_pct=self.min_improvement_pct,
-            private_reference_dir=self.private_reference_dir,
-        )
         engine = LongHorizonCampaign(
             base_campaign=self,
-            max_version=self.max_iters,
+            max_episodes=self.max_iters,
             token_budget=self.token_budget,
-            handoff_resumes=self.handoff_resumes,
-            max_stall=self.max_stall,
-            verifier=verifier,
             session_runner=LongSessionRunner(agent=self.agent, agent_cli=self.agent_cli,
                 usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0),
         )
@@ -2657,15 +2038,6 @@ class Campaign:
 
     def _finish(self, reason: str) -> str:
         print(f"\n[orchestrator] STOP — {reason}", flush=True)
-        if self.generate_memory:
-            try:
-                subprocess.run(
-                    [sys.executable, str(resource("tools/memory_manager.py")),
-                     "summary", "--workspace", str(self.workspace)],
-                    check=False,
-                )
-            except OSError:
-                pass
         # Production output is fail-closed: do not package a PyTorch baseline,
         # alternate DSL, or independently rejected dependency as a production candidate.
         if self.optimization_mode == "production":

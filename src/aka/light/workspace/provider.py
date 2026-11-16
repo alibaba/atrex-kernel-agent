@@ -1,12 +1,12 @@
-"""Task provider owns draft reset, snapshots and sealed Git promotion."""
-from pathlib import Path
-from dataclasses import replace
+"""Task provider owns source setup and the persistent Agent workspace.
+
+Legacy worktree operations remain inherited only for the separate Legacy
+workflow contract. AKA Light does not call them: every audit segment reuses the
+same trajectory repository.
+"""
 import subprocess
 
 from aka.legacy.task.candidate_workspace.provider import GitCandidateWorkspace
-from aka.legacy.evaluation.resources import profile_driver_script
-from aka.contracts.workspace import CandidateHandle
-from aka.contracts.content import WorkspaceFile
 from aka.light.workspace.files import publish
 from aka.light.workspace.resource_catalog import resource
 
@@ -14,10 +14,22 @@ from aka.light.workspace.resource_catalog import resource
 class ManagedCandidateWorkspace(GitCandidateWorkspace):
     managed_drafts = True
 
-    def __init__(self, *, inherit_state: bool = True, file_system: str | None = None, source_tree: dict | None = None):
-        if type(inherit_state) is not bool:
-            raise ValueError("inherit_state must be boolean")
-        self.inherit_state = inherit_state
+    def __init__(
+        self,
+        *,
+        inherit_state: bool | None = None,
+        file_system: str | None = None,
+        source_tree: dict | None = None,
+    ):
+        # Read old Light compositions that explicitly stored the former default,
+        # but do not retain the retired per-Episode workspace mode.
+        if inherit_state is not None and type(inherit_state) is not bool:
+            raise ValueError("inherit_state must be a boolean when reading an old config")
+        if inherit_state is False:
+            raise ValueError(
+                "inherit_state=false is retired; Light always uses one persistent "
+                "trajectory workspace"
+            )
         if file_system is not None:
             from .sources import select
             select(file_system)
@@ -41,21 +53,13 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
         return task_selection(self.file_system, framework=framework, source_tree=source_tree)
 
     def activate_file_system(self, workspace, system):
+        from .sources.private_state import bind
         from .sources.registry import resolve
-        from .sources.common import SELECTION
-        import json
-        current, _ = resolve(workspace, revision='HEAD')
+
+        current, contract = resolve(workspace, revision='HEAD')
         if current.name != system.name:
             raise ValueError(f'Selected {system.name} file system requires a matching candidate; found {current.name}')
-        data = (json.dumps({'name':system.name}, sort_keys=True)+'\n').encode()
-        path = workspace / SELECTION
-        if path.is_file() and path.read_bytes() != data:
-            raise ValueError('File system selection cannot change when resuming a Campaign')
-        publish(workspace, SELECTION, data)
-        subprocess.run(['git','add','--',SELECTION],cwd=workspace,check=True)
-        changed = subprocess.run(['git','diff','--cached','--quiet','--',SELECTION],cwd=workspace)
-        if changed.returncode:
-            subprocess.run(['git','commit','-q','-m','Pin candidate file system','--',SELECTION],cwd=workspace,check=True)
+        bind(workspace, file_system=system.name, contract=contract)
 
     def prepare_sol(self, workspace, content, *, problem_files):
         # SourceProvider owns implementation bytes, not the selected Workflow's
@@ -66,30 +70,83 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
             "interface. Maximize the arithmetic mean of workload speedups against the "
             "reference while every workload passes its correctness checks.\n\n"
             "Use `python3 tools/sandbox.py --kind run --no-sync`. The Supervisor owns "
-            "the evaluator, its configuration, solution metadata and Git. Do not run "
-            "the evaluator locally or edit those files. Submit `episode-report` through "
-            "the Runtime; read the installed gpu-measurement and runtime-records Skills "
+            "the evaluator, its configuration and solution metadata. Manage the trajectory's "
+            "local Git history, and commit a clean Kernel HEAD before Runtime requests. Do not run "
+            "the evaluator locally or edit those files. Submit an exact reachable commit with "
+            "`submit-kernel` after a standard full Evaluate passes for that exact commit; read the installed "
+            "gpu-measurement and runtime-records Skills "
             "for request examples. Put temporary probes and requests under `scratch/`.\n"
         )
-        # The shared initializer now seals its explicit contributions itself.
-        # Select Light guidance before that commit, not as a later dirty edit.
-        return super().prepare_sol(workspace, replace(content, readme=readme),
-            problem_files=problem_files,
-            harness=WorkspaceFile("test_kernel.py", source=resource("reference/test_kernel.py")),
-            runtime_files=(
-                WorkspaceFile("CLAUDE.md", source=resource("reference/CLAUDE.md")),
-                WorkspaceFile("profile_driver.py", source=profile_driver_script()),
-            ))
+        workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "test_kernel.py").unlink(missing_ok=True)
+        repository = workspace / ".git"
+        if repository.is_dir():
+            history = subprocess.run(
+                ["git", "rev-list", "--reverse", "HEAD", "--", "kernel.py"],
+                cwd=workspace,
+                capture_output=True,
+                text=True,
+                check=True,
+            ).stdout.split()
+            if history:
+                source_commit = history[0]
+                expected = next(
+                    item for item in content.files if item.path == "kernel.py"
+                )
+                expected_bytes = (
+                    expected.source.read_bytes()
+                    if expected.source is not None
+                    else expected.text.encode("utf-8")
+                )
+                committed = subprocess.run(
+                    ["git", "show", f"{source_commit}:kernel.py"],
+                    cwd=workspace,
+                    capture_output=True,
+                    check=True,
+                ).stdout
+                if committed != expected_bytes:
+                    raise ValueError("V0 selected SOL Kernel source changed")
+                return source_commit
+
+        # Public task inputs, evaluator metadata and guidance remain in the
+        # workspace but outside Agent Git. Only Kernel source enters V0.
+        self.install_files(workspace, problem_files)
+        from aka.legacy.task.candidate_workspace.initial import SOL_CONFIG
+        (workspace / "config.json").write_text(SOL_CONFIG, encoding="utf-8")
+        self.install_files(workspace, content.files)
+        (workspace / "test_kernel.py").unlink(missing_ok=True)
+        publish(
+            workspace,
+            "CLAUDE.md",
+            resource("reference/CLAUDE.md").read_bytes(),
+        )
+        (workspace / "README.md").write_text(readme, encoding="utf-8")
+        from aka.light.workspace.agent_git import AgentGit, initialize_gitignore
+        initialize_gitignore(workspace)
+        agent_git = AgentGit(workspace)
+        agent_git.prepare()
+        result = agent_git.head()
+        if result is None:
+            raise RuntimeError("SOL V0 did not produce an Agent Git commit")
+        from aka.light.workspace.auxiliary import ensure_workspace_scratch
+        ensure_workspace_scratch(workspace)
+        return result
 
     def initialize_at(self, workspace, content):
         workspace.mkdir(parents=True, exist_ok=True)
+        (workspace / "test_kernel.py").unlink(missing_ok=True)
+        from aka.light.workspace.auxiliary import ensure_workspace_scratch
+        ensure_workspace_scratch(workspace)
         self.install_files(workspace, content.files)
-        for name in ("CLAUDE.md", "test_kernel.py"):
-            publish(workspace, name, resource(f"reference/{name}").read_bytes())
-        publish(workspace, "profile_driver.py", profile_driver_script().read_bytes())
+        (workspace / "test_kernel.py").unlink(missing_ok=True)
+        publish(
+            workspace,
+            "CLAUDE.md",
+            resource("reference/CLAUDE.md").read_bytes(),
+        )
         publish(workspace, "README.md", b"# Kernel optimization workspace\n")
-        publish(workspace, ".gitignore", b"__pycache__/\n*.pyc\n/scratch\n")
-        (workspace / "memory").mkdir(exist_ok=True)
+        from aka.light.workspace.agent_git import initialize_gitignore
+        initialize_gitignore(workspace)
         if not (workspace / ".git").exists():
             subprocess.run(["git", "init", "-q", str(workspace)], check=True)
             subprocess.run(["git", "-C", str(workspace), "config", "user.name", "GPU Kernel Optimizer"], check=True)
@@ -101,39 +158,4 @@ class ManagedCandidateWorkspace(GitCandidateWorkspace):
 
     def open_draft(self, workspace, root, **options):
         from aka.light.workspace.episode import EpisodeWorkspace
-        return EpisodeWorkspace(workspace, root, inherit_state=self.inherit_state, **options)
-
-    def plan(self, workspace, episode, base_commit, root=None):
-        from aka.light.workspace.git import EpisodeWorktree
-        handle = EpisodeWorktree.plan(workspace, episode, base_commit, root)
-        return CandidateHandle(handle.episode, handle.base_commit, handle.branch, handle.path)
-
-    def restore_handle(self, episode, base_commit, branch, path):
-        return CandidateHandle(episode, base_commit, branch, path)
-
-    @staticmethod
-    def _implementation(handle):
-        from aka.light.workspace.git import EpisodeWorktree
-        return EpisodeWorktree(handle.episode, handle.base_commit, handle.branch, handle.path)
-
-    def validate_candidate(self, handle, candidate_commit):
-        return self._implementation(handle).validate_candidate(candidate_commit)
-
-    def restore_sealed_candidate(self, handle, candidate_commit, source):
-        return self._implementation(handle).restore_sealed_candidate(candidate_commit, source)
-
-    def reset_scratch(self, handle):
-        self._implementation(handle).reset_scratch()
-
-    def materialize(self, handle, workspace):
-        self._implementation(handle).materialize(workspace)
-
-    def archive(self, handle, destination, candidate_commit="HEAD"):
-        return self._implementation(handle).archive(destination, candidate_commit)
-
-    def remove(self, handle, workspace):
-        self._implementation(handle).remove(workspace)
-
-    def promote(self, workspace, **options):
-        from aka.light.workspace.git import promote_candidate
-        return promote_candidate(workspace, **options)
+        return EpisodeWorkspace(workspace, root, **options)

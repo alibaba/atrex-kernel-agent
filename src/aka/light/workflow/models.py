@@ -1,24 +1,14 @@
 from __future__ import annotations
 
-from aka.legacy.evaluation.models import VerificationRun, VerificationResult as SharedVerificationResult
+from aka.legacy.evaluation.models import (
+    VerificationRun as VerificationRun,
+    VerificationResult as SharedVerificationResult,
+)
 
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from aka.light.agent.runtime.model import (AgentRuntimeCapabilities, NormalizedAgentEvent, TokenUsage)
-
-TERMINAL_STATUSES = frozenset({"candidate_ready", "pivot", "blocked"})
-
-
-@dataclass(frozen=True)
-class EpisodeHandoff:
-    status: str
-    candidate_commit: str = ""
-    last_trial_commit: str = ""
-
-    def as_dict(self) -> dict[str, str]:
-        return {key: value for key, value in asdict(self).items() if value}
-
 
 @dataclass(frozen=True)
 class InvocationObservation:
@@ -40,12 +30,13 @@ class SessionResult:
     tokens: int
     session_id: str
     resume_count: int
-    handoff: EpisodeHandoff | None
     stdout_tail: str = ""
     stderr_tail: str = ""
     completion_diagnosis: str = ""
     invocations: tuple[InvocationObservation, ...] = ()
     output_limit_recoveries: int = 0
+    dependency_policy_recoveries: int = 0
+    terminal_failure_kind: str | None = None
 
 
 @dataclass
@@ -64,16 +55,16 @@ class VerificationResult(SharedVerificationResult):
 @dataclass
 class SupervisorState:
     episodes: int = 0
-    accepted: int = 0
-    rejected: int = 0
-    pivoted: int = 0
-    blocked: int = 0
-    protocol_failures: int = 0
+    episode_budget_exhausted: int = 0
     interrupted: int = 0
     tokens: int = 0
     # Cumulative usage per runner invocation, independent of episode outcomes.
     usage_receipts: dict[str, int] = field(default_factory=dict)
-    consecutive_without_promotion: int = 0
+    # Latest native provider Session for this serial trajectory. Pooled search
+    # gives every trajectory its own SupervisorState, so Sessions never cross
+    # island boundaries.
+    session_id: str = ""
+    session_backend: str = ""
     attempts: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod

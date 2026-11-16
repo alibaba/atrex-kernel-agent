@@ -30,7 +30,10 @@ PROGRESS_STAGES = {
     "failed": ("Failed", None), "interrupted": ("Interrupted", None),
     "v1_interrupted": ("Baseline interrupted", "prepare"), "waiting": ("Waiting for records", "prepare"),
 }
-TOKEN_FIELDS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens", "total_tokens")
+TOKEN_FIELDS = (
+    "input_tokens", "output_tokens", "reasoning_tokens", "cache_read_tokens",
+    "cache_write_tokens", "total_tokens",
+)
 SCOPE = "Settled Episode Agent usage. Excludes setup, V1, independent reviewers and auxiliary CLIs. Current invocation usage settles when the call returns."
 
 
@@ -87,7 +90,7 @@ def iso(value):
 def usage(value):
     value = obj(value)
     measurement = value.get("measurement", "unavailable")
-    if measurement not in {"exact", "partial", "unavailable"}:
+    if measurement not in {"exact", "estimated", "partial", "unavailable"}:
         measurement = "unavailable"
     return {**{key: integer(value.get(key)) if measurement != "unavailable" else None
                for key in TOKEN_FIELDS}, "measurement": measurement}
@@ -387,7 +390,16 @@ class WorkspaceReader:
                 "arch": baseline.get("arch") or hardware.get("arch"),
                 "updated_at": iso(max(observed_time, terminal_time, stamp(baseline.get("recorded_at")), memory_time)),
                 "progress": progress, "canonical": canonical,
-                "counts": {key: integer(state.get(key)) for key in ("episodes", "accepted", "rejected")},
+                "counts": {
+                    key: integer(state.get(key))
+                    for key in (
+                        "episodes",
+                        "accepted",
+                        "rejected",
+                        "episode_budget_exhausted",
+                        "protocol_failures",
+                    )
+                },
                 "tokens": {"total": total, "control_total": raw_tokens, "measurement": measurement,
                            "receipt_count": len(obj(state.get("usage_receipts"))), "reason_codes": reasons,
                            "pending": progress["pending_tokens"], "scope": SCOPE},

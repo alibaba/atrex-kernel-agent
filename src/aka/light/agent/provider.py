@@ -1,4 +1,4 @@
-"""One Agent owner; Workflow retains retries, handoff and promotion decisions."""
+"""One Agent owner; Workflow retains retries, observation and Session recovery."""
 from dataclasses import dataclass
 import json
 import threading
@@ -45,10 +45,16 @@ class _Runtime:
         self.owner.check_open()
         environment = dict(request.environment or {})
         environment.update(self.owner.options.environment())
+        # A Supervisor-selected archive root makes capture mandatory for this
+        # managed invocation, even if a reusable Agent profile disabled
+        # optional standalone capture.
+        if request.environment and request.environment.get("ATREX_SESSION_CAPTURE_DIR"):
+            environment["ATREX_SESSION_CAPTURE"] = "1"
         result = self.runtime.run(LegacyRequest(
             workspace=request.workspace, prompt=request.prompt,
             timeout_s=request.timeout_s, reasoning_effort=request.reasoning_effort,
-            session_id=request.session_id, extra_environment=environment,
+            session_id=request.session_id, resume_session=request.resume_session,
+            extra_environment=environment,
             observation_directory=request.observation_directory,
         ))
         return AgentRunResult(
@@ -80,6 +86,8 @@ class LightAgent:
         self.check_open()
         environment = dict(env or {})
         environment.update(self.options.environment())
+        if env and env.get("ATREX_SESSION_CAPTURE_DIR"):
+            environment["ATREX_SESSION_CAPTURE"] = "1"
         return self._process(command, cwd=cwd, timeout=timeout, env=environment)
 
     def runtime(self, runtime_id):
@@ -99,6 +107,8 @@ class LightAgent:
             # BASH_ENV. Light mounts its own packaged guard for both call paths.
             values = {"BASH_ENV": str(SESSION_SHELL_GUARD), **(environment or {})}
             values.update(self.options.environment())
+            if environment and environment.get("ATREX_SESSION_CAPTURE_DIR"):
+                values["ATREX_SESSION_CAPTURE"] = "1"
             session = NativeSession(
                 runtime_id, workspace, session_id or str(uuid.uuid4()), self._execute,
                 values, self.check_open, runtime=self.runtime(runtime_id).runtime,

@@ -25,15 +25,16 @@ PROTECTED = {"atrex_bench", "torch", "cutlass", "cuda", "triton", "site", "sitec
              "usercustomize", "importlib", "packaging", "json", "subprocess", "os", "sys"}
 # Controller/public inputs and runtime state are not Candidate source files.
 WORKSPACE_ONLY = {"tools", "skills", "scratch", "memory", "input", "profiles", "eval", "plans",
-    "reference", "reference-projects", "gpu-wiki", "atrex-bench", "verification_artifacts",
-    "README.md", "CLAUDE.md", "WORKSPACE.md", "agent_problem.json", "reference.py", "input.py",
+    "directions", "experiments", "records", "research-library",
+    "reference", "reference-projects", "references", "gpu-wiki", "atrex-bench", "verification_artifacts",
+    "README.md", "CLAUDE.md", "WORKSPACE.md", "PROGRESS.md", "frontier.json", "agent_problem.json", "reference.py", "input.py",
     "shapes.json", "metadata.json", "roofline.json", "valid.py", "definition.json", "workload.jsonl",
     "solution.json", "config.json", "test_kernel.py", "profile_driver.py", "evaluations.jsonl",
     "numerical_probe.py", "numerical_inputs.py", "probe-request.json", "policy_review_request.json",
     ".gitignore", ".claude", ".codex", ".qoder", ".agents", ".pi", ".orchestrator_mode.json",
     ".aka-agent-observations", ".aka-agent-sessions", ".aka-agent-session-errors", ".humanize",
-    ".gpu_wiki_profile", ".atrex_long_horizon", ".atrex_versions", ".atrex_plugins",
-    ".atrex_stall_state.json", ".orchestrator_state.json", "framework_baseline.json",
+    ".gpu_wiki_profile", ".atrex_versions", ".atrex_plugins",
+    ".atrex_request", ".atrex_stall_state.json", ".orchestrator_state.json",
     "baseline_report.md", "trace-retention-manifest.json", ".atrex_environment", ".qodersec", ".venv", "node_modules", POLICY, SELECTION}
 
 
@@ -66,7 +67,7 @@ class Layout:
     auxiliary_metadata: tuple[str, ...] = ()
 
     def owns(self, name: str) -> bool:
-        return name == SELECTION or name in self.candidate_metadata
+        return name in self.candidate_metadata
 
     def diagnostic_route(self, kind: str) -> str:
         if self.typed_only:

@@ -1,7 +1,7 @@
 """Version-local optional service boundaries; not new upstream-stable protocols.
 
-Factories are composition-owned and stateless. Experiment stores and Journals
-are Campaign/Episode-scoped; services borrow only explicit callbacks. Transport
+Factories are composition-owned and stateless. Measurement, research and
+submission stores are Campaign-scoped; services borrow only explicit callbacks. Transport
 authorization and lifetime never enter the evaluation or acceptance objects.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ class Evaluation(Protocol):
 
 
 class Experiments(Protocol):
-    # Existing Journal evidence readers share this private store; replacing its
+    # Existing research evidence readers share this private store; replacing its
     # storage schema is not implied by replacing the experiment coordinator.
     store: MeasurementStore
 
@@ -44,6 +44,8 @@ class Acceptance(Protocol):
 
 class JournalFactory(Protocol):
     research_records: bool
+    tool_modules: tuple[str, ...]
+    directions_enabled: bool
+    experiments_enabled: bool
 
-    def initialize(self, path, *, episode, base_commit, branch, memory_version): ...
     def open(self, **options): ...

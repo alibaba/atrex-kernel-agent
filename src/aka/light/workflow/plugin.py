@@ -1,5 +1,7 @@
 """Select the managed light Workflow without changing legacy behavior."""
 from aka.legacy.workflow.plugin import WORKFLOW
+from aka.light.workflow.constants import DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES
+from aka.light.workflow.search import SearchOptions
 
 name = "workflow"
 provide = ("workflow",)
@@ -11,8 +13,10 @@ Config = {"type": "object", "properties": {
     "startup": {"type": "boolean"},
     "numerical_validation": {"type": "boolean"},
     "goal_episodes": {"type": "boolean"},
-    "generate_memory": {"type": "boolean"},
     "output_limit_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
+    "dependency_policy_recovery_retries": {
+        "type": "integer", "minimum": 0, "maximum": 10,
+    },
     "episode_timeout_seconds": {"type": "number", "minimum": 0},
     "source_tree": {"type": "object", "properties": {
         "manifest": {"type": "string", "minLength": 1},
@@ -24,10 +28,17 @@ Config = {"type": "object", "properties": {
         "trajectories": {"type": "integer", "minimum": 1, "maximum": 64},
         "episodes_per_trajectory": {"type": "integer", "minimum": 1, "maximum": 100},
         "max_parallel_episodes": {"type": "integer", "minimum": 1, "maximum": 64},
+        "synchronization": {
+            "type": "string",
+            "enum": ["synchronous", "asynchronous"],
+        },
+        "role_specialization": {"type": "boolean"},
     }, "additionalProperties": False},
 }, "additionalProperties": False}
-Defaults = {"startup": False, "numerical_validation": False, "goal_episodes": False, "generate_memory": False,
-            "output_limit_recovery_retries": 2, "episode_timeout_seconds": 14400, "search": {}}
+Defaults = {"startup": False, "numerical_validation": False, "goal_episodes": False,
+            "output_limit_recovery_retries": DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES,
+            "dependency_policy_recovery_retries": 2,
+            "search": {}}
 
 
 def validate_config(config):
@@ -45,8 +56,8 @@ def apply(ctx, config):
     ctx.effect(workflow.close, label="close light Workflow and private runtimes")
     ctx.provide(WORKFLOW, workflow)
     if config.get("startup", False):
-        from aka.legacy.workflow.startup import WorkflowStartup
-        ctx.provide("startup", WorkflowStartup(
+        from aka.light.workflow.startup import LightWorkflowStartup
+        ctx.provide("startup", LightWorkflowStartup(
             workflow, configuration=config, observer=ctx.workflow_observer,
             evaluator_factory=ctx.evaluator_factory,
         ))

@@ -208,12 +208,10 @@ update, so identity checks and explicit partial-data states remain necessary.
 
 ## Long-horizon records and measurement semantics
 
-The current adapter derives canonical performance history from `memory/vN.json`;
-it does not yet read Light's default `.atrex_versions/vN.json` facts. To populate that
-history for a new Light run, enable `workflow.config.generate_memory: true`. Existing
-runs without summaries may still expose Episode/usage observations, but missing history
-must not be interpreted as zero performance or a failed campaign. Workflow/CI export
-reads version facts independently and does not share this reader limitation.
+The dashboard adapter described here is for the Legacy workflow. AKA Light does not
+generate or project `memory/vN.json`; use Light's observability commands and its private
+MeasurementStore, Runtime audits and Session token receipts instead. Missing Legacy
+memory files must not be interpreted as zero performance or a failed Light campaign.
 
 The default reader accepts a single campaign or a parent containing direct
 `kernel_opt_*` directories. It does not recursively discover private episode worktrees
@@ -226,8 +224,6 @@ and excludes symlinked campaign directories. Only the adapter interprets this la
 | `.atrex_long_horizon/state.json` | Settled Episode Agent tokens, receipts and episode outcomes |
 | `.atrex_long_horizon/episodes/eNNNN/attempt.json` | Accepted/rejected/pivot/blocked/interrupted outcome and verification |
 | `.atrex_long_horizon/episodes/eNNNN/telemetry.summary.json` | Structured usage, phase attribution, measurement quality and reason codes |
-| `memory/vN.json` | Canonical correctness, certified performance and comparability metadata |
-| `framework_baseline.json`, baseline crash progress | Framework baseline or interrupted baseline observation |
 | `trace-retention-manifest.json` | Timestamped historical terminal status and hardware labels |
 
 Verified legacy records without schema declarations remain readable. Declared live,

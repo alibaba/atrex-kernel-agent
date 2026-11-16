@@ -1,24 +1,17 @@
-## Prior iteration state
+## Direction and Experiment records
 
-Use Journal list/load tools and optional `memory/v*.json` summaries for relevant historical
-Directions and Experiments. Treat prior analysis as interpretation, not measurement authority.
-Revisit a rejected Direction only with new evidence or a materially different implementation.
+Both modules are enabled. Start with `PROGRESS.md`; open only the research files needed for the next decision. A Direction is a durable optimization program organized around a bottleneck, workload regime, or architecture objective and should normally span multiple candidates and Experiments. A single implementation, parameter sweep, capability probe, or mechanism test is an Experiment, not a new Direction. Reuse matching Directions and check duplicates before proposing. Choose executable work from the Local work queue, explicitly restart paused work, and treat the Shared direction pool as discovery-only. Absorb compatible peer ideas into a local derivative citing every source ID. Genealogy does not inherit source, evidence, status, or priority.
 
-## Engineering loop
+Lifecycle is explicit: `propose` creates `proposed`; call `start` to enter `in_progress`; only an `in_progress` Direction may `complete`, `abandon`, `defer`, or `block`. Restart `deferred` or `blocked` work with `start`. `completed` and `abandoned` are terminal, so continued work needs a derived Direction.
 
-Use this as a working guide when useful, not as additional mandatory stages:
+Starting a Direction makes it the focus. Queue reordering does not change focus. An Experiment may omit `direction_id` only when exactly one local Direction is active; otherwise name the intended Direction explicitly. A local proposed Direction may already own an Experiment: when an existing measurement informs whether that Direction should start, record the Experiment against the proposed Direction first, then start it. Do not put measured numeric claims only in Direction prose. Inspect and continue imported peer history through remote-tracking refs such as `atrex/T2` with normal Git commands.
 
-1. **Understand the starting point.** Inspect the current Kernel, public contract, and relevant
-   history. Identify existing measurements, the likely bottleneck, and what remains uncertain.
-2. **Choose a Direction.** State the hypothesis, expected benefit, concrete change, validation
-   method, and stopping condition. Register it before exploration; keep the concise plan in the
-   Direction Journal rather than creating separate draft or plan files.
-3. **Research the question.** Use available references, Profile, or an explicitly enabled knowledge
-   tool to resolve a specific uncertainty that informs the next change. Do not call disabled Wiki
-   or research/profile without a concrete purpose.
-4. **Implement and validate.** Work on one coherent candidate at a time. Use Gateway Evaluate for
-   correctness and performance, reusing a matching saved result instead of repeating the measurement.
-5. **Record and decide.** Record each decisive result as an Experiment, separating measured facts
-   from analysis. Use the evidence to continue, repair, restore a measured Kernel, or change Direction.
-   Prepare the report as work proceeds; submit an evidence-backed candidate, pivot, or blocker using
-   the terminal contract below. Leave secondary tweaks for a later Episode.
+Record an Experiment immediately when a probe or measurement changes the keep, repair, restore, or next-branch decision; do this before launching another candidate or switching paths. Use concrete `intent`, bounded `interpretation`, and the returned Gateway Record ID or archived references. A disposable probe that changes no decision need not become an Experiment. Keep measured facts in `records/`; an unmeasured Experiment cannot support a measured conclusion. Runtime receipts repeat this reminder when Experiment recording is enabled.
+
+Records cited by a Direction/Experiment currently visible to this lineage and passing standard full-Evaluate Records are visible here; accepted submissions and winners therefore carry their complete Evaluate evidence. Other local Records remain private.
+
+A supported Experiment updates the evidence for its Direction; it does not imply that the Direction is complete. After each Experiment, compare the remaining branches within the current Direction before deciding whether the overall optimization program is exhausted. Keep the Direction active while any high-value implementation variant, parameter family, workload regime, or combination remains unexplored. The default next action is to update the current Direction's remaining plan and continue. Create a derived Direction only when the optimization objective or applicability changes materially.
+
+Close a Direction only when its optimization program is genuinely completed or exhausted, strategically deferred, concretely blocked, or reasonably abandoned. Cite relevant `supporting_experiment_ids` when available; a lifecycle decision may omit them when no Experiment directly establishes it.
+
+Direction `propose` and proposed-state `revise` update unreviewed draft `v0`; they do not spend a Reviewer Session. `start` performs the first independent Review and writes immutable `v1`. Active Direction revisions, Direction closures, and every Experiment submission also return an inline Review and write the next immutable `vN`; Experiments start at `v1`. Accepted versions enter the Campaign Research Library. The workspace `research-library/` is its read-only, visibility-filtered copy: synchronous search freezes peer visibility at each Epoch boundary, while asynchronous search exposes new peer revisions immediately. Only the original owner may revise an identity; continue a peer idea through a new local derived record. Review labels evidence strength, not visibility. `archive_status` says whether the claim was stored, `claim_review_quality` reports its review state, and `evidence_eligible` says whether it may support a research conclusion. Follow `runtime_action`; `scientific_next_check` is the smallest evidence-producing follow-up. Partial and `claim_review_quality=review_unavailable` records remain visible but must not be treated as established support. Runtime retries an unavailable Reviewer once before using that state. Unsupported reviewed mutations have no `archive_path`, so there is no revision to publish. Runtime returns the full Review once; afterward its compact fields remain Agent-visible while full receipts and reviewer conversations are Supervisor-private. Revise local open records by stable ID; restart paused Directions first and continue terminal work through a derived Direction. Follow the installed Skill for exact fields.

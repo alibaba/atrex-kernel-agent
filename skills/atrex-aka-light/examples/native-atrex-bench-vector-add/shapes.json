@@ -1,26 +1,12 @@
 {
-  "small": {
-    "init_kwargs": {
-      "alpha": 1.0
-    },
-    "input_kwargs": {
-      "numel": 1024
-    }
-  },
-  "medium": {
-    "init_kwargs": {
-      "alpha": 0.5
-    },
-    "input_kwargs": {
-      "numel": 65536
-    }
-  },
-  "large": {
-    "init_kwargs": {
-      "alpha": 2.0
-    },
-    "input_kwargs": {
-      "numel": 1048576
-    }
-  }
+  "0": {"init_kwargs": {}, "input_kwargs": {"n": 1, "dtype": "float32"}},
+  "1": {"init_kwargs": {}, "input_kwargs": {"n": 17, "dtype": "float16"}},
+  "2": {"init_kwargs": {}, "input_kwargs": {"n": 255, "dtype": "bfloat16"}},
+  "3": {"init_kwargs": {}, "input_kwargs": {"n": 256, "dtype": "float32"}},
+  "4": {"init_kwargs": {}, "input_kwargs": {"n": 257, "dtype": "float16"}},
+  "5": {"init_kwargs": {}, "input_kwargs": {"n": 4096, "dtype": "bfloat16"}},
+  "6": {"init_kwargs": {}, "input_kwargs": {"n": 65535, "dtype": "float32"}},
+  "7": {"init_kwargs": {}, "input_kwargs": {"n": 65536, "dtype": "float16"}},
+  "8": {"init_kwargs": {}, "input_kwargs": {"n": 1048576, "dtype": "bfloat16"}},
+  "9": {"init_kwargs": {}, "input_kwargs": {"n": 4194304, "dtype": "float32"}}
 }

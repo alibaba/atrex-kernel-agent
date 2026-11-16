@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
+import stat
 import subprocess
-import sys
 from pathlib import Path
 
 from aka.light.agent.home import HOST_HOME_ENV, PREPARED_ENV, open_private_directory, projected_backends
@@ -73,14 +74,27 @@ SYSTEM_PATHS = (
 
 
 def sandbox_executable(environment: dict[str, str]) -> str | None:
-    if environment.get("ATREX_AGENT_PROC_MODE", "private") not in {"private", "projected"}:
-        raise ValueError("ATREX_AGENT_PROC_MODE must be private or projected")
+    if environment.get("ATREX_AGENT_PROC_MODE", "private") not in {"private", "host"}:
+        raise ValueError("ATREX_AGENT_PROC_MODE must be private or host")
     mode = environment.get("ATREX_AGENT_SANDBOX", "none")
+    if mode not in {"none", "bwrap"}:
+        raise ValueError("ATREX_AGENT_SANDBOX must be none or bwrap")
+    claim_review = (
+        environment.get("ATREX_AGENT_WORKSPACE_ROLE")
+        == "research-claim-review"
+    )
+    if claim_review and mode != "bwrap":
+        raise RuntimeError(
+            "Research claim review requires Bubblewrap; native execution is not permitted"
+        )
     if mode == "none":
         return None
-    if mode != "bwrap":
-        raise ValueError("ATREX_AGENT_SANDBOX must be none or bwrap")
     if platform.system() != "Linux":
+        if claim_review:
+            raise RuntimeError(
+                "Research claim review requires Bubblewrap on a Linux coordinator; "
+                "native execution is not permitted"
+            )
         raise RuntimeError(
             "Agent Bubblewrap requires a Linux coordinator; use Lima/Linux, "
             "or set sandbox=none on the selected aka.light.agent.plugin module"
@@ -88,6 +102,12 @@ def sandbox_executable(environment: dict[str, str]) -> str | None:
     executable = environment.get("ATREX_BWRAP_EXECUTABLE", "bwrap")
     resolved = shutil.which(executable, path=environment.get("PATH"))
     if not resolved:
+        if claim_review:
+            raise RuntimeError(
+                f"Research claim review requires Bubblewrap, but the executable "
+                f"was not found: {executable}. Install bwrap or configure "
+                "bwrap_executable; native execution is not permitted"
+            )
         raise RuntimeError(
             f"Agent Bubblewrap executable not found: {executable}. "
             "Install bwrap or configure the Agent module's bwrap_executable; "
@@ -101,6 +121,84 @@ def read_only_grants(environment: dict[str, str]) -> tuple[Path, ...]:
     if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
         raise ValueError("ATREX_AGENT_READ_ONLY_PATHS must be a JSON array of paths")
     return tuple(Path(value).expanduser().resolve(strict=True) for value in raw)
+
+
+REFERENCE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]*\Z")
+
+
+def reference_sources(environment: dict[str, str]) -> tuple[tuple[str, Path], ...]:
+    """Resolve and validate named operator knowledge roots."""
+    raw = json.loads(environment.get("ATREX_AGENT_REFERENCE_PATHS", "{}"))
+    if not isinstance(raw, dict) or any(
+        not isinstance(name, str)
+        or not REFERENCE_NAME.fullmatch(name)
+        or not isinstance(value, str)
+        for name, value in raw.items()
+    ):
+        raise ValueError("ATREX_AGENT_REFERENCE_PATHS must map safe names to paths")
+    sources = []
+    for name, value in sorted(raw.items()):
+        source = Path(value).expanduser().resolve(strict=True)
+        if not source.is_dir():
+            raise ValueError(f"Agent reference must be a directory: {source}")
+        sources.append((name, source))
+    return tuple(sources)
+
+
+def _reference_root(workspace: Path) -> Path:
+    root = workspace / "references"
+    root.mkdir(exist_ok=True)
+    if root.is_symlink() or root.resolve(strict=True) != root:
+        raise ValueError("Agent references root must be a real workspace directory")
+    return root
+
+
+def reference_grants(
+    environment: dict[str, str], workspace: Path
+) -> tuple[tuple[str, Path, Path], ...]:
+    """Resolve named knowledge roots to read-only Bubblewrap mountpoints."""
+    sources = reference_sources(environment)
+    if not sources:
+        return ()
+    root = _reference_root(workspace)
+    grants = []
+    for name, source in sources:
+        destination = root / name
+        destination.mkdir(exist_ok=True)
+        if destination.is_symlink() or destination.resolve(strict=True) != destination:
+            raise ValueError(f"Agent reference mountpoint must be a real directory: {destination}")
+        if any(destination.iterdir()):
+            raise ValueError(f"Agent reference mountpoint must be empty: {destination}")
+        grants.append((name, source, destination))
+    return tuple(grants)
+
+
+def project_native_references(environment: dict[str, str], workspace: Path) -> None:
+    """Link knowledge roots into an unsandboxed Agent workspace.
+
+    This is a discoverability projection, not a protection boundary. The Agent
+    runs as the coordinator OS user and can modify the referenced source tree.
+    """
+    sources = reference_sources(environment)
+    if not sources:
+        return
+    workspace = workspace.resolve(strict=True)
+    root = _reference_root(workspace)
+    for name, source in sources:
+        if source.is_relative_to(workspace) or workspace.is_relative_to(source):
+            raise ValueError(f"Agent reference overlaps Agent workspace: {source}")
+        destination = root / name
+        if destination.is_symlink():
+            if destination.resolve(strict=True) != source:
+                raise ValueError(
+                    f"Agent reference link targets a different directory: {destination}"
+                )
+            continue
+        if destination.exists():
+            raise ValueError(
+                f"Native Agent reference projection must be absent or a managed link: {destination}"
+            )
+        destination.symlink_to(source, target_is_directory=True)
 
 
 def _mount(argv: list[str], source: Path, destination: Path, *, writable=False) -> None:
@@ -188,9 +286,16 @@ def wrap_agent_command(
     if executable is None:
         if auxiliary_input_files:
             raise ValueError("Explicit auxiliary inputs require a Bubblewrap auxiliary workspace")
+        if environment.get(WORKSPACE_ROLE_ENV, "optimizer") == "optimizer":
+            project_native_references(environment, workspace)
         native_environment = {
             key: value for key, value in environment.items()
-            if key not in {"ATREX_EPISODE_PRIVATE_PATHS", "ATREX_AKA_RUNTIME_OWNER", "GIT_CEILING_DIRECTORIES"}
+            if key not in {
+                "ATREX_EPISODE_PRIVATE_PATHS",
+                "ATREX_AKA_RUNTIME_OWNER",
+                "ATREX_AGENT_REFERENCE_PATHS",
+                "GIT_CEILING_DIRECTORIES",
+            }
         }
         return SandboxLaunch(list(command), native_environment), None
     workspace = workspace.resolve(strict=True)
@@ -203,10 +308,25 @@ def wrap_agent_command(
     private_paths = tuple(Path(value) for value in json.loads(
         environment.get("ATREX_EPISODE_PRIVATE_PATHS", "[]")
     )) if managed else ()
+    from aka.light.agent.claude_tools import CONTROL_ROOT_ENV
+    raw_control_root = environment.get(CONTROL_ROOT_ENV, "")
+    control_root = None
+    if raw_control_root:
+        control_root = Path(raw_control_root)
+        if not control_root.is_absolute():
+            raise ValueError("Agent control root must be absolute")
+        control_root = control_root.resolve(strict=True)
+        if not control_root.is_dir() or control_root.is_symlink():
+            raise ValueError("Agent control root must be a real directory")
+        private_paths = (*private_paths, control_root)
     host_home = Path(environment[HOST_HOME_ENV]).resolve()
     role = environment.get(WORKSPACE_ROLE_ENV, "optimizer")
     if role != "optimizer" and role not in WORKSPACE_LAYOUTS:
         raise ValueError(f"Unknown Agent workspace role: {role}")
+    # Operator-provided knowledge is available only to the optimization Agent.
+    # Independent reviewers receive their own bounded evidence view and must
+    # not be influenced by the optimizer's optional reference library.
+    references = reference_grants(environment, workspace) if role == "optimizer" else ()
     if role == "optimizer" and auxiliary_input_files:
         raise ValueError("Explicit auxiliary inputs require an auxiliary workspace role")
     view = (
@@ -214,20 +334,17 @@ def wrap_agent_command(
         if role != "optimizer" else None
     )
     try:
-        projected_proc = environment.get("ATREX_AGENT_PROC_MODE", "private") == "projected"
+        host_proc = environment.get("ATREX_AGENT_PROC_MODE", "private") == "host"
         argv = [executable]
         # Only a durable handoff owner controls the sandbox lifetime. Direct
         # launches preserve native behavior on Supervisor/spawning-thread death.
         # spawn_owned_session validates the handoff before starting its wrapper.
-        # In projected mode the durable proc-view wrapper is bwrap's parent;
-        # it survives the Supervisor in the direct path, but owns the view for
-        # the whole CLI lifetime and must not leave a namespace without it.
-        if environment.get(HANDOFF_ID_ENV) or projected_proc:
+        if environment.get(HANDOFF_ID_ENV):
             argv.append("--die-with-parent")
+        argv.extend(("--new-session", "--unshare-user"))
+        if not host_proc:
+            argv.append("--unshare-pid")
         argv.extend((
-            "--new-session",
-            "--unshare-user",
-            "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
             "--unshare-cgroup-try",
@@ -243,14 +360,46 @@ def wrap_agent_command(
             if path.exists():
                 _mount(argv, path.resolve(), path)
         argv.extend(("--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run"))
-        if projected_proc:
-            from aka.light.agent.proc_view import SHIM_SOURCE, SHIM_TARGET, projected_mounts
-            argv.extend(projected_mounts())
-            argv.extend(("--dir", "/run/aka-proc", "--ro-bind", SHIM_SOURCE, SHIM_TARGET))
-        else:
-            argv.extend(("--proc", "/proc"))
+        # Aone Sandbox already provides a container-scoped procfs but rejects
+        # mounting another procfs in a nested Bubblewrap namespace. Host mode
+        # deliberately shares that complete procfs and PID namespace. Private
+        # mode retains an isolated PID namespace and a newly mounted procfs.
+        argv.extend(("--bind", "/proc", "/proc") if host_proc else ("--proc", "/proc"))
         _mount(argv, view.root if view else workspace, workspace, writable=True)
+        if managed:
+            for name, directory in (
+                ("research-library", True),
+                ("records", True),
+                ("PROGRESS.md", False),
+            ):
+                projection = workspace / name
+                if not projection.exists():
+                    if name == "research-library":
+                        # Research-disabled Campaigns do not project this tree.
+                        continue
+                    raise ValueError(
+                        f"Managed Runtime projection is unavailable before sandbox launch: {name}"
+                    )
+                mode = projection.lstat().st_mode
+                if (
+                    projection.is_symlink()
+                    or (not stat.S_ISDIR(mode) if directory else not stat.S_ISREG(mode))
+                    or projection.resolve(strict=True) != projection
+                ):
+                    kind = "directory" if directory else "file"
+                    raise ValueError(
+                        f"Managed {name} mountpoint must be a real {kind}"
+                    )
+                # Overlay Runtime projections read-only. Their backing paths
+                # remain writable to the trusted Supervisor outside this
+                # namespace. Directories reflect atomic child replacement;
+                # PROGRESS.md keeps a stable inode for live refreshes.
+                _mount(argv, projection, projection)
         _mount(argv, home, home, writable=True)
+        if control_root is not None:
+            # Hooks receive only their narrow rendezvous directory, never the
+            # containing Supervisor campaign tree.
+            _mount(argv, control_root, control_root, writable=True)
         # HTTP sessions carry their reviewed tool/Skill copies in the workspace.
         # Do not re-expose the repository's retired workflows or evaluator code.
         assets = PUBLIC_ASSETS if view is None and not environment.get("ATREX_AKA_RUNTIME_URL") else ()
@@ -283,14 +432,14 @@ def wrap_agent_command(
                     _mount(argv, common, common, writable=True)
             if managed:
                 # This is already a separate persistent draft, not the Git
-                # worktree. Public inputs and canonical memory stay read-only.
-                for name in (*PUBLIC_FILES, "memory", "input"):
+                # worktree. Public inputs stay read-only.
+                for name in (*PUBLIC_FILES, "input"):
                     source = workspace / name
                     if source.exists():
                         if source.is_symlink() or source.resolve(strict=True) != source:
                             raise ValueError("Managed public inputs must not traverse symlinks")
                         _mount(argv, source, source)
-            from aka.light.workspace.adaptive import PROTECTED_PATHS_ENV
+            from aka.light.workspace.managed_assets import PROTECTED_PATHS_ENV
             protected = ("tools", "skills")
             if managed and PROTECTED_PATHS_ENV in environment:
                 protected = json.loads(environment[PROTECTED_PATHS_ENV])
@@ -348,7 +497,12 @@ def wrap_agent_command(
                 host_home=host_home, session_home_root=home.parent,
                 private_paths=private_paths,
             )
-        forbidden = (workspace, home.parent, REPOSITORY_ROOT / ".git", *private_paths)
+        forbidden = (
+            workspace,
+            home.parent,
+            REPOSITORY_ROOT / ".git",
+            *private_paths,
+        )
         installations = projected_backends(environment)
         if view is None and not environment.get("ATREX_AKA_RUNTIME_URL"):
             installations += ("agate",)
@@ -380,12 +534,21 @@ def wrap_agent_command(
             if path in {Path("/"), host_home, REPOSITORY_ROOT}:
                 raise ValueError(f"Read-only grant is too broad: {path}")
             _mount(argv, path, path)
+        for _, source, destination in references:
+            if any(
+                root.is_relative_to(source) or source.is_relative_to(root)
+                for root in (workspace, home.parent, *private_paths)
+            ):
+                raise ValueError(f"Agent reference overlaps Agent workspace/state: {source}")
+            if source in {Path("/"), host_home, REPOSITORY_ROOT}:
+                raise ValueError(f"Agent reference is too broad: {source}")
+            _mount(argv, source, destination)
         # Preserve the pre-PR CLI command and cwd; no prompt rewriting is needed.
         # Secrets are set by bwrap from an anonymous FD, never KEY=value argv.
         values = {
             key: value
             for key, value in environment.items()
-            if key not in {HOST_HOME_ENV, PREPARED_ENV, "PWD", "OLDPWD", "ATREX_EPISODE_PRIVATE_PATHS"}
+            if key not in {HOST_HOME_ENV, PREPARED_ENV, "PWD", "OLDPWD", "ATREX_EPISODE_PRIVATE_PATHS", "ATREX_AGENT_REFERENCE_PATHS"}
             and (
                 not key.startswith("GIT_")
                 or key
@@ -418,26 +581,7 @@ def wrap_agent_command(
                 )
             }
         argv.extend(("--chdir", str(workspace)))
-        if not projected_proc:
-            return SandboxLaunch.with_bwrap_environment(argv, command, values), view
-        child_values = dict(values, LD_PRELOAD=SHIM_TARGET, ATREX_PROC_MAPS_SOCKET="/proc/.maps.sock")
-        # Wait for the first namespace-local census, with a bounded readiness
-        # failure rather than letting the Provider start against an empty view.
-        ready = ["/bin/sh", "-c", 'n=0; while [ ! -r /proc/self/stat ]; do '
-                 'n=$((n+1)); if [ "$n" -ge 1200 ]; then '
-                 'echo "Agent process view did not become ready" >&2; exit 125; fi; '
-                 'sleep 0.025; done; exec "$@"', "aka-proc-ready", *command]
-        launch = SandboxLaunch.with_bwrap_environment(argv, ready, child_values)
-        # The shim belongs inside bwrap only, not in its trusted Python parent.
-        launch.environment = values
-        prefix = [sys.executable, "-m", "aka.light.agent.proc_view",
-                  "--workspace", str(workspace), "--argument-fd", str(launch.pass_fds[0])]
-        provider = shutil.which(command[0], path=values.get("PATH")) if command else None
-        if provider:
-            # The same exact executable has already passed installation_mounts.
-            prefix.extend(("--provider-executable", str(Path(provider).resolve(strict=True))))
-        launch.command = [*prefix, "--", *launch.command]
-        return launch, view
+        return SandboxLaunch.with_bwrap_environment(argv, command, values), view
     except BaseException:
         if view:
             view.close()

@@ -1,6 +1,7 @@
-"""Native Eval ABBA over Agate or SSH: exact A/B/B/A evidence."""
+"""Native Agate Eval ABBA: exact A/B/B/A evidence, no Dev driver fallback."""
 from __future__ import annotations
 
+import copy
 import json
 import math
 import os
@@ -8,16 +9,17 @@ import re
 import statistics
 import subprocess
 import sys
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from aka.legacy.evaluation.abba import verification_schedule
-from aka.light.evaluation.result_conversion import compile_failures
-from aka.legacy.evaluation.shapes import batch_shape_ids, shape_batch_request
+from aka.light.agent.runtime.process import ENVIRONMENT_TEMPFAIL
+from aka.light.evaluation.abba_shape_compat import full_reference_abba_batch_request
 from aka.light.evaluation.evaluation_feedback import evaluation_feedback
 from aka.light.evaluation.policy import BATCH_WORKERS, validate_abba_repeats
 from aka.light.evaluation.public_result import correctness_summary
+from aka.light.evaluation.result_conversion import compile_failures
+from aka.light.evaluation.shapes import batch_shape_ids
 from aka.light.experiment.abba_checkpoints import AbbaBatchStore, validate_batch
 from aka.light.experiment.store import (
     ABBA_BATCH_ROOT_ENV,
@@ -26,12 +28,12 @@ from aka.light.experiment.store import (
     EvidenceUnavailable,
 )
 
-
 ABBA_WALL_CLOCK_TIMEOUT_REASON = "abba_run_wall_clock_timeout"
 _ABBA_WALL_CLOCK_TIMEOUT = re.compile(
     r"^candidate exceeded [0-9]+(?:\.[0-9]+)?s wall-clock timeout$",
     re.IGNORECASE,
 )
+_INVALID_MANAGED_CLOCK = "manage mode requires a positive integer graphics_mhz value"
 
 
 def _abba_wall_clock_timeout_failures(job: object) -> list[dict]:
@@ -195,6 +197,58 @@ def _job_deadline_process(
     )
 
 
+def _clock_configuration_error(value: object) -> dict | None:
+    """Return the deterministic Agate worker clock-configuration failure.
+
+    This is an operator-side Atrex-Bench configuration error, not missing ABBA
+    evidence and not a Candidate verdict.  Search only structured evaluator
+    result/error containers so Candidate source or captured output cannot forge
+    the classification.
+    """
+    if isinstance(value, str):
+        if _INVALID_MANAGED_CLOCK in value.casefold():
+            return {
+                "error_class": "infra",
+                "reason": "agate_clock_configuration_invalid",
+                "message": _INVALID_MANAGED_CLOCK,
+            }
+        return None
+    if isinstance(value, list):
+        for item in value:
+            if error := _clock_configuration_error(item):
+                return error
+        return None
+    if not isinstance(value, dict):
+        return None
+    for key in (
+        "error", "message", "details", "cause", "result", "abba",
+        "sdk_results", "runs", "baseline", "candidate", "passed",
+        "compile", "correctness", "performance", "shapes", "cases",
+    ):
+        if error := _clock_configuration_error(value.get(key)):
+            return error
+    return None
+
+
+def _clock_configuration_process(
+    job: dict, process: subprocess.CompletedProcess[str]
+) -> subprocess.CompletedProcess[str] | None:
+    """Project the safe configuration diagnostic without a physical Job ID."""
+    error = _clock_configuration_error(job)
+    if error is None:
+        return None
+    return subprocess.CompletedProcess(
+        process.args,
+        ENVIRONMENT_TEMPFAIL,
+        json.dumps({
+            "status": "failed",
+            "outcome": "unavailable",
+            "error": error,
+        }),
+        process.stderr,
+    )
+
+
 def _summarize(raw: dict, shapes: list[str]) -> dict:
     """Same per-Shape median (ms -> us) and GeoMean as Runtime's ABBA ledger."""
     from aka.light.execution.gateway_jobs import complete_evaluation
@@ -328,14 +382,21 @@ def parse_native_abba(job: dict, repeats: int, shapes: list[str]) -> dict:
 
 
 def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
-    from aka.light.evaluation.operations import validate_comparison, comparison_run_timeout
     from aka.light.acceptance.verifier import merge_abba_batch_payloads
+    from aka.light.evaluation.operations import (
+        comparison_allocation_timeout,
+        comparison_run_timeout,
+        validate_comparison,
+    )
     from aka.light.evaluation.projection import abba, emit_gateway_error
     from aka.light.execution.gateway_jobs import eval_retry_kind, payload_identity
 
     validate_comparison(args)
     if (workspace / "workload.jsonl").exists():
-        raise ValueError("Native Eval ABBA requires an Atrex-Bench input/Shape contract")
+        raise ValueError(
+            "Native Eval ABBA requires an Atrex-Bench input/Shape contract; "
+            "the SOL Dev fallback is disabled"
+        )
     from aka.light.workspace.sources import read_path
     baseline = read_path(workspace / args.baseline_path)
     command = ["python3", "test_kernel.py"]
@@ -345,36 +406,38 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     limitation = gateway._typed_workspace_limitation(workspace, command, "run")
     if limitation:
         raise ValueError(f"Native ABBA cannot represent this workspace: {limitation}; no Dev fallback was submitted")
+    per_run_timeout = comparison_run_timeout(args)
+    allocation_timeout = comparison_allocation_timeout(args, per_run_timeout)
+    execution_args = copy.copy(args)
+    execution_args.timeout = allocation_timeout
     request = gateway.build_typed_request(
-        workspace, args.hardware, args.timeout, args.env, command, "run", evaluation_mode="full",
+        workspace, args.hardware, allocation_timeout, args.env, command, "run", evaluation_mode="full",
         requirements=args.requirement or (), deps_mode=args.deps_mode,
+        ssh=bool(args.ssh),
     )
     from .agate_native import apply_request
     request = apply_request(request, args, "run")
     request["abba"] = {"baseline": None, "repeats": args.comparison_repeats // 2}
-    from .source_transport import attach, ARCHIVES
+    from .source_transport import attach
     attach(request, workspace, side="baseline", source=baseline.snapshot)
     if not request["abba"]["baseline"] or not request["candidate"]:
         raise ValueError("Native ABBA requires two non-empty candidate sources")
-    request["runner_overrides"]["perf_timeout_s"] = comparison_run_timeout(args)
+    request["runner_overrides"]["perf_timeout_s"] = per_run_timeout
     shapes = sorted(request["reference"]["shapes"], key=gateway.shape_id_sort_key)
     if not shapes:
         raise ValueError("Native ABBA requires at least one Shape")
     if args.dry_run:
-        print(json.dumps({"kind": "same_allocation_abba",
-                          "transport": "ssh_native_eval_abba" if args.ssh else "agate_native_eval_abba",
+        print(json.dumps({"kind": "same_allocation_abba", "transport": (
+                              "ssh_native_eval_abba" if args.ssh else "agate_native_eval_abba"
+                          ),
                           "shape_count": len(shapes), "comparison_repeats": args.comparison_repeats}))
         return 0
-    executable = None if args.ssh else gateway.find_agate()
-    url = args.url
-    if not args.ssh and not executable and not url:
-        raise ValueError("Native ABBA requires a resolvable Agate Gateway URL; no Dev fallback was submitted")
     schedule = verification_schedule(args.comparison_repeats)
     # Recorded acceptance retries create a fresh Gateway Record after an
     # incomplete result.  Its per-record JOB_ROOT_ENV changes, so checkpoints
     # stored there cannot suppress already-completed Shape submissions.  The
     # Runtime supplies a Campaign-stable private root for recorded ABBA; retain
-    # JOB_ROOT_ENV as the standalone/cooperative CLI fallback.
+    # JOB_ROOT_ENV as the standalone/cooperative invocation fallback.
     checkpoint_root = (
         os.environ.get(BATCH_ROOT_ENV)
         or os.environ.get(ABBA_BATCH_ROOT_ENV)
@@ -399,12 +462,16 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             record_store.retain_terminal_job(identity, retained)
 
     def run_batch(ids):
-        batch = shape_batch_request(request, ids)
-        identity = {"transport": "agate_native_eval_abba", "request": payload_identity(batch),
+        # Temporary Agate compatibility: ABBA rejects Shape selectors. Build a
+        # complete shard-local reference and submit all of its Shapes instead.
+        batch = full_reference_abba_batch_request(request, ids)
+        identity = {"transport": (
+                        "ssh_native_eval_abba" if args.ssh else "agate_native_eval_abba"
+                    ), "request": payload_identity(batch),
                     "schedule": schedule, "shape_ids": ids}
         if args.ssh:
             from .ssh_transport import endpoint_identity
-            identity.update(endpoint_identity(args))
+            identity.update(endpoint_identity(execution_args))
         if store and (saved := store.load(identity)) is not None:
             retain_in_record(identity, saved)
             return saved["payload"], None
@@ -415,69 +482,24 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             )
             if args.ssh:
                 from .ssh_transport import run
-                return run(gateway, args, workspace, batch, "run")
-            if ARCHIVES in batch:
-                from .source_transport import run as run_tree
-                return run_tree(
+                return run(
                     gateway,
-                    args,
+                    execution_args,
+                    workspace,
                     batch,
                     "run",
-                    queue_wait_grace,
-                    identity_extra=retry_identity,
                 )
-            if executable:
-                # Use native eval CLI flags, retaining configured profile credentials.
-                # This never uploads/runs a Dev harness. --abba-repeats counts blocks.
-                with tempfile.TemporaryDirectory(prefix="aka-native-abba-") as directory:
-                    sidecars = Path(directory)
-                    reference = sidecars / "reference"
-                    reference.mkdir()
-                    for field, filename in (
-                        ("reference_py", "reference.py"),
-                        ("input_py", "input.py"),
-                        ("shapes", "shapes.json"),
-                        ("metadata", "metadata.json"),
-                        ("roofline", "roofline.json"),
-                    ):
-                        if field in batch["reference"]:
-                            content = batch["reference"][field]
-                            (reference / filename).write_text(
-                                content if isinstance(content, str) else json.dumps(content),
-                                encoding="utf-8",
-                            )
-                    command = gateway.build_typed_agate_command(
-                        executable,
-                        args,
-                        workspace,
-                        "run",
-                        batch,
-                        queue_wait_grace,
-                        reference_dir=reference,
-                        request_sidecar_dir=sidecars,
-                    )
-                    request_identity = {"kind": "eval", "request": batch}
-                    if retry_identity:
-                        request_identity.update(retry_identity)
-                    return gateway.run_agate_with_cancel_retry(
-                        agate=command,
-                        executable=executable,
-                        url=url,
-                        gateway_profile=args.gateway_profile,
-                        command_timeout=args.timeout,
-                        wait_budget=args.timeout + queue_wait_grace,
-                        request_identity=request_identity,
-                        max_device_retries=10,
-                        device_retry_delay=60,
-                    )
-            return gateway.run_direct_job(
-                url=url,
-                kind="eval",
-                payload=batch,
-                timeout=args.timeout,
-                queue_wait_grace=queue_wait_grace,
-                max_device_retries=10,
-                device_retry_delay=60,
+            # Native ABBA is an Eval request regardless of whether either side
+            # needs an uploaded source archive.  The SDK transport accepts both
+            # inline and archive-backed sources, so there is no CLI/direct-HTTP
+            # fallback to select here.
+            from .source_transport import run as run_tree
+            return run_tree(
+                gateway,
+                execution_args,
+                batch,
+                "run",
+                queue_wait_grace,
                 identity_extra=retry_identity,
             )
 
@@ -486,6 +508,10 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             process = dispatch(attempt)
             job = gateway.parse_job_response(process.stdout or "")
             if not job or job.get("status") != "succeeded":
+                if isinstance(job, dict) and (
+                    configuration := _clock_configuration_process(job, process)
+                ):
+                    return None, configuration
                 return None, process
             timeout_failures = _abba_wall_clock_timeout_failures(job)
             if timeout_failures:
@@ -529,25 +555,38 @@ def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
             return payload, None
 
     batches = batch_shape_ids(shapes, args.shape_batch_size)
-    if args.ssh:
-        results = [run_batch(ids) for ids in batches]
-    else:
-        with ThreadPoolExecutor(max_workers=min(BATCH_WORKERS, len(batches))) as pool:
-            results = list(pool.map(run_batch, batches))
+    with ThreadPoolExecutor(max_workers=min(BATCH_WORKERS, len(batches))) as pool:
+        results = list(pool.map(run_batch, batches))
     failures = [process for _, process in results if process is not None]
     if failures:
         infrastructure = False
+        configuration_failure = False
         for process in failures:
             emit_gateway_error(process, "same_allocation_abba")
             job = gateway.parse_job_response(process.stdout or "")
+            configuration_failure |= bool(
+                isinstance(job, dict)
+                and isinstance(job.get("error"), dict)
+                and job["error"].get("reason") == "agate_clock_configuration_invalid"
+            )
             infrastructure |= job is None or eval_retry_kind(job) is not None or job.get("status") in {"cancelled", "canceled"}
+        if configuration_failure:
+            # The exact Agent-safe error was emitted above and the unredacted
+            # Agate terminal Job remains in the private checkpoint.  Do not add
+            # a later generic evidence_unavailable marker that hides the cause.
+            return ENVIRONMENT_TEMPFAIL
         if infrastructure:
             raise EvidenceUnavailable(
                 "Native ABBA did not produce a measurement; completed Shape batches "
                 "are retained and only incomplete Shapes will be retried"
             )
         return 1
-    payload = merge_abba_batch_payloads([value for value, _ in results], schedule, shapes)
+    payload = merge_abba_batch_payloads(
+        [value for value, _ in results],
+        schedule,
+        shapes,
+        request["reference"].get("metadata"),
+    )
     value = abba(payload, schedule, shapes, args.comparison_repeats)
     print("[sandbox] ABBA_JSON=" + json.dumps(value))
     return 0 if value["correct"] else 1

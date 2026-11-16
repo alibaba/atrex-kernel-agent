@@ -21,8 +21,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from aka.legacy.acceptance.review import _validate_production_review, _validate_review_item
-
 import aka.light.agent.runtime as _agent_runtime
 from aka.light.workflow.constants import (
     DEFAULT_SANDBOX_TIMEOUT,
@@ -31,15 +29,20 @@ from aka.light.workflow.constants import (
     SANDBOX_FULL_WORKFLOW_PROMPT,
     SANDBOX_SAFETY_BOUNDARY_PROMPT,
     SANDBOX_TOOL,
-    TEST_RESULT_PREFIX,
 )
 from aka.light.execution.recovery import (environment_state_file, raise_if_environment_blocked)
 from aka.light.evaluation.hardware import hardware_vendor
 from aka.light.agent.recovery_processes import spawn_owned_session
 from aka.light.execution.config import queue_wait_grace
-from aka.light.workspace.state import speedup_vs_reference
-
-
+from aka.light.evaluation.policy import SHAPE_BATCH_SIZE
+from aka.contracts.evaluation import (
+    DEFAULT_ABBA_REPEATS,
+    DEFAULT_EVALUATION_STEP_TIMEOUT,
+)
+from aka.light.evaluation.shapes import (
+    effective_shape_batch_size,
+    shape_request_timeout,
+)
 def _status_is(value: object, expected: str) -> bool:
     """Accept a status even when a CLI accidentally stored it as a JSON-quoted string."""
     current = value
@@ -75,6 +78,15 @@ class SessionResult:
 def _render(template_path: Path, **kw: str) -> str:
     text = template_path.read_text(encoding="utf-8")
     mode_policy = kw.pop("MODE_POLICY", "")
+    required = set(re.findall(r"\{\{([A-Z][A-Z0-9_]*)\}\}", text))
+    missing = required - set(kw)
+    if "MODE_POLICY" in missing and mode_policy:
+        missing.remove("MODE_POLICY")
+    if missing:
+        raise ValueError(
+            f"Prompt template {template_path} has unresolved fields: "
+            + ", ".join(sorted(missing))
+        )
     for key, val in kw.items():
         text = text.replace("{{" + key + "}}", str(val))
     if mode_policy:
@@ -89,8 +101,8 @@ def ensure_submodules(platform: str = "", arch: str = "") -> None:
     used by Campaigns are vendored under tools/ncu_helpers/. KernelWiki's
     Agent-facing skill and the GPU Wiki JSON stores are repository-native.
     PPU campaigns also require their vendor reference projects: without those
-    working trees the framework-baseline catalog silently contains no usable
-    PPU implementation sources.
+    working trees the reference catalog contains no usable PPU implementation
+    sources.
     Idempotent: already-initialized submodules are untouched.
     """
     needed = []
@@ -141,7 +153,7 @@ def ensure_submodules(platform: str = "", arch: str = "") -> None:
 def run_session(
     workspace: Path,
     prompt: str,
-    timeout: int,
+    timeout: int | None,
     agent_cli: str = "claude",
     sandbox_hardware: str = "",
     sandbox_profile: str = "",
@@ -198,19 +210,36 @@ def run_session(
 
 def _production_review_candidate_paths(workspace: Path) -> list[Path]:
     """Return the complete, bounded source set shown to the production reviewer."""
-    from aka.light.workspace.sources import review_paths
-    return review_paths(workspace)
+    from aka.light.workspace.sources import policy_at, collect
+    policy = policy_at(workspace)
+    if policy is not None:
+        return [workspace / name for name in sorted(collect(workspace, policy))]
+    paths = [
+        workspace / "kernel.py",
+        workspace / "solution.json",
+    ]
+    return [path for path in paths if path.is_file()]
 
 
 def _production_review_digest(
     workspace: Path,
     framework: str,
     require_gluon: bool,
+    specify_dsl: bool = True,
+    review_profile: str = "",
 ) -> str:
     digest = hashlib.sha256()
     digest.update(f"production-review-v{DEPENDENCY_REVIEW_SCHEMA_VERSION}\0".encode())
     digest.update(framework.encode("utf-8", errors="replace"))
-    digest.update(b"\0gluon-required\0" if require_gluon else b"\0selected-framework\0")
+    digest.update(b"\0")
+    digest.update(review_profile.encode("utf-8", errors="replace"))
+    digest.update(
+        b"\0open-dsl\0"
+        if not specify_dsl
+        else b"\0gluon-required\0"
+        if require_gluon
+        else b"\0selected-framework\0"
+    )
     for path in _production_review_candidate_paths(workspace):
         relative = path.relative_to(workspace).as_posix()
         contents = path.read_bytes()
@@ -255,6 +284,74 @@ def sandbox_boundary_directive(hardware: str, profile: str = "", url: str = "", 
                    ENDPOINT=_sandbox_endpoint(profile, url, ssh))
 
 
+def _evaluation_request_shape_count(
+    workspace: Path,
+    private_reference_dir: Path | None,
+    command: list[str],
+    base_timeout: int,
+    performance_timeout: int,
+    grace: int,
+    environment: dict[str, str],
+) -> int:
+    """Return the largest concrete Shape shard the child Eval will submit."""
+    selected = []
+    for index, value in enumerate(command):
+        if value == "--shape-id" and index + 1 < len(command):
+            selected.append(command[index + 1])
+        elif value.startswith("--shape-id="):
+            selected.append(value.split("=", 1)[1])
+    selected = list(dict.fromkeys(item for item in selected if item))
+
+    requested_batch_size = int(
+        environment.get("ATREX_EVAL_SHAPE_BATCH_SIZE", str(SHAPE_BATCH_SIZE))
+    )
+    batch_size = effective_shape_batch_size(
+        base_timeout,
+        requested_batch_size,
+        grace,
+        performance_timeout=performance_timeout,
+    )
+    if selected:
+        return min(len(selected), batch_size)
+
+    shapes_path = (
+        private_reference_dir / "shapes.json"
+        if private_reference_dir is not None
+        else workspace / "shapes.json"
+    )
+    try:
+        shapes = json.loads(shapes_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        # The child owns custom/private request construction. Use its legal
+        # maximum shard size when the parent cannot inspect the Shape contract.
+        return batch_size
+    shape_count = len(shapes) if isinstance(shapes, dict) else 0
+    return min(shape_count, batch_size) if shape_count else batch_size
+
+
+def _command_option(command: list[str], name: str) -> str | None:
+    """Return the final value of a conventional ``--name VALUE`` option."""
+    value = None
+    for index, item in enumerate(command):
+        if item == name and index + 1 < len(command):
+            value = command[index + 1]
+        elif item.startswith(name + "="):
+            value = item.split("=", 1)[1]
+    return value
+
+
+def _evaluation_performance_timeout(command: list[str], step_timeout: int) -> int:
+    """Return only the sequential per-Shape performance work in a request."""
+    if (
+        _command_option(command, "--baseline-path") is not None
+        or _command_option(command, "--baseline-commit") is not None
+    ):
+        repeats_value = _command_option(command, "--comparison-repeats")
+        repeats = int(repeats_value) if repeats_value is not None else DEFAULT_ABBA_REPEATS
+        return 2 * repeats * step_timeout
+    return step_timeout
+
+
 def _sandbox_command(
     workspace: Path,
     hardware: str,
@@ -271,6 +368,10 @@ def _sandbox_command(
     gateway_kind: str = "auto",
     private_reference_dir: Path | None = None,
     preflight: bool = False,
+    terminal_validation: bool = False,
+    evaluation_step_timeout: int = DEFAULT_EVALUATION_STEP_TIMEOUT,
+    gpu_clock_mhz: int | None = None,
+    job_root: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """Run the private GPU executor for trusted Supervisor verification."""
     if sum(bool(value) for value in (ssh, url, profile)) > 1:
@@ -286,7 +387,13 @@ def _sandbox_command(
         str(workspace),
         "--timeout",
         str(timeout),
+        "--evaluation-step-timeout",
+        str(evaluation_step_timeout),
     ]
+    if gpu_clock_mhz is not None:
+        if type(gpu_clock_mhz) is not int or gpu_clock_mhz <= 0:
+            raise ValueError("gpu_clock_mhz must be a positive integer")
+        cmd += ["--gpu-clock-mhz", str(gpu_clock_mhz)]
     if url:
         cmd += ["--url", url]
     elif profile:
@@ -309,21 +416,50 @@ def _sandbox_command(
     environment = os.environ.copy()
     from aka.light.runtime.paths import supervisor_campaign_root
     from aka.light.experiment.store import JOB_ROOT_ENV
+    from aka.light.execution.gateway_jobs import TERMINAL_VALIDATION_ENV
     # Bootstrap runs before the HTTP Runtime exists. Keep accepted IDs and the
     # exact uploaded wire request outside the workspace so recovery polls/replays
     # that same submission instead of creating an untracked replacement.
-    environment[JOB_ROOT_ENV] = str(supervisor_campaign_root(workspace) / "trusted-jobs")
+    environment[JOB_ROOT_ENV] = str(
+        job_root
+        if job_root is not None
+        else supervisor_campaign_root(workspace) / "trusted-jobs"
+    )
+    environment.pop(TERMINAL_VALIDATION_ENV, None)
+    if terminal_validation:
+        environment[TERMINAL_VALIDATION_ENV] = "1"
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:
         environment["ATREX_PRIVATE_REFERENCE_DIR"] = str(private_reference_dir)
     # The gateway wait includes GPU queueing; --timeout bounds remote execution.
     # Keep the outer process alive for the same queue grace used by sandbox.py.
-    if wall_timeout is not None:
+    if terminal_validation:
+        effective_timeout = None
+    elif wall_timeout is not None:
         effective_timeout = wall_timeout
     else:
         uses_ssh = bool(ssh or (not profile and not url and environment.get("ATREX_SANDBOX_SSH")))
         grace = 0 if uses_ssh else queue_wait_grace(environment)
-        effective_timeout = timeout + grace + 240
+        command_timeout = timeout
+        if not uses_ssh and gateway_kind == "run":
+            performance_timeout = _evaluation_performance_timeout(
+                command, evaluation_step_timeout
+            )
+            shape_count = _evaluation_request_shape_count(
+                workspace,
+                private_reference_dir,
+                command,
+                timeout,
+                performance_timeout,
+                grace,
+                environment,
+            )
+            command_timeout = shape_request_timeout(
+                timeout,
+                shape_count,
+                performance_timeout=performance_timeout,
+            )
+        effective_timeout = command_timeout + grace + 240
     raise_if_environment_blocked()
     process = spawn_owned_session(
         cmd,
@@ -352,17 +488,23 @@ def _sandbox_command(
                 pass
             return process.communicate()
 
-    deadline = time.monotonic() + effective_timeout
+    deadline = (
+        time.monotonic() + effective_timeout
+        if effective_timeout is not None
+        else None
+    )
     try:
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            remaining = deadline - time.monotonic() if deadline is not None else None
+            if remaining is not None and remaining <= 0:
                 stdout, stderr = stop_process_group()
                 raise subprocess.TimeoutExpired(
                     cmd, effective_timeout, output=stdout, stderr=stderr
                 )
             try:
-                stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+                stdout, stderr = process.communicate(
+                    timeout=min(0.25, remaining) if remaining is not None else 0.25
+                )
             except subprocess.TimeoutExpired:
                 raise_if_environment_blocked()
                 continue
@@ -405,25 +547,21 @@ def check_ssh_environment(
 
 def _test_result_from_stdout(stdout: str) -> dict:
     """Read the structured result emitted by the active sandbox harness."""
+    from aka.light.evaluation.result_json import parse_evaluation_result_line
+
     for line in reversed(stdout.splitlines()):
-        if line.startswith(TEST_RESULT_PREFIX):
-            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
-            if isinstance(result, dict):
-                return result
-    raise RuntimeError("sandbox test output has no structured RESULT_JSON line")
+        result = parse_evaluation_result_line(line)
+        if result is not None:
+            return result
+    raise RuntimeError("sandbox test output has no structured Evaluate result")
 
 
-def _record_local_test_result(workspace: Path, version: str, result: dict, *, generate_memory: bool = False) -> Path:
-    """Persist evaluator facts; publish an Agent memory summary only on opt-in."""
-    from aka.light.workspace.versions import save_version_record, version_record_path
+def _local_test_record(workspace: Path, version: str, result: dict, *, existing: dict | None = None) -> dict:
+    """Build normalized evaluator facts without choosing their storage boundary."""
     if not re.fullmatch(r"v[0-9]+", version):
         raise ValueError("Invalid canonical version")
     number = int(version[1:])
-    path = version_record_path(workspace, number, prefer_summary=generate_memory)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        data = {}
+    data = dict(existing or {})
     data.setdefault("version", version)
     data.setdefault("masked", False)
     data["timestamp"] = datetime.now(timezone.utc).isoformat()
@@ -435,7 +573,13 @@ def _record_local_test_result(workspace: Path, version: str, result: dict, *, ge
     by_shape = by_shape if isinstance(by_shape, dict) else {}
     perf["latency_us_by_shape"] = by_shape
     perf["measurement_scope"] = "real_evaluator_shapes"
-    perf["shape_ids_are_opaque"] = (workspace / "agent_problem.json").is_file()
+    generalized = (workspace / "agent_problem.json").is_file()
+    perf["shape_ids_are_opaque"] = generalized
+    if generalized:
+        perf["shape_visibility"] = "hidden"
+        perf["public_shape_ids"] = []
+    else:
+        perf["shape_visibility"] = "all"
     perf["measurement_status"] = (
         "complete" if result.get("all_pass") and by_shape else "incomplete"
     )
@@ -446,15 +590,7 @@ def _record_local_test_result(workspace: Path, version: str, result: dict, *, ge
         "performance_score", result.get("speedup_vs_ref_geomean")
     )
     perf["speedup_vs_ref_mean"] = result.get("speedup_vs_ref_mean")
-    perf["speedup_vs_ref_geomean"] = (
-        None
-        if performance_objective == "shape_speedup_arithmetic_mean"
-        else speedup_vs_reference(
-            workspace,
-            result.get("latency_us_geomean"),
-            result.get("speedup_vs_ref_geomean"),
-        )
-    )
+    perf["speedup_vs_ref_geomean"] = result.get("speedup_vs_ref_geomean")
     all_pass = bool(result.get("all_pass"))
     corr = data.setdefault("correctness", {})
     corr["status"] = "PASS" if all_pass else "FAIL"
@@ -464,7 +600,22 @@ def _record_local_test_result(workspace: Path, version: str, result: dict, *, ge
     gate["result"] = "PASS" if all_pass else "FAIL"
     failures = result.get("failures") or []
     gate["failure_reason"] = None if all_pass else "; ".join(map(str, failures))[:2000]
-    return save_version_record(workspace, number, data, generate_memory=generate_memory)
+    return data
+
+
+def _record_local_test_result(workspace: Path, version: str, result: dict) -> Path:
+    """Persist legacy non-V0 version facts; V0 is a Gateway Measurement."""
+    from aka.light.workspace.versions import save_version_record, version_record_path
+    number = int(version[1:]) if re.fullmatch(r"v[0-9]+", version) else -1
+    if number == 0:
+        raise ValueError("V0 evaluator facts must use the Campaign Measurement Store")
+    path = version_record_path(workspace, number)
+    try:
+        existing = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, json.JSONDecodeError):
+        existing = {}
+    data = _local_test_record(workspace, version, result, existing=existing)
+    return save_version_record(workspace, number, data)
 
 
 def detect_arch(

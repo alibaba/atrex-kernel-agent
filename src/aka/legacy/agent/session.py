@@ -27,7 +27,7 @@ class SessionResult:
 def run_session(
     workspace: Path,
     prompt: str,
-    timeout: int,
+    timeout: int | None,
     agent_cli: str = "claude",
     reasoning_effort: str = "max",
     extra_environment: Optional[dict[str, str]] = None,

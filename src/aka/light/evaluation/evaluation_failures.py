@@ -19,6 +19,11 @@ _DEVICE_ERRORS = (
     "no cuda gpus are available",
 )
 
+_CANDIDATE_WALL_CLOCK_TIMEOUT = re.compile(
+    r"^candidate exceeded [0-9]+(?:\.[0-9]+)?s wall-clock timeout$",
+    re.IGNORECASE,
+)
+
 
 def _messages(value: JsonValue) -> Iterator[str]:
     if isinstance(value, str):
@@ -41,6 +46,37 @@ def _results(value: JsonValue) -> Iterator[dict[str, JsonValue]]:
         # Follow only the Eval / native ABBA envelope, never source, stdout or metadata.
         for key in ("result", "abba", "sdk_results", "runs", "baseline", "candidate"):
             yield from _results(value.get(key))
+
+
+def embedded_candidate_wall_clock_timeouts(job: object) -> list[str]:
+    """Return exact candidate wall-clock timeout diagnostics from Eval evidence.
+
+    Search only structured result fields and skip captured streams/source text,
+    so a Kernel comment or echoed command cannot trigger a retry.
+    """
+    if not isinstance(job, dict) or job.get("status") not in {"succeeded", "failed"}:
+        return []
+    found: list[str] = []
+
+    def visit(value: object) -> None:
+        if isinstance(value, str):
+            message = value.strip()
+            if _CANDIDATE_WALL_CLOCK_TIMEOUT.fullmatch(message):
+                found.append(message)
+            return
+        if isinstance(value, list):
+            for child in value:
+                visit(child)
+            return
+        if not isinstance(value, dict):
+            return
+        for key, child in value.items():
+            if key in {"source", "stdout", "stderr", "traceback", "logs", "assembly"}:
+                continue
+            visit(child)
+
+    visit(job.get("result"))
+    return list(dict.fromkeys(found))
 
 
 def embedded_device_failure(job: dict[str, JsonValue]) -> str | None:

@@ -25,7 +25,7 @@ def _bounded(value, limit):
 
 
 def record_probe_diagnostics(job: dict) -> None:
-    """Do not publish this file to scratch, Agent results, or record-read.
+    """Do not publish this file to scratch or Agent-visible record projections.
 
     JOB_ROOT_ENV is injected by RecordedExperiments and resides outside the
     Agent workspace. Standalone commands without that authority do not write.

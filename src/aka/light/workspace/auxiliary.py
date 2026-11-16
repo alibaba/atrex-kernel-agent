@@ -15,13 +15,36 @@ WORKSPACE_ROLE_ENV = "ATREX_AGENT_WORKSPACE_ROLE"
 WORKSPACE_LAYOUTS = {
     "numerical-review": (("review_request.json", "candidate", "trusted", "instructions.md", "driver.py", "transport.py"), ("numerical_review.json",)),
     "production-review": (("review_request.json", "candidate"), ("dependency_review.json",)),
+    "research-claim-review": (
+        (
+            "submissions",
+            "gateway-records",
+            "references",
+            "kernels",
+            "evidence-manifest.json",
+        ),
+        ("review.json",),
+    ),
     "problem-generation": (
         ("reference.py", "input.py", "shapes.json", "metadata.json"),
         ("agent_problem.json",),
     ),
-    "baseline-exit-review": (("crash_record.json", "candidate"), ("resume.json",)),
     "baseline-correctness-review": (("context",), ("correctness_review.md",)),
 }
+
+
+def ensure_workspace_scratch(workspace: Path) -> None:
+    """Ensure every Agent view starts with a private writable scratch directory."""
+    scratch = workspace.resolve() / "scratch"
+    if scratch.is_symlink():
+        raise ValueError("Agent scratch path cannot be a symlink")
+    try:
+        scratch.mkdir(mode=0o700, exist_ok=True)
+    except FileExistsError as error:
+        raise ValueError("Agent scratch path must be a directory") from error
+    if not scratch.is_dir():
+        raise ValueError("Agent scratch path must be a directory")
+    scratch.chmod(0o700)
 
 
 def reset_episode_scratch(workspace: Path) -> None:
@@ -31,7 +54,7 @@ def reset_episode_scratch(workspace: Path) -> None:
         scratch.unlink()
     elif scratch.exists():
         shutil.rmtree(scratch)
-    scratch.mkdir(mode=0o700)
+    ensure_workspace_scratch(workspace)
 
 
 class AuxiliaryWorkspace:

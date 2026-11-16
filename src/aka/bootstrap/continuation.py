@@ -27,6 +27,28 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def launch_composition(payload: str) -> dict:
+    """Return the frozen Core identity embedded in a captured launch.
+
+    ``capture()`` creates this payload before any Light Campaign exists.  The
+    Campaign can therefore atomically persist the already-validated identity
+    in its own manifest instead of creating a second root-level lock file.
+    """
+    from aka.core.lock import validate_snapshot
+
+    try:
+        value = json.loads(payload)
+        identity = value["identity"]
+    except (KeyError, TypeError, ValueError) as exc:
+        raise CompositionError(
+            "continuation", "captured launch has no composition identity"
+        ) from exc
+    validate_snapshot(identity, source="continuation composition identity")
+    # JSON round-tripping also detaches the mutable object from the decoded
+    # selection while preserving the exact lock representation.
+    return json.loads(json.dumps(identity, allow_nan=False))
+
+
 def token_definition_identity(definitions) -> dict:
     """Pin declared token modules as code, including package resource membership."""
     identities = {}

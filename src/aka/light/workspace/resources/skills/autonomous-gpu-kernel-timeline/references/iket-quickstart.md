@@ -70,7 +70,7 @@ python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
 For a remote campaign command, pass the skill as an explicit sandbox input and sync only the attempt:
 
 ```bash
-python tools/sandbox.py --kind profile \
+python3 tools/sandbox.py --kind profile \
   --input skills/autonomous-gpu-kernel-timeline \
   --sync scratch/episode_N/timeline/attempt-N -- \
   python skills/autonomous-gpu-kernel-timeline/scripts/timeline.py profile-iket \
@@ -88,10 +88,11 @@ Use `capture-iket` and `export-iket` separately only for local debugging. Export
 non-empty native Perfetto trace exists, the target launch is present, all declared events are observed
 with the declared kind, locations are valid, and range timestamps are ordered. It emits the common
 deterministic Perfetto JSON gzip, summary, manifest, binary identity, native-capture index, and receipt.
-The commands above create exploration evidence. Before requesting `--stage final`, run the immutable
-AKA evaluator against the instrumented snapshot and pass its sandbox-owned
-`.atrex_long_horizon/evaluations.jsonl` to `export-iket` as `--correctness-evidence`; the text
-`--correctness passed` alone cannot produce `decision_grade`.
+The commands above create exploration evidence. Managed Light keeps evaluator authority in immutable
+Gateway Records rather than projecting a private evaluator log into the Agent workspace. Request `--stage final` only when Runtime explicitly returns
+a hash-bound correctness receipt accepted by `--correctness-evidence`. Otherwise keep the trace
+diagnostic, remove all probes, and rely on the ordinary immutable evaluator for final Kernel
+acceptance; `--correctness passed` alone cannot produce `decision_grade`.
 
 Do not run IKeT in the same process as NSYS or NCU. `--enabled-cluster X,Y,Z` can reduce output for a
 large grid, but that is sampled coverage and must not be described as all-CTA evidence. IKeT time is

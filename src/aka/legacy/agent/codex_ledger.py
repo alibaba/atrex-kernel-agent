@@ -68,6 +68,7 @@ def usage_matches(observed: TokenUsage, terminal: TokenUsage) -> bool:
         "cache_read_tokens",
         "cache_write_tokens",
         "total_tokens",
+        "reasoning_tokens",
     ):
         left = getattr(observed, name)
         right = getattr(terminal, name)
@@ -88,7 +89,13 @@ def _usage(value: object) -> TokenUsage:
     )
     if any(item is None for item in components):
         return TokenUsage.unavailable()
-    return TokenUsage(*components, measurement="exact")
+    details = value.get("output_tokens_details")
+    reasoning = _counter(value, "reasoning_tokens")
+    if reasoning is None:
+        reasoning = _counter(value, "reasoning_output_tokens")
+    if reasoning is None and isinstance(details, Mapping):
+        reasoning = _counter(details, "reasoning_tokens")
+    return TokenUsage(*components, measurement="exact", reasoning_tokens=reasoning)
 
 
 CODEX_LEDGER_CAPABILITIES = AgentRuntimeCapabilities(
@@ -333,6 +340,7 @@ class CodexSessionLedgerObserver:
             "cache_read_tokens",
             "cache_write_tokens",
             "total_tokens",
+            "reasoning_tokens",
         ):
             previous_value = getattr(previous_usage, name)
             invocation_value = getattr(invocation_usage, name)

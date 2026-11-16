@@ -14,7 +14,7 @@ describe the versions and environments identified in those documents.
 | [Light modules and profiles](optional-light-modules.md) | Provider options, Wiki, search, source imports, budgets, recovery |
 | [Installed startup](application-plugin-migration.md) | CLI/profile selection, package ownership, frozen continuations |
 | [Native CUDA and source layouts](native-cuda.md) | Source trees, single-file and CUDA manifests, source identity |
-| [Agent workspace isolation](agent-workspace-isolation.md) | Native/Bubblewrap selection, Homes, mounts, projected proc |
+| [Agent workspace isolation](agent-workspace-isolation.md) | Native/Bubblewrap selection, Homes, mounts, private/host proc modes |
 | [Supplemental numerical validation](numerical-validation.md) | Optional production risk probes and repair semantics |
 
 ## Runtime and extensions
@@ -23,7 +23,7 @@ describe the versions and environments identified in those documents.
 | --- | --- |
 | [Tool Runtime](supervisor-runtime.md) | HTTP authority, GPU/Wiki tools, public results and deadlines |
 | [Measurement records](measurement-records.md) | Source/task identity, deduplication, result queries and GPU recovery |
-| [Runtime Journal](runtime-journal.md) | Default report-only workflow and optional research annotations |
+| [Runtime research and submissions](runtime-journal.md) | Direction/Experiment records and exact-commit submission audit |
 | [Handoff and promotion](supervisor-promotion.md) | Source sealing, acceptance, ABBA, promotion-audit repair |
 | [Session observability](session-observability.md) | Capture configuration, transcripts, usage and failure boundaries |
 | [Core plugin framework](plugin-framework.md) | Composition, service contracts, lifecycle and ownership |

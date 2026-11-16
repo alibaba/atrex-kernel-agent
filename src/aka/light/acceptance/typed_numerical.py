@@ -20,7 +20,7 @@ def input_source(original: bytes, case: dict, seed: int) -> bytes:
         f"    return numerical_inputs(__aka_original_inputs(**kwargs), {case!r}, {seed!r}, 0)\n").encode()
 
 
-def run(campaign, workspace, suite, shapes, schedule, directory, *, cancel, max_rel_l2):
+def run(campaign, workspace, suite, shapes, schedule, directory, *, cancel):
     if suite["world_size"] != 1:
         raise ValueError("Typed supplemental probes require one GPU")
     rows = []
@@ -42,8 +42,8 @@ def run(campaign, workspace, suite, shapes, schedule, directory, *, cancel, max_
                     response = campaign.measure_for_acceptance(probe, [
                         "--kind", "run", "--no-sync", "--", "python3", "test_kernel.py",
                         "--correctness-only", "--multi-seed", "0",
-                        "--correctness-max-rel-l2", str(max_rel_l2),
-                    ], execution_timeout=600, parent=cancel.parent, reference_snapshot=probe)
+                    ], execution_timeout=600, parent=cancel.parent, reference_snapshot=probe,
+                        terminal_validation=True)
                 result, record_id = None, None
                 for line in response["stdout"].splitlines():
                     if line.startswith("[test_kernel] RESULT_JSON="):

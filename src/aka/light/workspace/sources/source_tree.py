@@ -1,4 +1,4 @@
-"""Editable ``kernel.py`` plus optional implementation sources."""
+"""Editable ``kernel.py`` plus an optional ``impl/`` source directory."""
 from __future__ import annotations
 import hashlib,json,os,stat,subprocess,tarfile,time
 from pathlib import Path
@@ -12,24 +12,24 @@ def pack(files, policy):
 
 
 def default_tree(files):
-    """Normalize one editable ``kernel.py`` into the source-tree contract."""
+    """Normalize one editable ``kernel.py`` into the default source-tree layout."""
     if not isinstance(files, dict) or set(files) != {"kernel.py"}:
         raise ValueError("Default source-tree initialization requires exactly kernel.py")
+    normalized = {"kernel.py": files["kernel.py"]}
     policy = {
         "schema_version": 1,
         "source_revision": None,
         "seed_digest": "sha256:" + hashlib.sha256(json.dumps(
-            {name: data.decode() for name, data in sorted(files.items())},
+            {name: data.decode() for name, data in sorted(normalized.items())},
             sort_keys=True,
         ).encode()).hexdigest(),
         "package_root": ".",
-        # ``impl`` is an allowed future root, not a required initial directory.
         "editable_roots": ["kernel.py", "impl"],
         "immutable_files": {},
         "runtime_requirements": [],
     }
-    validate_files(files, policy)
-    return policy, files
+    validate_files(normalized, policy)
+    return policy, normalized
 
 def validate_import_options(options):
     if (not isinstance(options, dict)
@@ -55,18 +55,16 @@ def validate_policy(policy):
             or not isinstance(seed, str) or not seed.startswith("sha256:") or len(seed) != 71
             or any(c not in "0123456789abcdef" for c in seed[7:])):
         raise ValueError("Source contract needs a seed digest and an exact Git revision or null for a directory snapshot")
-    if not isinstance(policy["editable_roots"], list) or not policy["editable_roots"]:
-        raise ValueError("Source contract requires editable_roots")
+    if policy["package_root"] != ".":
+        raise ValueError("Source-tree package_root is fixed at '.'")
+    if policy["editable_roots"] != ["kernel.py", "impl"]:
+        raise ValueError("Source-tree editable_roots are fixed at kernel.py and impl/")
     for root in policy["editable_roots"]:
         relative(root)
         if not source_name(root):
             raise ValueError("Editable root collides with workspace infrastructure")
-    if not isinstance(policy["immutable_files"], dict):
-        raise ValueError("Source contract immutable_files must be an object")
-    kernel_editable = editable(policy, "kernel.py")
-    kernel_immutable = "kernel.py" in policy["immutable_files"]
-    if kernel_editable == kernel_immutable:
-        raise ValueError("Source contract must make kernel.py either editable or immutable")
+    if policy["immutable_files"] != {}:
+        raise ValueError("Source-tree Kernel files are editable; immutable_files must be empty")
     for name, digest in policy["immutable_files"].items():
         relative(name)
         if not source_name(name) or not isinstance(digest, str) or len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -135,16 +133,14 @@ def collect(workspace, policy, *, validate=True):
     return validate_files(files, policy) if validate else files
 
 def instructions(policy):
-    entry = ("Editable kernel.py and optional implementation sources form one Kernel. "
-             "kernel.py is the evaluator entry point and may contain the complete implementation. "
-             if editable(policy, "kernel.py") else
-             "The fixed kernel.py adapter and bundled implementation sources form one Kernel. ")
-    return ("\n## Kernel source tree\n" + entry +
-            "Edit/add/delete source only inside editable_roots: " + json.dumps(policy["editable_roots"]) +
-            ". Paths listed as immutable must stay unchanged. "
-            "Keep probes and temporary build outputs in scratch/. "
-            "Evaluate, Profile, Check, Disassemble, sealed reports and broadcasts bind the entire tree. "
-            "kernel-read writes a directory for tree Kernels; pass that directory to --baseline-path.\n")
+    return ("\n## Kernel source tree\nEditable source: `kernel.py` plus optional `impl/`. "
+            "Together they form one Kernel. "
+            "You may keep the complete implementation in kernel.py or create, edit and delete "
+            "helper, host, CUDA and header sources below impl/. "
+            "Keep probes and temporary build outputs in scratch/; use custom tools/ or skills/ "
+            "only for genuinely reusable Agent helpers. "
+            "Evaluate, Profile, Check, Disassemble, commit review and broadcasts bind the entire tree. "
+            "For ABBA, pass a reachable Git commit with --baseline-commit; Runtime exports it privately.\n")
 
 def _git_sources(repository, revision, paths):
     if not isinstance(revision, str) or len(revision) not in {40, 64} or any(c not in "0123456789abcdef" for c in revision):
@@ -265,18 +261,21 @@ def import_tree(manifest_path, repository=None, *, directory=None):
     files = (_git_sources(Path(repository).expanduser().resolve(), revision, paths)
              if repository is not None else _directory_sources(directory, paths))
     if "kernel.py" in files:
-        raise ValueError("Imported source collides with the task entry point")
+        raise ValueError("Imported source collides with the task adapter")
     files["kernel.py"] = read_regular_bytes(manifest_path.parent / relative(manifest["adapter"]), limit=MAX_FILE + 1)
-    roots = [relative(p) for p in manifest["editable_roots"]]
-    for root in roots:
+    imported_roots = [relative(p) for p in manifest["editable_roots"]]
+    for root in imported_roots:
         if not any(name.startswith(root + "/") for name in files):
             raise ValueError("editable_roots must name imported source directories")
-    editable_roots = ["kernel.py", *roots]
+    # Normalize imported packages into the one Agent-visible source boundary.
+    normalized = {"kernel.py": files.pop("kernel.py")}
+    for name, data in files.items():
+        normalized[f"impl/{name}"] = data
+    files = normalized
     policy = {"schema_version": 1, "source_revision": revision, "seed_digest": "sha256:" + hashlib.sha256(
         json.dumps({k: v.decode() for k, v in sorted(files.items())}, sort_keys=True).encode()).hexdigest(),
-        "package_root": relative(spec.get("package_root", "."), dot=True), "editable_roots": editable_roots,
-        "immutable_files": {k: hashlib.sha256(v).hexdigest() for k, v in files.items()
-                            if k != "kernel.py" and not any(k.startswith(p + "/") for p in roots)},
+        "package_root": ".", "editable_roots": ["kernel.py", "impl"],
+        "immutable_files": {},
         "runtime_requirements": manifest.get("runtime_requirements", [])}
     if policy["package_root"] != ".":
         raise ValueError("Native Eval archives require package_root='.', matching Runtime; no Dev fallback")
@@ -359,16 +358,16 @@ class SourceTree:
                               if name.startswith(prefix) and source_name(name[len(prefix):])}, policy)
     def editable(self, policy, name):return editable(policy, name)
     def instructions(self, policy):return instructions(policy)
-    def metadata(self, policy):return {POLICY:(json.dumps(policy, sort_keys=True)+'\n').encode()}
+    def metadata(self, policy):return {}
     def obsolete(self, workspace, policy):return set(collect(workspace, policy, validate=False))
     def install(self, workspace, files, policy):
-        for name,data in {**files, **self.metadata(policy)}.items():publish(workspace,name,data)
+        for name,data in files.items():publish(workspace,name,data)
     def execution_source(self, files, policy, archive):
         if policy['package_root'] != '.':raise ValueError("Eval archives require package_root='.'; no Dev fallback")
         requirements=tuple(v['distribution']+v.get('version','') for v in policy['runtime_requirements'])
         return ExecutionSource({'archive':archive,'entry_point':'kernel.py'},
                                {archive:{k:v.decode() for k,v in files.items()}},requirements)
-    def declared_paths(self, workspace, policy):return set(collect(workspace,policy))|{POLICY}
+    def declared_paths(self, workspace, policy):return set(collect(workspace,policy))
     def evidence_paths(self, workspace, policy):return self.declared_paths(workspace,policy)
 
     def typed_limitation(self, workspace, policy):return None

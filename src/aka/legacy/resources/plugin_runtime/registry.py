@@ -24,6 +24,7 @@ RESERVED_MOUNTS = frozenset(
         "reference",
         "skills",
         "reference-projects",
+        "references",
         "atrex-bench",
         "memory",
         "plans",

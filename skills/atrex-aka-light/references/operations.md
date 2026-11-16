@@ -1,194 +1,284 @@
 # AKA Light operations
 
-Read this file when starting, configuring, stopping, resuming, or explaining a Light campaign.
+Read this file when starting, explaining, resuming or stopping a Light campaign.
 
 ## Preflight
 
-Resolve these inputs before launching:
+### Required user input
 
-- AKA checkout and commit;
-- [supported Native Atrex-Bench or SOL problem](problem-inputs.md);
-- target Agate hardware/platform and endpoint profile;
-- one target framework, or intentional auto-dispatch;
-- Agent backend and its existing authentication/configuration;
-- optimization mode and evaluator-shape visibility;
-- candidate layout;
-- workspace and campaign budgets.
+Before every new launch, explain the mode choices and explicitly ask the user for:
 
-Inspect `git status` before syncing code. Preserve user changes. Verify `aka`, Python, the selected Agent CLI, and Agate credentials without printing secrets.
+- a safe way to make Agate `AGATE_AK` and `AGATE_SK` available to the Supervisor process;
+- the canonical Atrex-Bench checkout root containing `scripts/run_eval.py` and `src/atrex_bench/`;
+- the target GPU/platform token, for example `L20N` or `L20D`; never infer it from the problem,
+  available Sandbox, queue state or an older Campaign.
+- the Agent CLI: `claude` (Claude Code), `codex`, `qodercli`, or `pi`;
+- the optimization mode: Fast, Performance or Ultra; when Ultra is selected, also require its DSL.
+- whether to run the Agent with Bubblewrap Sandbox (`light-sandbox`) or without it (`light`); when
+  Sandbox is selected, ask for `private` or `host` proc mode.
+- whether to expose optional knowledge directories with `--agent-reference-dir`, or explicitly use
+  none. Bubblewrap mounts them read-only; native Light cannot protect the original directories from
+  modification, so tell the user to retain an independent copy.
 
-## Command shape
+These are required user decisions for every new Campaign. Pass the chosen `--agent-cli`,
+`--optimization-mode`, and `--profile` explicitly; do not rely on parser or composition defaults.
+When Bubblewrap is chosen, also materialize the user's proc-mode choice explicitly.
 
-Launch options belong before `--`; optimization options belong after it:
+Reference directories appear as `references/<basename>/` and must have unique basenames. They are
+optional engineering knowledge, not candidate source or evaluation evidence. Native Light creates
+workspace links to the original directories; it does not copy them and cannot enforce read-only
+access under the coordinator OS user.
+
+For Atrex-Bench, offer exactly two acquisition paths: use an existing canonical checkout supplied
+by the user, or clone `https://github.com/alibaba/atrex-bench` into a destination selected by the
+user. Do not suggest `/Users/guoyuqi/atrex-bench` merely because it exists locally.
+
+| Agent CLI | Selection meaning |
+|---|---|
+| `claude` | Claude Code; requires its existing authentication/configuration |
+| `codex` | OpenAI Codex CLI; requires its existing authentication/configuration |
+| `qodercli` | Qoder CLI; requires its existing authentication/configuration |
+| `pi` | Pi CLI; requires its existing authentication/configuration |
+
+Explain the modes as follows:
+
+| Mode | What the user is choosing |
+|---|---|
+| Fast | Agent-selected DSL; declared reproducible libraries or prebuilt implementations may perform core computation |
+| Performance | Agent-selected DSL; final core computation must be self-authored |
+| Ultra | User-pinned DSL plus self-authored core computation; launch is invalid without the DSL |
+
+Explain the Agent boundary separately from optimization mode:
+
+| Choice | Meaning |
+|---|---|
+| With Sandbox (`light-sandbox`) | Linux Bubblewrap isolates the Agent from Supervisor-private filesystem/process state while retaining Light capture and persistent Session/Git; it does not create an Aone Sandbox |
+| Without Sandbox (`light`) | Agent runs natively as the coordinator's current OS user; Light persistence/capture remain, but Bubblewrap isolation is absent |
+
+`light-sandbox` requires Linux and Bubblewrap. Native macOS must use `light` or run
+`light-sandbox` inside Lima. An Aone Sandbox is an outer execution environment; selecting
+`light-sandbox` inside it still refers to the inner Agent boundary.
+
+When Sandbox is selected, explain and require one proc-mode choice:
+
+| Proc mode | Isolation and supported environment |
+|---|---|
+| `private` | New PID namespace and procfs; unrelated coordinator processes are hidden. Supported on ordinary Linux and Lima. |
+| `host` | Shares the outer PID namespace and complete `/proc`; filesystem allowlist and dropped capabilities remain, but process visibility is not isolated. |
+
+**Aone Sandbox supports only `host`.** Its container policy rejects the nested procfs mount used by
+`private`; do not try `private`, compatibility shims, or projected `/proc` there. Apply the complete
+host-proc agent composition patch described in [installation](installation.md), and use a dedicated
+Aone Sandbox because the Agent can see every process in it. Without Agent Sandbox (`light`), proc
+mode is not applicable and must not be requested.
+
+Do not reuse these values from an older Campaign or silently select a GPU based on availability.
+Do not silently select a nearby checkout. Do not ask
+the user to paste AK/SK values into chat. Credentials must already be present in the launch
+environment or come from an existing secure credential source; verify presence without printing
+values. Ask separately for `--sandbox-hardware` only when its Agate worker token differs from the
+logical platform, and require the user to confirm both tokens.
+
+Resolve before launch:
+
+- AKA checkout and commit matching installed wheels;
+- supported Native Atrex-Bench or SOL input;
+- target platform, Agate route and optional distinct worker alias;
+- explicit Agent CLI and its existing authentication;
+- explicit framework for Ultra, or intentional Agent-selected DSL for Fast/Performance;
+- Fast, Performance or Ultra final-source policy;
+- Shape visibility and candidate layout;
+- durable workspace, search topology and budgets.
+
+Inspect `git status` before syncing code. Preserve user changes. Verify `aka`, Python, the Agent CLI and Agate access without printing secrets.
+
+For a complete smoke example, including a minimal operator, checkout validation and launch
+command, use [the Native Vector Add example](../examples/native-atrex-bench-vector-add/README.md).
+
+## Launch command
+
+The uppercase values below are required user selections, not defaults. Include
+`--framework USER_SELECTED_ULTRA_DSL` only for Ultra.
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox -- \
-  --op-dir /path/to/atrex-bench/operator \
-  --platform L20D \
-  --framework CuteDSL \
-  --agent-cli claude \
-  --optimization-mode production \
-  --workspace /path/to/campaign-root \
-  --max-iters 20
+  --profile USER_SELECTED_PROFILE -- \
+  --op-dir /path/to/atrex-bench/data/operator \
+  --platform USER_SELECTED_GPU \
+  --agent-cli USER_SELECTED_AGENT_CLI \
+  --optimization-mode USER_SELECTED_MODE \
+  --workspace /path/to/campaign-root
 ```
 
-Omit `--profile` for native Light. `--profile light-sandbox` is the Bubblewrap Agent boundary on the coordinator; it is unrelated to provisioning an Aone Sandbox.
+`--workspace` is a dedicated non-Git Campaign directory and must be empty on a
+new launch (the composition bootstrap may already have created `.atrex_plugins/`).
+Light writes Campaign evidence directly below this root and creates Agent Git
+repositories only at `lineages/tNNNN/agent-workspace`. It does not create a
+parent `.atrex-supervisor-runtime/<hash>` namespace, a nested
+`.atrex-supervisor-runtime/` wrapper, or Controller Git clones.
 
-Run the checkout's help before constructing non-trivial commands:
+Launch options precede `--`; campaign options follow it. Pass `--profile light` for the explicitly
+selected native boundary or `--profile light-sandbox` for the explicitly selected Bubblewrap
+boundary. `light-sandbox` is the Bubblewrap boundary on the coordinator, not an Aone Sandbox
+request.
+
+Run checkout-specific help first:
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent -- --help
 ```
 
-Installed Agate options that Light intentionally exposes appear under their native names in this help. Pass only options shown for the installed version; Light refuses sensitive options and rejects options unsupported by the requested Agate operation.
+Before constructing an ordinary command, use one independent serial trajectory: carry a patch with
+`workflow.config.search: {}` and ask the user for a positive `--max-iters N`. Do not choose the
+value for them. Direction and Experiment annotations stay disabled and should not burden ordinary
+launch intake. Expose pooled search or Research module settings only after an explicit user request.
 
-Read [Configuration](configuration.md) for the complete current-main option table, defaults, composition-patch fields and the shared-parser flags that remain Legacy-only.
+After validation, launch in the background by default. Preserve the Campaign root, launcher log,
+checkout commit, and durable process identity. In Aone Sandbox use `akfctl sandbox command submit`
+and retain its command ID; do not emulate durability with `bash ... &`. For a local host use the
+host's durable process supervisor or a detached launch script with stdout/stderr redirected to a
+known bounded log. Run in the foreground only when the user explicitly asks for an interactive
+launch.
 
-## Launch profiles
+Once accepted, observe the Campaign with the `atrex-aka-light-observability` skill. The first status
+view is `light_lineage_status.py`; use `light_kernel_history.py`, `light_kernel_best.py`,
+`light_runtime_calls.py`, `light_agate_calls.py`, and evidence tracing/export only as needed. The
+launcher process is not sufficient evidence of lineage progress or GPU execution health.
 
-`--profile` selects the Workflow, workspace implementation, Agent boundary and services. It is orthogonal to `--optimization-mode`, which selects the candidate-acceptance policy inside the chosen Workflow.
+## Profiles
 
-| Profile | Workflow | Agent | Capture | Boundary |
-|---|---|---|---|---|
-| `light` (default) | Managed drafts and unified Light Episodes | Native Light Agent | Enabled | Cooperative same-UID execution |
-| `light-sandbox` | Managed drafts and unified Light Episodes | Bubblewrap Light Agent | Enabled | Filesystem/process isolation on Linux |
-| `workflow` | Legacy Setup/Fast/Full/goal Workflow | Legacy Agent | Legacy behavior | Explicit old-Workflow compatibility |
-| `observed` | Legacy Workflow | Native Light Agent | Enabled | Observation upgrade only; not Light Workflow |
-| `sandbox` | Legacy Workflow | Bubblewrap Light Agent | Disabled | Agent isolation only; not Light Workflow |
+| Profile | Workflow | Agent boundary |
+|---|---|---|
+| `light` | Current Light | Native process, capture enabled |
+| `light-sandbox` | Current Light | Bubblewrap, capture enabled |
+| `workflow` | Legacy | Legacy Agent behavior |
+| `observed` | Legacy | Native Light Agent/capture only |
+| `sandbox` | Legacy | Bubblewrap Agent only |
 
-Only `light` and `light-sandbox` install the managed Light Workspace, private HTTP Tool Runtime, measurement records, Journal service and Light acceptance/promotion path. `observed` and `sandbox` replace only the Agent provider inside Legacy.
+Only `light` and `light-sandbox` select the current persistent Session, Agent Git, Runtime/MeasurementStore, Research Store and accepted-submission workflow. `observed` and `sandbox` do not turn Legacy into Light.
 
-Bubblewrap profiles require Linux and fail explicitly on macOS. Bubblewrap limits filesystem/process visibility; it is not a network sandbox or separate user account. Native `light` remains cooperative under the same OS user.
+Bubblewrap requires Linux. On macOS the user must choose native Light or a Lima Linux VM. In Lima,
+the user may explicitly select `private` or `host`. Aone Sandbox allows only explicit `host`, which
+binds the Sandbox's complete `/proc` and shares its PID namespace; if the user does not accept that
+boundary, use native `light`. Host mode retains filesystem isolation but is not process isolation.
+Bubblewrap is not a network allowlist or another OS account.
 
-The CLI accepts a Profile JSON path in addition to the named Profiles. Treat custom compositions as advanced configuration: required Light services form a coherent set and should not be removed independently. Recorded continuations restore their frozen launch Profile and reject a new `--profile` or composition patch. For manual restarts, retain the original Profile. Never point Legacy and Light Workflows at the same live workspace; start a new workspace when changing Workflow families.
+## Modes
 
-## Optimization modes
+### Fast
 
-The optimization mode controls which candidate implementations may be accepted. It is independent of the launch profile (`light` or `light-sandbox`), Agate endpoint, Agent backend, and evaluator-shape visibility.
+The Agent chooses any evaluator-supported DSL or mixture. Explicitly declared, reproducible
+third-party or prebuilt implementations may perform core computation. Review still rejects hidden
+dispatch, undeclared downloads, secret external paths, incomplete dependency inventory and manifest
+mismatch.
 
-### `leaderboard`
+### Performance
 
-`leaderboard` is the permissive default on current main. Choose it for benchmark exploration where the main objective is the fastest correct result:
+The Agent chooses a DSL using supplied expert guidance and measurements; recommendations are not a
+hard gate. Final core computation must be self-authored. Framework runtimes and
+compiler/header/ABI/launch plumbing remain allowed, while prebuilt core compute, PyTorch/ATen
+fallback, hidden dispatch and external implementations are rejected.
 
-- the requested framework is a preferred direction, not a hard purity boundary;
-- evidence-backed mixed or alternate implementations are allowed;
-- third-party helper and kernel libraries are allowed;
-- evaluator correctness, full Evaluate evidence, exact source sealing, ABBA comparison, and the minimum-improvement promotion gate remain mandatory.
+### Ultra
 
-The result may be valid for the benchmark without being self-contained or deployable solely in the requested framework. With `--framework-baseline=auto`, leaderboard normally retains V0 instead of running the production-oriented V1 bring-up stage; use `always` to request that stage explicitly. Source-layout-specific behavior, including CUDA tasks, can still pin or establish an applicable baseline, so report the actual Supervisor decision rather than inferring it from the flag alone.
+Ultra applies the Performance provenance rules and additionally pins one explicit DSL. Launch fails
+before workspace creation when `--framework` is missing or open DSL is requested.
 
-### `production`
+All three modes require a passing full Evaluate with complete per-Shape performance for the exact
+Agent Git commit. None adds automatic terminal ABBA or a minimum-improvement threshold.
 
-Choose `production` when accepted and exported candidates must be deployable and conform to the selected framework:
+Evaluator Shapes are exposed by default. `--no-expose-evaluator-shapes` is valid only for the
+supported generalized Performance/Ultra flow. If Light cannot create/load the actual hidden
+projection, it fails instead of silently exposing Shapes under a hidden label.
 
-- V0 may be the PyTorch reference wrapper, but optimized candidates must implement GPU computation in the selected framework;
-- self-authored build, compiler, header, ABI, and launch support may be accepted;
-- prebuilt compute kernels/operators, alternate DSLs, PyTorch compute fallback, hidden dispatch, and external implementation loading are rejected;
-- deterministic source checks and an independent read-only full-candidate policy review are required;
-- missing, malformed, or rejecting policy evidence blocks acceptance even when correctness and performance pass;
-- ordinary correctness, full-workload evaluation, candidate sealing, ABBA comparison, and minimum-improvement promotion remain required;
-- `--framework-baseline=auto` normally creates or pins a framework-compliant V1 after V0;
-- final packaging fails closed if the retained candidate is not production-compliant.
+## Current lifecycle
 
-Validated multi-GPU evaluator contracts may skip the single-GPU source-policy inspection because distributed implementations require different communication facilities. They still retain evaluator correctness, numerical checks when enabled, and performance promotion gates.
+The current workflow is:
 
-### Shared behavior and separate controls
+```text
+prepare deterministic V0
+→ full-workload V0 Evaluate
+→ persistent Agent Session + Agent Git
+→ repeated probe/edit/commit/measure cycles
+→ optional submit-kernel for exact evaluated commits
+→ accepted-submission lineage/global winner selection
+```
 
-Both modes measure V0 and promote only verified improvements. Production adds implementation-policy gates; it does not replace measurement. Conversely, leaderboard removes the production purity requirement; it does not remove correctness or promotion evidence.
+An Episode is an audit segment, not a candidate slot. When the Agent stops, the segment ends; the next segment resumes the same conversation, workspace and Agent Git. There is no Framework Baseline, `episode-report`, source sealing, terminal handoff, automatic terminal ABBA, candidate rollback or Supervisor promotion threshold.
 
-Evaluator shapes are exposed by default on current main in both modes. `--no-expose-evaluator-shapes` requests the generalized hidden-shape flow for a supported production operator. Shape visibility and optimization mode are both workspace identity: do not resume a workspace with a different mode or visibility setting. Use a fresh workspace when intentionally changing either one.
+`submit-kernel` accepts only a reachable clean Agent Git commit whose standard full Evaluate is passing and has complete per-Shape performance. Fast skips the independent final-source Reviewer; Performance and Ultra run it, with Ultra additionally enforcing the configured DSL. The first call creates immutable `v1` under a stable Submission ID. A repaired and fully evaluated commit can revise that identity as the next `vN`; its Reviewer resumes the prior Session while rechecking the complete candidate. Submission does not end the Session or change Agent Git, and a rejected later revision does not revoke an older accepted revision.
 
-Always verify these defaults in the selected checkout because they have changed across versions.
+Explicit ABBA remains available when the Agent wants paired comparison evidence. It is not automatically invoked at Episode boundaries.
 
-## V0 and framework baseline
+## Platform, framework and source layout
 
-The current Light sequence is:
-
-1. prepare the selected initial source;
-2. run and commit the full-workload V0 measurement;
-3. optionally establish a framework baseline V1;
-4. begin optimization Episodes.
-
-`--framework-baseline` controls V1, not V0:
-
-- `auto`: normally run V1 in production; current behavior may pin an already compliant source;
-- `always`: enable the V1 stage in leaderboard mode too;
-- `never`: optimize directly from measured V0.
-
-Current main does not support skipping V0 and going directly to Framework Baseline. A failed V0 stops before V1. Confirm this invariant in `src/aka/light/workflow/bootstrap.py` before describing a newer branch.
-
-## Platform, framework and candidate layout
-
-`--platform` is required and cannot be deduced from the operator directory. It is the logical target product used in Agent instructions, Wiki context, hardware fallback detection and workspace identity. By default it is also the hardware token sent to Agate. Use the exact token accepted by the selected environment.
-
-When the logical product and remote executor alias differ, use `--sandbox-hardware` without changing the logical platform:
+`--platform` is the logical product shown to the Agent and normally sent to Agate. If the worker alias differs:
 
 ```bash
 --platform L20D --sandbox-hardware AGATE_WORKER_ALIAS
 ```
 
-The alias in this example is a placeholder. If Agate accepts `L20D`, omit `--sandbox-hardware`; the CLI automatically uses the `--platform` value. Supply the override only when the configured Agate endpoint exposes a different scheduler token.
+`--platform` is not the compiler architecture. Runtime probing should determine values such as `sm_103a`, `sm_100a`, or `gfx942`; use `--arch` only for an intentional override or failed probe.
 
-`--platform` is distinct from runtime architecture. AKA normally probes the actual worker and obtains an architecture such as `sm_89`, `sm_100` or `gfx942`. Runtime architecture is authoritative for NVIDIA/AMD vendor selection; the platform name is a fallback. PPU is recognized from product tokens beginning with `PPU` or `ZW` because its borrowed architecture token is ambiguous. Use `--arch` only for an intentional override or when probing fails.
+Fast and Performance create one open-DSL campaign. Ultra requires exactly one explicit
+`--framework`; it does not auto-dispatch and rejects `--no-specify-dsl`.
 
-Supplying one `--framework` runs one child Campaign in that DSL. In Production the assigned framework is a hard acceptance constraint; in Leaderboard it is a preferred direction. Supported auto-dispatch sets are:
+Candidate layouts:
 
-| Detected vendor | Frameworks when `--framework` is omitted |
-|---|---|
-| NVIDIA | `Triton`, `CuteDSL`, `Cuda`, `TileLang` |
-| AMD | `Triton`, `FlyDSL`, `TileLang` |
-| PPU | `Triton`, `Cuda`, `TileLang` |
-| Unknown | `Triton`, `TileLang` |
+- Native default `source_tree`: editable `kernel.py` plus optional editable `impl/`;
+- SOL configured `single_file`;
+- native CUDA without a Python loader: configured `cuda_manifest`.
 
-Omitting `--framework` launches these children independently and normally in parallel. Each child has a separate workspace, version limit and token budget. Framework availability still depends on the worker; choose one explicit framework when the requested experiment should create only one Campaign.
+The layout is fixed for the campaign. `impl/` is optional and must not be created merely to satisfy scaffolding.
 
-- Native Atrex-Bench tasks use `source_tree` by default. `kernel.py` is the editable evaluator entry point and may contain the full implementation or import helpers from `impl/`.
-- Native CUDA without a Python loader requires the `cuda_manifest` candidate configuration; use the checkout's documented composition patch rather than inventing a layout.
-- The chosen candidate layout is fixed for the task and must match on resume.
+## Search and budgets
 
-For optional modules or pooled search, read `docs/optional-light-modules.md` from the selected checkout. A composition patch replaces the provider's whole configuration; retain required fields such as Workflow startup and the intended Agent sandbox/capture settings.
+One independent serial trajectory is the default. Explicit advanced pooled search may use, for
+example, 10 Epochs, 3 trajectories, 1 Episode per trajectory per Epoch, 3 parallel Episodes,
+asynchronous publication and no role specialization. Each pooled trajectory owns one durable
+conversation/workspace/Git lineage.
 
-## Budgets
+This is an implementation default, not an ordinary launch recommendation. Ordinary Skill launches
+use one independent serial trajectory and require a user-selected positive `--max-iters`. Pooled
+settings are advanced options shown only when the user explicitly requests multi-trajectory search.
 
-On current main, ordinary optimization Episodes default to four hours of Agent active time; blocking Runtime Tool waits pause the Agent and do not consume that allowance. Framework Baseline has a separate eight-hour wall-clock default. Agate queue/execution timeouts remain independent.
+Set `workflow.config.search` to `{}` for serial mode. Then `--max-iters N` counts Episode audit segments. In pooled mode, the schedule is `epochs × trajectories × episodes_per_trajectory`; `--max-iters` is not the pooled segment count.
 
-`--max-iters N` is an inclusive canonical-version ceiling for each serial child Campaign. The default is `20`, so `--max-iters 20` means that the Campaign may record through `v20` and then stops admitting new Episodes.
+Episode active time is unlimited by default. Set `workflow.config.episode_timeout_seconds` only when needed. `--token-budget 0` means no token admission cap. Runtime waits pause Agent active time, but Agate queue/request/per-Shape timeouts remain independent.
 
-It is not a count of accepted kernels, model turns, attempts, or Agate calls:
+Every archived Direction and Experiment revision is written immediately to the central Campaign
+Research Library. Each workspace receives an ordinary `research-library/` copy following the configured visibility mode; Bubblewrap overlays that copy read-only:
+synchronous trajectories freeze peer revisions at the last Epoch watermark, while asynchronous
+trajectories see the catalog head immediately. Only `owner_lineage` may revise an identity; peers
+derive a new local record. At synchronization/publication points Light also publishes:
 
-- V0 is `v0` and is always measured before optimization.
-- If Framework Baseline creates or pins V1, optimization starts at `v2`; `--max-iters 20` therefore permits at most 19 optimization Episodes.
-- If Framework Baseline is skipped, optimization starts at `v1`; the same limit permits at most 20 optimization Episodes.
-- A terminal Episode records the next canonical version even when it is not promoted. Rejected, blocked, pivoted, invalid-handoff and recovered-interrupted outcomes therefore consume version slots too.
-- The Supervisor checks the ceiling before admitting another Episode. An already admitted Episode reaches a durable terminal outcome before the next check.
-- Resume reads the latest recorded version and continues with only the remaining slots.
-- When `--framework` is omitted, each auto-dispatched framework child has its own `--max-iters` ceiling.
+- the corresponding visible Direction and Experiment records with their actual review quality;
+- relevant immutable Gateway Records;
+- peer Agent Git refs;
+- accepted-submission lineage/global winner facts;
+- aggregated Direction queue.
 
-Optional pooled multi-trajectory search replaces this serial budget with the explicit product `epochs × trajectories × episodes_per_trajectory`. Do not describe `--max-iters 20` as 20 Episodes per trajectory in that mode.
+It does not merge conversations or scratch files and never resets a trajectory to a peer winner. Inspect peer refs with normal Git and explicitly cherry-pick or derive work when useful.
 
-`--token-budget`, Episode active-time limits, target utilization, mandatory conversion and `--max-stall` are separate stop conditions and can end a Campaign before the version ceiling. If mandatory Triton-to-Gluon conversion is still pending when the version ceiling is reached, Light reports that conversion failure instead of declaring ordinary budget completion.
+## Start verification
 
-Treat these as versioned defaults. Confirm the selected checkout's help and composition before changing them. State whether a reported duration is Agent active time, session wall time, Agate wait time, or campaign wall time.
+Process creation is not success. Verify:
 
-## Start and verify
+- Supervisor remains alive;
+- expected campaign and trajectory scopes exist;
+- V0 measurement or Agent Session has a durable update;
+- Runtime/Agate requests have identifiable records;
+- no immediate problem-contract, credential, source-layout or policy error occurred;
+- `PROGRESS.md` and `frontier.json` reflect accepted submissions after `submit-kernel` succeeds.
 
-After launch, verify all of the following rather than treating process creation as success:
-
-- the Supervisor process remains alive;
-- the expected campaign workspace and scope(s) exist;
-- V0 or Framework Baseline has produced a durable progress update;
-- the Agent Session is active or a concrete Agate job is pending;
-- no immediate configuration, credential, source-layout, or policy error is present.
-
-Prefer a background service or declared workload for long runs; do not keep an interactive command slot occupied for hours when the environment provides a durable launcher.
+Prefer a durable workload/service launcher for long campaigns.
 
 ## Resume
 
-Resume with the same checkout behavior, workspace, composition, framework, source layout, mode, and visibility settings. Light reconciles accepted Agate job IDs, completed batches, an interrupted Framework Baseline, and an interrupted Episode from durable state.
+Resume with the same checkout behavior, workspace, profile/composition, problem snapshot, framework, source layout, mode, visibility and search identity. Light restores the persistent Agent Session/Git and reconciles saved Runtime/Agate evidence.
 
-Do not clear a workspace merely because a process exited. First inspect runtime, Agate, and acceptance status. If the user requests a clean rerun that preserves Bootstrap/V0, identify the exact supported reset boundary for that checkout; do not manually delete arbitrary state directories.
+Do not clear a workspace merely because a process exited. Inspect the latest Session, Runtime audit, Gateway Records, Agate state and search checkpoint first. Do not edit private files or Git metadata to force a resume.
 
 ## Stop and cleanup
 
-Stop the campaign through its owning Supervisor or workload mechanism, then verify Agent, Runtime, and child processes exited. Avoid broad process-name kills that could affect unrelated campaigns. Workspace or Sandbox deletion requires explicit user authorization; export evidence first when results may be needed.
+Stop through the owning Supervisor or workload mechanism, then verify Agent, Runtime and child processes exited. Avoid broad process-name kills. Deleting a workspace or Sandbox requires explicit authorization; export source/evidence first when it may be needed.

@@ -10,7 +10,7 @@ from aka.legacy.task.durable import durable_write_json
 
 
 def retry_review(workspace: Path, stage: str, operation):
-    """Allow one fresh review after a timeout, durably bound to its evidence.
+    """Allow one fresh review after an externally reported execution timeout.
 
     The operation must create a fresh isolated session and restore its inputs.
     Explicit service outages retain their separate infrastructure retry policy.
@@ -39,5 +39,5 @@ def retry_review(workspace: Path, stage: str, operation):
             return result
     raise ValueError(
         "reviewer infrastructure timed out twice for this evidence; "
-        "validation blocked (increase the reviewer timeout to retry)"
+        "validation blocked (inspect the reviewer service and session diagnostics)"
     )

@@ -124,6 +124,8 @@ transient failure, the helper retries only the failed reviewer once; it does not
 reviewer and does not retry quota, authentication, timeout, disabled, or missing-CLI failures.
 Enabled external reviewer processes always use maximum reasoning effort; episode/session settings,
 reviewer effort environment variables, and legacy `--reasoning-effort` arguments cannot lower it.
+Formal reviewer consultations have no Supervisor execution deadline. The bounded startup probe only
+checks whether an optional reviewer backend can be launched; it is not a plan review.
 By default each external review is ephemeral. `--long-reviewer-session codex` or
 `--long-reviewer-session qoder` resumes one campaign-private, read-only reviewer thread across
 episodes while continuing to send the complete current candidate proposal, draft, and bounded

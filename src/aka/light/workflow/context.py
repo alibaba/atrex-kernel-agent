@@ -6,23 +6,16 @@ import aka.light.workflow.constants as _constants
 import aka.light.workspace.state as _workspace_state
 import aka.light.agent.runtime.process as _agent_process
 from aka.light.workflow.bootstrap import Campaign
-from aka.light.workflow.constants import DEFAULT_CONVERT_AFTER
 from aka.light.evaluation.hardware import (
-    hardware_directive,
     hardware_vendor,
     head_kernel_is_gluon,
-    should_convert_to_gluon,
 )
 from aka.light.acceptance.source_policy import install_workspace_policy
 from aka.light.workflow.session_io import _sandbox_command
-from aka.light.workspace.assets import (_agent_runtime_directive)
 from aka.light.workspace.state import (
     git_head,
     head_kernel_is_initial_baseline,
     latest_version,
-    read_stall,
-    reconstruct_stall,
-    write_stall,
 )
 
 
@@ -38,7 +31,9 @@ def prepare_campaign(campaign: Campaign) -> None:
             flush=True,
         )
         campaign._link_runtime()  # Compatibility seam intentionally isolated in this module.
-    campaign.ensure_framework_baseline()
+    # Light starts the persistent optimization Session directly from measured
+    # V0. Bring-up, diagnostics, optimization and optional commit review all
+    # happen in the same Agent conversation and trajectory Git repository.
     if (
         campaign.optimization_mode == "production"
         and latest_version(campaign.workspace) > 0
@@ -66,29 +61,45 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
         native,
         plugin_registry=campaign.plugin_registry,
         research_records=campaign.research_records,
+        research_modules=campaign.research_modules,
         is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
     )
     install_workspace_policy(
         workspace, campaign.optimization_mode, campaign.framework,
         update_tracked_files=False,
         source_checks_enabled=campaign.source_checks_enabled,
+        specify_dsl=campaign.specify_dsl,
+        numerical_validation_enabled=campaign.module_options.numerical_validation,
         expose_evaluator_shapes=campaign.expose_evaluator_shapes,
     )
 
 
-def episode_directives(campaign: Campaign, version: int) -> dict[str, str]:
-    """Public operator guidance for the single optimization workflow."""
+def episode_directives(campaign: Campaign) -> dict[str, str]:
+    """Return only optional task-specific additions to the Episode prompt."""
     return {
         "plugins": campaign.plugin_directive("episode"),
-        "hardware": hardware_directive(campaign.platform, campaign.arch),
-        "sandbox": campaign._sandbox_directive(),
-        "evaluator": campaign._evaluator_directive(),
-        "mode_policy": campaign._mode_directive(),
-        "agent_runtime": _agent_runtime_directive(
-            campaign.agent_cli, is_ppu=hardware_vendor(campaign.platform, campaign.arch) == "ppu",
-            wiki=campaign.tool_runtime.wiki,
-            pause_agent_during_requests=campaign.tool_runtime.pause_agent_during_requests,
-            knowledge_skills=campaign.plugin_registry.knowledge_skills() if campaign.tool_runtime.wiki else (),
+    }
+
+
+def session_execution_policy(campaign: Campaign) -> dict[str, object]:
+    """Agent-session policy shared by every resumed Episode segment.
+
+    Stage goals and terminal instructions belong in their prompts. Resource
+    budgeting, reasoning effort and automatic recovery must not drift between
+    the two workflows.
+    """
+    return {
+        "episode_timeout_seconds": getattr(
+            campaign.module_options, "episode_timeout_seconds", None
+        ),
+        "reasoning_effort": "max",
+        "output_limit_recovery_retries": getattr(
+            campaign.module_options,
+            "output_limit_recovery_retries",
+            _constants.DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES,
+        ),
+        "dependency_policy_recovery_retries": getattr(
+            campaign.module_options, "dependency_policy_recovery_retries", 2
         ),
     }
 
@@ -141,35 +152,10 @@ def candidate_policy_violations(
     )
 
 
-def conversion_required(campaign: Campaign, stall: int, workspace: Path) -> bool:
-    if not campaign.source_checks_enabled:
-        return False
-    return should_convert_to_gluon(
-        campaign.framework,
-        stall,
-        int(getattr(campaign, "convert_after", DEFAULT_CONVERT_AFTER)),
-        head_is_gluon=head_kernel_is_gluon(workspace),
-    )
-
-
-def candidate_is_gluon(workspace: Path) -> bool:
-    return head_kernel_is_gluon(workspace)
-
-
-def restored_stall(workspace: Path) -> int:
-    value = read_stall(workspace)
-    return int(value if value is not None else reconstruct_stall(workspace))
-
-
-def save_stall(workspace: Path, value: int) -> None:
-    write_stall(workspace, value)
-
-
 # Re-exported for the rest of long_horizon, which reaches orchestrator only through this adapter.
 run_bounded = _agent_process.run_bounded
 peak_util = _workspace_state.peak_util
 read_memory = _workspace_state.read_memory
 speedup_vs_reference = _workspace_state.speedup_vs_reference
-CONVERT_PERF_TOL = _constants.CONVERT_PERF_TOL
 IMMUTABLE_BASELINE_PATHS = _constants.IMMUTABLE_BASELINE_PATHS
 STALL_STATE_FILE = _constants.STALL_STATE_FILE

@@ -1,1 +1,1 @@
-"""Managed candidate drafts and controller-owned Git."""
+"""Trajectory-persistent Agent repositories and controller-owned Git."""

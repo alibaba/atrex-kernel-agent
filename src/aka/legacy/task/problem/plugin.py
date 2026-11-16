@@ -11,13 +11,16 @@ identity_packages = ("aka.contracts.problem", "aka.contracts.problem_provider", 
 Config = {
     "type": "object",
     "properties": {
-        "optimization_mode": {"type": "string", "enum": ["leaderboard", "production"]},
+        "optimization_mode": {
+            "type": "string",
+            "enum": ["fast", "performance", "ultra", "leaderboard", "production"],
+        },
         "worker_requirements": {"type": "string"},
     },
     "required": ["optimization_mode"],
     "additionalProperties": False,
 }
-Defaults = {"optimization_mode": "leaderboard", "worker_requirements": ""}
+Defaults = {"optimization_mode": "fast", "worker_requirements": ""}
 interpolate = ("worker_requirements",)
 
 

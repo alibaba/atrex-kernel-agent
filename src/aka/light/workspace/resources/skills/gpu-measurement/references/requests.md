@@ -12,13 +12,19 @@ not replace a passing ordinary full Evaluate for the exact selected source.
 | --- | --- | --- |
 | Is the current candidate correct and faster? | `run --no-sync` | Official correctness and end-to-end timing across the contract. Inspect correctness before using latency. |
 | Does a numerical repair work without timing? | Atrex-Bench `run --mode correctness_only --no-sync` | Correctness evidence only; missing latency is not zero latency. |
-| How do candidate and baseline compare in one allocation? | `run --baseline-path PATH --comparison-repeats 2 --no-sync` | Paired ABBA evidence. Use the injected acceptance command for exact reuse; this does not replace ordinary full Evaluate. |
+| How do candidate and baseline compare in one allocation? | `run --baseline-commit COMMIT --comparison-repeats 2 --no-sync` | Paired ABBA evidence. Runtime exports the exact reachable Git commit privately; this does not replace ordinary full Evaluate. |
 | Which GPU resource or Kernel needs attention? | `profile --profile-level sol --no-sync` | Structured counters, not an algorithmic optimality verdict. Narrow to a Kernel/launch for `deep`. |
 | Does compilation or a sanitizer reveal a defect? | `check --no-sync`, optionally `--sanitize memcheck` | Diagnostic results; inspect inner errors even if transport completed. |
 | What code did the compiler generate? | `disassemble --format ptx --no-sync` | Generated device code, not correctness or performance validation. |
-| Can a custom probe resolve one implementation question? | `dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py` | Probe output and exit status, not necessarily an evaluation. |
-| What is available on the assigned GPU worker? | `env` | GPU/environment/capability facts, not facts about the Agent host or a Kernel measurement. |
-| Has this exact candidate or observation already been measured? | `record-read`, `kernel-read`, `kernel-records`, `kernel-pareto-frontier` | Saved facts/source; no new GPU allocation. See the history section below. |
+| Can a self-contained single-file probe that reads no candidate or other workspace file resolve one question? | `dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py` | Only the explicitly declared probe is uploaded; returns its output and exit status. |
+| Does custom code read the candidate, helpers, prior artifacts, or any other workspace state? | `command -- python3 -m scratch.experiment` | Bounded engineering workspace projection uploaded; `scratch/` synchronized back. Runtime control state, Skills and bulk `records/` history are excluded. |
+| What is available on the assigned GPU target? | `env` | Runtime selects the Campaign hardware and returns its GPU/environment/capability facts; this is not a fact about the Agent host or a Kernel measurement. |
+| Has this exact candidate or observation already been measured? | `records/*.json`, local Git, root `PROGRESS.md` | Saved facts and exact committed source; `PROGRESS.md` includes per-Shape historical winners. No new GPU allocation. |
+
+For Python Command probes below `scratch/`, use module form such as
+`python3 -m scratch.probe`. Running `python3 scratch/probe.py` directly makes
+`scratch/` the first Python module-search directory, so root candidate modules such as
+`kernel.py` may not be importable even though Command uploaded them correctly.
 
 Read `python3 tools/sandbox.py --kind OPERATION --help` before using unfamiliar controls.
 The Runtime discovers safe native options from its installed Agate client at startup and
@@ -43,7 +49,11 @@ The session Prompt states whether Runtime request suspension is enabled. When en
 pause the Agent/subagents and do not consume the Agent active-time budget; when disabled, they
 remain active time. Every request remains subject to its own deadline. A quiet CLI is not a failure.
 
-Save JSON stdout and stderr separately if needed:
+Measurement commands print one compact receipt; the complete result is already saved under the
+receipt's `record_path`. Env instead prints the complete redacted Agate capability response directly
+to stdout and creates no Gateway Record. When a measurement has stdout or stderr, the receipt's
+`stdout_location` or `stderr_location` names both the Record file and exact JSON field containing
+the complete stream. Save a measurement receipt separately only when needed:
 
 ```bash
 python3 tools/sandbox.py --kind run --no-sync > scratch/evaluate.json 2> scratch/evaluate.stderr
@@ -65,14 +75,12 @@ not a custom probe.
 # Full workload: Atrex-Bench or SOL-ExecBench.
 python3 tools/sandbox.py --kind run --no-sync
 # Optional explicit version label (both evaluators).
-python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --version v2 --no-memory
+python3 tools/sandbox.py --kind run --no-sync --version v2
 # Atrex-Bench only: correctness-only diagnostic, not a full Evaluate.
 python3 tools/sandbox.py --kind run --mode correctness_only --no-sync
-# Atrex-Bench only: reduced-seed diagnostic, insufficient for final acceptance.
-python3 tools/sandbox.py --kind run --mode correctness_only --multi-seed 0 --no-sync
 # Generic AB/BA example; use the injected acceptance command for reuse.
-python3 tools/sandbox.py --kind run --baseline-path scratch/incumbent.py --comparison-repeats 2 --no-sync
-# Atrex-Bench Typed NCU/rocprof profile; IDs name opaque cases, not exact private shapes.
+python3 tools/sandbox.py --kind run --baseline-commit <full-git-commit> --comparison-repeats 2 --no-sync
+# Atrex-Bench Typed NCU/rocprof profile; use a Shape ID returned by Runtime.
 python3 tools/sandbox.py --kind profile --profile-level sol --no-sync
 python3 tools/sandbox.py --kind profile --profile-shape-id 0 --no-sync
 python3 tools/sandbox.py --kind profile --profile-level deep --kernel-name my_kernel --profile-source --launch-count 1 --no-sync
@@ -84,65 +92,67 @@ python3 tools/sandbox.py --kind disassemble --format ptx --no-sync
 python3 tools/sandbox.py --kind env
 ```
 
-For ABBA, optional `--comparison-run-timeout SECONDS` controls each run and must fit the
-configured allocation's complete schedule. Without that option, each run uses the smaller of
-the 300-second Performance timeout and its equal share of the configured allocation. Acceptance can
-reuse only an exact matching request, including baseline bytes, path, repeats and run timeout.
-The injected acceptance block supplies the exact command for the current
-configuration, including Shape batch size, and a `kernel-read` command for the committed
-incumbent. Use that block instead of this generic example when seeking acceptance reuse.
-Runtime owns the measurement repetitions and derives the allocation timeout; do not emulate
+Managed `env` takes no target, capability, or refresh override. Runtime supplies the Campaign's
+hardware identity and requests its capability view; use the returned architecture/features rather
+than querying a different product or guessing from a marketing name. The stdout payload is the
+complete redacted Agate Env response, not a compact measurement receipt.
+
+For ABBA, optional `--comparison-run-timeout SECONDS` controls each run. Runtime uses an explicit
+positive value unchanged and expands the ABBA allocation to fit the complete schedule. Without
+that option, Runtime derives the smaller of the Campaign evaluation-step timeout and the maximum
+that fits the existing allocation. If the resulting allocation exceeds Agate's typed-job limit,
+Runtime returns the supplied per-run timeout, repeat count, required allocation, and service limit;
+it does not clamp the value or submit a Job.
+Acceptance can reuse only an exact matching request, including baseline commit/source, repeats and
+run timeout.
+The injected acceptance block supplies the exact Agent-controlled command for the current
+configuration and committed incumbent ID. Use that block instead of this generic example when
+seeking acceptance reuse.
+Runtime also owns Shape batch size, measurement repetitions and the derived allocation timeout; do not emulate
 them with repeated Agent requests or environment overrides. Other request/input changes can
 prevent reuse. A matching comparison is optional and does not replace the report's full Evaluate.
 
-Full Evaluate and ABBA default to 20 timing iterations and 5 warmup iterations, matching
-Legacy's sampling counts. They use one Shape per batch and at most 16 concurrent batches.
-Promotion minimizes GeoMean latency versus the
-incumbent; `performance_score` is diagnostic. The returned `improvement_pct` is
+Full Evaluate and ABBA default to 100 timing iterations and 20 warmup iterations. Runtime uses
+its configured Shape-batch upper bound (default 10, and it
+may reduce the effective batch size to fit a request deadline) and configured batch-worker cap
+(default 16). These are Supervisor settings, not Agent request fields.
+Winner reporting minimizes the task's declared performance objective among accepted
+`submit-kernel` commits; `performance_score` is diagnostic. The returned `improvement_pct` is
 `(speedup - 1) * 100`, matching Runtime (100 us to 80 us means 1.25x and 25%).
-This is not the latency-reduction percentage used by the Supervisor's promotion threshold.
+There is no Supervisor promotion threshold.
 Do not loop requests to reproduce the sampling policy.
 
-Atrex-Bench Evaluate defaults to the base case plus five additional correctness cases per Shape.
+Atrex-Bench Evaluate uses the base case plus four additional correctness cases per Shape.
 Full mode keeps its normal performance measurement; extra cases do not add timing runs.
-`--mode correctness_only` uses the same six cases without timing. An explicit `--shape-id` smoke
-defaults to one case, and `--multi-seed N` can override the case count for diagnostics. Check,
-Profile and Dev probes do not gain this seed expansion. Agent ABBA defaults to six cases;
-Supervisor retention ABBA explicitly uses `--multi-seed 0` after the six-case candidate gate. For legacy explicit
-`test_kernel.py --version v2 --multi-seed N` commands, positive N still implies correctness-only
-unless `--mode full` is supplied; an implicit default never disables performance measurement.
+`--mode correctness_only` uses the same five cases without timing. An explicit `--shape-id` narrows
+performance coverage but does not weaken Runtime-owned correctness coverage. Agent requests cannot
+set `--multi-seed`; Check, Profile and Dev probes do not gain this case expansion. Agent and
+Supervisor ABBA use the same five-case correctness policy.
 
-For Atrex-Bench `candidate_ready`, the Supervisor reuses a successful full or correctness-only six-case result
-when the frozen source, complete Shape contract, evaluator, tolerances, target and environment
-match. Otherwise it runs the missing six-case check without timing. You do not need a separate
-robustness request after a matching full Evaluate. Custom inputs, Shape subsets, fewer seeds and
-old records without the resolved seed policy cannot satisfy this check. A passing full Evaluate
-for the exact selected source remains required. With research recording disabled, cite its
-`gateway_record_id` directly in the report's `gateway_record_ids`; do not invent an Experiment.
-With research recording enabled, the selected Experiment must cite that evidence instead.
-Follow the installed `skills/runtime-records/references/journal.md` for the current report schema.
-Baseline sessions follow their bounded instructions.
-
-For SOL-ExecBench `candidate_ready`, the Supervisor runs or reuses the official full-workload
-evaluation of the frozen candidate and matching workload/configuration. The Atrex-Bench six-case
-policy and correctness-only mode do not apply to SOL.
+`submit-kernel` accepts an exact reachable Agent Git commit only when MeasurementStore already
+contains a passing standard full Evaluate for that same commit with complete, parseable per-Shape
+performance. It launches no extra correctness run or ABBA. Shape subsets, correctness-only runs,
+custom inputs and incomplete performance cannot satisfy submission. SOL submissions likewise need
+their official full-workload Evaluate; Atrex-Bench's five-case policy does not apply to SOL.
 
 For Atrex-Bench evaluator controls, choose one spelling:
 
 ```bash
 # Shorthand: no explicit command.
-python3 tools/sandbox.py --kind run --multi-seed 3 --timed-runs 100 --no-sync
-# Explicit command: evaluator controls belong after test_kernel.py.
-python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --multi-seed 3 --timed-runs 100 --no-memory
+python3 tools/sandbox.py --kind run --timed-runs 100 --no-sync
+# Evaluator controls belong to the Runtime request; its private harness is not
+# part of the Agent workspace.
+python3 tools/sandbox.py --kind run --no-sync --timed-runs 100
 ```
 
-Top-level `--version`, `--multi-seed`, `--shape-id` and `--timed-runs` require
+Top-level `--version`, `--shape-id` and `--timed-runs` require
 `--kind run` without an explicit command. Mixing these top-level controls with a
 command is rejected before execution; they are not merged or silently ignored.
+`--multi-seed` is Runtime-owned and is rejected in either spelling.
 Explicit shorthand controls require a compatible typed evaluation route and
 cannot silently fall back to Dev. Once a Typed Evaluate starts, admission,
-transport or evaluator failure also cannot change it into a Dev job. ABBA still accepts `--version` and
-`--timed-runs` and `--multi-seed` without a command; Shape/input overrides remain unsupported.
+transport or evaluator failure also cannot change it into a Dev job. ABBA accepts `--version` and
+`--timed-runs` without a command; Shape/input/seed overrides remain unsupported.
 ABBA uses native Eval only; it never runs a Dev driver. Native ABBA requires an Atrex-Bench
 input/Shape contract and an Agate or SSH endpoint; SOL comparison is unsupported. Repeats must
 be even, 2–16 measurements per side; 2 means one A/B/B/A block.
@@ -162,9 +172,12 @@ NCU CLI and Python's standard library. Binary reports stay remote by default,
 including OSS transfers. Missing worker NCU or empty metrics is an explicit
 Profile failure; narrow the kernel/launch selection or ask the operator to
 provision the worker, not the local Agent environment.
-Use `--profile-shape-id ID`, not `--shape-id`, to select an opaque case from a saved result.
-Atrex-Bench Profile uses the Typed route by default, including hidden Shapes. The Supervisor supplies
-exactly one private case; only its opaque ID and projected metrics are returned to the Agent.
+Use `--profile-shape-id ID`, not `--shape-id`, to select a case from a saved result. On a
+generalized hidden-Shape task, all evaluator Shape IDs are opaque. On an exposed task, consult
+`shapes.json` for exact parameters.
+Atrex-Bench Profile uses the Typed route by default, including Shapes whose parameters are not
+public. The Supervisor supplies exactly one evaluator case and returns its ID and projected metrics;
+in hidden mode the returned ID remains opaque.
 Without a selector it uses the first sorted Shape. `--profile-shape-id` takes precedence over
 legacy `--env PROFILE_SHAPE_ID=...`; no environment override is needed.
 Custom commands/wrappers, `--input`, and driver-specific `PROFILE_*` controls use Dev
@@ -183,19 +196,15 @@ subsystem-specific counters when the limiting unit remains unclear.
 
 ## Saved results and source
 
-Reuse recorded facts across Episodes. Replace these placeholder IDs with values
-returned by the Runtime; these queries do not submit GPU jobs:
+Reuse recorded facts across Episodes by reading or querying the relevant
+`records/<gateway_record_id>.json` directly; inspect exact Kernel commits with ordinary Git commands. Runtime projects a Record only
+when every referenced commit is reachable from local or imported shared refs and its committed
+source matches the private measurement snapshot.
 
-```bash
-python3 tools/sandbox.py --kind record-read --record-id gateway-0123456789abcdef0123456789abcdef
-python3 tools/sandbox.py --kind kernel-read --kernel-id kernel-0123456789abcdef0123456789abcdef --output-path scratch/previous.py
-python3 tools/sandbox.py --kind kernel-records --kernel-id kernel-0123456789abcdef0123456789abcdef
-python3 tools/sandbox.py --kind kernel-pareto-frontier
-```
-
-Measurements and `record-read` print one JSON object with `operation`, `status`,
-`result`, `gateway_record_id`, and `kernel_id` when Kernel-bound. ABBA uses
-`operation: evaluate`, `result.comparison`, and an additional `baseline_kernel_id`.
+Each measurement response and projected Record contains `operation`, `status`,
+`result`, `gateway_record_id`, and `kernel_commit_id` when a single Kernel is bound. ABBA uses
+`operation: evaluate`, `result.comparison`, `candidate_kernel_commit_id`, and
+`baseline_kernel_commit_id`.
 Evaluate uses `result.correct` plus `result.correctness` (`status: PASS|FAIL`,
 `rel_err`, `max_abs_err`, `max_rel_err`); unavailable error metrics are null, not zero.
 `result.mode` is `full` or `correctness_only`; `result.input_scope` is `contract`
@@ -203,14 +212,15 @@ or `custom`. Custom input/Shape overrides and Shape subsets are not full-contrac
 Correctness-only results have null latency summaries and an empty per-Shape latency map.
 ABBA keeps the per-side aggregate metrics, not raw schedules or repetition arrays.
 
-`record-read` prints the saved public result without executing GPU work. Its exit
-code is zero when the read succeeds, even if the saved operation has `status: failed`
-or `cancelled`. A completed evaluator can have `result.correct: false`; completion
-does not mean the Kernel passed. Old stream-only records are normalized on read.
-`kernel-read` copies exact measured source into `scratch/`. `kernel-records` lists
-that Kernel's Record IDs, operations and timestamps without loading every result.
+A completed evaluator can have `result.correct: false`; completion does not mean the Kernel passed.
+Search `records/*.json` by commit ID to find its measurements. Use `git show`, `git diff`, `git log`
+or a local branch to inspect source; imported peer history uses refs such as `atrex/T2`.
+Dev and Command receipts show bounded stdout/stderr previews and byte counts. Their complete redacted
+streams remain in the saved Record and can be read directly in bounded ranges.
 Dev probes also produce Record IDs even when their output is not an evaluation.
-A duplicate-task error means the result already exists, not that the Kernel failed.
+When an identical completed task already has a valid cached Record, Runtime returns that Record
+through the same normal completed receipt and does not submit another Agate task. Cache reuse is a
+Supervisor implementation detail; do not expect or handle a separate completed-duplicate error.
 
 ## Interpret completion and failures
 
@@ -220,37 +230,54 @@ Do not infer unavailable counters or missing measurements as zero.
 
 | Response | Next action |
 | --- | --- |
-| Full Evaluate completed, `result.correct: true` | Compare the measured latency and per-Shape changes with your expected effect. Keep, refine or restore based on evidence; promotion still belongs to the Supervisor. |
-| Evaluate completed, `result.correct: false` | Inspect correctness diagnostics and opaque Shape/case/output identifiers. Repair the candidate; do not call it a Gateway outage or use its timings as a valid speedup. |
+| Full Evaluate completed, `result.correct: true` | Compare the measured latency and per-Shape changes with your expected effect. Keep, refine or restore based on evidence; use `submit-kernel` only when you want this exact commit included in winner selection. |
+| Evaluate completed, `result.correct: false` | Inspect correctness diagnostics and Shape/case/output identifiers. On generalized hidden-Shape tasks, treat IDs as opaque; on exposed tasks, use `shapes.json`. Repair the candidate; do not call it a Gateway outage or use its timings as a valid speedup. |
 | Dev/Check/Profile/Disassemble failure | Read `result.error` and available `stdout`/`stderr` or diagnostic fields. Compiler/import/file errors require source or declared-input repair. A successful Dev probe is not automatically a passing Evaluate. |
 | Request rejected with `issues`, `request_schema`, `recovery` or `error.next_action` | Correct the named field/path or evidence reference. Follow the supplied operation-specific guidance, not guessed flags or IDs. |
-| `duplicate_gateway_task` | Read the previous Record ID supplied by the error. Do not relabel the version or change source merely to bypass deduplication. |
 | `gateway_task_running` | The same call is still executing; this request did not submit another Agate task. Wait for the original response. `remaining_seconds` is its remaining Runtime request budget, not a guaranteed successful completion ETA; null means unknown, and zero means the deadline has elapsed and cleanup is still in progress. No complete Record is available to read yet. |
 | `request_not_started`, explicitly `repairable: true` | No executor started. Wait at least `retry_after_seconds` and retry unchanged with backoff; this exception does not authorize retries for other failures. |
-| Infrastructure recovery exhausted | Runtime already owns bounded retries. Follow its final `next_action`; report a genuine blocker instead of declaring the Kernel incorrect or building another retry loop. |
+| Infrastructure recovery exhausted | Runtime already applied the configured terminal/non-terminal retry policy. Follow its final `next_action`; report a genuine blocker instead of declaring the Kernel incorrect or building another retry loop. |
 | Connection loss, unknown outcome, missing/revoked Session | Inspect saved records when available and ask the operator to reconcile or restore the Session. Do not resubmit blindly or bypass the Runtime. |
 
 An error may appear on stderr as a request/transport error, or inside a persisted measurement's
 `result.error`. Preserve the saved ID and separate the observed failure from your explanation.
-`feedback_truncation` means details were omitted; rereading the Record is not a promise of
-unbounded/raw logs. Narrow subsequent diagnostics or ask the operator for unavailable details.
+Historical Records can contain `feedback_truncation`, which means an older Runtime omitted
+details. New Runtime responses preserve complete redacted diagnostic text; they still do not
+expose evaluator inputs, credentials or other private controller material.
 
 ## Probe files and returned artifacts
 
-Write multi-line probes as files in `scratch/`, then declare each required extra file with
-repeatable `--input`; do not embed a whole script in the command string. The contracted candidate
-is supplied by the Supervisor. Extra probe files are separate inputs, not a way to replace the
-evaluator or expose hidden cases. Remote jobs start fresh, so do not assume a previous job's
-probe files or installed dependencies persist.
+Use Dev only when one explicitly declared probe file is self-contained and reads no candidate or
+other workspace file. Do not embed a whole script in the command string. Dev uploads only its
+declared inputs; it does not implicitly supply the candidate. If the probe imports or opens the
+candidate, a helper, a prior artifact, or any other workspace path, use Command instead. Extra probe
+files are not a way to replace the evaluator or expose hidden cases. Remote jobs start fresh, so do
+not assume a previous job's probe files or installed dependencies persist.
 
 Use `--sync scratch/path` for returned files. Keep report-cited artifacts and their referenced
 files under `scratch/`; only that diagnostics tree is published to the controller workspace.
 Paths must be workspace-relative and must not traverse symlinks or `..`.
 Do not request control files or changes to Kernel source via remote outputs.
 
+For every workspace-dependent custom experiment, use the workspace Command wrapper. It excludes
+bulk root `records/`; if a historical result is required remotely, first copy the selected result
+into `scratch/` with a normal local file copy rather than uploading the entire measurement history:
+
+```bash
+cp records/gateway-0123456789abcdef0123456789abcdef.json scratch/record.json
+python3 tools/sandbox.py --kind command -- python3 -m scratch.probe_mma
+```
+
+It uploads a bounded engineering projection, including the committed candidate, custom helpers
+and safe Runtime-owned tools. It excludes Git internals, credentials, private Runtime inputs,
+bulk measurement history, Skills, control state and nested Runtime submission clients. The returned
+`scratch/` tree is merged back into the trajectory workspace. Files outside `scratch/` are
+read-only inputs from the Agent's perspective and are not copied back. Every invocation still
+uses a fresh remote job; packages, processes and undeclared system changes do not persist.
+
 ## Optional Wiki
 
-Wiki is enabled by default. Only use these commands when the session mounts
+Wiki availability is campaign-configured. Only use these commands when the session mounts
 `skills/KernelWiki/SKILL.md`; read that Skill for query scope and hardware identity.
 Do not depend on a `gpu-wiki/` source directory in the Agent workspace. When Wiki is explicitly disabled,
 use supplied public knowledge and measured evidence instead.
@@ -258,5 +285,5 @@ use supplied public knowledge and measured evidence instead.
 ```bash
 python3 tools/sandbox.py --kind wiki-query "Triton reduction on sm_120: measured bandwidth bottleneck"
 python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverage
-python3 tools/sandbox.py --kind wiki-hardware --product sm120
+python3 tools/sandbox.py --kind wiki-hardware --product B200
 ```

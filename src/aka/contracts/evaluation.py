@@ -12,17 +12,15 @@ from .problem import EvaluationInput
 
 
 # These are execution-policy defaults shared by the workflow configuration and
-# Light's native evaluator. The enclosing allocation is derived from the work
-# it contains; it is not an independent timeout users must keep in sync.
-# Some production Shapes spend more than five minutes in input materialization
-# plus the first JIT touch. Keep candidate construction/correctness distinct
-# from the shorter steady-state performance budget.
-DEFAULT_CANDIDATE_TIMEOUT = 600
-DEFAULT_PERFORMANCE_TIMEOUT = 300
-# One A or B run uses the same default execution budget as an ordinary
-# performance measurement. Operators may still override either limit.
-DEFAULT_ABBA_RUN_TIMEOUT = DEFAULT_PERFORMANCE_TIMEOUT
+# Light owns one default per-Shape step budget. Candidate construction,
+# correctness, performance and one A/B run remain aligned unless the caller
+# explicitly supplies an override.
+DEFAULT_EVALUATION_STEP_TIMEOUT = 60
+DEFAULT_CANDIDATE_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
+DEFAULT_PERFORMANCE_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
+DEFAULT_ABBA_RUN_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
 DEFAULT_ABBA_REPEATS = 2
+DEFAULT_SHAPE_BATCH_SIZE = 10
 ABBA_SCHEDULING_OVERHEAD = 30
 MAX_TYPED_GATEWAY_JOB_TIMEOUT = 10_800
 
@@ -30,13 +28,19 @@ MAX_TYPED_GATEWAY_JOB_TIMEOUT = 10_800
 def derived_evaluation_timeout(
     *,
     repeats: int = DEFAULT_ABBA_REPEATS,
-    per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT,
-    candidate_timeout: int = DEFAULT_CANDIDATE_TIMEOUT,
-    performance_timeout: int = DEFAULT_PERFORMANCE_TIMEOUT,
+    step_timeout: int | None = None,
+    per_run_timeout: int | None = None,
+    candidate_timeout: int | None = None,
+    performance_timeout: int | None = None,
 ) -> int:
     """Return one allocation large enough for either Eval or A/B/B/A."""
+    step = DEFAULT_EVALUATION_STEP_TIMEOUT if step_timeout is None else step_timeout
+    per_run_timeout = step if per_run_timeout is None else per_run_timeout
+    candidate_timeout = step if candidate_timeout is None else candidate_timeout
+    performance_timeout = step if performance_timeout is None else performance_timeout
     values = {
         "repeats": repeats,
+        "step_timeout": step,
         "per_run_timeout": per_run_timeout,
         "candidate_timeout": candidate_timeout,
         "performance_timeout": performance_timeout,
@@ -168,7 +172,7 @@ class EvaluationConfiguration:
     timeout: int = derived_evaluation_timeout()
     repeats: int = DEFAULT_ABBA_REPEATS
     per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT
-    shape_batch_size: int = 4
+    shape_batch_size: int = DEFAULT_SHAPE_BATCH_SIZE
     max_parallelism: int = 4
     private_reference_dir: Path | None = None
     native: bool = False

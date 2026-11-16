@@ -85,6 +85,7 @@ def _probe_reviewer(
     enabled_name, reason_name = REVIEWER_ENVIRONMENT[reviewer]
     environment[enabled_name] = "1"
     environment[reason_name] = "startup availability probe"
+    environment["ATREX_REVIEWER_AVAILABILITY_PROBE"] = "1"
     try:
         completed = subprocess.run(
             [
@@ -94,7 +95,7 @@ def _probe_reviewer(
                 str(draft),
                 "--proposal",
                 str(proposal),
-                "--timeout",
+                "--availability-timeout",
                 str(timeout_s),
             ],
             cwd=str(workspace),

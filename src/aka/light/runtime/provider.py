@@ -23,6 +23,10 @@ class ManagedRuntimeFactory:
     def research_records(self) -> bool:
         return self.services.journal.research_records if self.services is not None else False
 
+    @property
+    def tool_modules(self) -> tuple[str, ...]:
+        return self.services.journal.tool_modules if self.services is not None else ()
+
     def open(self, configuration, *, workspace_provider):
         from aka.light.runtime.server import SupervisorRuntime
         return SupervisorRuntime(replace(configuration,

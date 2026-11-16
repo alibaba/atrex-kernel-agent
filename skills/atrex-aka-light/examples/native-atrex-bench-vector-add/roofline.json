@@ -1,0 +1,14 @@
+{
+  "shapes": {
+    "0": {"semantic_W_flops": {"float32": 1}, "semantic_Q_read_bytes": 8, "semantic_Q_write_bytes": 4},
+    "1": {"semantic_W_flops": {"float16": 17}, "semantic_Q_read_bytes": 68, "semantic_Q_write_bytes": 34},
+    "2": {"semantic_W_flops": {"bfloat16": 255}, "semantic_Q_read_bytes": 1020, "semantic_Q_write_bytes": 510},
+    "3": {"semantic_W_flops": {"float32": 256}, "semantic_Q_read_bytes": 2048, "semantic_Q_write_bytes": 1024},
+    "4": {"semantic_W_flops": {"float16": 257}, "semantic_Q_read_bytes": 1028, "semantic_Q_write_bytes": 514},
+    "5": {"semantic_W_flops": {"bfloat16": 4096}, "semantic_Q_read_bytes": 16384, "semantic_Q_write_bytes": 8192},
+    "6": {"semantic_W_flops": {"float32": 65535}, "semantic_Q_read_bytes": 524280, "semantic_Q_write_bytes": 262140},
+    "7": {"semantic_W_flops": {"float16": 65536}, "semantic_Q_read_bytes": 262144, "semantic_Q_write_bytes": 131072},
+    "8": {"semantic_W_flops": {"bfloat16": 1048576}, "semantic_Q_read_bytes": 4194304, "semantic_Q_write_bytes": 2097152},
+    "9": {"semantic_W_flops": {"float32": 4194304}, "semantic_Q_read_bytes": 33554432, "semantic_Q_write_bytes": 16777216}
+  }
+}

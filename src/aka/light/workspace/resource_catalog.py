@@ -15,10 +15,10 @@ SHARED = {
     "tools/ncu_classification.py": "execution/profiling/nvidia/ncu_classification.py",
     "tools/compute_utilization.py": "execution/profiling/common/compute_utilization.py",
     "tools/extract_asm.py": "execution/profiling/amd/extract_asm.py",
-    "prompts/dependency_review.md": "workflow/prompts/dependency_review.md",
-    "reference/test_kernel.py": "task/problem/sol_harness.py",
+    # Evaluator code is a private Runtime asset.  It must never be enumerated
+    # under the Agent-facing reference/ tree.
+    "private/sol_harness.py": "task/problem/sol_harness.py",
     "reference/v_iteration.schema.json": "workflow/resources/v_iteration.schema.json",
-    "prompts/framework_baseline_exit_supervisor.md": "workflow/prompts/framework_baseline_exit_supervisor.md",
     "prompts/generalize_agent_problem.md": "task/problem/prompts/generalize_agent_problem.md",
     "tools/extract_ttgir.py": "execution/profiling/common/extract_ttgir.py",
     "tools/iteration_trace.py": "workflow/iteration_trace.py",
@@ -47,7 +47,6 @@ OWNED = {
     "tools/sandbox.py": "runtime/client/sandbox.py",
     "tools/plugin.py": "runtime/client/plugin.py",
     "tools/session_shell_guard.sh": "agent/session_shell_guard.sh",
-    "tools/memory_manager.py": "workflow/memory.py",
     "reference/sol_seed.py": "workflow/sol_seed.py",
     "reference/sol_finalize.py": "workflow/sol_finalize.py",
 }

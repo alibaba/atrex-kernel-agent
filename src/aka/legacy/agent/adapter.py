@@ -40,6 +40,15 @@ def token_usage_from_mapping(usage: object) -> TokenUsage:
         "cacheCreationInputTokens",
         "cacheWrite",
     )
+    reasoning_tokens = _counter(
+        usage, "reasoning_tokens", "reasoningTokens", "reasoning_output_tokens"
+    )
+    for details_name in ("output_tokens_details", "outputTokensDetails"):
+        details = usage.get(details_name)
+        if reasoning_tokens is None and isinstance(details, Mapping):
+            reasoning_tokens = _counter(
+                details, "reasoning_tokens", "reasoningTokens"
+            )
     official_total = _counter(usage, "total_tokens", "totalTokens")
     components = (
         input_tokens,
@@ -59,6 +68,7 @@ def token_usage_from_mapping(usage: object) -> TokenUsage:
         cache_write_tokens=cache_write_tokens,
         total_tokens=total_tokens,
         measurement="exact",
+        reasoning_tokens=reasoning_tokens,
     )
 
 
@@ -568,6 +578,7 @@ class CodexAdapter(AgentBackendAdapter):
                             cache_write_tokens=terminal.cache_write_tokens,
                             total_tokens=terminal.total_tokens,
                             measurement=terminal.measurement,
+                            reasoning_tokens=terminal.reasoning_tokens,
                         )
                 if terminal.total_tokens is not None:
                     normalized.append(

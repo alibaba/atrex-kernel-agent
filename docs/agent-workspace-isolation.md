@@ -14,9 +14,25 @@ aka optimize --repo-root "$PWD" --profile light-sandbox -- \
   --workspace /path/to/new-runs
 ```
 
-The coordinator needs `bwrap` and permission to create the required user/mount/PID
-namespaces. A remote GPU gateway does not satisfy this local requirement.
-On macOS, use native Light or run the coordinator in an appropriately configured Linux VM.
+The coordinator needs the `bwrap` executable and permission to create the required
+user/mount/PID namespaces. A remote GPU gateway does not satisfy this local requirement.
+Native `light` does not require Bubblewrap. On macOS, use native Light or run the complete
+coordinator in a Linux VM. A minimal Lima setup is:
+
+```bash
+# macOS host
+brew install lima
+limactl start --name=aka-light template:default
+limactl shell aka-light
+
+# inside the default Ubuntu guest
+sudo apt-get update
+sudo apt-get install -y bubblewrap git python3 python3-venv
+```
+
+Install AKA, the Agent CLI and its credentials inside the guest, then launch
+`--profile light-sandbox` there. The GPU workload remains remote in Agate; Lima does not need GPU
+passthrough.
 
 Configure custom isolation through the Agent provider, with a composition patch before `--`:
 
@@ -34,6 +50,24 @@ Configure custom isolation through the Agent provider, with a composition patch 
 ```
 
 Replace the illustrative runtime path with an existing narrowly scoped directory, or omit it.
+Optional engineering references are selected per optimization launch, independently of the Agent
+composition patch. They work with both Agent boundaries:
+
+```bash
+aka optimize --repo-root /path/to/agent --profile light-sandbox -- \
+  --op-dir /path/to/problem --platform L20N --framework Cuda \
+  --agent-reference-dir /knowledge/nvidia /knowledge/cuda-guides
+```
+
+The option may be repeated. Each directory appears at
+`references/<directory-basename>/` inside the Agent workspace. Basenames must be unique. Bubblewrap
+mounts the directory read-only. Native `light` creates a symbolic link to the original directory;
+because the Agent runs as the coordinator OS user, Light cannot prevent modification of those
+original files. Retain an independent copy or backup before exposing knowledge to a native Agent.
+The Prompt identifies these directories as optional engineering knowledge rather than task
+contract, measurement evidence, or candidate source. References are excluded from Kernel Git,
+candidate snapshots, and remote command uploads, and cannot be selected as GPU request files. The
+final Kernel must not import or depend on them.
 A patch replaces the whole Agent configuration. Include both sandbox and capture settings
 when preserving `light-sandbox` behavior; the provider's standalone capture default is false.
 The former `--agent-sandbox`, `--bwrap-executable`, and `--agent-read-only-path` optimizer
@@ -46,7 +80,7 @@ environment from these options.
 | `capture` | Diagnostic capture, independent of filesystem isolation |
 | `bwrap_executable` | Bubblewrap executable, default `bwrap` |
 | `read_only_paths` | Explicit extra installation/runtime paths |
-| `proc_mode` | `private` procfs, or explicit `projected` compatibility view |
+| `proc_mode` | `private` procfs, or the existing complete `host` procfs and PID namespace |
 | `timeout_seconds` | Per-invocation active-time ceiling; Workflow Episode budget is separate |
 
 ## Launch lifecycle
@@ -69,8 +103,8 @@ provider options; do not reinterpret a running Session by changing environment v
 Bubblewrap starts from an empty root with selected read-only system/runtime files, minimal
 devices, private temporary directories, and its selected proc view. It mounts:
 
-- The managed draft, permitted editable source roots, custom Skills/tools, and scratch.
-- Public contracts, immutable imported sources, reserved clients/Skills, and eligible history read-only.
+- The managed draft, editable `kernel.py + impl/` source tree, custom Skills/tools, and scratch.
+- Public contracts, reserved clients/Skills, and eligible history read-only.
 - A writable Session-specific Provider Home outside the candidate Git tree.
 - Minimal CLI installation files and explicitly validated extra grants.
 
@@ -104,21 +138,31 @@ separate snapshot rules; reusable state can survive an unpromoted kernel.
 Reserved assets are refreshed from trusted sources. See
 [reusable workspace](optional-light-modules.md#reusable-workspace).
 
-## Restricted containers and preflight
+## Restricted containers
 
-Use `proc_mode: projected` only when deliberately selecting the supported restricted-container
-view. It preserves namespace and filesystem isolation while exposing a bounded Session process
-view. It requires a compiler/development headers and ordinary namespace/bind permissions.
+Use `proc_mode: host` as the default for Light inside Aone Sandbox. It preserves Bubblewrap's
+filesystem isolation but shares the outer container's PID namespace and complete `/proc` with
+the Agent. Ordinary Linux and Lima continue to default to `private`.
 
-The installed, model-free compiler preflight is:
+This is the default and required Bubblewrap mode in the current Aone Sandbox environment: its outer
+container policy rejects Bubblewrap's normal nested procfs mount. Use an Agent composition patch
+that retains the complete `light-sandbox` settings:
 
-```bash
-python3 -m aka.light.agent.preflight
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "agent", "config": {
+    "sandbox": "bwrap",
+    "capture": true,
+    "proc_mode": "host"
+  }}]
+}
 ```
 
-Run it in the Linux environment that will actually launch the Agent. It checks the packaged
-shim and compiler; it does not certify Bubblewrap namespace permission or GPU execution.
-See [projected proc details](optional-light-modules.md#bubblewrap-in-restricted-containers).
+Pass it as `--profile light-sandbox --patch /path/to/patch.json` before the optimizer's `--`
+separator. No compiler, compatibility shim or `LD_PRELOAD` configuration is required. Because
+the Agent can see every process in the Aone Sandbox, use a dedicated Sandbox and do not treat
+host mode as process isolation.
 
 ## Verification and rollback
 

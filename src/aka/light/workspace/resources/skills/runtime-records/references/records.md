@@ -1,77 +1,91 @@
 # Read saved measurement evidence
 
-All commands run through `python3 tools/sandbox.py` in the Session workspace.
+Runtime projects every visible result as `records/<gateway_record_id>.json`. Read and search those
+flat files normally. Exact Kernel source is ordinary reachable Git history.
+
+Runtime measurement calls print a compact receipt rather than the complete result. Env is the
+exception: it prints its redacted Agate response directly and creates no Record. Query a full saved
+measurement Record locally without another GPU request. Use ordinary read/search tools or a short
+local JSON query; for example:
+
+```bash
+RECORD="records/${GATEWAY_RECORD_ID}.json"
+python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["result"]["correct"])' "$RECORD"
+python3 -c 'import json,sys; print(sorted(json.load(open(sys.argv[1]))["result"]))' "$RECORD"
+```
+
+Read large text with bounded line or byte ranges. Do not use `cat`, a full `json.dumps`, or an
+equivalent command that copies a complete Record, per-Shape table, source, stdout, or stderr into
+the Session. A receipt with stream output includes `stdout_location` and/or `stderr_location`, whose
+`path` names this Record and whose `field` is `result.stdout` or `result.stderr`.
 
 | ID | Meaning | Use |
 | --- | --- | --- |
-| `gateway-…` | One saved measurement operation | Measured evidence, result reader, direct report citation when research recording is disabled |
-| `kernel-…` | Exact Kernel source; equal bytes have equal IDs | Source reader, measurement index |
-| `direction_…` | Research hypothesis and lifecycle | Direction list/load/update |
-| `experiment_…` | Interpretation tied to real measurement IDs | Experiment list/load, closure, report |
+| `gateway-…` | One saved measurement operation | Measured evidence, result reader, direct report citation when the Experiment module is disabled |
+| full Git commit ID | Exact committed Kernel source; exposed as `kernel_commit_id` | Source reader, measurement index, peer Git history |
+| `direction_…` | Optimization objective and lifecycle | `PROGRESS.md`, `research-library/directions/<direction_id>/vN/direction.json`, Direction updates |
+| `experiment_…` | Concrete test and interpretation tied to measurement IDs | `research-library/experiments/<experiment_id>/vN/experiment.json`, closure and report |
 
 Agate Job IDs cannot replace these IDs.
 
-```bash
-python3 tools/sandbox.py --kind record-read --record-id gateway-11111111111111111111111111111111
-python3 tools/sandbox.py --kind kernel-records --kernel-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-python3 tools/sandbox.py --kind kernel-read --kernel-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --output-path scratch/previous.py
-```
-
-`record-read` prints one JSON object, the same public result returned by a new measurement:
-`operation`, `status`, `result`, `gateway_record_id`, and `kernel_id` when Kernel-bound.
-ABBA uses `operation: evaluate` with `result.comparison` and `baseline_kernel_id`.
+Each projected file contains the same public result returned by a new measurement:
+`operation`, `status`, `result`, `gateway_record_id`, and `kernel_commit_id` when Kernel-bound.
+ABBA uses `operation: evaluate` with `result.comparison`, `candidate_kernel_commit_id`, and
+`baseline_kernel_commit_id`.
 Other operation names are `profile`, `dev`, `check`, and `disassemble`.
-Parse the whole stdout as JSON; do not look for legacy executor markers.
+Parse a measurement command's whole stdout as one compact receipt. Env stdout is the direct
+redacted Agate capability response and is not a receipt.
 Dev preserves probe text in `result.stdout`/`result.stderr` and its process `exit_code`.
 Its Kernel is the workspace snapshot, not proof the probe measured it.
 
-The read exits zero when evidence was retrieved, regardless of the stored outcome.
 Inspect `status` (`completed`, `failed`, `cancelled`) and, for Evaluate, `result.correct`.
-An evaluator can complete with a rejected Kernel. Missing or corrupt records still fail the query.
-Old stream-only records are converted in memory, without changing their stored evidence or
-submitting GPU work. Private request/options/input hashes are never included.
+An evaluator can complete with a rejected Kernel. Private request/options/input hashes are never
+included. Search the flat files for a commit ID to enumerate its measurements. Use Git to inspect,
+branch from, restore or compare the corresponding source.
 
-`kernel-records` lists Record ID, operation and timestamp, not result bodies. `kernel-read`
-writes source to the requested scratch file and acknowledges it. Read that file before restoring it.
-
-Use returned IDs, not these illustrative examples. Shape IDs are opaque. Profile duration and
+Use returned IDs, not these illustrative examples. Shape parameters are public through
+`shapes.json` only in exposed mode; in hidden mode every Shape ID is opaque. Profile duration and
 Evaluate latency are different measurements; a diagnostic cannot establish untested performance.
-When adopting an older Kernel, cite its saved measurement in a current-Episode Experiment if
-research recording is enabled; otherwise cite it directly in `episode-report`.
+When checking out an older Kernel, reuse a visible Experiment whose measured decision has a `supported` Review and whose saved full Evaluate
+still matches that exact commit, or record a new Experiment when the interpretation or evidence has
+changed. Source-policy review is requested separately with `submit-kernel`.
 
-## Per-Shape historical best
+## Per-Shape accepted-submission Pareto
 
 ```bash
-python3 tools/sandbox.py --kind kernel-pareto-frontier
+# Read root PROGRESS.md for the Research Board and per-Shape frontier.
 ```
 
-This read-only query takes no IDs and submits no GPU work. It returns one JSON object:
-`best_by_shape` maps each opaque Shape ID to `kernel_id`, `gateway_record_id`, and `latency_us`;
-`winner_kernel_ids` lists the distinct winning sources; `shape_count` counts returned Shapes;
+The Pareto section of Runtime-managed root `PROGRESS.md` takes no IDs and submits no GPU work.
+It includes only commits accepted by `submit-kernel` that also have eligible full Evaluate evidence.
+`best_by_shape` maps each Shape ID to
+`kernel_commit_id`, `gateway_record_id`, and `latency_us`;
+`winner_kernel_commit_ids` lists the distinct winning sources; `shape_count` counts returned Shapes;
 `evaluation_count` counts eligible full Evaluations, not distinct Kernels. With no eligible history,
-the map and list are empty and both counts are zero. Use `kernel-read` and `record-read` on returned IDs.
+the map and list are empty and both counts are zero. Open the cited Record file and Git commit directly.
 
-Only completed, passing standard full Evaluations in this Campaign count, across Episodes,
-including saved baseline/controller full Evaluations. Custom-input, Shape-subset, correctness-only,
-ABBA, Profile and Dev results do not count. Failed, incomplete and invalid records are excluded.
-The query remains available with research recording disabled. Equal latencies break ties by
-Kernel ID, then Record ID. These are observed minima, not a statistically confirmed bound or a
+Only completed, passing standard full Evaluations for accepted submissions in this Campaign count,
+across Episodes and imported peer lineages. An Evaluate without an accepted submission remains in
+`records/` but does not enter Pareto. Custom-input, Shape-subset, correctness-only, ABBA, Profile and
+Dev results do not count. Failed, incomplete and invalid records are excluded.
+The projection remains available with research recording disabled. Equal latencies break ties by
+Kernel commit ID, then Record ID. These are observed minima, not a statistically confirmed bound or a
 single Kernel that achieves every minimum; combining implementations requires a new full Evaluate.
 
 ## Errors
 
-Journal validation errors return `ok:false`, `repairable:true`, and `error` with
+Research/report validation errors return `ok:false`, `repairable:true`, and `error` with
 `code`, `message`, `next_action`; field errors also list missing/unexpected/allowed fields.
 Fix the indicated request or lifecycle state and call again. This is not permission to replay an
 unknown-outcome mutation. Missing/corrupt private storage and post-write publication failures are
 infrastructure errors, not input mistakes.
 
 - Duplicate measurement: read `error.gateway_record_id`; do not submit another GPU task.
-- Direction conflict/limit (research recording enabled): finish the active hypothesis before starting another; propose ideas
-  for later Episodes without starting a fourth Direction.
-- Report rejected: verify exact source and measured evidence. With research recording enabled,
-  check the selected Experiment and close active Directions; otherwise check `gateway_record_ids`.
-  Correct the report and resubmit. No successful finalization occurred; the Supervisor owns Commit creation.
-- Report publication failed: after storage recovery, resubmit the identical report; the durable
-  report is reused. Do not rerun GPU work or create another Commit.
-- Unknown transport outcome: list/load records or ask the operator before resubmitting a write.
+- Kernel submission needs evaluation: inspect `evaluation_evidence`; run a standard full Evaluate
+  for the exact commit, then submit it again. A failed saved Evaluate must be repaired in a new
+  commit and remeasured.
+- Kernel source review rejected: inspect `diagnostics`, repair the final-source policy violation in
+  a new commit, run its full Evaluate, and submit that exact commit. Rejection never changes Git or
+  measurement records.
+- Unknown transport outcome: inspect `PROGRESS.md` and the projected research files, or ask the
+  operator before resubmitting a write.

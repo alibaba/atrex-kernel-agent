@@ -18,6 +18,41 @@ Light consists of three Python distributions that must come from the same source
 
 The three wheels and the resource checkout passed through `--repo-root` must come from the same revision. The packages commonly all report version `0.1.0`, so rebuild and force-reinstall them after a source update; do not rely on the displayed package version alone.
 
+## Agate dependency and Atrex-Bench source
+
+Install `atrex-gateway-client==0.14.31`, which provides the Agate Python SDK and `agate` CLI, into
+the same Python environment that will run `aka optimize`:
+
+```bash
+python3 -m pip install --upgrade \
+  --index-url http://artlab.alibaba-inc.com/1/pypi/pypi-releases \
+  --trusted-host artlab.alibaba-inc.com \
+  'atrex-gateway-client==0.14.31'
+```
+
+Verify the exact distribution and CLI before launching:
+
+```bash
+python3 - <<'PY'
+from importlib.metadata import version
+print("atrex-gateway-client", version("atrex-gateway-client"))
+PY
+agate --version
+```
+
+Obtain Atrex-Bench as a canonical source checkout from GitHub:
+
+```bash
+git clone https://github.com/alibaba/atrex-bench.git /path/to/atrex-bench
+test -f /path/to/atrex-bench/scripts/run_eval.py
+test -d /path/to/atrex-bench/src/atrex_bench
+```
+
+Record the selected Atrex-Bench commit for reproducibility and supply this checkout root during
+launch intake. Native inputs require the checkout itself, including `scripts/run_eval.py`,
+`src/atrex_bench/`, and the operator directory; the Skill does not install or expand an
+Atrex-Bench wheel.
+
 ## Recommended installation script
 
 Create and activate an isolated virtual environment:
@@ -97,3 +132,15 @@ At launch, pass the same source checkout through `--repo-root`. Read [operations
 4. Start a new campaign with the updated environment, or verify resume identity before resuming an existing campaign.
 
 Do not skip reinstallation merely because the distributions still report version `0.1.0`. Do not replace code underneath a running campaign and assume its processes loaded the update; restart through the campaign's Supervisor or workload mechanism and verify the result.
+
+## Bubblewrap proc modes
+
+Light supports exactly two Bubblewrap process-view modes:
+
+- `private` creates a private PID namespace and mounts a new procfs. It is supported on ordinary Linux and Lima.
+- `host` shares the outer container's PID namespace and bind-mounts its complete `/proc`. It is the only supported Bubblewrap proc mode inside Aone Sandbox because Aone rejects a nested procfs mount; use a dedicated Sandbox.
+
+Host mode requires Bubblewrap but no C compiler, development headers, compatibility shim or `LD_PRELOAD`. It preserves the filesystem allowlist and dropped capabilities, but it deliberately does not isolate process visibility within the Aone Sandbox.
+For every new launch, ask the user to select `private` or `host` after they select
+`light-sandbox`. Inside Aone, ask the user to accept `host` or choose native `light`; do not apply a
+proc-mode default on the user's behalf.

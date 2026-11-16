@@ -1,4 +1,4 @@
-"""Discover and forward safe native Agate command options.
+"""Discover and forward safe native Agate request options.
 
 Agate owns the public spelling, types and enum values.  Light owns credentials,
 sources, timeouts, uploads and job recovery, so those options are never copied
@@ -45,6 +45,7 @@ BLOCKED = frozenset({
     "--backend", "--harness", "--atrex-bench-version", "--set", "--operator",
     "--deps-mode", "--replay-policy",
     "--num-correctness-cases", "--bench-iters", "--mode", "--lock-clocks",
+    "--shape-shards",
     # These select a different evaluator/source contract rather than tuning the
     # current operator request. They need first-class Runtime workflows.
     "--collective", "--numel", "--dtype", "--warmup-iters", "--subset",
@@ -276,9 +277,12 @@ def extend_parser(parser: argparse.ArgumentParser) -> argparse.ArgumentParser:
                     )
                     continue
                 # ACU is implemented by Light's SSH backend even when the
-                # installed Agate catalog only advertises NCU and rocprofv3.
-                existing.choices = (tuple(dict.fromkeys([*existing.choices, *option.choices]))
-                                    if existing.dest == 'profiler' else option.choices)
+                # installed Agate catalog advertises only NCU/rocprofv3.
+                existing.choices = (
+                    tuple(dict.fromkeys([*existing.choices, *option.choices]))
+                    if existing.dest == "profiler"
+                    else option.choices
+                )
             if option.help:
                 existing.help = option.help
             setattr(existing, "agate_commands", supported)
@@ -330,28 +334,6 @@ def values(args: argparse.Namespace, kind: str) -> dict[str, Any]:
     return result
 
 
-def cli_arguments(args: argparse.Namespace, kind: str) -> list[str]:
-    """Render explicitly supplied native values using Agate's own spellings."""
-    supplied = values(args, kind)
-    result: list[str] = []
-    for option in catalog().values():
-        if option.dest not in supplied:
-            continue
-        value = supplied[option.dest]
-        if option.action == "append":
-            for item in value:
-                result += [option.flag, str(item)]
-        elif option.action in {"store_true", "store_false"}:
-            enabled = bool(value) if option.action == "store_true" else not bool(value)
-            if enabled:
-                result.append(option.flag)
-        elif option.action == "boolean_optional":
-            result.append(option.flag if value else "--no-" + option.flag.removeprefix("--"))
-        else:
-            result += [option.flag, str(value)]
-    return result
-
-
 def selectors(items: list[str] | None, label: str) -> dict[str, str]:
     """Parse Agate's repeatable KEY=VALUE selector contract."""
     result: dict[str, str] = {}
@@ -364,7 +346,7 @@ def selectors(items: list[str] | None, label: str) -> dict[str, str]:
 
 
 def apply_request(request: dict[str, Any], args: argparse.Namespace, kind: str) -> dict[str, Any]:
-    """Apply native options to a direct HTTP request using Agate wire names."""
+    """Apply native options to an SDK request using Agate wire names."""
     supplied = values(args, kind)
     cluster = selectors(supplied.pop("cluster_label", None), "--cluster-label")
     node = selectors(supplied.pop("node_label", None), "--node-label")
@@ -380,6 +362,13 @@ def apply_request(request: dict[str, Any], args: argparse.Namespace, kind: str) 
     shape_shards = supplied.pop("shape_shards", None)
     if shape_shards is not None:
         request.setdefault("options", {})["shape_shards"] = shape_shards
+    if kind == "dev":
+        intent = supplied.pop("intent", None)
+        note = supplied.pop("note", None)
+        if intent is not None:
+            request["dev_intent"] = intent
+        if note is not None:
+            request["dev_note"] = note
     # Agate's typed Profile/Check/Disassemble fields use their parser dest as
     # their wire name. Unknown future additive fields follow that public SDK
     # convention and remain subject to Gateway schema validation.
@@ -393,4 +382,3 @@ def apply_request(request: dict[str, Any], args: argparse.Namespace, kind: str) 
             raise ValueError(f"Agate option {key!r} conflicts with the Runtime request")
         request[key] = value
     return request
-

@@ -1,7 +1,6 @@
 """Accept recorded, policy-matched ABBA evidence for Full Episodes."""
 from __future__ import annotations
 
-import shlex
 import tempfile
 from pathlib import Path
 
@@ -22,62 +21,40 @@ from aka.light.acceptance.verifier import (
 
 
 class RecordedABBAValidator(GatewayABBAValidator):
-    BASELINE_PATH = "scratch/incumbent.py"
-
     def __init__(self, *, execute, **kwargs):
         super().__init__(**kwargs)
         self.execute = execute
 
-    def request_argv(self) -> list[str]:
-        """One canonical request for trusted acceptance and the Agent prompt."""
+    def request_argv(self, baseline_kernel_id: str) -> list[str]:
+        """Canonical Supervisor-owned terminal acceptance request."""
         return [
             "--kind", "run", "--mode", "full", "--no-sync",
-            "--baseline-path", self.BASELINE_PATH,
+            "--baseline-commit", baseline_kernel_id,
             "--comparison-repeats", str(self.repeats),
             "--comparison-run-timeout", str(self.per_run_timeout),
-            "--shape-batch-size", str(self.shape_batch_size),
-            "--multi-seed", "0",
         ]
 
-    def agent_instructions(self, *, baseline_kernel_id: str, measurement_repetitions: int) -> str:
-        read = shlex.join([
-            "python3", "tools/sandbox.py", "--kind", "kernel-read", "--kernel-id",
-            baseline_kernel_id, "--output-path", self.BASELINE_PATH,
-        ])
-        measure = shlex.join(["python3", "tools/sandbox.py", *self.request_argv()])
-        return f"""## This Episode's acceptance request
+    def agent_instructions(self, *, measurement_repetitions: int) -> str:
+        return f"""## ABBA comparisons and terminal acceptance
 
-ABBA is optional during exploration. To make a comparison eligible for acceptance reuse,
-leave the complete candidate in place and run these exact commands
-(for a source-tree task, `kernel-read` creates a baseline directory, not a Python file):
+During exploration, you may compare the clean committed candidate against any baseline commit
+reachable from local Git or a peer remote-tracking ref such as `atrex/T2` by running:
 
 ```bash
-{read}
-{measure}
+python3 tools/sandbox.py --kind run --mode full --baseline-commit <FULL_GIT_COMMIT>
 ```
 
-The first command copies this Episode's committed incumbent, not the current draft; it is
-safe to use after edits or resume. Do not modify `{self.BASELINE_PATH}` before the comparison.
-The second command matches the Supervisor's configured ABBA repeats, per-run timeout and
-Shape batch size. Retention ABBA uses one correctness case, matching Runtime;
-the separate candidate correctness gate covers six cases. Do not add
-command/input/Shape/seed/benchmark/dependency overrides.
-The Runtime supplies the evaluator, full workload and target; private inputs stay private.
+That is a research comparison: you choose its baseline and interpret the result. It does not alter
+the standard full Evaluate or final-source review required by `submit-kernel`. Runtime does not run
+an automatic terminal ABBA or promote a candidate when an Episode ends.
 
-Supervisor measurement repetitions: **{measurement_repetitions}** per request (one result if 1;
-per-Shape median if 3). The enclosing allocation is derived from the per-run limits above.
-These are Runtime-owned settings, already applied to this request; do not loop the command
-or set environment variables to reproduce them.
-
-Reuse requires the same candidate, incumbent, inputs, evaluator and complete task policy.
-A duplicate-task error names an existing Record: use `record-read`, not another submission.
-Acceptance reuses a completed matching Record or measures when none exists; it is not a
-zero-submission guarantee. ABBA does not replace the standard full Evaluate required by
-`episode-report`, and the Supervisor still applies policy and performance gates.
+Runtime measurement repetitions: **{measurement_repetitions}** per request (one result if 1;
+per-Shape median if 3).
 """
 
     def verify(self, workspace: Path, *, base_commit: str, candidate_commit: str,
-               changed_paths: list[str]) -> VerificationResult:
+               changed_paths: list[str], candidate_kernel_id: str | None = None,
+               baseline_kernel_id: str | None = None) -> VerificationResult:
         try:
             from aka.light.workspace.sources import from_git, Artifact, install
             candidate = from_git(workspace, candidate_commit)
@@ -94,8 +71,15 @@ zero-submission guarantee. ABBA does not replace the standard full Evaluate requ
                         continue
                     publish(staged, name, content)
                 install(staged, candidate)
-                Artifact(baseline).export(staged / self.BASELINE_PATH)
-                response = self.execute(staged, self.request_argv())
+                response = self.execute(
+                    staged,
+                    self.request_argv(baseline_kernel_id or base_commit),
+                    kernel_ids={
+                        "candidate": candidate_kernel_id or candidate_commit,
+                        "baseline": baseline_kernel_id or base_commit,
+                    },
+                    journal_workspace=workspace,
+                )
             result = result_from_response(response, "same_allocation_abba")
             if not result or not result.get("gateway_record_id"):
                 raise ValueError("No authoritative ABBA record: " + response.get("stderr", "")[-1000:])

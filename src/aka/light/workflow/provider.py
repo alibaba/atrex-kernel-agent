@@ -3,12 +3,13 @@
 No global adapter is replaced. The selected Agent is borrowed and remains owned
 by its composition; this Workflow owns only Campaigns and their private servers.
 """
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import SimpleNamespace
 from weakref import WeakSet
 
 from aka.contracts.problem import LoadedProblem
 from aka.contracts.workflow import CampaignRequest, ProblemSource
+from .constants import DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES
 from .search import SearchOptions
 
 
@@ -16,18 +17,26 @@ from .search import SearchOptions
 class WorkflowOptions:
     numerical_validation: bool = False
     goal_episodes: bool = False
-    generate_memory: bool = False
-    output_limit_recovery_retries: int = 2
-    episode_timeout_seconds: float = 14400
+    output_limit_recovery_retries: int = DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES
+    dependency_policy_recovery_retries: int = 2
+    episode_timeout_seconds: float | None = None
+    # One independent lineage is the ordinary default.  Pooled search is an
+    # explicit advanced configuration rather than an implicit launch choice.
     search: SearchOptions | dict | None = None
     source_tree: dict | None = None
 
     def __post_init__(self):
         from aka.light.agent.execution_clock import validate_timeout
-        validate_timeout(self.episode_timeout_seconds)
+        if self.episode_timeout_seconds is not None:
+            validate_timeout(self.episode_timeout_seconds)
         if (type(self.output_limit_recovery_retries) is not int
                 or not 0 <= self.output_limit_recovery_retries <= 10):
             raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")
+        if (type(self.dependency_policy_recovery_retries) is not int
+                or not 0 <= self.dependency_policy_recovery_retries <= 10):
+            raise ValueError(
+                "dependency_policy_recovery_retries must be an integer from 0 to 10"
+            )
         if self.source_tree is not None:
             from aka.light.workspace.sources import validate_import_options
             validate_import_options(self.source_tree)
@@ -43,7 +52,7 @@ class LightWorkflow:
         if not getattr(agent, "supports_tool_runtime", False):
             raise ValueError("light Workflow requires aka.light.agent.plugin (sandbox may remain none)")
         if not getattr(candidate, "managed_drafts", False):
-            raise ValueError("light Workflow requires aka.light.workspace.plugin for sealed candidates")
+            raise ValueError("light Workflow requires aka.light.workspace.plugin for managed Agent workspaces")
         self.agent, self.problem, self.source, self.candidate = agent, problem, source, candidate
         self.options = options
         self.tool_runtime = tool_runtime
@@ -87,13 +96,19 @@ class LightWorkflow:
                       else SimpleNamespace(profile="", url="", ssh="", ssh_init="",
                                            ssh_gpu=None, health_command=""))
         runtime = request.runtime
+        hardware = runtime.hardware or request.settings.platform
+        from aka.light.evaluation.policy import resolved_gpu_clock_mhz
         return SimpleNamespace(
-            hardware=runtime.hardware or request.settings.platform,
+            hardware=hardware,
             profile=connection.profile,
             url=connection.url,
             timeout=runtime.timeout,
             verify_repeats=runtime.verify_repeats,
-            verify_run_timeout=runtime.verify_run_timeout,
+            evaluation_step_timeout=runtime.evaluation_step_timeout,
+            shape_batch_size=runtime.shape_batch_size,
+            gpu_clock_mhz=resolved_gpu_clock_mhz(
+                hardware, runtime.gpu_clock_mhz
+            ),
             min_improvement_pct=runtime.min_improvement_pct,
             ssh=connection.ssh,
             ssh_init=connection.ssh_init,

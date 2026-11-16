@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 --input <draft.md> [--proposal <candidate.md>] [--context <file>]... [--timeout <seconds>]" >&2
+    echo "Usage: $0 --input <draft.md> [--proposal <candidate.md>] [--context <file>]..." >&2
     exit 2
 }
 
@@ -11,7 +11,7 @@ input_file=""
 proposal_file=""
 context_files=()
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-codex_timeout="${ATREX_ASK_CODEX_TIMEOUT:-600}"
+codex_timeout="0"
 session_file="${ATREX_CODEX_REVIEW_SESSION_FILE:-}"
 # Independent plan review is always run at maximum reasoning depth. Do not inherit the episode,
 # project, environment, or caller effort because that would weaken the review when the main agent
@@ -36,8 +36,12 @@ while [[ $# -gt 0 ]]; do
             context_files+=("$2")
             shift 2
             ;;
-        --timeout)
+        --availability-timeout)
             [[ $# -ge 2 && "$2" != --* ]] || usage
+            [[ "${ATREX_REVIEWER_AVAILABILITY_PROBE:-}" == "1" ]] || {
+                echo "ask-codex: --availability-timeout is reserved for startup probing" >&2
+                exit 2
+            }
             codex_timeout="$2"
             shift 2
             ;;
@@ -57,8 +61,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$input_file" ]] || { echo "ask-codex: --input is required" >&2; usage; }
-[[ "$codex_timeout" =~ ^[1-9][0-9]*$ ]] || {
-    echo "ask-codex: timeout must be a positive integer" >&2
+[[ "$codex_timeout" =~ ^[0-9]+$ ]] || {
+    echo "ask-codex: timeout must be a non-negative integer (0 means unbounded)" >&2
     exit 2
 }
 if [[ -n "$codex_model" && ! "$codex_model" =~ ^[a-zA-Z0-9._-]+$ ]]; then
@@ -132,12 +136,17 @@ for ((index = 0; index < ${#context_files[@]}; index++)); do
     python_args+=("${context_files[$index]}")
 done
 
+if [[ "$codex_timeout" == "0" ]]; then
+    timeout_label="unbounded"
+else
+    timeout_label="${codex_timeout}s"
+fi
 if [[ -n "$session_file" ]]; then
     echo "ask-codex: running campaign-persistent read-only consultation " \
-        "(timeout=${codex_timeout}s, effort=$reasoning_effort)" >&2
+        "(timeout=$timeout_label, effort=$reasoning_effort)" >&2
 else
     echo "ask-codex: running isolated read-only consultation " \
-        "(timeout=${codex_timeout}s, effort=$reasoning_effort)" >&2
+        "(timeout=$timeout_label, effort=$reasoning_effort)" >&2
 fi
 if codex_response="$(python3 - "${python_args[@]}" <<'PY'
 import json
@@ -149,7 +158,8 @@ import tempfile
 import uuid
 from datetime import datetime, timezone
 
-timeout = int(sys.argv[1])
+timeout_seconds = int(sys.argv[1])
+timeout = timeout_seconds or None
 input_file = pathlib.Path(sys.argv[2])
 proposal_file = pathlib.Path(sys.argv[3]) if sys.argv[3] else None
 context_count = int(sys.argv[4])
@@ -367,7 +377,7 @@ try:
         else:
             response = completed.stdout
 except subprocess.TimeoutExpired:
-    print(f"ask-codex: timed out after {timeout}s", file=sys.stderr)
+    print(f"ask-codex: timed out after {timeout_seconds}s", file=sys.stderr)
     raise SystemExit(124)
 except OSError as exc:
     print(f"ask-codex: failed to start codex: {exc}", file=sys.stderr)

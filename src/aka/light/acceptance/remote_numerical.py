@@ -3,8 +3,7 @@
 
 The original generator supplies tensor metadata and unchanged structural inputs.
 Only the requested tensor leaves are regenerated; tuple/list/dict ABIs are preserved.
-Supplemental floating outputs use relative L2; structural and mutation checks
-remain owned by the evaluator.
+All correctness checks remain owned by the evaluator and its benchmark metadata.
 """
 from __future__ import annotations
 
@@ -39,7 +38,6 @@ replace_leaves = _inputs.replace_leaves
 numerical_inputs = _inputs.numerical_inputs
 
 PREFIX = "__ATREX_NUMERICAL_RESULT__="
-MAX_REL_L2 = 1e-3
 GENERATORS = {"uniform", "log_uniform", "sparse", "alternating", "constant", "ramp", "packed_bytes", "near_constant"}
 
 
@@ -177,9 +175,9 @@ def run(request_path):
     rows = []
     diagnostics = []
     try:
-        # The standalone driver cannot import the Supervisor package. New
-        # requests carry ordinary Evaluate policy; omitted values retain the
-        # Legacy default for old standalone callers.
+        # The standalone driver cannot import the Supervisor package. The
+        # benchmark metadata copied into this allocation remains the sole
+        # source of numerical acceptance policy.
         candidate_timeout = request.get("candidate_timeout_s")
         if candidate_timeout is not None and (
                 type(candidate_timeout) not in {int, float}
@@ -226,7 +224,6 @@ def run(request_path):
                         for cached in (root / "__pycache__").glob(f"{stem}.*.pyc"):
                             cached.unlink()
                     command = [*evaluator, "--version", "vlong", "--no-memory", "--correctness-only",
-                               "--correctness-max-rel-l2", str(request.get("max_rel_l2", MAX_REL_L2)),
                                "--multi-seed", "0", "--seed", str(seed), "--shape-id", shape_id]
                     if candidate_timeout is not None:
                         command += ["--candidate-timeout-s", str(candidate_timeout)]

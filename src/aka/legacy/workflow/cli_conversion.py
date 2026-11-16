@@ -2,7 +2,11 @@
 from __future__ import annotations
 import argparse, json, os, re, sys
 from pathlib import Path
-from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S, GATEWAY_CANDIDATE_RECOVERY_MODES
+from aka.legacy.workflow.constants import AGENT_CLI_CHOICES, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, FRAMEWORK_BASELINE_MODES, FRAMEWORK_BASELINE_TIMEOUT_S, GATEWAY_CANDIDATE_RECOVERY_MODES
+from aka.contracts.evaluation import (
+    DEFAULT_EVALUATION_STEP_TIMEOUT,
+    DEFAULT_SHAPE_BATCH_SIZE,
+)
 from aka.legacy.execution.recovery import DEFAULT_SSH_HEALTH_COMMAND
 from aka.legacy.task.hardware import _workspace_slug
 from aka.legacy.workflow.policy import OPTIMIZATION_MODE_CHOICES
@@ -19,17 +23,26 @@ def parse_arguments(argv):
     ap.add_argument("--conversion-budget-action", choices=("fail", "retain_verified"), default="fail")
     ap.add_argument("--resume-framework-candidate", action="store_true",
                     help="Validate a retained framework candidate before generating another implementation")
-    ap.add_argument("--verify-shape-batch-size", dest="shape_batch_size", type=int, default=4,
+    ap.add_argument("--verify-shape-batch-size", dest="shape_batch_size", type=int,
+                    default=DEFAULT_SHAPE_BATCH_SIZE,
                     help="Maximum workload shapes in one verification allocation")
+    ap.add_argument(
+        "--gpu-clock-mhz",
+        type=int,
+        default=None,
+        help=(
+            "Locked Eval graphics clock in MHz. L20N defaults to its verified "
+            "2370 MHz realizable application-clock bin; an explicit value overrides the product default."
+        ),
+    )
     ap.add_argument(
         "--op-dir",
         required=True,
         help=(
             "The operator dir (SOL definition.json/workload.jsonl/reference.py, or native "
             "Atrex-Bench reference.py/input.py/shapes.json with optional agent_problem.json). "
-            "Production exposes the detailed evaluator contract by default. Use "
-            "--no-expose-evaluator-shapes to instead optimize from a provided or derived "
-            "agent_problem.json while keeping exact shapes private."
+            "Evaluator Shapes are exposed by default. Use --no-expose-evaluator-shapes "
+            "to optimize from a generalized public contract while keeping exact Shapes private."
         ),
     )
     ap.add_argument(
@@ -88,7 +101,7 @@ def parse_arguments(argv):
         default=None,
         metavar="INDEX",
         help=(
-            "Physical GPU index assigned to SSH execution (required with "
+            "Physical NVIDIA GPU index assigned to SSH execution (required with "
             "--sandbox-ssh; default: ATREX_SANDBOX_SSH_GPU)."
         ),
     )
@@ -149,30 +162,55 @@ def parse_arguments(argv):
     ap.add_argument(
         "--optimization-mode",
         choices=OPTIMIZATION_MODE_CHOICES,
-        default="leaderboard",
-        help="leaderboard preserves the permissive current CLAUDE.md flow; production keeps "
-        "deterministic structure/state gates and requires an independent fail-closed full-candidate "
-        "framework, compute-provenance, dependency, loader, and manifest review.",
+        default="fast",
+        help=(
+            "Final-source policy: fast lets the Agent choose a DSL and use declared libraries; "
+            "performance lets the Agent choose a DSL with expert guidance but requires "
+            "self-authored core compute; ultra additionally requires one explicitly configured "
+            "DSL. leaderboard/production remain compatibility aliases."
+        ),
+    )
+    ap.add_argument(
+        "--framework",
+        default="",
+        help=(
+            "Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL / TileLang. Required by "
+            "ultra and rejected by fast/performance, where the Agent owns DSL selection. "
+            "Historical leaderboard/production aliases retain their compatibility behavior."
+        ),
+    )
+    ap.add_argument(
+        "--specify-dsl",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Compatibility switch for historical modes. Fast/performance always leave DSL "
+            "selection to the Agent. Ultra always pins the explicit --framework and rejects "
+            "--no-specify-dsl."
+        ),
     )
     ap.add_argument(
         "--expose-evaluator-shapes",
         action=argparse.BooleanOptionalAction,
         default=True,
         help=(
-            "Expose native Atrex-Bench shapes.json and detailed evaluator metadata to the "
-            "Agent. Production source review and promotion gates remain enabled, and Runtime "
-            "results remain compact, but shape dimensions are not redacted (default: on; "
-            "use --no-expose-evaluator-shapes for the generalized hidden-shape flow)."
+            "Expose native Atrex-Bench shapes.json and Shape details in Runtime results "
+            "(default: enabled). --no-expose-evaluator-shapes uses the generalized "
+            "hidden-Shape flow and redacts Shape details from every Agent-visible result."
         ),
     )
     ap.add_argument(
-        "--framework",
-        default="",
-        help="Target DSL, e.g. Triton / CuteDSL / Cuda / FlyDSL / TileLang. When omitted, "
-        "launch all frameworks supported by the detected hardware in parallel: NVIDIA uses "
-        "Triton/CuteDSL/Cuda/TileLang, AMD uses Triton/FlyDSL/TileLang, PPU uses "
-        "Triton/Cuda/TileLang, and unknown hardware uses Triton/TileLang. "
-        "Each auto-dispatched production child is bound to its assigned framework.",
+        "--agent-reference-dir",
+        action="append",
+        nargs="+",
+        default=[],
+        metavar="DIR",
+        help=(
+            "Expose one or more existing directories at references/<basename>/ inside the "
+            "optimization Agent workspace. Repeat the option or list several directories "
+            "after one option. Bubblewrap mounts them read-only; native Agent execution "
+            "uses links and cannot prevent modification of the original directories."
+        ),
     )
     ap.add_argument(
         "--notes", default="none", help="Extra constraints / known bottlenecks."
@@ -223,10 +261,6 @@ def parse_arguments(argv):
         help="Same-session recovery turns after an incomplete episode handoff (default: 2).",
     )
     ap.add_argument(
-        "--production-review-timeout", type=int, default=600,
-        help="Independent production dependency review timeout in seconds (default: 600).",
-    )
-    ap.add_argument(
         "--review-trace-mode",
         choices=("off", "errors", "all"),
         default=os.environ.get("ATREX_REVIEW_TRACE_MODE", "errors"),
@@ -243,12 +277,14 @@ def parse_arguments(argv):
         help="Incumbent/candidate ABBA repeat pairs in one gateway allocation (default: 2).",
     )
     ap.add_argument(
-        "--verify-run-timeout",
+        "--evaluation-step-timeout",
         type=int,
-        default=DEFAULT_VERIFY_RUN_TIMEOUT,
-        help=f"Evaluator budget for each ABBA run (default: {DEFAULT_VERIFY_RUN_TIMEOUT}s, "
-        "matching the Performance timeout; the enclosing allocation is derived from "
-        "the complete schedule).",
+        default=DEFAULT_EVALUATION_STEP_TIMEOUT,
+        help=(
+            "Unified seconds limit for candidate initialization/correctness, one "
+            "Shape Performance phase, and one ABBA A/B run "
+            f"(default: {DEFAULT_EVALUATION_STEP_TIMEOUT})."
+        ),
     )
     ap.add_argument(
         "--min-improvement-pct",
@@ -262,9 +298,9 @@ def parse_arguments(argv):
         default="auto",
         help="Run one dedicated session after V0 setup that "
         "replaces the V0 PyTorch wrapper with the first self-contained framework "
-        "kernel, recorded as v1 (so optimization episodes start at v2). Production "
-        "auto = production mode only; always = leaderboard too; "
-        "never = optimize directly from the V0 kernel.",
+        "kernel, recorded as v1 (so optimization episodes start at v2). "
+        "The default, auto, runs this stage when V0 still needs framework bring-up; "
+        "always forces it and never explicitly opts out.",
     )
     ap.add_argument(
         "--framework-baseline-timeout",
@@ -321,6 +357,31 @@ def parse_arguments(argv):
         ap.error(
             "--workspace-suffix must be a normalized lowercase alphanumeric/underscore suffix"
         )
+    reference_paths = []
+    reference_names = set()
+    for raw_path in (item for group in args.agent_reference_dir for item in group):
+        path = Path(raw_path).expanduser()
+        try:
+            path = path.resolve(strict=True)
+        except OSError as exc:
+            ap.error(f"--agent-reference-dir cannot resolve {raw_path!r}: {exc}")
+        if not path.is_dir():
+            ap.error(f"--agent-reference-dir must name a directory: {raw_path}")
+        name = path.name
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name):
+            ap.error(
+                "--agent-reference-dir basenames must be safe path components: "
+                f"{name!r}"
+            )
+        if name in reference_names:
+            ap.error(
+                "--agent-reference-dir directories must have unique basenames: "
+                f"{name!r}"
+            )
+        reference_names.add(name)
+        reference_paths.append((name, str(path)))
+    args.agent_reference_paths = tuple(reference_paths)
+    del args.agent_reference_dir
     if args.sandbox_timeout is not None and args.sandbox_timeout < 1:
         ap.error("--sandbox-timeout must be positive")
     if args.setup_timeout <= 0:
@@ -337,15 +398,17 @@ def parse_arguments(argv):
         ap.error("--verify-repeats must be positive")
     if args.shape_batch_size <= 0:
         ap.error("--verify-shape-batch-size must be positive")
-    if args.verify_run_timeout <= 0:
-        ap.error("--verify-run-timeout must be positive")
+    if args.gpu_clock_mhz is not None and args.gpu_clock_mhz <= 0:
+        ap.error("--gpu-clock-mhz must be positive")
+    if args.evaluation_step_timeout <= 0:
+        ap.error("--evaluation-step-timeout must be positive")
     if not 0.0 <= args.min_improvement_pct < 100.0:
         ap.error("--min-improvement-pct must be in [0, 100)")
     if (args.sandbox_timeout is not None
-            and args.verify_run_timeout * args.verify_repeats * 2 + 30 > args.sandbox_timeout):
+            and args.evaluation_step_timeout * args.verify_repeats * 2 + 30 > args.sandbox_timeout):
         ap.error(
             "ABBA verification must fit one sandbox allocation: "
-            "2 * --verify-repeats * --verify-run-timeout + 30 <= --sandbox-timeout"
+            "2 * --verify-repeats * --evaluation-step-timeout + 30 <= --sandbox-timeout"
         )
     if args.framework_baseline_timeout <= 0:
         ap.error("--framework-baseline-timeout must be positive")
@@ -379,13 +442,13 @@ def parse_arguments(argv):
         )
         if not re.fullmatch(r"[0-9]+", raw_ssh_gpu):
             ap.error(
-                "--sandbox-ssh-gpu must be a physical GPU index; "
+                "--sandbox-ssh-gpu must be a physical NVIDIA index; "
                 "MIG/UUID selectors are not yet supported"
             )
         args.sandbox_ssh_gpu = int(raw_ssh_gpu)
         if args.sandbox_ssh_gpu > 31:
             ap.error("--sandbox-ssh-gpu must be in the range 0..31")
-        if not args.framework:
+        if not args.framework and args.optimization_mode not in {"fast", "performance"}:
             ap.error(
                 "--sandbox-ssh requires an explicit --framework so one assigned GPU "
                 "cannot be shared by auto-dispatched campaigns"
@@ -432,9 +495,12 @@ def parse_arguments(argv):
             ap.error(str(exc))
     if args.agent_cli == "dsh":
         from aka.legacy.agent.dsh import settings_values
+
         try:
-            settings_values(os.environ.get("ATREX_DSH_SESSION_SETTINGS")
-                            or os.environ.get("ATREX_SESSION_SETTINGS", ""))
+            settings_values(
+                os.environ.get("ATREX_DSH_SESSION_SETTINGS")
+                or os.environ.get("ATREX_SESSION_SETTINGS", "")
+            )
         except ValueError as exc:
             ap.error(str(exc))
     if args.agent_cli == "qodercli" and args.token_budget > 0:
@@ -456,11 +522,43 @@ def parse_arguments(argv):
 
 def adapt_argv(argv):
     args, raw_argv = parse_arguments(argv)
+    explicit = {value.split("=",1)[0] for value in raw_argv if value.startswith("--")}
+    if args.optimization_mode in {"fast", "performance"}:
+        if "--specify-dsl" in explicit or "--framework" in explicit:
+            raise SystemExit(
+                f"orchestrator: {args.optimization_mode} mode leaves DSL selection to the Agent; "
+                "remove --specify-dsl/--framework and provide non-binding expert guidance "
+                "through task notes or references"
+            )
+        # These policies deliberately leave the final DSL to the Agent.  A
+        # supplied framework may still appear in notes/references, but it is
+        # never an enforcement identity or an auto-dispatch request.
+        args.specify_dsl = False
+        args.framework = ""
+    elif args.optimization_mode == "ultra":
+        if "--no-specify-dsl" in explicit:
+            raise SystemExit(
+                "orchestrator: ultra mode requires a pinned DSL; remove "
+                "--no-specify-dsl and pass --framework <DSL>"
+            )
+        if not str(args.framework or "").strip():
+            raise SystemExit(
+                "orchestrator: ultra mode requires an explicit --framework <DSL>; "
+                "automatic framework dispatch is not allowed"
+            )
+        args.specify_dsl = True
+    if not args.specify_dsl:
+        # The switch owns the semantic choice. An incidental/default framework
+        # must not leak into the frozen request, workspace identity, or policy.
+        args.framework = ""
     sandbox_hardware = args.sandbox_hardware or args.platform
     source = problem_request(args.op_dir, args.optimization_mode,
         workspace=args.workspace,
-        suffix=args.workspace_suffix or f"{args.framework}_{args.platform}",
-        expose_evaluator_shapes=args.expose_evaluator_shapes)
+        suffix=args.workspace_suffix or (
+            f"{args.framework}_{args.platform}_{args.optimization_mode}"
+            if args.specify_dsl
+            else f"open_dsl_{args.platform}_{args.optimization_mode}"
+        ), expose_evaluator_shapes=args.expose_evaluator_shapes)
     values = vars(args).copy()
     from aka.legacy.execution.configuration import configure_legacy_arguments
     configure_legacy_arguments(values)
@@ -469,9 +567,14 @@ def adapt_argv(argv):
     values.update(name=source.directory.name, problem=source,
                   sandbox_hardware=sandbox_hardware)
     request = campaign_request(values)
-    explicit = {value.split("=",1)[0] for value in raw_argv if value.startswith("--")}
     workflow_options = {field.name for field in __import__("dataclasses").fields(request.settings)
                         if "--" + field.name.replace("_", "-") in explicit}
+    if "--no-specify-dsl" in explicit:
+        workflow_options.add("specify_dsl")
+    if "--no-expose-evaluator-shapes" in explicit:
+        workflow_options.add("expose_evaluator_shapes")
+    if "--agent-reference-dir" in explicit:
+        workflow_options.add("agent_reference_paths")
     runtime_options = {field.name for field in __import__("dataclasses").fields(request.runtime)
                        if "--" + field.name.replace("_", "-") in explicit}
     if "--verify-shape-batch-size" in explicit:

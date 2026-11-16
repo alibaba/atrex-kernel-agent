@@ -23,10 +23,11 @@ from aka.light.agent.session_tail import read_regular_bytes
 from aka.light.workspace.sources import MAX_SNAPSHOT, Artifact
 
 RECORD_ID = re.compile(r"gateway-[0-9a-f]{32}")
-KERNEL_ID = re.compile(r"kernel-[0-9a-f]{32}")
+KERNEL_ID = re.compile(r"[0-9a-f]{40}(?:[0-9a-f]{24})?")
 JOB_ROOT_ENV = "ATREX_AKA_MEASUREMENT_JOB_ROOT"
 ABBA_BATCH_ROOT_ENV = "ATREX_AKA_ABBA_BATCH_ROOT"
 BATCH_ROOT_ENV = "ATREX_AKA_SHAPE_BATCH_ROOT"
+RUNTIME_REQUEST_ID_ENV = "ATREX_AKA_RUNTIME_REQUEST_ID"
 MAX_RECORD_BYTES = 32 * 1024 * 1024
 MAX_RECORD_HEADER_BYTES = 16 * 1024
 RECORD_HEADER_FIELDS = frozenset({"gateway_record_id", "operation", "created_at", "kernels"})
@@ -37,10 +38,11 @@ def digest(value: object) -> str:
                                      allow_nan=False).encode()).hexdigest()
 
 
-def source_identity(source: bytes) -> dict:
+def source_identity(source: bytes, kernel_id: str) -> dict:
+    if not isinstance(kernel_id, str) or KERNEL_ID.fullmatch(kernel_id) is None:
+        raise ValueError("kernel_commit_id must be a complete Git commit ID")
     checksum = "sha256:" + hashlib.sha256(source).hexdigest()
-    return {"kernel_id": "kernel-" + uuid.uuid5(uuid.NAMESPACE_URL, f"urn:atrex:kernel-source:{checksum}").hex,
-            "kernel_artifact_digest": checksum}
+    return {"kernel_id": kernel_id, "kernel_artifact_digest": checksum}
 
 
 def read_json(path: Path, *, limit: int = MAX_RECORD_BYTES) -> dict:
@@ -140,12 +142,9 @@ class DuplicateTask(RuntimeError):
                          "Identical Gateway task is already running")
 
     def response(self) -> dict:
-        return {"code": "duplicate_gateway_task", "message": str(self),
-                "gateway_record_id": self.record_id,
-                "next_action": (
-                    "Read the recorded result: python3 tools/sandbox.py --kind record-read --record-id "
-                    + self.record_id if self.record_id else
-                    "Wait for the original request; do not launch a second identical job.")}
+        raise RuntimeError(
+            "Completed exact Gateway tasks are internal cache hits, not Agent errors"
+        )
 
 
 class TaskRunning(DuplicateTask):
@@ -222,8 +221,12 @@ class MeasurementStore:
         if len(self.identity_key) != 32:
             raise ValueError("Measurement identity key is invalid; restore its private state")
 
-    def kernel(self, source: bytes) -> dict:
-        identity = source_identity(source)
+    def kernel(
+        self,
+        source: bytes,
+        kernel_id: str,
+    ) -> dict:
+        identity = source_identity(source, kernel_id)
         directory = self.root / "kernels" / identity["kernel_id"]
         with open_private_directory(directory):
             pass
@@ -236,19 +239,56 @@ class MeasurementStore:
             durable_write_text(path, source.decode("utf-8"))
         else:
             if existing != source:
-                raise ValueError("Kernel artifact does not match its content identity")
+                raise ValueError("Git commit ID is already bound to different Kernel source")
+        digest_directory = (
+            self.root
+            / "source-index"
+            / identity["kernel_artifact_digest"].removeprefix("sha256:")
+        )
+        with open_private_directory(digest_directory):
+            pass
+        marker = digest_directory / kernel_id
+        try:
+            value = read_regular_bytes(marker, limit=65).decode()
+        except FileNotFoundError:
+            durable_write_text(marker, kernel_id)
+        else:
+            if value != kernel_id:
+                raise ValueError("Kernel source index is inconsistent")
         return identity
+
+    def find_kernel_id(self, source: bytes) -> str:
+        """Resolve an already recorded source to one preserved Git commit ID."""
+        digest_directory = self.root / "source-index" / hashlib.sha256(source).hexdigest()
+        matches = []
+        for marker in digest_directory.glob("*"):
+            if not marker.is_file() or KERNEL_ID.fullmatch(marker.name) is None:
+                continue
+            try:
+                existing = read_regular_bytes(
+                    self.root / "kernels" / marker.name / "kernel.py",
+                    limit=MAX_SNAPSHOT + 1,
+                )
+            except (OSError, ValueError):
+                continue
+            if existing == source:
+                matches.append(marker.name)
+        if not matches:
+            raise RecordNotFound(
+                "Kernel source has no recorded Git commit ID; commit and evaluate it first"
+            )
+        return sorted(matches)[0]
 
     def read_kernel(self, kernel_id: str) -> bytes:
         if not KERNEL_ID.fullmatch(kernel_id):
-            raise ValueError("Use a kernel- ID returned by a Gateway measurement")
+            raise ValueError("Use a Git commit ID returned by a Gateway measurement")
         try:
             source = read_regular_bytes(self.root / "kernels" / kernel_id / "kernel.py",
                                         limit=MAX_SNAPSHOT + 1)
         except FileNotFoundError as error:
             raise RecordNotFound("Kernel is not available in this Campaign; use an ID returned here") from error
-        if len(source) > MAX_SNAPSHOT or source_identity(source)["kernel_id"] != kernel_id:
-            raise ValueError("Kernel artifact identity or size is invalid")
+        if len(source) > MAX_SNAPSHOT:
+            raise ValueError("Kernel artifact size is invalid")
         return source
 
     def read(self, record_id: str) -> dict:
@@ -263,9 +303,45 @@ class MeasurementStore:
             raise ValueError("Gateway record result integrity check failed")
         for side, identity in record["kernels"].items():
             source = self.read_kernel(identity["kernel_id"])
-            if source_identity(source) != identity or not Artifact(source).verify_measurement_inputs(record["request"], side):
+            if source_identity(source, identity["kernel_id"]) != identity or not Artifact(source).verify_measurement_inputs(record["request"], side):
                 raise ValueError("Gateway record omits or changes candidate source evidence")
         return record
+
+    def record_ids(self) -> list[str]:
+        """List validated terminal Record identities without exposing payloads."""
+        values = []
+        for path in (self.root / "records").glob("gateway-*/record.json"):
+            record_id = path.parent.name
+            if not RECORD_ID.fullmatch(record_id):
+                continue
+            try:
+                record = self.read(record_id)
+            except (OSError, ValueError, KeyError, TypeError, RecursionError):
+                logging.getLogger(__name__).warning(
+                    "Skipping unreadable Gateway record while exporting shared evidence: %s",
+                    record_id,
+                )
+                continue
+            if record.get("gateway_record_id") == record_id:
+                values.append(record_id)
+        return sorted(values)
+
+    def import_record(self, source: "MeasurementStore", record_id: str) -> dict:
+        """Import immutable evidence without importing its task/cache identity."""
+        record = source.read(record_id)
+        for identity in record["kernels"].values():
+            kernel_source = source.read_kernel(identity["kernel_id"])
+            if self.kernel(kernel_source, identity["kernel_id"]) != identity:
+                raise ValueError("Imported Kernel identity differs from the Gateway Record")
+        destination = self.root / "records" / record_id / "record.json"
+        try:
+            existing = self.read(record_id)
+        except (FileNotFoundError, RecordNotFound):
+            private_write(destination, record)
+            existing = self.read(record_id)
+        if existing != record:
+            raise ValueError(f"Gateway Record collision while importing {record_id}")
+        return existing
 
     def _cached(self, record_id: str, task_digest: str) -> dict | None:
         # Broken/old indexes are misses. Transient IO failures retain the index
@@ -285,16 +361,23 @@ class MeasurementStore:
                         # record intact, but do not use it as a permanent verdict.
                         return None
                 from aka.light.evaluation.evaluation_failures import embedded_device_failure
+                from aka.light.evaluation.result_json import parse_evaluation_result_line
                 negative = False
                 for line in record["response"].get("stdout", "").splitlines():
-                    for prefix in ("[test_kernel] RESULT_JSON=", "[sandbox] ABBA_JSON="):
-                        if line.startswith(prefix):
-                            result = json.loads(line[len(prefix):])
-                            if not isinstance(result, dict):
-                                return None
-                            if embedded_device_failure({"status": "succeeded", "result": result}):
-                                return None
-                            negative = negative or result.get("all_pass", result.get("correct")) is False
+                    result = parse_evaluation_result_line(line)
+                    if result is not None:
+                        if embedded_device_failure({"status": "succeeded", "result": result}):
+                            return None
+                        negative = negative or result.get("all_pass", result.get("correct")) is False
+                        continue
+                    prefix = "[sandbox] ABBA_JSON="
+                    if line.startswith(prefix):
+                        result = json.loads(line[len(prefix):])
+                        if not isinstance(result, dict):
+                            return None
+                        if embedded_device_failure({"status": "succeeded", "result": result}):
+                            return None
+                        negative = negative or result.get("all_pass", result.get("correct")) is False
                 if negative:
                     # Old projections could hide the device error. Inspect sealed
                     # terminal jobs only for failed Eval/ABBA records, not all history.
@@ -330,6 +413,15 @@ class MeasurementStore:
     @contextmanager
     def reserve(self, request: dict, kernels: dict, *, deadline: float | None = None, request_id: str = ""):
         key = digest(request)
+        # Gateway calls may deliberately have no local deadline while the
+        # Runtime owns durable remote retries.  JSON has no portable infinity
+        # value, and waiting callers must see that as an unknown completion
+        # time rather than a fabricated finite budget.
+        reservation_deadline = (
+            deadline
+            if type(deadline) in (int, float) and math.isfinite(deadline)
+            else None
+        )
         with open_private_directory(self.root / "tasks") as directory:
             descriptor = os.open(key + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=directory)
         acquired = False
@@ -342,7 +434,7 @@ class MeasurementStore:
             # Publish only the current owner's supervisory deadline, outside
             # task identity. Waiting callers must not reset it with their own.
             os.ftruncate(descriptor, 0)
-            os.write(descriptor, json.dumps({"deadline": deadline, "request_id": request_id},
+            os.write(descriptor, json.dumps({"deadline": reservation_deadline, "request_id": request_id},
                                             allow_nan=False).encode())
             marker = self.root / "tasks" / (key + ".json")
             try:
@@ -370,8 +462,17 @@ class MeasurementStore:
                 private_write(directory / "request.json", request)
             private_write(marker, {"status": "running", "gateway_record_id": record_id})
             with self._active_lock:
-                self._active_tasks[key] = TaskRunning(deadline, request_id)
-            yield MeasurementTask(self, key, record_id, directory, request, kernels, marker)
+                self._active_tasks[key] = TaskRunning(reservation_deadline, request_id)
+            yield MeasurementTask(
+                self,
+                key,
+                record_id,
+                directory,
+                request,
+                kernels,
+                marker,
+                request_id=request_id,
+            )
         finally:
             try:
                 if acquired:
@@ -415,9 +516,21 @@ class MeasurementStore:
 
 
 class MeasurementTask:
-    def __init__(self, store, key, record_id, directory, request, kernels, marker):
+    def __init__(
+        self,
+        store,
+        key,
+        record_id,
+        directory,
+        request,
+        kernels,
+        marker,
+        *,
+        request_id="",
+    ):
         self.store, self.key, self.record_id = store, key, record_id
         self.directory, self.request, self.kernels, self.marker = directory, request, kernels, marker
+        self.request_id = request_id
 
     def finish(self, response: dict, *, cacheable: bool, pending: bool = False) -> dict:
         from aka.light.evaluation.public_result import seal_response
@@ -430,6 +543,8 @@ class MeasurementTask:
                   "operation": self.request["operation"], "response": response,
                   "result_digest": digest(response), "cacheable": cacheable,
                   "created_at": datetime.now(timezone.utc).isoformat()}
+        if self.request_id:
+            record["runtime_request_id"] = self.request_id
         # Match private_write's actual encoding, including envelope and escaping.
         # Refuse before publication: reserve() can recover this running task's
         # existing Jobs instead of leaving an unreadable validation_pending record.

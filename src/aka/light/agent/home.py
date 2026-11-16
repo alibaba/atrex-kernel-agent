@@ -37,6 +37,7 @@ CONFIG_ROOTS = {
 }
 HOST_HOME_ENV = "ATREX_AGENT_HOST_HOME"
 PREPARED_ENV = "ATREX_AGENT_PREPARED_HOME"
+SESSION_HOME_ROOT_ENV = "ATREX_AGENT_SESSION_HOME_ROOT"
 
 
 def projected_backends(environment: dict[str, str]) -> tuple[str, ...]:
@@ -147,11 +148,24 @@ def prepare_agent_environment(
     values = dict(environment)
     host_home = Path(values.get("HOME") or str(Path.home())).expanduser().resolve()
     role = values.get("ATREX_AGENT_WORKSPACE_ROLE", "optimizer")
+    configured_root = values.get(SESSION_HOME_ROOT_ENV, "")
+    if configured_root:
+        state_root = Path(configured_root)
+        if not state_root.is_absolute():
+            raise ValueError("Agent Session Home root must be absolute")
+        state_root = state_root.resolve()
+        # The Supervisor supplies a trajectory-private root. Its stable path,
+        # shared with the trajectory-stable Agent repository rather than the
+        # per-Episode trusted worktree, is the continuity boundary for a native
+        # provider Session.
+        identity_scope = str(state_root)
+    else:
+        state_root = workspace.resolve().parent / ".atrex-agent-homes"
+        identity_scope = str(workspace.resolve())
     identity = "\0".join(
-        (str(workspace.resolve()), values.get("ATREX_AGENT_CLI", ""), role, session_key)
+        (identity_scope, values.get("ATREX_AGENT_CLI", ""), role, session_key)
     )
     key = hashlib.sha256(identity.encode()).hexdigest()[:32]
-    state_root = workspace.resolve().parent / ".atrex-agent-homes"
     if state_root.is_symlink():
         raise ValueError("Agent Home root cannot be a symlink")
     home = state_root / key

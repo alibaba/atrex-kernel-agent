@@ -58,28 +58,19 @@ python -m pip install --force-reinstall /tmp/aka-dist/*.whl
   containing `scripts/run_eval.py` and `src/atrex_bench`. An optional `agent_problem.json` may provide
   the generalized public contract using schema `atrex.agent_problem.v1`.
 
-Production native campaigns expose detailed shapes and evaluator metadata by default. Runtime
-feedback remains compact but does not redact exact dimensions. Use
-`--no-expose-evaluator-shapes` to enable the generalized hidden-shape flow. In that flow, if
-`agent_problem.json` is supplied, AKA validates and copies it directly. Otherwise a separate clean AKA
+Native campaigns expose exact Shape parameters through `shapes.json` by default. With
+`--no-expose-evaluator-shapes`, AKA instead validates and copies a supplied `agent_problem.json`,
+or runs a separate clean AKA
 preprocessing session using the configured `--agent-cli` at maximum reasoning effort reads
 `reference.py`, `input.py`, and the evaluator-owned detailed shapes, derives the public
 `agent_problem.json`, validates that its development cases do not duplicate evaluator cases, and
-persists only that contract in the campaign workspace. Exact shapes and evaluator metadata are then
-injected privately during sandbox evaluation. Canonical memory retains real per-shape latency under
-opaque ids; set `PROFILE_SHAPE_ID` to one of those ids to profile that real shape privately.
+persists that contract in the campaign workspace. Exact Shapes and Shape-bearing Agate diagnostics
+remain private in hidden mode. Canonical memory retains real per-shape latency under opaque stable
+ids; set `PROFILE_SHAPE_ID` to one of those ids to profile that real shape.
 
-Shape visibility does not relax production source review, correctness, ABBA, or promotion policy.
-The visible and hidden settings use distinct retained Problem snapshots, so changing the setting
-cannot silently resume a workspace captured under the other visibility mode.
-Pre-upgrade leaderboard snapshots keep their historical exposed key. Pre-upgrade hidden production
-workspaces resume with `--no-expose-evaluator-shapes`; a mismatched resume fails before a new
-snapshot is captured and reports the matching visibility flag.
-
-Leaderboard mode always preserves legacy exact-shape behavior, even when the source operator also
-contains `agent_problem.json`; sandbox private-shape injection and generalized result masking are
-production-only. The orchestrator never treats operator inputs as editable candidate files. Start a
-fresh workspace when resuming an older production campaign that exposed exact shapes.
+Leaderboard and Production share the same explicit boolean Shape-disclosure setting; optimization
+mode does not silently override it. The orchestrator never treats operator inputs as editable
+candidate files. Start a fresh workspace when changing Shape visibility.
 
 For native Atrex-Bench and SOL operators, V0 does not launch a coding Agent. The supervisor commits
 the verbatim reference wrapper, runs exactly one official full-workload base-seed evaluator, writes
@@ -242,8 +233,8 @@ verifying any deferred remote cleanup.
 3. **Establish V0.** The supervisor commits the evaluator-owned reference wrapper, runs one official
    full-workload base-seed evaluation, and records canonical `memory/v0.json` without launching a
    coding Agent.
-4. **Establish V1 when enabled.** `--framework-baseline=auto` creates a self-contained
-   framework-native V1 in production mode. When enabled, read-only reviewers provide bounded
+4. **Establish V1 when explicitly enabled.** `--framework-baseline=auto` or `always` creates a
+   self-contained framework-native V1. When enabled, read-only reviewers provide bounded
    correctness guidance; the coding Agent implements and smoke-tests, while the supervisor owns full
    evaluation, policy review, memory, and the final commit.
 5. **Run isolated optimization episodes.** Each episode owns one candidate direction in a private
@@ -371,18 +362,17 @@ metadata, not candidate files. Production runs use a separate
 `kernel_opt_<name>_<framework>_<platform>_production` workspace and cannot accidentally resume a
 leaderboard campaign.
 
-With the default `--framework-baseline=auto`, production inserts one dedicated framework bring-up
-session after V0. Native V1 receives a pre-seeded manifest and three latency-quantile smoke ids; the
-supervisor first runs the enabled isolated Codex and Qoder correctness reviews over the bounded public
-contract and immutable reference, concurrently when both are enabled. Reviewers nominate only from a
-bounded local path catalog; the supervisor reconciles their choices and injects at most two exact reference
-paths alongside the available reviews. V1 reads only that shortlist without recursively browsing siblings.
-The reviews are cached for restart and never receive private shapes or write access to the candidate. The
-coding Agent implements and smoke-tests only, without full evaluation, memory writing, or commits. The
-supervisor then runs policy review in parallel with one combined full-workload evaluator that measures the
-base seed and checks five additional seeds, writes memory, and pins V1. Use
-`--framework-baseline=always` to enable the same stage in leaderboard mode, or `never` to seed
-optimization directly from V0. A Triton campaign escalates to Gluon after three consecutive stalls
+The default `--framework-baseline=auto` inserts a dedicated framework bring-up Session after V0
+when the measured baseline is still a reference wrapper. Use `always` to force the stage or `never`
+to start optimization directly from V0.
+When enabled, optional isolated Codex/Qoder correctness reviewers may provide bounded advice from the
+public contract and immutable reference. The implementation Agent creates one complete `kernel.py +
+impl/` candidate and leaves a clean Git commit; it does not submit an Episode report. The Supervisor then
+runs Production Review, combined full-workload correctness/performance validation, and supplemental
+numerical validation in parallel. Native correctness uses the same five-case policy as Episodes (base plus
+four additional Runtime-owned cases). The resulting V1 is pinned before normal optimization Episodes begin.
+A Triton campaign escalates
+to Gluon after three consecutive stalls
 by default; once triggered, conversion retries until correctness and performance parity pass, and
 later episodes remain in Gluon. This applies independently of leaderboard or production mode.
 
@@ -412,7 +402,7 @@ Rerunning the same command keeps the interrupted worktree and resumes V1 from th
                                                     Configure full ask-qoder (default: off)
 --optimization-mode MODE         leaderboard (default) or production
 --framework DSL                  Explicit DSL; omit for automatic parallel dispatch
---framework-baseline MODE        auto (production only), always, or never
+--framework-baseline MODE        auto (default), always, or never
 --framework-baseline-timeout S   Framework bring-up wall-clock budget (default: 28800)
 --target-util PCT                Peak-utilization short-circuit (default: 90)
 --setup-timeout S                Legacy V0/problem-authoring session timeout (default: 7200)

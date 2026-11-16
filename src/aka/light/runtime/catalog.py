@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 from aka.light.runtime.plugins import PluginError
 from aka.light.runtime.plugins import PluginRegistry as Registry
@@ -66,9 +67,11 @@ class PluginRegistry(Registry):
         if not self.plugins:
             return ""
         parts = [
-            "Discover enabled plugin tools with `python3 tools/plugin.py list`; "
-            "call `python3 tools/plugin.py call <plugin.tool> --input scratch/request.json`. "
-            "Tools run through the Supervisor; plugin code and resources are not workspace files."
+            "Installed Skills define the preferred Agent-facing interface for enabled capabilities. "
+            "Use `python3 tools/plugin.py list` to inspect the raw plugin catalog, and call "
+            "`python3 tools/plugin.py call <plugin.tool> --input scratch/request.json` only when no "
+            "installed Skill documents a dedicated Runtime command. Both routes run through the "
+            "Supervisor; plugin code and resources are not workspace files."
         ]
         for plugin in self.plugins:
             for key in dict.fromkeys(("common", phase)):
@@ -77,6 +80,15 @@ class PluginRegistry(Registry):
                     text = read_text(local_file(plugin.root, relative))
                     for name, value in values.items():
                         text = text.replace("{{" + name + "}}", str(value))
+                    unresolved = sorted(set(re.findall(
+                        r"\{\{([A-Z][A-Z0-9_]*)\}\}", text
+                    )))
+                    if unresolved:
+                        raise PluginError(
+                            "invalid_manifest",
+                            "plugin instruction template has unresolved fields: "
+                            + ", ".join(unresolved),
+                        )
                     parts.append(text)
         return "\n\n".join(parts)
 

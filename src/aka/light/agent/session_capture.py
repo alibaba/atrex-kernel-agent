@@ -14,7 +14,7 @@ import threading
 import time
 import uuid
 from contextvars import ContextVar
-from dataclasses import replace
+from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
@@ -27,7 +27,10 @@ from aka.light.agent.session_transcript import (
     record_provider_line,
     render_conversation,
 )
-from aka.light.agent.session_usage import UsageAccumulator
+from aka.light.agent.session_usage import (
+    UsageAccumulator,
+    estimate_usage_from_conversation,
+)
 
 if TYPE_CHECKING:
     from aka.light.agent.runtime.model import AgentRuntimeCapabilities, NormalizedAgentEvent, TokenUsage
@@ -43,7 +46,93 @@ class CapturedObservation(NamedTuple):
     capture_complete: bool
 
 
+class CompleteSessionArchive(NamedTuple):
+    """One finalized, Supervisor-owned Session capture."""
+
+    root: Path
+    conversation: Path
+    token_usage: Path
+
+
+def latest_complete_session_archive(root: Path) -> CompleteSessionArchive | None:
+    """Return the newest finalized capture below ``root``.
+
+    A Review is auditable only when both projections exist.  The final token
+    receipt is the commit marker written after the finalized conversation, so
+    live/partial captures are deliberately ignored.
+    """
+    root = Path(root)
+    if not root.is_dir() or root.is_symlink():
+        return None
+    candidates: list[tuple[int, str, CompleteSessionArchive]] = []
+    for directory in root.glob("run-*"):
+        if not directory.is_dir() or directory.is_symlink():
+            continue
+        conversation = directory / "conversation.jsonl"
+        token_usage = directory / "token-usage.json"
+        if any(
+            not path.is_file() or path.is_symlink()
+            for path in (conversation, token_usage)
+        ):
+            continue
+        try:
+            with conversation.open("rb") as stream:
+                stream.seek(0, os.SEEK_END)
+                size = stream.tell()
+                stream.seek(max(0, size - 1024 * 1024))
+                terminal_lines = stream.read().splitlines()
+            terminal = json.loads(terminal_lines[-1]) if terminal_lines else None
+            if not isinstance(terminal, dict) or terminal.get("type") != "session_end":
+                continue
+            usage = json.loads(token_usage.read_text(encoding="utf-8"))
+            if (
+                not isinstance(usage, dict)
+                or usage.get("state")
+                not in {"completed", "failed", "timed_out", "interrupted"}
+                or not isinstance(usage.get("finished_at"), str)
+                or not usage["finished_at"]
+            ):
+                continue
+            modified = max(
+                conversation.stat().st_mtime_ns,
+                token_usage.stat().st_mtime_ns,
+            )
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            continue
+        candidates.append(
+            (
+                modified,
+                directory.name,
+                CompleteSessionArchive(directory, conversation, token_usage),
+            )
+        )
+    return max(candidates, key=lambda row: row[:2])[2] if candidates else None
+
+
 _LAST_CAPTURE: ContextVar[tuple[str, dict] | None] = ContextVar("aka_session_capture", default=None)
+
+
+def _claude_root_output_limit(text: str) -> bool:
+    """Recognize the native root response that precedes StopFailure."""
+    for line in text.splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if (
+            not isinstance(event, dict)
+            or event.get("type") != "assistant"
+            or event.get("parent_tool_use_id") is not None
+        ):
+            continue
+        message = event.get("message")
+        if isinstance(message, dict) and message.get("stop_reason") == "max_tokens":
+            return True
+        if event.get("isApiErrorMessage") is True and {
+            event.get("error"), event.get("api_error")
+        } & {"max_output_tokens"}:
+            return True
+    return False
 
 
 def clear_capture() -> None:
@@ -194,6 +283,9 @@ class SessionCapture:
         self.started_at = datetime.now(UTC).isoformat()
         self._lock = threading.RLock()
         self._stop = threading.Event()
+        # This is a functional fallback for Claude versions or compatible
+        # endpoints that persist max_tokens but fail to emit StopFailure.
+        self.output_limit_detected = threading.Event()
         self._readers: list[threading.Thread] = []
         self._monitor: threading.Thread | None = None
         # Functional output has the same full-stream contract as Popen.communicate.
@@ -268,6 +360,12 @@ class SessionCapture:
         return self._tails[name]
 
     def _feed_usage(self, path: str, text: str, *, previous: bool = False) -> None:
+        if (
+            self.backend == "claude"
+            and not previous
+            and _claude_root_output_limit(text)
+        ):
+            self.output_limit_detected.set()
         try:
             self._usage.feed(path, text, previous=previous)
             self._usage_dirty = True
@@ -524,6 +622,19 @@ class SessionCapture:
             )
             _atomic(self.root / "conversation.jsonl", conversation)
             report = self._write_usage(True)
+            total = report.get("total") if isinstance(report, dict) else None
+            if not isinstance(total, dict) or total.get("total_tokens") is None:
+                estimated, estimate_detail = estimate_usage_from_conversation(
+                    conversation
+                )
+                if estimated.total_tokens is not None:
+                    report["total"] = asdict(estimated)
+                    report["accounting_basis"] = "conversation_text_estimate"
+                    report["conversation_estimate"] = estimate_detail
+                    warnings = report.setdefault("warnings", [])
+                    warning = "provider_usage_unavailable; estimated_from_conversation"
+                    if warning not in warnings:
+                        warnings.append(warning)
             report.update(
                 state=state,
                 exit_status=exit_status,

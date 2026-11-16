@@ -11,7 +11,7 @@ from aka.contracts.evaluation import (
     derived_evaluation_timeout,
 )
 from aka.legacy.evaluation.abba import (
-    verification_schedule, _geomean, _merge_batch_results,
+    verification_schedule, _geomean,
     _result_latency, _result_performance_score,
 )
 from aka.light.evaluation.policy import SHAPE_BATCH_SIZE, BATCH_WORKERS, validate_abba_repeats
@@ -87,8 +87,7 @@ def parse_abba_payload(stdout: str) -> dict[str, Any]:
 def _verification_shape_batches(
     workspace: Path, private_reference_dir: Path | None, batch_size: int
 ) -> tuple[list[list[str] | None], list[str]]:
-    harness = workspace / "test_kernel.py"
-    if not harness.is_file() or "--shape-id" not in harness.read_text(encoding="utf-8"):
+    if (workspace / "workload.jsonl").is_file():
         return [None], []
     shapes_path = (private_reference_dir or workspace) / "shapes.json"
     if not shapes_path.is_file():
@@ -116,10 +115,9 @@ def merge_abba_batch_payloads(
     payloads: list[dict[str, Any]],
     schedule: list[dict[str, int | str]],
     shape_ids: list[str],
+    metadata: object = None,
 ) -> dict[str, Any]:
     """Combine batch results for a shared ABBA schedule and complete Shape set."""
-    if len(payloads) == 1:
-        return payloads[0]
     for payload in payloads:
         rows = payload.get("runs")
         if (
@@ -148,11 +146,13 @@ def merge_abba_batch_payloads(
     runs = []
     for index, step in enumerate(schedule):
         rows = [payload["runs"][index] for payload in payloads]
-        result = _merge_batch_results([row["result"] for row in rows], shape_ids)
-        # Main's shared merger requires reference scores; Light's latency gate
-        # requires complete measured Shapes, not optional reference metadata.
-        result["all_pass"] = (set(result["latency_us_by_shape"]) == set(shape_ids)
-                              and all(row["result"].get("all_pass") is True for row in rows))
+        from aka.light.evaluation.result_conversion import merge_optimizer_results
+        result = merge_optimizer_results(
+            [row["result"] for row in rows],
+            shape_ids,
+            metadata,
+            require_performance=True,
+        )
         from aka.light.evaluation.evaluation_feedback import merge_feedback
         result.update(merge_feedback(row["result"] for row in rows))
         runs.append(

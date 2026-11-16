@@ -16,7 +16,7 @@ Do not reduce the question to arbitrary keywords.
 python3 tools/sandbox.py --kind wiki-query "Target B200, runtime sm_100. Triton normalization is measured DRAM-bound; which fusion strategies apply? Include B200 hardware specifications and relevant architecture/ISA facts." --brief
 python3 tools/sandbox.py --kind wiki-query --file scratch/wiki-question.txt
 python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverage
-python3 tools/sandbox.py --kind wiki-hardware --product sm120
+python3 tools/sandbox.py --kind wiki-hardware --product B200
 ```
 
 Use the `tools/sandbox.py --kind wiki-*` commands above from an Agent workspace.
@@ -36,8 +36,9 @@ blocker. A Wiki failure is not a GPU environment failure.
 Check coverage before restrictive type filters. Read the returned source, scope,
 payload and notes. A zero-match fallback sample is labelled, not advice for your
 question. A missing hardware spec is not permission to substitute another GPU.
-When research recording is enabled, record `query_id` and canonical `wiki_id` in the existing
-Experiment Journal when knowledge materially affects an experiment; retrieval alone is not adoption.
+When the Experiment module is enabled, record `query_id` and canonical `wiki_id` in the existing
+Experiment when knowledge materially affects it; retrieval alone is not adoption. When that module
+is disabled, use the query normally but do not invent an Experiment or attribution mutation.
 Use `applied`, `partially_applied`, `reference_only` or `rejected` for `disposition`;
 `used`, `material_use` and `considered` are invalid. See the complete attribution JSON example in
 `skills/runtime-records/references/journal.md`. Correct rejected attribution fields and resubmit

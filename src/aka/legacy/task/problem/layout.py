@@ -27,6 +27,7 @@ GENERATED_AGENT_PROBLEM_FIELDS = frozenset(
 GENERALIZED_AGENT_VISIBLE_FILES = (
     "reference.py",
     "input.py",
+    "metadata.json",
     AGENT_PROBLEM_FILENAME,
 )
 LEGACY_ATREX_VISIBLE_FILES = (
@@ -225,12 +226,12 @@ def should_use_generalized_problem(
 ) -> bool:
     """Return whether an operator must expose a generalized public contract.
 
-    Private exact-case handling is a production policy, not an operator-layout side effect.
-    Production uses a supplied contract when present and otherwise generates one from
-    ``shapes.json`` before setup. Leaderboard always keeps its detailed shapes public.
+    Hidden mode uses a supplied contract when present and otherwise generates one
+    from ``shapes.json`` before setup. Exposed mode gives the Agent the evaluator
+    Shapes directly. The two modes intentionally have no partial-prefix state.
     """
     return (
-        optimization_mode == "production"
+        optimization_mode in {"production", "performance", "ultra"}
         and not expose_evaluator_shapes
         and not is_sol_op(op_dir)
         and (op_dir / "shapes.json").is_file()
@@ -241,7 +242,7 @@ def should_use_generalized_problem(
 def agent_visible_operator_files(op_dir: Path, *, generalized: bool) -> tuple[str, ...]:
     """Return the allowlisted operator files copied into an optimization workspace."""
     if generalized:
-        # A production campaign may intentionally arrive here without a source problem; it
+        # A native campaign may intentionally arrive here without a source problem; it
         # generates one in its workspace before any optimization session starts.
         if has_agent_problem(op_dir):
             validate_agent_problem(

@@ -1060,8 +1060,13 @@ def _fp4_correctness_max_rel_l2(
     )
 
 
+def _is_generalized_workspace(workspace: Path) -> bool:
+    """Return whether this workspace uses private exact-case handling."""
+    return (workspace / AGENT_PROBLEM_FILENAME).is_file()
+
+
 def _private_reference_dir(workspace: Path) -> Path | None:
-    """Resolve private evaluator inputs only for a generalized production workspace."""
+    """Resolve private evaluator inputs only for a generalized workspace."""
     if not _is_generalized_workspace(workspace):
         return None
     raw = os.environ.get(PRIVATE_REFERENCE_ENV, "")
@@ -1425,7 +1430,6 @@ def _make_atrex_bench_runtime_bundle(
     run_eval = runtime_root / "scripts" / "run_eval.py"
     package = runtime_root / "src" / "atrex_bench"
     utils_module = package / "utils.py"
-    sdk_module = package / "sdk.py"
     if (
         not package.is_dir()
         or not run_eval.is_file()
@@ -1438,16 +1442,13 @@ def _make_atrex_bench_runtime_bundle(
     archive = io.BytesIO()
     with tarfile.open(fileobj=archive, mode="w:gz") as tf:
         if evaluator_only:
-            evaluator_files = [package / "__init__.py", utils_module]
-            # Newer Atrex-Bench releases re-export the Python evaluation API
-            # from ``atrex_bench.__init__``.  Keep the file optional so the
-            # evaluator-only bundle remains compatible with older releases
-            # that predate sdk.py.
-            if sdk_module.is_file():
-                evaluator_files.append(sdk_module)
-            shape_contracts = package / "shape_contracts.py"
-            if shape_contracts.is_file():
-                evaluator_files.append(shape_contracts)
+            # Keep every package-root module. Public Atrex-Bench releases use
+            # root modules such as ``shards``, ``ray_data`` and
+            # ``_process_guard`` from the CLI/eval package. A hand-maintained
+            # allowlist can import in the checkout yet fail after unpacking.
+            evaluator_files = sorted(
+                path for path in package.glob("*.py") if path.is_file()
+            )
             evaluator_files.extend(_walk_files(package / "eval"))
             # Newer Atrex-Bench releases moved the CLI implementations into
             # ``atrex_bench.cli`` and kept ``scripts/run_eval.py`` as a thin

@@ -1,0 +1,53 @@
+{
+  "schema_version": "atrex.agent_problem.v1",
+  "objective": "Implement a correct and fast general CUDA kernel for vector_add on the complete public shape domain. Exact evaluator cases are private; specialization may use runtime tensor properties and declared public parameters only.",
+  "evaluation": {
+    "exact_cases": "private",
+    "correctness_requirement": "every hidden case must pass",
+    "performance_requirement": "performance is measured across hidden cases after correctness passes",
+    "development_cases_are_evaluation_cases": false
+  },
+  "operator_contract": {
+    "name": "vector_add",
+    "family": "elementwise",
+    "entrypoint": "Model.forward(self, x, y)",
+    "semantics": "Return a new contiguous tensor whose every element is x[i] + y[i], preserving the input dtype and shape without mutating either input.",
+    "authoritative_public_sources": {
+      "reference.py": "exact operator computation and return semantics",
+      "input.py": "runtime argument construction, dtypes, layouts and value generation",
+      "shape_domain": "verbatim projection of shape_range.json"
+    }
+  },
+  "workload_profile": {
+    "domain_kind": "general synthetic functional-test workload",
+    "case_identity": "private opaque evaluator IDs",
+    "dispatch_basis": "runtime tensor properties and public input parameters"
+  },
+  "distribution_profile": {
+    "frequency_evidence": "none published",
+    "policy": "Treat every point admitted by shape_domain as relevant; do not assume private case frequencies."
+  },
+  "shape_domain": {
+    "init_kwargs": {},
+    "input_kwargs": {
+      "type": "object",
+      "properties": {
+        "n": {"type": "integer", "min": 1, "max": 4194304},
+        "dtype": {"type": "string", "values": ["float16", "bfloat16", "float32"]}
+      },
+      "required": ["n", "dtype"]
+    },
+    "cross_field_invariants": []
+  },
+  "invariants": [
+    "x and y have the same one-dimensional shape, dtype, device and contiguous layout.",
+    "The returned tensor has the same shape and dtype and equals x + y elementwise.",
+    "Neither input tensor is mutated or aliased by the output.",
+    "Dispatch may use runtime tensor properties and declared public parameters, never evaluator case IDs or a reconstructed private case table."
+  ],
+  "coverage_regimes": [
+    {"name": "n", "requirement": "Support the complete range, including boundaries, small vectors and lengths that leave partial CUDA blocks."},
+    {"name": "dtype", "requirement": "Support float16, bfloat16 and float32."}
+  ],
+  "development_cases": []
+}

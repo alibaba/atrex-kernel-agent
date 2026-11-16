@@ -4,10 +4,5 @@
   ```bash
   python3 tools/sandbox.py --kind run --no-sync
   ```
-  Reuse exact matching saved results when available. On `candidate_ready`, the Supervisor
-  automatically applies the evaluator-specific acceptance check: six-case correctness for
-  Atrex-Bench, or the official full workload for SOL-ExecBench. You do not need to request this
-  check manually. If it fails, inspect the returned Record, repair the candidate and its evidence,
-  then resubmit. Runtime handles batching, repetitions, aggregation and retries.
-- Use Profile or custom Dev probes only when they answer an unresolved optimization question.
-  Reuse saved Gateway records instead of repeating an identical completed measurement.
+  Reuse exact matching saved results when available. Runtime handles batching, repetitions, aggregation and retries. Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the current mode; it must already have a passing standard full Evaluate with complete per-Shape performance. Submit when ready, not mechanically after every Evaluate.
+- Use Profile, a minimal custom Dev probe, or a full-workspace Command only when it answers an unresolved optimization question. Reuse saved Gateway records instead of repeating an identical completed measurement.

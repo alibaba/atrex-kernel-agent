@@ -6,12 +6,15 @@ writing the response. Client backgrounding/disconnection cannot release a wait.
 """
 from contextlib import contextmanager
 from contextvars import ContextVar
+import json
 import math
 import os
+from pathlib import Path
 import signal
 import subprocess
 import threading
 import time
+import uuid
 
 from aka.light.agent.recovery_processes import session_process_snapshot
 
@@ -27,18 +30,25 @@ def validate_timeout(value, name="episode_timeout_seconds"):
 
 
 class ActiveBudget:
-    def __init__(self, seconds=DEFAULT_TIMEOUT_SECONDS):
-        self.seconds = validate_timeout(seconds)
+    def __init__(self, seconds=None):
+        self.seconds = None if seconds is None else validate_timeout(seconds)
         self.used = 0.0
+        # Recovery sessions within one stage share the same budget identity so
+        # Claude's reminder hook does not repeat already delivered thresholds.
+        self.id = uuid.uuid4().hex
 
     @property
     def remaining(self):
-        return max(0.0, self.seconds - self.used)
+        return math.inf if self.seconds is None else max(0.0, self.seconds - self.used)
+
+    @property
+    def limited(self):
+        return self.seconds is not None
 
 
 @contextmanager
 def episode_budget(seconds):
-    """One budget across report repair and fresh output-limit recovery sessions."""
+    """One optional budget across report repair and fresh recovery sessions."""
     budget = ActiveBudget(seconds)
     token = _BUDGET.set(budget)
     try:
@@ -118,6 +128,59 @@ class SessionControl:
         self.paused_since = None
         self.wait_seconds = 0.0
         self.finished_active_seconds = None
+        self.budget_state_path = None
+        self.budget_id = ""
+        self.budget_stage_name = "Agent stage"
+        self.budget_total_seconds = 0.0
+        self.budget_remaining_at_start = 0.0
+
+    def configure_budget(
+        self,
+        path,
+        *,
+        budget_id,
+        stage_name,
+        total_seconds,
+        remaining_seconds,
+    ):
+        """Publish a best-effort active-time clock for invocation-local hooks."""
+        with self.condition:
+            self.budget_state_path = Path(path)
+            self.budget_id = str(budget_id)
+            self.budget_stage_name = str(stage_name or "Agent stage")
+            self.budget_total_seconds = validate_timeout(
+                total_seconds, "Agent budget total_seconds"
+            )
+            self.budget_remaining_at_start = max(0.0, float(remaining_seconds))
+            self._write_budget_state(paused=True)
+
+    def _write_budget_state(self, *, paused):
+        """Write clock state atomically; reminders must never affect execution."""
+        path = self.budget_state_path
+        if path is None:
+            return
+        remaining = max(
+            0.0,
+            self.budget_remaining_at_start - self.active_seconds(),
+        )
+        document = {
+            "schema_version": 1,
+            "budget_id": self.budget_id,
+            "stage_name": self.budget_stage_name,
+            "total_seconds": self.budget_total_seconds,
+            "remaining_seconds": remaining,
+            "updated_monotonic": time.monotonic(),
+            "paused": bool(paused),
+        }
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps(document, sort_keys=True))
+            os.replace(temporary, path)
+        except (OSError, TypeError, ValueError):
+            # This file is advisory. A filesystem failure must not terminate or
+            # pause a coding session.
+            pass
 
     def attach(self, pid):
         with self.condition:
@@ -125,6 +188,7 @@ class SessionControl:
                 raise RuntimeError("Agent session has already closed")
             self.started = time.monotonic()
             self.scope = AgentProcessScope(pid)
+            self._write_budget_state(paused=False)
             self.condition.notify_all()
 
     def active_seconds(self):
@@ -154,6 +218,7 @@ class SessionControl:
             if not self.pending:
                 self.paused_since = time.monotonic()
             self.pending += 1
+            self._write_budget_state(paused=True)
             try:
                 self.scope.signal(signal.SIGSTOP)
                 # The first pass freezes known parents. Re-scan before dispatch
@@ -177,6 +242,7 @@ class SessionControl:
                     if not self.closed:
                         try:
                             self.scope.signal(signal.SIGCONT)
+                            self._write_budget_state(paused=False)
                         except BaseException:
                             self.kill()
                             raise
@@ -187,6 +253,7 @@ class SessionControl:
             if self.finished_active_seconds is None:
                 self.finished_active_seconds = self.active_seconds()
             self.closed = True
+            self._write_budget_state(paused=True)
             self.condition.notify_all()
 
     def kill(self):
@@ -203,9 +270,11 @@ class SessionControl:
 
 
 class ActiveCommunication:
-    """Drain once to EOF while the caller supervises active-time and suspension."""
-    def __init__(self, communicate, process, control):
+    """Drain once to EOF while supervising active-time and terminal interrupts."""
+    def __init__(self, communicate, process, control, *, interrupt_when=None):
         self.process, self.control = process, control
+        self.interrupt_when = interrupt_when
+        self.interrupted = False
         self.done = threading.Event()
         self.result = None
         self.error = None
@@ -224,6 +293,15 @@ class ActiveCommunication:
     def __call__(self, timeout=None):
         deadline = timeout  # Total invocation active time, including process setup.
         while not self.done.wait(0.05):
+            if (
+                not self.interrupted
+                and self.interrupt_when is not None
+                and self.interrupt_when()
+            ):
+                self.interrupted = True
+                # The native response is already persisted. Terminate the
+                # stuck CLI wrapper so its owner can resume the same session.
+                self.control.kill()
             self.control.poll()
             if deadline is not None and self.control.active_seconds() >= deadline:
                 raise subprocess.TimeoutExpired(self.process.args, timeout)

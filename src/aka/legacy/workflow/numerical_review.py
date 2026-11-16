@@ -154,7 +154,6 @@ def _request_review(campaign, workspace, files, digest, previous=None):
     from aka.legacy.agent.session import run_session
 
     def review_once():
-        timeout = campaign.production_review_timeout
         trace = ReviewTrace(
             workspace,
             "numerical-planner",
@@ -171,7 +170,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
                 (root / "review_request.json").write_text(json.dumps(request, indent=2))
                 trace.write_private_json("review-request.json", request)
                 result = run_session(
-                    root, PROMPT.read_text(), timeout=timeout,
+                    root, PROMPT.read_text(), timeout=None,
                     agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
                     runtime=campaign.agent_runtime,
                     observation_directory=trace.observation_directory,
@@ -180,7 +179,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
                 campaign._account(result, "numerical supplemental-test planning")
                 response = root / "numerical_review.json"
                 record = {"evidence_digest": digest, "session_id": result.session_id,
-                          "timeout_s": timeout, "exit_status": result.exit_status,
+                          "timeout_s": None, "exit_status": result.exit_status,
                           "timed_out": result.timed_out, "response_written": response.is_file()}
                 record_path = (
                     workspace / VERIFY_DIR / f"numerical_planning-{trace.attempt_id}.json"
@@ -232,7 +231,7 @@ def _request_review(campaign, workspace, files, digest, previous=None):
             raise
 
     context = hashlib.sha256(json.dumps(previous, sort_keys=True).encode()).hexdigest()
-    stage = f"numerical-advice:{digest}:{campaign.agent_cli}:{campaign.production_review_timeout}:{context}"
+    stage = f"numerical-advice:{digest}:{campaign.agent_cli}:unbounded:{context}"
     return retry_infrastructure(workspace, stage, review_once)
 
 

@@ -1,16 +1,20 @@
 """Additional GPU operations, separate from measurement storage and acceptance.
 
 The gateway argument is the running executor module's public API. Passing that
-instance keeps job tracking/cancellation shared with the CLI entry point, which
-may be loaded as __main__ rather than supervisor.gateway.
+instance keeps job tracking and SDK cancellation shared with the module entry
+point, which may be loaded as __main__ rather than supervisor.gateway.
 """
 from __future__ import annotations
 
 import json
 import subprocess
-import tempfile
 from pathlib import Path
-from aka.light.evaluation.policy import PERFORMANCE_TIMEOUT, validate_abba_repeats
+from aka.contracts.evaluation import (
+    ABBA_SCHEDULING_OVERHEAD,
+    DEFAULT_EVALUATION_STEP_TIMEOUT,
+    MAX_TYPED_GATEWAY_JOB_TIMEOUT,
+)
+from aka.light.evaluation.policy import validate_abba_repeats
 
 from aka.light.evaluation.projection import (
     GATEWAY_ERROR_PREFIX,
@@ -33,33 +37,17 @@ def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
     from aka.light.evaluation.agate_native import apply_request
     request = apply_request(request, args, args.kind)
     if args.dry_run:
-        print(json.dumps({"kind": args.kind, "candidate_bytes": len(json.dumps(request["candidate"]).encode())}))
+        print(json.dumps({"kind": args.kind, "candidate_bytes": len(request["candidate"].encode())}))
         return 0
-    executable = None if args.ssh else gateway.find_agate()
-    from aka.light.evaluation.source_transport import DIAGNOSTIC, run as run_tree
     if args.ssh:
-        from .ssh_transport import run
+        from aka.light.evaluation.ssh_transport import run
         process = run(gateway, args, workspace, request, args.kind)
-    elif DIAGNOSTIC in request:
-        process = run_tree(gateway, args, request, args.kind, queue_wait_grace)
-    elif args.url and executable is None:
-        process = gateway.run_direct_job(
-            url=args.url, kind="compile" if args.kind == "check" else "disassemble",
-            payload=request, timeout=args.timeout, queue_wait_grace=queue_wait_grace,
-        )
     else:
-        if executable is None:
-            raise ValueError("Install the Agate client on the Supervisor or configure --sandbox-url")
-        with tempfile.TemporaryDirectory(prefix="aka-diagnostic-") as directory:
-            command = gateway.build_typed_agate_command(executable, args, workspace, args.kind, request,
-                                                   queue_wait_grace, request_sidecar_dir=Path(directory))
-            process = gateway.run_agate_with_cancel_retry(
-                agate=command, executable=executable, url=args.url,
-                gateway_profile=args.gateway_profile,
-                command_timeout=gateway.gateway_job_timeout(args.timeout, queue_wait_grace),
-                wait_budget=args.timeout + queue_wait_grace,
-                request_identity={"kind": args.kind, "request": request},
-            )
+        # All Agate Gateway diagnostics share the typed SDK lifecycle.  The
+        # explicit SSH transport above is independent of Agate and does not
+        # reintroduce CLI or direct-HTTP Gateway fallbacks.
+        from aka.light.evaluation.source_transport import run as run_tree
+        process = run_tree(gateway, args, request, args.kind, queue_wait_grace)
     source_error = candidate_source_rejection(process)
     if source_error is not None:
         print(SOURCE_ERROR_PREFIX + json.dumps(source_error))
@@ -78,7 +66,7 @@ def diagnostic(gateway, args, workspace: Path, queue_wait_grace: int) -> int:
 
 def validate_comparison(args) -> None:
     if args.kind != "run" or args.evaluation_mode == "correctness_only":
-        raise ValueError("--baseline-path requires --kind run in full mode")
+        raise ValueError("ABBA requires --kind run in full mode")
     validate_abba_repeats(args.comparison_repeats)
     if (args.command or args.evaluation_input_path or args.evaluation_shapes_path
             or args.shape_id):
@@ -87,16 +75,67 @@ def validate_comparison(args) -> None:
 
 
 def comparison_run_timeout(args) -> int:
-    available = (args.timeout - 30) // (2 * args.comparison_repeats)
-    requested = getattr(args, "comparison_run_timeout", None)
-    # Request-level repeat overrides are valid without a matching allocation
-    # override. Preserve the ordinary Performance timeout when it fits, and
-    # otherwise divide the enclosing allocation across the complete schedule.
-    # An explicit per-run timeout remains strict and is never silently reduced.
-    seconds = min(PERFORMANCE_TIMEOUT, available) if requested is None else requested
-    if seconds <= 0 or seconds > available:
-        raise ValueError("--comparison-run-timeout must be positive and fit the full ABBA allocation schedule")
+    available = (
+        args.timeout - ABBA_SCHEDULING_OVERHEAD
+    ) // (2 * args.comparison_repeats)
+    # Recorded acceptance emits the explicit Agent-visible override. Preserve
+    # it exactly so the prompt/request identity matches the job actually run.
+    seconds = getattr(args, "comparison_run_timeout", None)
+    if seconds is not None:
+        if type(seconds) is not int or seconds <= 0:
+            raise ValueError("--comparison-run-timeout must be a positive integer")
+        return seconds
+    # The Campaign step timeout is an upper bound, not a promise that it fits
+    # every ABBA schedule. Derive a safe implicit value when the Agent leaves
+    # the option unset. An explicit value is authoritative and is never
+    # clamped to this pre-existing allocation.
+    seconds = min(
+        getattr(
+            args,
+            "evaluation_step_timeout",
+            DEFAULT_EVALUATION_STEP_TIMEOUT,
+        ),
+        available,
+    )
+    if seconds <= 0:
+        raise ValueError(
+            "The configured ABBA allocation leaves no positive per-run budget; "
+            "increase the Campaign evaluation allocation"
+        )
     return seconds
+
+
+def comparison_allocation_timeout(args, per_run_timeout: int | None = None) -> int:
+    """Return an allocation that honors an explicit Agent per-run timeout."""
+    seconds = (
+        comparison_run_timeout(args)
+        if per_run_timeout is None
+        else per_run_timeout
+    )
+    schedule_timeout = (
+        2 * args.comparison_repeats * seconds + ABBA_SCHEDULING_OVERHEAD
+    )
+    allocation_timeout = max(args.timeout, schedule_timeout)
+    if allocation_timeout > MAX_TYPED_GATEWAY_JOB_TIMEOUT:
+        explicit = getattr(args, "comparison_run_timeout", None)
+        if explicit is not None and schedule_timeout > MAX_TYPED_GATEWAY_JOB_TIMEOUT:
+            raise ValueError(
+                f"--comparison-run-timeout {explicit} seconds with "
+                f"--comparison-repeats {args.comparison_repeats} requires a "
+                f"{schedule_timeout}-second ABBA allocation "
+                f"(2 * {args.comparison_repeats} * {explicit} + "
+                f"{ABBA_SCHEDULING_OVERHEAD} seconds scheduling overhead), exceeding "
+                f"Agate's {MAX_TYPED_GATEWAY_JOB_TIMEOUT}-second typed-job limit. "
+                "Runtime did not clamp the supplied value and no Job was submitted; "
+                "reduce --comparison-run-timeout or --comparison-repeats."
+            )
+        raise ValueError(
+            f"The configured {allocation_timeout}-second ABBA allocation exceeds "
+            f"Agate's {MAX_TYPED_GATEWAY_JOB_TIMEOUT}-second typed-job limit. "
+            "Runtime did not clamp the allocation and no Job was submitted; reduce the "
+            "Campaign evaluation timeout."
+        )
+    return allocation_timeout
 
 
 def compare(gateway, args, workspace: Path, queue_wait_grace: int) -> int:

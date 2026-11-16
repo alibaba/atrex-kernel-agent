@@ -25,15 +25,23 @@ def prepare_request(launch, problem, *, frozen=False):
     base = launch.workspace_base
     from aka.legacy.execution.configuration import prepare_runtime
     arch, endpoint = prepare_runtime(launch, problem)
-    suffix = launch.workspace_suffix or (framework_workspace_suffix(
-        settings.framework, settings.platform, settings.optimization_mode) if settings.framework else "")
-    if not arch and settings.framework:
+    suffix = launch.workspace_suffix or framework_workspace_suffix(
+        settings.framework if settings.specify_dsl and settings.framework else "open_dsl",
+        settings.platform,
+        settings.optimization_mode,
+    )
+    if not arch and (settings.framework or not settings.specify_dsl):
         arch = recorded_workspace_arch(base / f"kernel_opt_{problem.name}_{suffix}")
         if arch:
             print(f"[orchestrator] sandbox arch detection failed; resuming with recorded {arch}",
                   file=sys.stderr, flush=True)
-    frameworks = ((settings.framework,) if settings.framework
-                  else supported_frameworks(settings.platform, arch))
+    frameworks = (
+        ("open_dsl",)
+        if not settings.specify_dsl
+        else (settings.framework,)
+        if settings.framework
+        else supported_frameworks(settings.platform, arch)
+    )
     reviewers = ",".join(f"{stage}[{','.join(names)}]" for stage, names in (
         ("v1", settings.framework_baseline_reviewers),
         ("fast", settings.fast_episode_reviewers), ("full", settings.full_episode_reviewers)))

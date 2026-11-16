@@ -31,8 +31,9 @@ class WorkflowStartup:
         settings, runtime = launch.request.settings, launch.request.runtime
         if launch.provided_settings is not None and "conversion_budget_action" not in launch.provided_settings:
             settings = replace(settings, conversion_budget_action=self.configuration.get("conversion_budget_action", "fail"))
-        if launch.provided_runtime is not None and "shape_batch_size" not in launch.provided_runtime:
-            runtime = replace(runtime, shape_batch_size=getattr(self.evaluator_factory, "shape_batch_size", runtime.shape_batch_size))
+        # The typed Runtime request is authoritative.  In particular, do not
+        # let a legacy evaluator factory silently replace Light's configured
+        # Shape shard size when the caller omitted that individual field.
         return replace(launch, request=replace(launch.request,settings=settings,runtime=runtime),
                        provided_settings=None, provided_runtime=None)
 
@@ -88,7 +89,7 @@ class WorkflowStartup:
             if launch.request != frozen:
                 raise ValueError('existing campaign requires its frozen request for resume')
         request, frameworks = prepare_request(launch, problem, frozen=context is not None)
-        if not launch.request.settings.framework:
+        if not launch.request.settings.framework and launch.request.settings.specify_dsl:
             from .dispatch import dispatch_framework_campaigns
             from dataclasses import replace
             from aka.legacy.task.hardware import framework_workspace_suffix

@@ -8,7 +8,7 @@ import json
 def check_review_service(result) -> None:
     """Classify execution timeouts separately from explicit service outages."""
     if result.timed_out:
-        raise TimeoutError("reviewer exceeded its configured execution timeout")
+        raise TimeoutError("reviewer reported an external execution timeout")
     if result.exit_status == 0:
         return
     for line in getattr(result, "stdout_tail", "").splitlines():

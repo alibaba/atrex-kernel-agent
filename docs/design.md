@@ -1,11 +1,9 @@
 # Architecture Design
 
 AKA's default `light` profile composes a coding Agent, managed CandidateWorkspace,
-private HTTP Tool Runtime, and Supervisor-owned optimization workflow. The Agent proposes
-implementations and evidence; the Supervisor owns evaluator inputs, acceptance, Git sealing,
-promotion, budgets, and recovery.
-
-![AKA architecture](../assets/aka-architecture-v0.4.0.png)
+private HTTP Tool Runtime, and Supervisor-owned audit workflow. The Agent owns implementation
+history and optimization decisions; the Supervisor owns evaluator inputs, request authorization,
+private evidence, source-policy review, budgets, and recovery.
 
 [Launch and configuration](quickstart.md) · [Detailed module reference](optional-light-modules.md)
 
@@ -59,117 +57,55 @@ profiling helpers belong to their packages and are published into campaign works
 | Owner | Authority |
 | --- | --- |
 | Problem / Source | Public problem contract, private evaluator roles, frozen initial source and runtime requirements |
-| CandidateWorkspace | Candidate layout, allowed edits, exact snapshots, draft publication, private Git transactions |
+| CandidateWorkspace | Candidate layout, allowed edits, persistent Agent workspace and audit snapshots |
 | Agent | CLI sessions, process supervision, usage observations, optional filesystem isolation |
 | Tool Runtime | Session capability, workspace authorization, request routing, deadlines and revocation |
 | Evaluation / Experiment / Execution | Measurement plan and result semantics / durable facts and reuse / physical GPU jobs |
 | Wiki provider | Knowledge source and public query operations; Runtime retains authorization and caching |
-| Journal / Acceptance | Report and optional research records / required correctness and performance evidence |
-| Workflow | Episode lifecycle, budgets, acceptance coordination, promotion and final export |
+| Journal / Review | Optional research records and exact-commit source/DSL policy review |
+| Workflow | Persistent Session, audit segments, budgets, recovery and optional peer sharing |
 
-The Agent does not choose private storage paths, submit a Git commit as proof, or rewrite
-the trusted evaluator. Native mode separates work cooperatively under the same OS user.
+The Agent does not choose private storage paths or rewrite the trusted evaluator. It identifies
+Kernel source with its own full Git commit IDs. Native mode separates work cooperatively under the same OS user.
 Bubblewrap adds filesystem enforcement; it does not add a network allowlist or change
 the remote GPU executor.
 
 ## Campaign lifecycle
 
 1. **Freeze inputs.** Load the operator, initial source, evaluator contract, runtime pins,
-   and selected candidate format. Production preprocessing provides a generalized public
-   contract while detailed inputs remain private.
-2. **Establish baselines.** Measure V0 and, when configured, establish V1 in the target
-   framework. Imported source trees retain their pinned initial package.
-3. **Explore.** Start or resume an Episode in a managed Git-free draft. The Agent can
-   research, edit, profile, evaluate, and inspect previous measurement records.
-4. **Report and seal.** A report cites a passing standard full Evaluate for the exact
-   source. Mandatory correctness, applicable production policy, and enabled supplemental
-   validation must succeed before the report can seal that candidate.
-5. **Compare and promote.** Obtain policy-matched native ABBA evidence for the sealed
-   candidate and committed incumbent. Promote only a strict improvement; otherwise retain
-   the incumbent and record the outcome.
-6. **Continue or export.** Carry eligible adaptive Skills/tools into the next Episode,
-   enforce campaign limits, and export the retained source with verified version facts.
+   and selected candidate format. Shapes are exposed by default. Production uses a
+   generalized public contract only when `--no-expose-evaluator-shapes` successfully stages
+   `agent_problem.json`; the persisted visibility records that actual projection. If the requested
+   hidden projection is unsupported, startup fails rather than falling back to exposed inputs.
+2. **Establish V0.** Measure the selected initial source and create one canonical Agent V0 Git
+   root. Pooled trajectories receive the same root commit; there is no separate Framework
+   Baseline or accepted V1 descendant.
+3. **Explore.** Start or resume the one persistent Agent Session in the trajectory's stable Git repository.
+   Uncommitted work, local branches, tags, `scratch/`, tools, and Skills survive Episode
+   boundaries. Runtime capabilities, public inputs, and shared evidence are refreshed for
+   the new Episode without reconstructing the repository.
+4. **Submit on demand.** `submit-kernel` verifies that one exact Agent commit already has a passing
+   standard full Evaluate, then reviews its source/DSL and applicable Production policy. It does
+   not launch another evaluation, mutate Agent Git, promote, roll back, or end the Session.
+5. **Segment and continue.** An Episode is only an audit boundary created when the Agent chooses
+   to stop a segment. The next segment resumes the same conversation, workspace and Git history.
+6. **Archive.** Preserve Gateway Records, research claims, commit-review receipts and shared peer
+   refs. Runtime does not choose or install an incumbent.
 
-The default report uses `gateway_record_ids`. Direction/Experiment annotations are enabled
-separately by `light_journal.research_records`; then a report selects a recorded Experiment.
-Generated memory is also optional. With it disabled, committed `.atrex_versions/vN.json`
-facts still support versioning, reporting, and recovery.
+The default Journal configuration enables both Direction and Experiment annotations through
+`light_journal.tool_modules`. They organize research but do not gate Session boundaries or select
+a Kernel. Generated memory is optional and remains an audit aid rather than promotion state.
 
 ## Source and measurement identity
 
-New tasks default to `source_tree`, with an editable `kernel.py` and optional `impl/`.
+New tasks default to `source_tree`, with editable evaluator entry point `kernel.py` and optional
+editable helpers below `impl/`.
 Explicit alternatives are `single_file` and `cuda_manifest`. Layout implementations own
 validation and packaging; Workflow uses their common artifact interface.
 
-```mermaid
-flowchart LR
-    A[Operator source] --> B{Candidate layout}
-    B -->|source_tree| C[Editable kernel.py<br/>optional editable helpers]
-    B -->|single_file| D[Editable kernel.py]
-    B -->|cuda_manifest| E[Declared CUDA sources]
-    C --> F[Seal source artifact]
-    D --> F
-    E --> F
-    F --> G[Evaluate / Profile / Check]
-    G --> H[Record binds exact artifact digest]
-```
-
-### Shape visibility and resume compatibility
-
-Leaderboard keeps detailed shapes exposed. Production also exposes them by default;
-`--no-expose-evaluator-shapes` activates the generalized contract only for a staged
-native operator that actually has `agent_problem.json`. SOL and layouts without that
-contract remain exposed. Historical leaderboard and hidden-production snapshot keys
-are preserved; only the new production-plus-exposed combination receives a namespace
-suffix.
-
-```mermaid
-flowchart TD
-    A[CLI visibility flag] --> B{Production + no-expose<br/>+ agent_problem.json?}
-    B -->|No| C[Exposed]
-    B -->|Yes| D[Hidden]
-    C --> E[Derive compatibility snapshot key]
-    D --> E
-    E --> F{Workspace state exists?}
-    F -->|No| G[Persist selected visibility]
-    F -->|Yes| H{Recorded visibility matches?}
-    H -->|Yes| I[Resume pinned snapshot]
-    H -->|No| J[Fail closed and name matching CLI flag]
-```
-
-### Native Agate option and response boundary
-
-Light discovers non-authority options from the installed Agate parser so harmless
-additions do not require a Light release. The exact denylist is backed by a
-sensitive-name/help filter; credentials, endpoints, uploads, images/setup,
-filesystem and scheduling controls fail closed. Every Supervisor parser build logs
-the Agate version, exposed catalog and refused sensitive flags. The Supervisor
-operator and a Light maintainer review that audit record after an Agate upgrade;
-a refused option is not exposed until a first-class Light workflow is reviewed.
-Existing Light actions are advertised only for the commands where
-Light really forwards them, and incompatible Agate enums do not overwrite Light's
-defaults.
-
-```mermaid
-flowchart TD
-    A[Installed Agate parser] --> B[Discover command options]
-    B --> C{Exact denylist or<br/>sensitive authority pattern?}
-    C -->|Yes| D[Refuse and audit-log]
-    C -->|No| E{Existing Light action?}
-    E -->|Yes| F[Intersect supported commands<br/>validate default against enum]
-    E -->|No| G[Add native option]
-    F --> H[Advertise per-kind schema]
-    G --> H
-    H --> I[Validate requested kind]
-    I --> J[Forward through typed CLI / request]
-    J --> K{Known response type?}
-    K -->|Yes| L[Operation-specific compact projection]
-    K -->|No, exposed mode| M[Preserve unknown evidence]
-    K -->|No, hidden mode| N[Credential, path and shape redaction]
-```
-
-A Kernel ID binds the complete source snapshot for multi-file candidates, including headers
-and build settings. A measurement identity additionally binds evaluator/input bytes, target,
+`kernel_commit_id` is the full Agent Git commit ID. Runtime accepts it only when the worktree is clean
+and the commit contains the exact complete source snapshot, including headers and build settings.
+A measurement identity additionally binds evaluator/input bytes, target,
 options, transport, and repetition policy. Changing any required identity produces a new task.
 Agent duplicates return the existing record reference; trusted acceptance can reuse compatible,
 completed evidence. Unavailable or contradictory results cannot become cached verdicts.
@@ -177,34 +113,28 @@ completed evidence. Unavailable or contradictory results cannot become cached ve
 See [candidate layouts](native-cuda.md), [measurement records](measurement-records.md),
 and [evaluator outcomes](evaluator-outcomes/README.md).
 
-## Correctness and promotion
+## Measurement and commit review
 
-Native Atrex-Bench candidate acceptance uses six correctness cases per shape. A targeted
-smoke test, custom-input probe, or partial-shape measurement cannot replace full-contract
-evidence. Supplemental numerical planning is default-off and adds measured probes when enabled.
+Evaluate, Check, Profile, Dev, Command, Disassemble and ABBA produce measurements only when the
+Agent requests them. Full-contract Evaluate remains the authoritative way to establish correctness;
+targeted probes and Shape subsets remain diagnostic. Runtime projects the resulting Gateway Records
+and derives `lineage_winner` plus `global_best` from accepted `submit-kernel` commits that have
+passing full-contract Evaluate evidence. Pooled search broadcasts those observational winners with
+their peer Git commits and Gateway Records, but never checks them out or uses them to control search.
+Passing Evaluate results that were not accepted by `submit-kernel` remain available through
+`records/`, but are excluded from the Research Board Pareto frontier and lineage/global winners.
 
-Light uses native same-allocation A/B/B/A measurements. Its promotion metric is:
-
-```text
-latency_reduction_pct = (incumbent_geomean_us - candidate_geomean_us)
-                        / incumbent_geomean_us * 100
-```
-
-The reduction must strictly exceed the configured threshold. Objective scores and public
-speedup ratios are diagnostic and have distinct meanings. Production source-policy review
-is shared with Legacy; the validated distributed Agate exception is frozen from evaluator
-metadata, not candidate declarations.
-
-Light's native ABBA requires an Atrex-Bench contract, executed through Agate or
-[OpenSSH](ssh-backend.md). SOL inputs can be loaded with explicit `single_file`,
-but SOL comparisons have no Light ABBA fallback.
-The [Legacy guide](legacy-workflow.md) covers the supported alternative verification path.
+`submit-kernel` is deliberately narrower: it archives and reviews one exact reachable Agent commit
+for source layout, DSL and applicable Production dependency policy. It does not execute the Kernel,
+certify correctness or performance, compare it with an incumbent, or modify Agent Git. The Legacy
+workflow retains its separate acceptance and promotion semantics; see the [Legacy guide](legacy-workflow.md).
 
 ## Recovery and observability
 
-The Supervisor persists accepted job IDs, request identities, complete ABBA batches, report
-transactions, source seals, and promotion audits. Direct HTTP replay uses durable idempotency
-keys. An uncertain CLI submission without an ID needs reconciliation, not blind resubmission.
+The Supervisor persists job IDs, request identities, measurement batches, commit-review receipts,
+private source archives and research audits. Agate SDK submissions use durable idempotency
+keys. An uncertain non-idempotent submission without an ID returns a structured submission
+timeout and is not blindly resubmitted.
 
 Session throttling and output-limit recovery retain the Episode draft and observation history.
 Agent active time excludes authenticated blocking Runtime requests. GPU, Wiki, and queue
@@ -212,8 +142,7 @@ deadlines remain independently enforced.
 
 Capture is diagnostic; missing transcripts or usage counters remain explicit gaps.
 Canonical state never depends on an Agent-writable projection.
-See [Session observability](session-observability.md), [Runtime Journal](runtime-journal.md),
-and [promotion recovery](supervisor-promotion.md).
+See [Session observability](session-observability.md) and [Runtime Journal](runtime-journal.md).
 
 ## Verification
 

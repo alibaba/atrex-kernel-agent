@@ -1,13 +1,14 @@
 # Supervisor GPU/Wiki Runtime
 
-Light's private Tool Runtime serves agent GPU, Wiki, record, and Journal requests.
+Light's private Tool Runtime serves Agent GPU, Wiki, research-record, and exact-commit
+submission requests.
 It is created by the selected Workflow behind `aka optimize`; no separate server command
 is needed. The agent receives thin `tools/sandbox.py` and `tools/plugin.py` clients,
 while credentials, private evaluator inputs, source snapshots, and records stay in the Supervisor.
 
 ## Lifecycle and authority
 
-The `tool_runtime` provider injects Execution, Experiment, Acceptance, Journal, and Wiki
+The `tool_runtime` provider injects Execution, Experiment, Acceptance, Research, and Wiki
 services. A Session capability authorizes the exact draft and allowed operations. Every
 request checks authorization, workspace binding, deadlines, and revocation.
 
@@ -20,12 +21,41 @@ request checks authorization, workspace binding, deadlines, and revocation.
 | Native Eval/ABBA and public results | `aka.light.evaluation` |
 | Physical dispatch and recovery | `aka.light.execution` |
 | Knowledge lifecycle | `aka.light.wiki.service` |
-| Journal/report transaction | `aka.light.workflow.journal_service` |
+| Research mutation and submit-kernel validation | `aka.light.workflow.journal_service` |
+| Immutable submit-kernel audit | `aka.light.workflow.submissions` |
+
+Direction and Experiment validation uses an in-memory snapshot of the Campaign Research Store.
+The Runtime does not materialize a compatibility Episode Journal or
+`research-transaction.json`; central Research, Submission, and Measurement stores are the only
+durable authorities.
 
 The Runtime stages the complete candidate selected by CandidateWorkspace, restores trusted
 evaluator inputs, and delegates through these services. It does not trust a candidate-provided
 evaluator or allow the agent to choose Supervisor storage paths. Known jobs and exact measurements
 are durable across requests; Session tokens are not durable recovery credentials.
+
+The Campaign root has one authoritative `campaign.json`, serialized by `campaign.lock`. Schema v3
+contains the immutable launch composition, the Campaign-wide SourceProvider file-system/contract
+binding, the latest effective `runtime_configuration`, and—after V0 succeeds—the V0 Agent commit
+and canonical source-tree digest. Current Runtime writes neither a detached `source/` tree, a
+detached `runtime-config.json`, nor a persistent `initial-source/` snapshot. Source preparation uses
+temporary staging; the only durable complete V0 source is archived at
+`measurements/kernels/<V0-commit>/kernel.py`. Every trajectory resolves the same binding from the
+manifest, and recovery rejects a different source contract. A persistent Agent workspace is
+recovered directly from its real Git repository and that binding, so it has no separate
+`agent-workspace-state.json`. Lineage `state.json` records only current segment/controller state.
+Runtime request receipts live under `runtime-audit/requests/`, while plugin calls live under
+`runtime-audit/plugin-calls/`. Detached Runtime config and flat request receipts are read-only
+compatibility inputs for older Campaigns; retired workspace-state files are ignored.
+
+Pooled Campaign coordination is also flat: `coordinator.json` and `coordinator.lock` live at the
+Campaign root, while each immutable synchronization event lives under
+`publications/pNNNNNNNN/`. Its global metadata is `publication.json`; producer Git bundles and
+receipts live in `sources/tNNNN/`, while consumer import receipts live in `imports/tNNNN.json`. The
+coordinator checkpoint does not duplicate per-lineage HEAD, Session, Episode or winner facts;
+those remain in `lineages/tNNNN/state.json`. The common Agent V0 Git root is archived once under
+`bootstrap/agent-v0.{bundle,json}`. The Campaign has no separate `peer-git/` or `git-sharing/`
+namespace.
 
 ## GPU operations
 
@@ -36,13 +66,19 @@ python3 tools/sandbox.py --kind run --no-sync
 python3 tools/sandbox.py --kind run --mode correctness_only --no-sync
 python3 tools/sandbox.py --kind profile --profile-shape-id SHAPE_ID --no-sync
 python3 tools/sandbox.py --kind dev --input scratch/probe.py --no-sync -- python3 scratch/probe.py
+python3 tools/sandbox.py --kind command -- python3 -m scratch.experiment
 python3 tools/sandbox.py --kind env
 ```
 
+Use `python3 -m scratch.<module>` for Python Command probes below `scratch/`. Directly running
+`python3 scratch/<module>.py` makes `scratch/` rather than the uploaded workspace root the first
+module-search directory, so imports such as `import kernel` may fail even though `kernel.py` was
+uploaded correctly.
+
 | Operation | Meaning |
 | --- | --- |
-| Evaluate (`run`) | Full or correctness-only evaluator request; native candidate checks default to six cases per shape |
-| ABBA (`run --baseline-path ...`) | Native comparison against an exact baseline source snapshot |
+| Evaluate (`run`) | Full or correctness-only evaluator request; native candidate checks use five cases per Shape |
+| ABBA (`run --baseline-commit ...`) | Native comparison against an exact reachable baseline Git commit; Runtime exports its source privately |
 | Profile | Profiler evidence for a selected shape; not correctness or promotion evidence |
 | Dev | Bounded exploratory commands; a source-bound record does not prove the command measured that source |
 | Check / Disassemble | Supported source diagnostics, subject to layout and worker capabilities |
@@ -58,20 +94,20 @@ not Agate Check/Disassemble or SOL. The [SSH backend](ssh-backend.md) supports
 native Evaluate/ABBA and worker-supported diagnostics, including native manifests.
 See [source-layout compatibility](native-cuda.md) before selecting an operation.
 
-The Episode prompt contains the exact acceptance ABBA command and the matching
-`kernel-read` command. Use those values rather than assuming that every candidate is
-a Python file or that any exploratory comparison can be reused for promotion.
+During exploration the Agent may choose any reachable Git commit with `--baseline-commit` for a
+research comparison. `submit-kernel` does not launch ABBA or end the Session; it reviews one exact
+commit that already has a passing, complete full Evaluate. An existing Record is reused only when
+every request identity matches.
 
 ## Public results and original GPU errors
 
-GPU calls and `record-read` return a single JSON object containing `operation`,
-`status`, `result`, `gateway_record_id`, and `kernel_id` when source-bound.
-ABBA is an Evaluate result with `result.comparison` and `baseline_kernel_id`.
+GPU calls and projected `records/<gateway_record_id>.json` contain `operation`,
+`status`, `result`, `gateway_record_id`, and `kernel_commit_id` when source-bound.
+ABBA is an Evaluate result with `result.comparison` and `baseline_kernel_commit_id`.
 Dev output lives inside `result.stdout`, `result.stderr`, and its exit code.
 
-A successful historical read exits zero even if the saved evaluator rejected the candidate.
-Inspect the result's status and correctness. Initial failed operations retain nonzero CLI
-outcomes. Legacy marker streams are private executor evidence, not the agent parsing contract.
+Inspect each projected result's status and correctness. Initial failed operations retain nonzero
+CLI outcomes. Legacy marker streams are private executor evidence, not the Agent parsing contract.
 
 Feedback retains compiler/runner errors, rank-local checks, output identity, numerical errors,
 tolerances, and failing-case seeds. Private dimensions and credentials are redacted.

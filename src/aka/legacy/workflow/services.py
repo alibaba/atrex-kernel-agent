@@ -131,7 +131,7 @@ class WorkflowServices:
         evaluator = self.evaluator_factory.create(
             EvaluationConfiguration(
                 timeout=s.timeout, repeats=s.verify_repeats,
-                per_run_timeout=s.verify_run_timeout,
+                per_run_timeout=s.evaluation_step_timeout,
                 shape_batch_size=s.shape_batch_size,
                 max_parallelism=1 if selected_ssh() else 4,
                 private_reference_dir=self.campaign.private_reference_dir,

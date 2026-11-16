@@ -1,4 +1,4 @@
-"""Provider counters, not tokenizer estimates; native/stream copies are one bill.
+"""Provider counters with a clearly labelled conversation-text fallback.
 
 Claude totals follow result.usage; modelUsage and child diagnostics have a
 different scope and must not replace or augment that total.
@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 from dataclasses import asdict, replace
+from typing import Any
 
 from aka.light.agent.runtime.adapter import (
     pi_event_usage,
@@ -22,7 +23,209 @@ from aka.light.agent.runtime.model import (
     sum_token_usages,
 )
 
-COMPONENTS = ("input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens")
+COMPONENTS = (
+    "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+    "reasoning_tokens",
+)
+
+
+def _text_tokens(text: str) -> int:
+    """Return a deterministic provider-neutral approximation.
+
+    CJK code points are commonly close to one token each. Remaining UTF-8 text
+    uses the conventional four-bytes-per-token heuristic. This intentionally
+    avoids pretending that one provider/model tokenizer applies to every Agent.
+    """
+    if not text:
+        return 0
+    cjk = 0
+    other = bytearray()
+    for character in text:
+        code = ord(character)
+        if (
+            0x3400 <= code <= 0x4DBF
+            or 0x4E00 <= code <= 0x9FFF
+            or 0xF900 <= code <= 0xFAFF
+        ):
+            cjk += 1
+        else:
+            other.extend(character.encode("utf-8"))
+    return cjk + ((len(other) + 3) // 4 if other else 0)
+
+
+def _content_text(value: object) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _reasoning_text(value: object) -> str:
+    """Extract reasoning/thinking payloads without adding them twice to total."""
+    found: list[str] = []
+
+    def visit(item: object, *, reasoning: bool = False) -> None:
+        if isinstance(item, str):
+            if reasoning:
+                found.append(item)
+            return
+        if isinstance(item, list):
+            for child in item:
+                visit(child, reasoning=reasoning)
+            return
+        if not isinstance(item, dict):
+            return
+        kind = str(item.get("type", "")).casefold()
+        local = reasoning or kind in {"thinking", "reasoning", "reasoning_content"}
+        for key, child in item.items():
+            if key in {"type", "signature", "id"}:
+                continue
+            child_reasoning = local or key.casefold() in {
+                "thinking",
+                "reasoning",
+                "reasoning_content",
+            }
+            visit(child, reasoning=child_reasoning)
+
+    visit(value)
+    return "\n".join(found)
+
+
+def _event_content(event: dict[str, Any]) -> tuple[str | None, object]:
+    message = event.get("message")
+    if isinstance(message, dict):
+        role = message.get("role")
+        if not isinstance(role, str):
+            role = (
+                "assistant"
+                if event.get("type") in {"assistant", "message", "message_end"}
+                else None
+            )
+        return role, message.get("content", message.get("text"))
+
+    item = event.get("item")
+    if isinstance(item, dict):
+        kind = str(item.get("type", "")).casefold()
+        if kind in {"reasoning", "agent_message", "assistant_message", "function_call"}:
+            return "assistant", item
+        if kind in {"function_call_output", "tool_result", "user_message"}:
+            return "user", item
+
+    event_type = str(event.get("type", "")).casefold()
+    role = event.get("role")
+    if not isinstance(role, str):
+        if event_type.startswith("assistant/") or event_type in {
+            "assistant",
+            "agent_message",
+            "reasoning",
+        }:
+            role = "assistant"
+        elif event_type.startswith("user/") or event_type in {
+            "user",
+            "tool_result",
+            "function_call_output",
+        }:
+            role = "user"
+        else:
+            return None, None
+    for key in ("content", "text", "output", "arguments", "result"):
+        if key in event:
+            return role, event[key]
+    return None, None
+
+
+def estimate_usage_from_conversation(conversation: str) -> tuple[TokenUsage, dict[str, object]]:
+    """Estimate a finalized invocation when every provider counter is absent.
+
+    The reading projection is already de-duplicated where the backend exposes
+    overlapping stream/native transcripts. The estimate counts only semantic
+    messages and tool payloads, never JSON envelope metadata. Replayed context,
+    hidden system prompts and provider cache behavior cannot be reconstructed.
+    """
+    runtime_inputs: list[str] = []
+    stream_inputs: list[str] = []
+    stream_outputs: list[str] = []
+    stream_reasoning: list[str] = []
+    native_inputs: list[str] = []
+    native_outputs: list[str] = []
+    native_reasoning: list[str] = []
+
+    for line in conversation.splitlines():
+        try:
+            record = json.loads(line)
+        except (TypeError, ValueError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        record_type = record.get("type")
+        if record_type == "message" and record.get("source") == "runtime_input":
+            text = _content_text(record.get("content"))
+            if text:
+                runtime_inputs.append(text)
+            continue
+        if record_type != "provider_event":
+            continue
+        event = record.get("event")
+        if not isinstance(event, dict):
+            continue
+        role, content = _event_content(event)
+        text = _content_text(content)
+        if not role or not text:
+            continue
+        is_stream = record.get("path") == "provider/stdout.stream-json"
+        inputs = stream_inputs if is_stream else native_inputs
+        outputs = stream_outputs if is_stream else native_outputs
+        reasoning = stream_reasoning if is_stream else native_reasoning
+        if role in {"user", "system", "tool"}:
+            inputs.append(text)
+        elif role == "assistant":
+            outputs.append(text)
+            thought = _reasoning_text(content)
+            if thought:
+                reasoning.append(thought)
+
+    # Prefer the functional stream to avoid counting a native copy twice. If
+    # it carries no semantic messages, fall back to captured native transcripts.
+    prefer_stream = bool(stream_outputs)
+    provider_inputs = stream_inputs if prefer_stream else native_inputs
+    provider_outputs = stream_outputs if prefer_stream else native_outputs
+    provider_reasoning = stream_reasoning if prefer_stream else native_reasoning
+    input_text = "\n".join([*runtime_inputs, *provider_inputs])
+    output_text = "\n".join(provider_outputs)
+    reasoning_text = "\n".join(provider_reasoning)
+    input_tokens = _text_tokens(input_text)
+    output_tokens = _text_tokens(output_text)
+    reasoning_tokens = _text_tokens(reasoning_text)
+    total_tokens = input_tokens + output_tokens
+    usage = TokenUsage(
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_tokens=None,
+        cache_write_tokens=None,
+        total_tokens=total_tokens,
+        measurement="estimated",
+        reasoning_tokens=reasoning_tokens,
+    )
+    return usage, {
+        "method": "conversation_text_cjk_plus_utf8_bytes_v1",
+        "input_characters": len(input_text),
+        "output_characters": len(output_text),
+        "reasoning_characters": len(reasoning_text),
+        "limitations": [
+            "hidden provider system prompts are unavailable",
+            "replayed context and cache billing cannot be reconstructed",
+            "the estimate is provider-tokenizer independent",
+        ],
+    }
 
 
 def json_events(text: str):

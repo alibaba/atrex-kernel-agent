@@ -1,6 +1,6 @@
 # Supplemental numerical validation
 
-Production candidates retain ordinary full-contract correctness, dependency/framework review and ABBA promotion gates. Supplemental numerical validation is disabled by default in Light. Set the Workflow option `numerical_validation: true` through a [composition patch](optional-light-modules.md#other-module-options) to enable it. When enabled, the Supervisor additionally asks a numerical planner for bounded, executable risk probes. Planner opinions never reject a Kernel; measured candidate failures do. Leaderboard mode is unchanged. There is one Episode workflow, not Fast/Full modes.
+Production candidates retain ordinary full-contract correctness, dependency/framework review and ABBA promotion gates. Supplemental numerical validation is disabled by default in Light and can be enabled with the Workflow option `numerical_validation: true` through a [composition patch](optional-light-modules.md#other-module-options). When enabled, the Supervisor additionally asks a numerical planner for bounded, executable risk probes. Planner opinions never reject a Kernel; measured candidate failures do. Leaderboard mode is unchanged. There is one Episode workflow, not Fast/Full modes.
 
 ```mermaid
 flowchart TD
@@ -20,16 +20,16 @@ flowchart TD
 - `aka.light.acceptance.numerical` snapshots the complete candidate artifact and trusted inputs outside the Agent workspace. Source layout and editable roots remain pinned; source, headers, and build settings follow the selected candidate contract. Hidden Shape definitions are not copied into the planner workspace, but original evaluator errors may quote case details. Its auxiliary session has no Runtime capability or GPU tools; Bubblewrap uses a dedicated read-only input allowlist when enabled.
 - The planner writes a declarative plan: at most three cases, actual nested tensor ABI paths, supported generators and public input constraints. It cannot provide Python, an evaluator, private Shape IDs or thresholds. Supported distributions include constant, uniform, log-uniform, sparse, alternating, ramp, packed bytes and near-constant. Unspecified input leaves retain the original generator's values.
 - `aka.light.acceptance.remote_numerical` executes up to three representative matching Shapes, two seeds and all declared ranks per case, using the canonical evaluator. Receipts bind case, selected Shapes, seeds, ranks and observed coverage. A complete failing workload can disprove correctness; a PASS requires all selected coverage. No eligible Shapes yields an explicit unsupported advisory, not a passing test.
-- Supplemental floating outputs use relative L2 `||candidate-reference||₂ / max(||reference||₂, 1e-12)`: non-FP4 threshold `1e-3`, FP4 threshold `0.2`. Structural, dtype, finite-value, mutation and exact non-floating checks remain evaluator-owned. Ordinary allclose/FP4 policy is unchanged.
-- Native `input.py`/`reference.py`/`shapes.json` is required for these constructors. SOL contracts without that ABI receive a recorded unsupported advisory. Their full-workload correctness remains required; Light native ABBA does not support SOL/SSH.
+- Supplemental probes use the task's trusted metadata/evaluator correctness policy; Light does not inject fallback `atol`, `rtol`, mismatch-fraction or relative-L2 thresholds. Structural, dtype, finite-value, mutation and exact non-floating checks remain evaluator-owned.
+- Native `input.py`/`reference.py`/`shapes.json` is required for these constructors. SOL contracts without that ABI receive a recorded unsupported advisory. Their full-workload correctness remains required; this supplemental route does not synthesize a native ABI for SOL. Explicit SSH can execute the same native Atrex-Bench probes when that ABI is present.
 
 ## Report and repair
 
-The selected Acceptance service invokes the numerical gate after ordinary correctness and before report sealing. Measured failures return `candidate_numerical_failed` with public distributions, metrics and Gateway Record IDs. Repair the candidate, measure it, and resubmit `episode-report` with direct Gateway record IDs by default; record an Experiment only when research recording is enabled. Plans survive candidate edits and Supervisor restarts; changing the candidate does not let a planner waive the retained tests. Recovery also checks the sealed commit, not mutable draft bytes.
+The selected Acceptance service starts the numerical gate alongside ordinary correctness and Production Review before report sealing; a numerical verdict cannot finalize until ordinary correctness is known. Measured failures return `candidate_numerical_failed` with public distributions, metrics and Gateway Record IDs. Repair the candidate, measure it, and resubmit `episode-report` with direct Gateway record IDs when the Experiment module is disabled; select a recorded Experiment when that module is enabled. Plans survive candidate edits and Supervisor restarts; changing the candidate does not let a planner waive the retained tests. Recovery also checks the sealed commit, not mutable draft bytes.
 
 Reference non-finite outputs, invalid generation or incomplete receipts return to the planner for one plan-repair attempt. The case IDs must be preserved. Unresolved validation yields `candidate_numerical_pending`, not a Kernel correctness failure. Baselines get up to two supplemental Kernel-repair turns; Episodes retain their existing continuation budget.
 
-Each planner uses `--production-review-timeout` (default 600 seconds). A bounded plan recovered from a timeout remains untrusted until schema/evidence validation and execution. Without a usable plan, a timeout permits a recorded `skipped_planner_timeout` only after ordinary correctness passed, evidence is unchanged and no measured supplemental candidate failure remains. Malformed non-timeout responses do not receive this exemption.
+Reviewer sessions, including the numerical planner, have no Supervisor time limit. Explicit campaign cancellation may still stop a reviewer. A provider-side timeout remains distinguishable from a local deadline and retains the existing fail-safe handling; malformed non-timeout responses remain untrusted until schema/evidence validation and execution.
 
 GPU probes use the private MeasurementStore and exact-task reuse. Python-backed probes use
 the remote numerical driver; native CUDA manifests use `aka.light.acceptance.typed_numerical`
@@ -65,7 +65,7 @@ evaluation does not enable this capture or change its scoring behavior.
 
 The complete diagnostic files remain outside Agent workspaces. Failure receipts
 include the original error, evaluator stdout/stderr, exit code and timeout flag
-for the probe planner, the optimization Agent and subsequent `record-read`.
+for the probe planner, the optimization Agent and the projected Gateway Record.
 They are not replaced by a generic "private diagnostics withheld" message.
 Upstream per-stream capture limits remain visible; public projection does not reconstruct
 bytes that were never captured. The current response-size, truncation, shape-redaction,

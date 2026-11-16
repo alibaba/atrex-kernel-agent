@@ -14,12 +14,42 @@ import sys
 import time
 import tarfile
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 
-from aka.light.experiment.store import JOB_ROOT_ENV, EvidenceUnavailable, digest, private_write, read_json
+from aka.light.experiment.store import (
+    JOB_ROOT_ENV,
+    RUNTIME_REQUEST_ID_ENV,
+    EvidenceUnavailable,
+    digest,
+    private_write,
+    read_json,
+)
 from aka.light.evaluation.evaluation_failures import embedded_device_failure
 
 DEFAULT_MAX_INFRA_RETRIES = 2
+DEFAULT_MAX_DEADLINE_RETRIES = 2
+TERMINAL_VALIDATION_ENV = "ATREX_AKA_TERMINAL_VALIDATION"
+
+
+def configured_max_deadline_retries(*, terminal_evaluation: bool = False) -> int | None:
+    """Bound exploration deadlines; retain terminal Eval/ABBA until recovery.
+
+    ``ATREX_AKA_TERMINAL_VALIDATION`` is controller-private but also covers
+    terminal Dev probes.  Require the caller to identify Eval semantics so a
+    terminal numerical probe, Profile, Check or Disassemble cannot inherit an
+    unbounded resubmission loop.
+    """
+    if terminal_evaluation and os.environ.get(TERMINAL_VALIDATION_ENV) == "1":
+        return None
+    return DEFAULT_MAX_DEADLINE_RETRIES
+
+
+def configured_max_infra_retries(
+    default: int | None = DEFAULT_MAX_INFRA_RETRIES,
+) -> int | None:
+    """Terminal validation retains its candidate until infrastructure recovers."""
+    return None if os.environ.get(TERMINAL_VALIDATION_ENV) == "1" else default
 
 
 def retry_delay(count: int) -> float:
@@ -35,6 +65,25 @@ def request_is_infrastructure(process) -> bool:
         return False
     return isinstance(error, dict) and (
         error.get("error_class") == "infra" or error.get("reason") == "oss_unavailable"
+    )
+
+
+def replay_forbidden(job: object) -> bool:
+    """Return whether explicit Gateway evidence forbids a replacement Job."""
+    if not isinstance(job, dict):
+        return False
+    policy = job.get("replay_policy")
+    if policy is not None and policy not in {"allow", "legacy"}:
+        return True
+    error = job.get("error") if isinstance(job.get("error"), dict) else {}
+    details = error.get("details") if isinstance(error.get("details"), dict) else {}
+    return (
+        job.get("execution_state") == "unknown"
+        or error.get("reason") == "dev_submission_ambiguous"
+        or any(
+            row.get("retry_advice") == "never"
+            for row in (job, error, details)
+        )
     )
 
 
@@ -66,11 +115,11 @@ class SubmissionRejected(RuntimeError):
         self.status = status
         self.retryable = status in {408, 429, 503} or request_is_infrastructure(process)
         super().__init__(f"Gateway rejected submission with HTTP {status}" if status is not None
-                         else "Agate CLI rejected submission before dispatch")
+                         else "Agate SDK rejected submission before dispatch")
 
 
 def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionRejected | None:
-    """Recognize pre-dispatch CLI errors; arbitrary stderr is not proof of safety."""
+    """Recognize pre-dispatch transport errors; arbitrary stderr is not proof of safety."""
     if process.returncode == 0:
         return None
     response = job_from_process(process)
@@ -87,7 +136,7 @@ def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionReje
     if (process.returncode == 2 and re.match(r"usage: agate\b", process.stderr or "")
             and re.search(r"(?m)^agate(?: [\w-]+)*: error: ", process.stderr or "")):
         return SubmissionRejected(process)
-    # Also accept structured CLI HTTP-error envelopes, but never infer a
+    # Also accept structured transport HTTP-error envelopes, but never infer a
     # pre-dispatch rejection from error_class=infra or exit code alone.
     if response and response.get("error"):
         status = response.get("http_status", response.get("status_code"))
@@ -96,28 +145,36 @@ def submission_rejection(process: subprocess.CompletedProcess) -> SubmissionReje
     return None
 
 
-def replay_forbidden(job: object) -> bool:
-    """An infra label never overrides explicit unknown-outcome/replay evidence."""
-    if not isinstance(job, dict):
+def _job_deadline_exceeded(error: object) -> bool:
+    """Recognize Agate's explicit terminal job-deadline diagnostic."""
+    if not isinstance(error, dict):
         return False
-    policy = job.get("replay_policy")
-    if policy is not None and policy not in ("allow", "legacy"):
-        return True
-    error = job.get("error") if isinstance(job.get("error"), dict) else {}
-    details = error.get("details") if isinstance(error.get("details"), dict) else {}
-    return (job.get("execution_state") == "unknown"
-            or error.get("reason") == "dev_submission_ambiguous"
-            or any(row.get("retry_advice") == "never" for row in (job, error, details)))
+    message = error.get("message")
+    return bool(
+        isinstance(message, str)
+        and "job deadline exceeded" in message.casefold()
+    )
 
 
 def retry_kind(job: object) -> str | None:
-    """Match Runtime: only explicitly failed infra Jobs are resubmitted."""
-    if not isinstance(job, dict) or job.get("status") != "failed" or replay_forbidden(job):
+    """Classify retryable terminal Jobs consistently for every operation."""
+    if not isinstance(job, dict) or job.get("status") not in {
+        "failed", "cancelled", "canceled",
+    } or replay_forbidden(job):
         return None
     error = job.get("error") or {}
     if not isinstance(error, dict):
         return None
-    if error.get("error_class") == "infra":
+    if _job_deadline_exceeded(error):
+        return "deadline"
+    details = error.get("details")
+    if (
+        error.get("error_class") == "infra"
+        or error.get("failure_origin") == "infrastructure"
+        or (isinstance(details, dict) and details.get("failure_origin") == "infrastructure")
+        or job.get("failure_origin") == "infrastructure"
+        or error.get("reason") == "oss_unavailable"
+    ):
         return "infra"
     return None
 
@@ -152,15 +209,24 @@ def cacheable_job(job: object, identity: dict | None = None) -> bool:
 
 def complete_evaluation(result: dict, request: dict) -> bool:
     """Missing stage/Shape data is not a completed Candidate rejection."""
+    # Native Eval shards project a reference view in which the shard Shapes are
+    # the complete workload.  This applies to both ordinary Eval and native
+    # ABBA; requiring Shapes from the parent workload in each shard would make
+    # every legitimate shard look incomplete.
+    from aka.light.evaluation.shapes import request_shape_ids
+
+    try:
+        shapes = request_shape_ids(request)
+    except (KeyError, TypeError, ValueError):
+        return False
     if request.get("abba"):
         from aka.light.evaluation.native_abba import parse_native_abba
         try:
             parse_native_abba({"status": "succeeded", "result": result},
-                              request["abba"]["repeats"] * 2, list(request["reference"]["shapes"]))
+                              request["abba"]["repeats"] * 2, shapes)
             return True
         except (ValueError, TypeError, KeyError, AttributeError):
             return False
-    shapes = request["reference"].get("shapes", {})
     passed = result.get("passed")
     if not shapes or not isinstance(passed, dict):
         return False
@@ -198,6 +264,100 @@ def job_from_process(process: subprocess.CompletedProcess) -> dict | None:
     return value if isinstance(value, dict) else None
 
 
+def annotate_deadline_timeout(
+    process: subprocess.CompletedProcess,
+    timeout_s: object,
+) -> subprocess.CompletedProcess:
+    """Expose the submitted Job deadline on an explicit deadline failure.
+
+    Agate currently returns ``job deadline exceeded`` without the configured
+    duration. Keep its original error intact and add only the Runtime-owned
+    request value so the Agent can distinguish a short deadline from a slow or
+    stuck candidate.
+    """
+    if (
+        isinstance(timeout_s, bool)
+        or not isinstance(timeout_s, (int, float))
+        or not math.isfinite(timeout_s)
+        or timeout_s <= 0
+    ):
+        return process
+    job = job_from_process(process)
+    if not isinstance(job, dict) or not _job_deadline_exceeded(job.get("error")):
+        return process
+    error = dict(job["error"])
+    error.setdefault("timeout_s", timeout_s)
+    job = dict(job, error=error)
+    return subprocess.CompletedProcess(
+        process.args,
+        process.returncode,
+        json.dumps(job),
+        process.stderr,
+    )
+
+
+def gateway_collection_timeout(
+    process: subprocess.CompletedProcess,
+    timeout_s: float,
+) -> subprocess.CompletedProcess:
+    """Return an Agent-safe timeout while retaining the accepted Job privately.
+
+    The physical Job ID remains only in the durable ``accepted`` checkpoint.
+    A later identical Runtime request can probe that checkpoint, but the current
+    request ends immediately and does not expose the ID or manufacture an
+    ``unknown`` Kernel verdict.
+    """
+    duration = max(0.0, float(timeout_s))
+    error = {
+        "error_class": "timeout",
+        "reason": "gateway_collection_timeout",
+        "message": "Runtime timed out while waiting for the Agate response.",
+    }
+    if math.isfinite(duration) and duration > 0:
+        error["timeout_s"] = duration
+    payload = {
+        "status": "timed_out",
+        "outcome": "timeout",
+        "error": error,
+    }
+    return subprocess.CompletedProcess(
+        process.args,
+        75,
+        json.dumps(payload),
+        "Runtime timed out while waiting for the Agate response.",
+    )
+
+
+def gateway_submission_timeout(
+    process: subprocess.CompletedProcess,
+    timeout_s: float,
+) -> subprocess.CompletedProcess:
+    """Return a bounded non-verdict when submission has no confirmed Job ID.
+
+    SDK callers may safely retry the same persisted idempotency key.  A
+    non-idempotent transport is never replaced automatically because the
+    original submission may already have reached the service.
+    """
+    duration = max(0.0, float(timeout_s))
+    error = {
+        "error_class": "timeout",
+        "reason": "gateway_submission_timeout",
+        "message": "Runtime could not confirm the Agate submission outcome.",
+    }
+    if math.isfinite(duration) and duration > 0:
+        error["timeout_s"] = duration
+    return subprocess.CompletedProcess(
+        process.args,
+        75,
+        json.dumps({
+            "status": "timed_out",
+            "outcome": "timeout",
+            "error": error,
+        }),
+        "Runtime could not confirm the Agate submission outcome.",
+    )
+
+
 def bundle_digest(data: bytes) -> str:
     """Ignore gzip/tar timestamps, but retain exact uploaded bytes and modes."""
     entries = {}
@@ -231,7 +391,7 @@ def payload_identity(payload: dict) -> dict:
         environment = value.pop("env_vars")
         encoded = json.dumps(environment, sort_keys=True, separators=(",", ":"),
                              ensure_ascii=False).encode()
-        # The empty-key fallback preserves standalone/cooperative CLI behavior;
+        # The empty-key fallback preserves standalone/cooperative invocation behavior;
         # only Supervisor-supplied keys make this fingerprint an authenticity check.
         key = bytes.fromhex(os.environ["ATREX_AKA_IDENTITY_KEY"]) if os.environ.get(
             "ATREX_AKA_IDENTITY_KEY"
@@ -301,32 +461,41 @@ def execute_job(
     retry_classifier=retry_kind,
     max_retries: int | None = None,
     max_infra_retries: int | None = DEFAULT_MAX_INFRA_RETRIES,
+    max_deadline_retries: int | None = DEFAULT_MAX_DEADLINE_RETRIES,
     idempotent_submission: bool = False,
     max_device_retries: int | None = None,
     device_retry_delay: float | None = None,
     max_wait_retries: int = 1,
+    capture_phase_observations: bool = False,
 ) -> subprocess.CompletedProcess:
-    """Persist each submission before polling and recover one exhausted wait.
+    """Persist each submission and return a bounded collection timeout.
 
     A fresh invocation starts by reading the durable accepted Job ID when one
     exists.  That old Job receives exactly one non-waiting recovery probe.  A
-    terminal result is returned directly; a missing, unreadable, queued or
-    running old Job may cause one bounded fresh submission unless the saved
-    evidence forbids replay. This deliberately
-    favors bounded recovery latency over remote GPU efficiency: the polling
-    abstraction has no authenticated ownership/cancellation handle, so it cannot
-    safely cancel the saved Job before replacing it, and one recovery may leave
-    that Job running concurrently. Newly submitted Jobs still receive the
-    complete poll budget. A prior CLI submission without a confirmed ID must
-    be reconciled before another non-idempotent submission.
+    terminal result is returned directly.  An unreadable, queued or running
+    accepted Job produces a structured collection timeout immediately after the
+    current bounded wait; its ID remains private so a later identical Runtime
+    request can probe the same Job. A definitively missing Job may still use the
+    bounded fresh-submission recovery path. An ambiguous submission without a
+    confirmed Job ID is replayed only when the SDK persisted an idempotency key;
+    otherwise it returns a structured submission timeout without replacement.
 
-    Explicit ``error_class=infra`` terminal failures are retried only while both
-    ``max_infra_retries`` and the current wait deadline allow another attempt.
+    Explicit infrastructure terminal failures are retried only while
+    ``max_infra_retries`` allows another attempt.  When that value is ``None``,
+    each replacement receives a fresh bounded wait window, so terminal
+    validation can wait indefinitely without making any individual Job
+    unbounded.
+    An explicit Agate ``job deadline exceeded`` terminal is retried according
+    to ``max_deadline_retries``. Terminal Eval/ABBA callers may set it to
+    ``None``; every such retry receives a fresh bounded wait window and remains
+    interruptible through Session revocation or process shutdown.
     """
     if max_wait_retries < 0:
         raise ValueError("max_wait_retries must be non-negative")
     if max_infra_retries is not None and max_infra_retries < 0:
         raise ValueError("max_infra_retries must be non-negative")
+    if max_deadline_retries is not None and max_deadline_retries < 0:
+        raise ValueError("max_deadline_retries must be non-negative")
     retry_classifier = retry_kind if retry_classifier is None else retry_classifier
     directory = Path(os.environ[JOB_ROOT_ENV]) / "jobs" / digest(identity) if os.environ.get(JOB_ROOT_ENV) else None
     state = {}
@@ -343,14 +512,31 @@ def execute_job(
     submission = state.get("submission", 0)
     retries = state.get("retries", {})
     wire_key = state.get("idempotency_key")
+    runtime_request_ids = [
+        value
+        for value in state.get("runtime_request_ids", [])
+        if isinstance(value, str) and value
+    ]
+    phase_observations = [
+        dict(value)
+        for value in state.get("phase_observations", [])
+        if isinstance(value, dict)
+    ]
+    current_runtime_request_id = os.environ.get(RUNTIME_REQUEST_ID_ENV)
+    if current_runtime_request_id and current_runtime_request_id not in runtime_request_ids:
+        runtime_request_ids.append(current_runtime_request_id)
     if idempotent_submission and not wire_key and state.get("phase") == "submitting":
         raise EvidenceUnavailable("Old submission has no persisted wire key; operator reconciliation required")
     wire_key = wire_key or uuid.uuid4().hex
 
     def save(phase, process=None):
         value = {"phase": phase, "submission": submission, "retries": retries, "identity": identity}
+        if runtime_request_ids:
+            value["runtime_request_ids"] = runtime_request_ids
         if idempotent_submission:
             value["idempotency_key"] = wire_key
+        if phase_observations:
+            value["phase_observations"] = phase_observations
         if process is not None:
             value["process"] = {"returncode": process.returncode, "stdout": process.stdout, "stderr": process.stderr}
         if directory:
@@ -358,6 +544,64 @@ def execute_job(
             if process is not None:
                 private_write(directory / f"submission-{submission:04d}-{phase}.json", value)
         return value
+
+    def observe_job(job: object) -> None:
+        """Persist bounded Agate phase facts without copying job result data."""
+        nonlocal state, phase_observations
+        if not capture_phase_observations or not isinstance(job, dict):
+            return
+        job_id = job.get("job_id")
+        status = job.get("status")
+        execution_phase = job.get("execution_phase")
+        if not isinstance(job_id, str) or not job_id or not isinstance(status, str):
+            return
+        now = datetime.now(timezone.utc).isoformat()
+        signature = (job_id, status, execution_phase)
+        previous = phase_observations[-1] if phase_observations else None
+        previous_signature = (
+            previous.get("job_id"),
+            previous.get("status"),
+            previous.get("execution_phase"),
+        ) if isinstance(previous, dict) else None
+        changed = False
+        if previous_signature == signature:
+            # The first observation already determines this phase boundary.
+            # Fill formerly absent server facts once, but do not rewrite the
+            # checkpoint on every two-second SDK poll.
+            if previous.get("agate_updated_at") is None and job.get("updated_at") is not None:
+                previous["agate_updated_at"] = job["updated_at"]
+                changed = True
+            elapsed = job.get("phase_elapsed_ms")
+            if (
+                previous.get("phase_elapsed_ms") is None
+                and type(elapsed) in {int, float}
+                and elapsed >= 0
+            ):
+                previous["phase_elapsed_ms"] = elapsed
+                changed = True
+        else:
+            observation = {
+                "job_id": job_id,
+                "status": status,
+                "execution_phase": (
+                    execution_phase if isinstance(execution_phase, str) else None
+                ),
+                "first_observed_at": now,
+            }
+            if job.get("updated_at") is not None:
+                observation["agate_updated_at"] = job["updated_at"]
+            elapsed = job.get("phase_elapsed_ms")
+            if type(elapsed) in {int, float} and elapsed >= 0:
+                observation["phase_elapsed_ms"] = elapsed
+            phase_observations.append(observation)
+            # A physical submission has only a small number of status/phase
+            # transitions. Keep a defensive bound for independently evolving
+            # Agate execution phases.
+            phase_observations = phase_observations[-128:]
+            changed = True
+        if directory and changed:
+            state = {**state, "phase_observations": phase_observations}
+            private_write(directory / "state.json", state)
 
     def saved_job_id() -> str | None:
         data = state.get("process")
@@ -373,8 +617,14 @@ def execute_job(
         """Start one fresh wait window by resubmitting the Agate task once."""
         nonlocal deadline, state, wire_key, wait_retries
         data = state.get("process")
-        if isinstance(data, dict) and replay_forbidden(job_from_process(subprocess.CompletedProcess(
-                [], data.get("returncode", 1), data.get("stdout", ""), data.get("stderr", "")))):
+        if isinstance(data, dict) and replay_forbidden(job_from_process(
+            subprocess.CompletedProcess(
+                [],
+                data.get("returncode", 1),
+                data.get("stdout", ""),
+                data.get("stderr", ""),
+            )
+        )):
             return False
         if wait_retries >= max_wait_retries:
             return False
@@ -399,19 +649,31 @@ def execute_job(
     rejection = None
     if state.get("phase") == "submitting":
         data = state.get("process")
+        saved_process = None
         if isinstance(data, dict):
-            rejection = submission_rejection(subprocess.CompletedProcess(
-                [], data["returncode"], data["stdout"], data["stderr"]))
-        if rejection is None and not idempotent_submission:
-            raise EvidenceUnavailable(
-                "Prior Gateway submission has no confirmed job ID; reconcile its outcome before resubmitting"
+            saved_process = subprocess.CompletedProcess(
+                [], data["returncode"], data["stdout"], data["stderr"]
             )
-        # A definitive rejection follows the normal rejection path. A missing
-        # response is not evidence that the prior POST did not execute.
+            rejection = submission_rejection(saved_process)
+        if rejection is None and not idempotent_submission:
+            # The old request may already have reached the service.  Without an
+            # idempotency key or Job ID a replacement can duplicate GPU work.
+            return gateway_submission_timeout(
+                saved_process or subprocess.CompletedProcess([], 75, "", ""),
+                wait_budget,
+            )
+        # A definitive rejection follows the normal rejection path.  An SDK
+        # request with a persisted wire key retries that same identity below.
 
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
+            if state.get("phase") == "accepted":
+                data = state["process"]
+                accepted = subprocess.CompletedProcess(
+                    [], data["returncode"], data["stdout"], data["stderr"]
+                )
+                return gateway_collection_timeout(accepted, wait_budget)
             if retry_wait(previous_job_id=saved_job_id()):
                 continue
             raise EvidenceUnavailable(
@@ -423,6 +685,7 @@ def execute_job(
                 process = subprocess.CompletedProcess([], data["returncode"], data["stdout"], data["stderr"])
             else:
                 submission += 1
+                phase_observations = []
                 save("submitting")
                 try:
                     process = submit(wire_key) if idempotent_submission else submit()
@@ -439,13 +702,13 @@ def execute_job(
                         # uncertain submission, never guess that retry is safe.
                         save("submitting", process)
                         if not idempotent_submission:
-                            return process
+                            return gateway_submission_timeout(process, wait_budget)
                         count = retries.get("transport", 0) + 1
                         retries["transport"] = count
                         save("submitting", process)
                         delay = retry_delay(count)
                         if deadline - time.monotonic() <= delay:
-                            raise EvidenceUnavailable("Gateway submission pending reconciliation; retry deadline reached")
+                            return gateway_submission_timeout(process, wait_budget)
                         print(f"[sandbox] Submission transport unavailable; retrying the SAME idempotency key in {delay}s",
                               file=sys.stderr, flush=True)
                         time.sleep(delay)
@@ -458,17 +721,20 @@ def execute_job(
             if not rejection.retryable:
                 return process
             rejection = None
-            kind = "submission"
+            kind = "infra" if max_infra_retries is None else "submission"
         else:
             job = job_from_process(process)
             if state.get("phase") != "terminal":
                 recovery_probe = probe_saved_job
                 probe_saved_job = False
                 try:
+                    poll_options = {"recovery_probe": recovery_probe}
+                    if capture_phase_observations:
+                        poll_options["observation_callback"] = observe_job
                     process = poll(
                         process,
                         max(1, int(deadline - time.monotonic())),
-                        recovery_probe=recovery_probe,
+                        **poll_options,
                     )
                 except AcceptedJobMissing as error:
                     if retry_wait(previous_job_id=error.job_id):
@@ -478,34 +744,22 @@ def execute_job(
                         "saved request requires reconciliation"
                     ) from error
                 except EvidenceUnavailable:
-                    previous_job_id = job.get("job_id") if isinstance(job, dict) else None
-                    if retry_wait(previous_job_id=previous_job_id):
-                        continue
-                    raise
+                    # The accepted Job and its ID remain in the private
+                    # checkpoint.  Do not resubmit or turn collection failure
+                    # into an ``unknown`` Kernel verdict.
+                    return gateway_collection_timeout(process, wait_budget)
                 job = job_from_process(process)
                 if not job or job.get("status") not in {"succeeded", "failed", "cancelled", "canceled"}:
-                    if (isinstance(job, dict) and isinstance(job.get("job_id"), str)
-                            and job["job_id"]):
-                        # Keep newly reported replay restrictions for both the
-                        # current wait recovery and a later invocation.
-                        state = save("accepted", process)
                     poll_rejection = submission_rejection(process)
                     if poll_rejection is not None and poll_rejection.status == 404:
                         missing_job_id = saved_job_id()
                         if isinstance(missing_job_id, str) and retry_wait(previous_job_id=missing_job_id):
                             continue
-                    previous_job_id = (
-                        job.get("job_id") if isinstance(job, dict)
-                        else saved_job_id()
-                    )
-                    if retry_wait(previous_job_id=previous_job_id):
-                        continue
-                    # Keep the accepted ID so a later request polls that same
-                    # Job before resubmitting the Agate task.
-                    return process
+                    # Keep the accepted ID privately so a later identical
+                    # request can probe the same Job.  Agent-visible output is
+                    # a timeout and intentionally contains no physical Job ID.
+                    return gateway_collection_timeout(process, wait_budget)
                 state = save("terminal", process)
-            if replay_forbidden(job):
-                return process
             kind = retry_classifier(job)
             diagnostic = (embedded_device_failure(job)
                           if max_device_retries is not None and isinstance(job, dict) else None)
@@ -522,19 +776,29 @@ def execute_job(
                 # Stable resubmission identity for the failed job, including crash replay.
                 error = job.get("error")
                 reason = error.get("reason") if isinstance(error, dict) else None
-                prefix = "eval-device-retry:" if kind == "device" else (
-                    "logs-retry:" if reason == "logs_unavailable" else "infra-retry:"
+                prefix = (
+                    "eval-device-retry:" if kind == "device" else
+                    "deadline-retry:" if kind == "deadline" else
+                    "logs-retry:" if reason == "logs_unavailable" else
+                    "infra-retry:"
                 )
                 wire_key = prefix + hashlib.sha256(job["job_id"].encode()).hexdigest()
         if (
             kind is None
             or (kind == "infra" and max_infra_retries is not None
                 and retries.get("infra", 0) >= max_infra_retries)
+            or (kind == "deadline" and max_deadline_retries is not None
+                and retries.get("deadline", 0) >= max_deadline_retries)
             or (max_retries is not None and sum(retries.values()) >= max_retries)
         ):
             return process
         retries[kind] = retries.get(kind, 0) + 1
         count = sum(retries.values())
+        if kind == "deadline" or (kind == "infra" and max_infra_retries is None):
+            # The service consumed the previous Job's own execution window.
+            # Give each unbounded replacement the same bounded collection
+            # window. Cancellation remains controlled by the Session/process.
+            deadline = time.monotonic() + wait_budget
         delay = device_retry_delay if kind == "device" and device_retry_delay is not None else retry_delay(count)
         if deadline - time.monotonic() <= delay:
             if kind == "device":

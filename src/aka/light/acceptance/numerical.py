@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import shutil
@@ -19,7 +20,6 @@ import time
 import traceback
 from concurrent.futures import CancelledError
 
-from aka.legacy.task.problem.native_harness import _fp4_correctness_max_rel_l2
 from aka.legacy.task.problem.resources import native_harness_script
 from aka.legacy.evaluation.drivers import numerical_inputs as probe_algorithms
 from aka.light.evaluation.policy import CANDIDATE_TIMEOUT
@@ -27,7 +27,7 @@ from aka.light.workspace.files import read_input, publish
 from aka.light.evaluation.projection import bounded_text, credential_values, redact_diagnostics
 from aka.light.agent.session_tail import read_regular_bytes
 
-from aka.light.acceptance.remote_numerical import MAX_REL_L2, PREFIX, validate_suite, validation_schedule
+from aka.light.acceptance.remote_numerical import PREFIX, validate_suite, validation_schedule
 from aka.light.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX
 from aka.legacy.task.persistence import durable_write_json
 from aka.light.execution.retry import (check_review_service, retry_infrastructure)
@@ -73,11 +73,21 @@ class NumericalCancellation:
     def timeout(self, seconds):
         self.check()
         if self.parent is not None and self.parent.deadline is not None:
-            return max(1, min(seconds, int(self.parent.deadline - time.monotonic())))
+            remaining = self.parent.deadline - time.monotonic()
+            if math.isfinite(remaining):
+                return max(1, min(seconds, int(remaining)))
         return seconds
 
 
-def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="episode"):
+def validate_candidate(
+    campaign,
+    workspace,
+    *,
+    source=None,
+    parent=None,
+    flow="episode",
+    standard_correctness_passed=True,
+):
     """Freeze inputs outside the Agent workspace before planning or execution.
 
     The caller must have verified ordinary correctness of these candidate bytes.
@@ -132,8 +142,14 @@ def validate_candidate(campaign, workspace, *, source=None, parent=None, flow="e
                     return ""
                 return f"{SUPPLEMENTAL_PENDING_PREFIX}: trusted input.py/reference.py/shapes.json unavailable"
             publish(frozen, "test_kernel.py", HARNESS.read_bytes())
-            return supplemental_feedback(campaign, frozen, state_root=state_root,
-                                         standard_correctness_passed=True, cancel=cancel, flow=flow)
+            return supplemental_feedback(
+                campaign,
+                frozen,
+                state_root=state_root,
+                standard_correctness_passed=standard_correctness_passed,
+                cancel=cancel,
+                flow=flow,
+            )
 
 
 def _digest(files):
@@ -196,7 +212,6 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
 
     def review_once():
         cancel.check()
-        timeout = campaign.production_review_timeout
         with tempfile.TemporaryDirectory(prefix="atrex-numerical-advice-") as temporary:
             root = Path(temporary).resolve()
             for name, source in files.items():
@@ -206,19 +221,43 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
             request = {"evidence_digest": digest, "previous_validation": previous,
                        "world_size": _world_size(workspace)}
             (root / "review_request.json").write_text(json.dumps(request, indent=2))
+            capture_root = state_root / "sessions" / uuid.uuid4().hex
             result = campaign._run_session(
-                root, PROMPT.read_text(), timeout=cancel.timeout(timeout),
+                root, PROMPT.read_text(), timeout=None,
                 agent_cli=campaign.agent_cli, reasoning_effort="high", agent_plugins=False,
                 extra_environment={**{key: "" for key in os.environ.keys() - scrub_environment(dict(os.environ)).keys()},
                     **campaign.agent_boundary_environment("numerical-review"),
-                    "ATREX_SESSION_CAPTURE_DIR": str(state_root / "sessions" / uuid.uuid4().hex)},
+                    "ATREX_SESSION_CAPTURE_DIR": str(capture_root)},
             )
-            campaign._account(result, "numerical supplemental-test planning")
+            from aka.light.workflow.review_usage import account_review
+            account_review(
+                campaign,
+                result,
+                review_kind="supplemental_numerical_review",
+                label="numerical supplemental-test planning",
+                backend=campaign.agent_cli,
+            )
+            from aka.light.agent.session_capture import latest_complete_session_archive
+
+            session_archive = latest_complete_session_archive(capture_root)
+            if session_archive is None:
+                raise ValueError(
+                    "supplemental numerical reviewer did not persist a complete "
+                    "conversation.jsonl and token-usage.json archive"
+                )
             cancel.check()
             response = root / "numerical_review.json"
             record = {"evidence_digest": digest, "session_id": result.session_id,
-                      "timeout_s": timeout, "exit_status": result.exit_status,
-                      "timed_out": result.timed_out, "response_written": response.is_file()}
+                      "timeout_s": None, "exit_status": result.exit_status,
+                      "timed_out": result.timed_out, "response_written": response.is_file(),
+                      "session_archive": {
+                          "conversation_path": session_archive.conversation.relative_to(
+                              state_root
+                          ).as_posix(),
+                          "token_usage_path": session_archive.token_usage.relative_to(
+                              state_root
+                          ).as_posix(),
+                      }}
             record_path = state_root / f"numerical_planning-{uuid.uuid4().hex}.json"
             durable_write_json(record_path, record, indent=2)
             if _digest({name: root / name for name in files}) != digest:
@@ -253,7 +292,7 @@ def _request_review(campaign, workspace, files, digest, previous=None, *, state_
                 durable_write_json(record_path, record, indent=2, ensure_ascii=False)
 
     context = hashlib.sha256(json.dumps(previous, sort_keys=True).encode()).hexdigest()
-    stage = f"numerical-advice:{digest}:{campaign.agent_cli}:{campaign.production_review_timeout}:{context}"
+    stage = f"numerical-advice:{digest}:{campaign.agent_cli}:unbounded:{context}"
     return retry_infrastructure(campaign.workspace, stage, review_once, cancel=cancel)
 
 
@@ -300,8 +339,7 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
     from aka.light.workspace.sources import layout_at
     if layout_at(workspace).typed_only:
         from aka.light.acceptance.typed_numerical import run
-        return run(campaign, workspace, suite, shapes, schedule, directory, cancel=cancel,
-                   max_rel_l2=_fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2)
+        return run(campaign, workspace, suite, shapes, schedule, directory, cancel=cancel)
     results = []
     for index, plan in enumerate(schedule):
         cancel.check()
@@ -317,7 +355,6 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
             # Use the ordinary Evaluate budget, not the legacy harness's 20s
             # default. This is part of the recorded request/dedup identity.
             "candidate_timeout_s": CANDIDATE_TIMEOUT,
-            "max_rel_l2": _fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2,
         })
 
         # Only a private, bounded input snapshot enters the normal Dev record
@@ -338,7 +375,8 @@ def _run_probes(campaign, workspace, suite, shapes_path, digest, directory, *, c
                 lambda: campaign.measure_for_acceptance(probe, [
                     "--kind", "dev", "--no-sync", "--input", "numerical_inputs.py", "--",
                     "python3", "numerical_probe.py", "probe-request.json",
-                ], execution_timeout=600, parent=cancel.parent, reference_snapshot=probe), cancel=cancel)
+                ], execution_timeout=600, parent=cancel.parent, reference_snapshot=probe,
+                    terminal_validation=True), cancel=cancel)
         durable_write_json(directory / f"response-{index:04d}.json", response)
         batch, record_id = None, None
         for line in response["stdout"].splitlines():
@@ -403,7 +441,16 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     validation_digest = _digest(validation_files)
     cache = getattr(campaign, "_supplemental_results", {})
     research_records = campaign.research_records
-    key = (str(state_root), validation_digest, standard_correctness_passed, flow, research_records)
+    research_modules = tuple(getattr(
+        campaign, "research_modules", ("directions", "experiments") if research_records else ()
+    ))
+    experiments_enabled = "experiments" in research_modules
+    correctness_cache_key = (
+        "deferred" if callable(standard_correctness_passed)
+        else bool(standard_correctness_passed)
+    )
+    key = (str(state_root), validation_digest, correctness_cache_key, flow,
+           research_modules)
     if key in cache:
         return cache[key]
 
@@ -418,9 +465,14 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     # Workspace feedback copies are never accepted as supervisor state.
     plan_root = state_root / "plans"
     plan_path = plan_root / (hashlib.sha256(repr(plan_key).encode()).hexdigest() + ".json")
-    record = {"schema_version": 1, "evidence_digest": validation_digest,
-              "comparison": {"metric": "relative_l2", "max_rel_l2":
-                  _fp4_correctness_max_rel_l2(workspace) or MAX_REL_L2}}
+    record = {
+        "schema_version": 1,
+        "evidence_digest": validation_digest,
+        "comparison": {
+            "metric": "task_metadata_correctness",
+            "policy_source": "metadata.json",
+        },
+    }
     try:
         previous_path = state_root / "numerical_feedback.json"
         if previous_path.is_file():
@@ -492,7 +544,11 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
         try:
             # Only the controller's just-verified sealed evidence permits a skip;
             # Agent-writable legacy evaluation logs are never a trust source.
-            standard_passed = standard_correctness_passed
+            standard_passed = (
+                standard_correctness_passed()
+                if callable(standard_correctness_passed)
+                else bool(standard_correctness_passed)
+            )
             measured_failure = record.get("known_candidate_failure", False) or any(
                 evaluation.get("status") == "needs_repair"
                 or any(probe.get("status") == "needs_repair"
@@ -539,17 +595,11 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
     if status in {"passed", "advisory", "skipped_planner_timeout"}:
         feedback = ""
     elif status == "needs_repair":
-        if flow == "framework_baseline":
-            next_step = (
-                "Repair the candidate sources, rerun the bounded V1 smoke command, then stop. "
-                "Do not submit episode-report. "
-            )
-        elif research_records:
-            next_step = "Repair the candidate within its editable source scope, measure it, record its Experiment and resubmit episode-report. "
+        if experiments_enabled:
+            next_step = "Repair the candidate within its editable source scope, measure it, record its Experiment, and use submit-kernel for that exact commit. "
         else:
             next_step = (
-                "Repair the candidate within its editable source scope, measure it, then resubmit episode-report "
-                "with the new measurement's gateway_record_ids. "
+                "Repair the candidate within its editable source scope, measure it, then use submit-kernel for that exact commit. "
             )
         feedback = (
             f"{SUPPLEMENTAL_REPAIR_PREFIX}: {rendered}\n"
@@ -558,8 +608,6 @@ def supplemental_feedback(campaign, workspace, *, state_root, standard_correctne
         )
     else:
         pending_step = (
-            "Preserve the V1 candidate and ask the operator to inspect the private numerical validation record."
-            if flow == "framework_baseline" else
             "Preserve the candidate; ask the operator to inspect the private numerical validation record, "
             "or submit an evidence-backed blocked report."
         )

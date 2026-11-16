@@ -246,7 +246,7 @@
 (() => {
   const $ = id => document.getElementById(id);
   const quality = {exact: 'Exact', partial: 'Partial', unavailable: 'Unavailable'};
-  const statuses = {accepted: 'Accepted', rejected: 'Rejected', pivot: 'Pivoted', blocked: 'Blocked', interrupted: 'Interrupted', invalid_handoff: 'Invalid handoff', candidate_ready: 'Candidate ready', observed_active: 'Last observed'};
+  const statuses = {accepted: 'Accepted', rejected: 'Rejected', pivot: 'Pivoted', blocked: 'Blocked', interrupted: 'Interrupted', episode_budget_exhausted: 'Episode budget exhausted', invalid_handoff: 'Invalid handoff', candidate_ready: 'Candidate ready', observed_active: 'Last observed'};
   let campaignId = null, episode = null, data = null, timer = null, busy = false, again = false, generation = 0, refreshMs = 2000, lastSuccess = null;
   const number = n => Number.isFinite(n) ? new Intl.NumberFormat('en-US').format(n) : 'Unavailable';
   const ep = n => Number.isInteger(n) ? `e${String(n).padStart(4, '0')}` : '-';
@@ -328,7 +328,7 @@
     text('performance', incumbent ? `${incumbent.value.toFixed(2)}${incumbent.unit}` : '-');
     text('performance-note', incumbent ? `${ver(incumbent.version)} · ${incumbent.label}` : 'Awaiting a verified baseline or promotion');
     text('episodes-count', c.counts.episodes == null ? '-' : number(c.counts.episodes));
-    text('counts', `Accepted ${number(c.counts.accepted)} · Rejected ${number(c.counts.rejected)}`);
+    text('counts', `Accepted ${number(c.counts.accepted)} · Rejected ${number(c.counts.rejected)} · Budget exhausted ${number(c.counts.episode_budget_exhausted ?? 0)} · Invalid handoff ${number(c.counts.protocol_failures ?? 0)}`);
     text('tokens-total', number(c.tokens.total)); text('tokens-note', `${quality[c.tokens.measurement]} · ${c.tokens.receipt_count} deduplicated receipts`);
     $('tokens-total').dataset.available = String(Number.isFinite(c.tokens.total));
     const issues = [...new Set([...c.issues, ...(detail?.issues || [])].map(i => `${i.file}: ${i.code}${i.code === 'unsupported_schema_version' ? ` (expected ${i.expected}; received ${i.actual})` : ''}`))];
@@ -363,7 +363,7 @@
       row.append(element('span', p.label), track, element('span', number(p.usage.total_tokens), 'number')); row.title = quality[p.usage.measurement]; $('phases').append(row);
     }
     $('token-types').replaceChildren();
-    for (const [key, label] of [['input_tokens','Input'], ['output_tokens','Output'], ['cache_read_tokens','Cache read'], ['cache_write_tokens','Cache write']]) $('token-types').append(element('dt', label), element('dd', number(t?.terminal_usage[key])));
+    for (const [key, label] of [['input_tokens','Input'], ['output_tokens','Output'], ['reasoning_tokens','Reasoning'], ['cache_read_tokens','Cache read'], ['cache_write_tokens','Cache write']]) $('token-types').append(element('dt', label), element('dd', number(t?.terminal_usage[key])));
     text('control-total', d ? `Budget control count: ${number(t.control_tokens)}; structured total: ${number(t.terminal_usage.total_tokens)}` : '');
     text('reasons', d ? (t.reason_codes.length ? t.reason_codes.join(' · ') : 'No measurement issues recorded') : '');
     text('detail-title', d ? `${ep(d.episode)} / ${ver(d.version)} · ${d.mode || '-'} · ${d.accepted ? 'Accepted' : statuses[d.status] || d.status}` : 'No episode details yet');

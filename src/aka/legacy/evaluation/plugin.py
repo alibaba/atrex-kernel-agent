@@ -1,4 +1,5 @@
 """Select measurement preparation without importing Core in business consumers."""
+from aka.contracts.evaluation import DEFAULT_SHAPE_BATCH_SIZE
 from aka.core.keys import ServiceKey
 from .evaluator import LegacyEvaluator
 
@@ -8,11 +9,11 @@ name = "evaluation"
 provide = ("evaluator_factory",)
 identity_packages = ("aka.legacy.evaluation", "aka.contracts.evaluation")
 Config = {"type": "object", "properties": {"shape_batch_size":{"type":"integer","minimum":1}}, "additionalProperties": False}
-Defaults = {"shape_batch_size":4}
+Defaults = {"shape_batch_size":DEFAULT_SHAPE_BATCH_SIZE}
 
 
 class LegacyEvaluatorFactory:
-    def __init__(self, *, shape_batch_size=4):
+    def __init__(self, *, shape_batch_size=DEFAULT_SHAPE_BATCH_SIZE):
         self.shape_batch_size = shape_batch_size
 
     def create(self, configuration, *, candidate_workspace, evaluation_input):

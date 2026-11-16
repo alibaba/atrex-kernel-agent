@@ -22,7 +22,7 @@ from aka.contracts.problem import LoadedProblem
 from aka.contracts.evaluation import EvaluationUnavailable
 from aka.legacy.agent.runtime import auth_hint
 
-from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEFAULT_VERIFY_RUN_TIMEOUT, DEPENDENCY_REVIEW_SCHEMA_VERSION, DEPENDENCY_REVIEW_TIMEOUT_S, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
+from aka.legacy.workflow.constants import SUPPLEMENTAL_PENDING_PREFIX, SUPPLEMENTAL_REPAIR_PREFIX, ATREX_PRIVATE_REFERENCE_ENV, DEFAULT_CONVERT_AFTER, DEFAULT_FAST_EPISODES, DEFAULT_FAST_TRIALS, DEFAULT_HANDOFF_RESUMES, DEFAULT_VERIFY_REPEATS, DEPENDENCY_REVIEW_SCHEMA_VERSION, FRAMEWORK_BASELINE_CATEGORY, FRAMEWORK_BASELINE_TIMEOUT_S, FRAMEWORK_BASELINE_VERSION
 from .resources import DEPENDENCY_REVIEW_PROMPT, PROMPTS_DIR
 from aka.legacy.execution.defaults import DEFAULT_SANDBOX_TIMEOUT
 from aka.legacy.task.candidate_workspace.filenames import FRAMEWORK_BASELINE_FILE
@@ -75,7 +75,6 @@ _LONG_REVIEWER_SESSION_ENV = {
 }
 
 
-_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S = 600
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_SCHEMA_VERSION = 3
 _FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_PATH = Path(
     ".atrex_long_horizon/framework_baseline/correctness_guidance.json"
@@ -191,7 +190,7 @@ class Campaign:
             return
         destination = self.workspace / AGENT_PROBLEM_FILENAME
         print(
-            "[orchestrator] generalized problem: production received detailed shapes only; "
+            "[orchestrator] generalized problem: campaign received detailed shapes only; "
             "starting AKA problem-authoring session",
             flush=True,
         )
@@ -229,7 +228,7 @@ class Campaign:
                         continue
                     detail = result.stderr_tail or result.stdout_tail
                     raise RuntimeError(
-                        "AKA could not generate a valid generalized production problem after "
+                        "AKA could not generate a valid generalized problem after "
                         f"two attempts: {validation_error}"
                         + (f"; agent output: {detail}" if detail else "")
                     ) from exc
@@ -482,7 +481,7 @@ class Campaign:
                 result = self._run_session(
                     review_workspace,
                     DEPENDENCY_REVIEW_PROMPT.read_text(encoding="utf-8"),
-                    timeout=self.production_review_timeout,
+                    timeout=None,
                     agent_cli=self.agent_cli,
                     reasoning_effort="high",
                     agent_plugins=False,
@@ -588,11 +587,11 @@ class Campaign:
         framework: str,
         require_gluon: bool,
     ) -> list[str]:
-        """Bound timeout retries across sessions and supervisor restarts."""
+        """Retry a reviewer that did not produce a usable terminal verdict."""
         from aka.legacy.workflow.review_retry import retry_review
 
         digest = _production_review_digest(workspace, framework, require_gluon)
-        stage = f"dependency-review:{digest}:{self.agent_cli}:{self.production_review_timeout}"
+        stage = f"dependency-review:{digest}:{self.agent_cli}:unbounded"
         try:
             return retry_review(
                 workspace,
@@ -693,7 +692,7 @@ class Campaign:
             self.workspace, content, runtime_files=initial_files(self.plugin_registry))
         if code:
             raise RuntimeError(f'Task workspace initialization failed with code {code}')
-        # Production native tasks always expose a generalized public contract. Exact shapes and
+        # Native tasks always expose a generalized public contract. Exact shapes and
         # release metadata remain in the source operator directory and are injected only at the
         # sandbox boundary. A missing public contract is authored before the baseline session.
         inputs = self._problem_inputs()
@@ -1146,11 +1145,6 @@ class Campaign:
                 return "adopt", "validate the retained framework candidate"
             return "run", "resuming preserved framework-baseline work"
 
-        if self.framework_baseline == "auto" and self.optimization_mode != "production":
-            return (
-                "skip",
-                "leaderboard mode keeps the permissive V0 (use --framework-baseline always)",
-            )
         if not progressed:
             if not self.source_checks_enabled:
                 return "pin", "multi-GPU Agate source checks are disabled; retain the validated V0"
@@ -1248,7 +1242,7 @@ class Campaign:
                     result = self._run_session(
                         review_workspace,
                         prompt,
-                        timeout=600,
+                        timeout=None,
                         agent_cli=supervisor_cli,
                         reasoning_effort="high",
                         agent_plugins=False,
@@ -1622,7 +1616,7 @@ class Campaign:
                 result = self._run_session(
                     review_workspace,
                     prompt,
-                    timeout=_FRAMEWORK_BASELINE_CORRECTNESS_REVIEW_TIMEOUT_S,
+                    timeout=None,
                     agent_cli=agent_cli,
                     reasoning_effort="max",
                     agent_plugins=False,

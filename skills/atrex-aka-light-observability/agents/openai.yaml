@@ -1,0 +1,4 @@
+interface:
+  display_name: "AKA Light Observability"
+  short_description: "Inspect Light state, performance, calls, and evidence"
+  default_prompt: "Use $atrex-aka-light-observability to inspect this AKA Light campaign and report only evidence-backed status."

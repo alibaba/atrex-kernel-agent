@@ -3,7 +3,7 @@
 set -euo pipefail
 
 usage() {
-    echo "Usage: $0 --input <draft.md> [--proposal <candidate.md>] [--context <file>]... [--timeout <seconds>]" >&2
+    echo "Usage: $0 --input <draft.md> [--proposal <candidate.md>] [--context <file>]..." >&2
     exit 2
 }
 
@@ -11,7 +11,7 @@ input_file=""
 proposal_file=""
 context_files=()
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-qoder_timeout="${ATREX_ASK_QODER_TIMEOUT:-600}"
+qoder_timeout="0"
 session_file="${ATREX_QODER_REVIEW_SESSION_FILE:-}"
 # Keep the independent review at maximum reasoning depth regardless of the active episode or
 # settings file. The explicit CLI flag below has precedence over configured defaults.
@@ -36,8 +36,12 @@ while [[ $# -gt 0 ]]; do
             context_files+=("$2")
             shift 2
             ;;
-        --timeout)
+        --availability-timeout)
             [[ $# -ge 2 && "$2" != --* ]] || usage
+            [[ "${ATREX_REVIEWER_AVAILABILITY_PROBE:-}" == "1" ]] || {
+                echo "ask-qoder: --availability-timeout is reserved for startup probing" >&2
+                exit 2
+            }
             qoder_timeout="$2"
             shift 2
             ;;
@@ -57,8 +61,8 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "$input_file" ]] || { echo "ask-qoder: --input is required" >&2; usage; }
-[[ "$qoder_timeout" =~ ^[1-9][0-9]*$ ]] || {
-    echo "ask-qoder: timeout must be a positive integer" >&2
+[[ "$qoder_timeout" =~ ^[0-9]+$ ]] || {
+    echo "ask-qoder: timeout must be a non-negative integer (0 means unbounded)" >&2
     exit 2
 }
 [[ "$max_output_tokens" =~ ^[1-9][0-9]*$ ]] || {
@@ -196,10 +200,15 @@ done
 # Empty tools keeps the consultation read-only. Attachments provide all required context.
 command+=(--tools "" -- "$query")
 
-if [[ -n "$session_file" ]]; then
-    echo "ask-qoder: running campaign-persistent read-only consultation (timeout=${qoder_timeout}s, model=$qoder_model, effort=$reasoning_effort)" >&2
+if [[ "$qoder_timeout" == "0" ]]; then
+    timeout_label="unbounded"
 else
-    echo "ask-qoder: running read-only consultation (timeout=${qoder_timeout}s, model=$qoder_model, effort=$reasoning_effort)" >&2
+    timeout_label="${qoder_timeout}s"
+fi
+if [[ -n "$session_file" ]]; then
+    echo "ask-qoder: running campaign-persistent read-only consultation (timeout=$timeout_label, model=$qoder_model, effort=$reasoning_effort)" >&2
+else
+    echo "ask-qoder: running read-only consultation (timeout=$timeout_label, model=$qoder_model, effort=$reasoning_effort)" >&2
 fi
 if qoder_response="$(python3 - "$qoder_timeout" "$session_file" "${command[@]}" <<'PY'
 import json
@@ -210,7 +219,8 @@ import sys
 import uuid
 from datetime import datetime, timezone
 
-timeout = int(sys.argv[1])
+timeout_seconds = int(sys.argv[1])
+timeout = timeout_seconds or None
 session_file = pathlib.Path(sys.argv[2]) if sys.argv[2] else None
 command = sys.argv[3:]
 environment = os.environ.copy()
@@ -290,7 +300,7 @@ try:
         cwd=None if review_cwd is None else str(review_cwd),
     )
 except subprocess.TimeoutExpired:
-    print(f"ask-qoder: timed out after {timeout}s", file=sys.stderr)
+    print(f"ask-qoder: timed out after {timeout_seconds}s", file=sys.stderr)
     raise SystemExit(124)
 except OSError as exc:
     print(f"ask-qoder: failed to start qodercli: {exc}", file=sys.stderr)

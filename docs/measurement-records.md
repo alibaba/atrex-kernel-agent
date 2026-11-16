@@ -3,7 +3,7 @@
 Light stores measurement facts outside Agent drafts and recognizes identical tasks across
 Sessions and Episodes. The Experiment service owns source/request identity, private records,
 deduplication, and checkpoints. Evaluation owns plan/result semantics; Execution owns physical
-jobs. Journal annotations and promotion decisions are separate responsibilities.
+jobs. Research revisions and exact-commit submission review are separate central stores.
 
 ## Lifecycle
 
@@ -21,15 +21,22 @@ The Tool Runtime owns authorization and the enclosing deadline.
 
 ## Records and identity
 
-Campaign records live under
-`<workspace-parent>/.atrex-supervisor-runtime/<workspace-key>/measurements/`.
+Campaign records live under `<campaign-workspace>/measurements/`.
 The store includes a private identity key, Kernel snapshots, Gateway records with frozen
 inputs and repetition/job checkpoints, and task reservation indexes.
 
-- A `kernel-...` ID binds the exact candidate artifact. For multi-file layouts this includes
+The initial V0 full Evaluate is recorded here immediately, using the same
+request/source/result integrity envelope as later Evaluates. Its visibility is
+Supervisor-private and it is used only as reference evidence; it is not an
+accepted submission and does not enter the Pareto frontier or winner selection.
+New Campaigns have no separate V0/baseline store. Pre-MeasurementStore V0 files
+are read only for legacy migration.
+
+- `kernel_commit_id` is the full Git commit ID and binds the exact committed candidate artifact. For multi-file layouts this includes
   the complete serialized source snapshot, headers, and build settings, not only `kernel.py`.
-  Historical single-file IDs retain their interpretation. A private file named `kernel.py`
-  may contain the snapshot encoding; use the artifact reader instead of assuming Python text.
+  The Measurement Store also archives and verifies the serialized source bytes. A private file
+  named `kernel.py` may contain the snapshot encoding; use the artifact reader instead of
+  assuming Python text.
 - A `gateway-...` ID identifies one logical measurement and its public result. ABBA binds
   both candidate and incumbent artifacts.
 - Task identity additionally binds evaluator/input bytes, operation, target/transport settings,
@@ -48,29 +55,30 @@ Run these commands in an active managed draft, using IDs returned by the campaig
 
 ```bash
 python3 tools/sandbox.py --kind run --no-sync
-python3 tools/sandbox.py --kind record-read --record-id gateway-11111111111111111111111111111111
-python3 tools/sandbox.py --kind kernel-records --kernel-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
-python3 tools/sandbox.py --kind kernel-read --kernel-id kernel-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa --output-path scratch/previous
-python3 tools/sandbox.py --kind kernel-pareto-frontier
+# Read records/*.json, root PROGRESS.md, and the corresponding local/shared Git commits.
 ```
 
-GPU calls and `record-read` return one JSON object containing `operation`, `status`,
-`result`, `gateway_record_id`, and `kernel_id` when source-bound.
-ABBA is `operation: evaluate` with a comparison and baseline Kernel ID.
+GPU calls and projected Record files contain `operation`, `status`,
+`result`, `gateway_record_id`, and `kernel_commit_id` when source-bound.
+ABBA is `operation: evaluate` with a comparison and `baseline_kernel_commit_id`.
 Parse the complete JSON, not private executor marker lines.
 
-A successful read exits zero even when the stored evaluator rejected the source.
 Initial failed operations retain their nonzero execution outcome. Dev preserves bounded
 probe stdout/stderr and process exit code inside `result`.
-Record reads submit no GPU work and do not recreate old profiler artifacts.
-
-`kernel-read` restores a file for `single_file` and a directory for multi-file artifacts.
-Use that same layout for `--baseline-path`. `kernel-records` lists metadata; a listed
-ID still needs full integrity validation when read. The Pareto query returns observed
+Reading projected files and Git submits no GPU work and does not recreate old profiler artifacts.
+ABBA accepts `--baseline-commit`; Runtime validates reachability and exports the source privately.
+Root `PROGRESS.md` returns observed
 per-shape minima from eligible passing full Evaluations, not a measured composite kernel.
 
-An Agent duplicate returns `duplicate_gateway_task` with an existing record reference
-and recovery guidance. In-progress duplicates instruct the caller to wait.
+In pooled search, each lineage sees its local Records, Records cited by the Direction/Experiment
+revisions currently visible to that lineage, and passing standard full Evaluates. Accepted submissions
+and selected winners therefore expose their complete Evaluate evidence automatically. There is no
+Agent operation for publishing arbitrary local Records; all trajectories read the same Campaign
+Measurement Store rather than receiving copied records.
+
+An exact completed duplicate reuses the existing validated Record and returns the same normal
+completed receipt without submitting another Agate task. Cache reuse is not exposed as an Agent
+error. In-progress duplicates still instruct the caller to wait because no terminal Record exists.
 Do not change labels or delete indexes to force a new random sample.
 
 ## Failure and recovery policy
@@ -115,9 +123,9 @@ aggregated into summaries; ABBA sides are aggregated separately. Correctness-onl
 Profile, Dev, Check, and Disassemble remain single-operation requests. An incomplete or
 rejected repetition cannot become a successful median.
 
-This repetition count is separate from native six-case correctness and ABBA's even
-measurement count per side. Standard native Evaluate defaults to six correctness cases;
-targeted smoke tests default to one. Matching correctness evidence can be reused by trusted
+This repetition count is separate from native five-case correctness and ABBA's even
+measurement count per side. Standard native Evaluate uses five correctness cases;
+matching correctness evidence can be reused by trusted
 acceptance without relaxing full-measurement or ABBA identity.
 
 SOL uses its full-workload contract with `sol_execbench_coverage_v1` in task identity.

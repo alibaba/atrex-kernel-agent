@@ -5,10 +5,13 @@ import json
 import math
 from pathlib import Path
 from typing import Any
-from aka.contracts.evaluation import VerificationResult, VerificationRun
+from aka.contracts.evaluation import (
+    DEFAULT_SHAPE_BATCH_SIZE,
+    VerificationResult,
+    VerificationRun,
+)
 
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
-DEFAULT_SHAPE_BATCH_SIZE = 4
 DEFAULT_SHAPE_BATCH_WORKERS = 4
 
 

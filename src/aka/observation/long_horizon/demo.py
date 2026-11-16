@@ -19,6 +19,7 @@ def create_demo_workspace(root: Path) -> Path:
 
     def tokens(total, measurement="exact"):
         return {"input_tokens": int(total * .8), "output_tokens": total - int(total * .8),
+                "reasoning_tokens": int(total * .05),
                 "cache_read_tokens": int(total * .4), "cache_write_tokens": 0,
                 "total_tokens": total, "measurement": measurement}
 
