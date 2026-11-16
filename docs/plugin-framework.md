@@ -17,13 +17,14 @@ checkout dependency.
 - `aka.bootstrap`: launch-profile resolution, startup target selection, invocation,
   continuation identity and disposal of the assembled composition. It has no fixed
   Application or Workflow dependency and contributes `aka run`.
-- `aka.legacy.compat`: optimization argument conversion and launch selection; contributes
-  `aka optimize`. Installed Workflow plugins provide the startup implementation.
-- `aka.light`: managed Agent, Workspace, Tool Runtime, measurement, acceptance, and Workflow providers.
+- `aka.bootstrap.workflow_cli`: public request parsing for installed `aka optimize`
+  and `aka workflow`. Selected Workflow plugins provide the startup implementation.
+- `aka.workflow.light` and `aka.workflow.legacy`: Workflow-specific orchestration.
+- `aka.agent`, `aka.task`, `aka.evaluation`, `aka.experiment`, `aka.execution`, and
+  `aka.resources`: shared business providers.
 
-Core imports neither the optimization application nor Execution. The local tool/Skill registries under
-`aka.legacy.resources.plugin_runtime` and `aka.light.runtime.plugins` serve a separate
-purpose; see [local plugins](plugins.md).
+Core imports neither Workflow nor Execution. `aka.resources.plugin_runtime` implements
+local tool/Skill manifests, a separate purpose from composition; see [local plugins](plugins.md).
 
 ## Plugin declaration and lifetime
 

@@ -23,7 +23,7 @@ from observability._internal.common import (
     table,
     telemetry_documents,
 )
-from aka.light.workflow.review_usage import REVIEW_KINDS
+from aka.workflow.light.long_horizon.review_usage import REVIEW_KINDS
 
 
 TOKEN_KEYS = (
@@ -54,8 +54,8 @@ def _summed_session_usage(rows: list[dict]) -> dict:
 
 def _review_rows(scope) -> list[dict]:
     rows = []
-    from aka.light.runtime.paths import supervisor_campaign_base_root
-    from aka.light.workflow.review_archive import bound_review_usage_rows
+    from aka.workflow.light.support.paths import supervisor_campaign_base_root
+    from aka.workflow.light.long_horizon.review_archive import bound_review_usage_rows
 
     campaign_root = supervisor_campaign_base_root(scope.workspace)
     lineage = f"T{scope.trajectory}" if scope.trajectory is not None else None

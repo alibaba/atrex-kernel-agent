@@ -39,7 +39,7 @@ Before preparing or launching this example, explicitly obtain from the user:
    namespace and `/proc`). Aone Sandbox supports only `host`.
 7. the positive `max-iters` for the ordinary one-trajectory run. This is the number of Episode
    audit segments; the example does not choose it for the user.
-8. whether to expose optional knowledge directories through `--agent-reference-dir`, or use none.
+8. whether to expose optional knowledge directories through `--agent-reference-paths`, or use none.
    Bubblewrap mounts them read-only. Native `light` links the originals without write protection;
    the user must retain an independent copy before exposing them.
 
@@ -166,8 +166,8 @@ case "$OPTIMIZATION_MODE" in
 esac
 
 case "$AGENT_CLI" in
-  claude|codex|qodercli|pi) ;;
-  *) echo "Select claude, codex, qodercli, or pi" >&2; exit 2 ;;
+  claude|codex|qodercli|pi|dsh) ;;
+  *) echo "Select claude, codex, qodercli, pi, or dsh" >&2; exit 2 ;;
 esac
 
 case "$AGENT_PROFILE" in
@@ -179,7 +179,7 @@ case "$AGENT_PROFILE" in
       private|host) ;;
       *) echo "Select private or host" >&2; exit 2 ;;
     esac
-    printf '{"api_version":1,"patches":[{"id":"agent","config":{"sandbox":"bwrap","capture":true,"proc_mode":"%s"}}]}\n' \
+    printf '{"api_version":1,"patches":[{"id":"agent","config":{"sandbox":"bwrap","proc_mode":"%s"}}]}\n' \
       "$AGENT_PROC_MODE" > "$AGENT_PATCH"
     PROFILE_ARGS=(--profile light-sandbox --patch "$AGENT_PATCH")
     ;;
@@ -197,23 +197,25 @@ require_positive_integer() {
 
 require_positive_integer MAX_ITERS "$MAX_ITERS"
 printf '%s\n' \
-  '{"api_version":1,"patches":[{"id":"workflow","config":{"startup":true,"search":{}}},{"id":"light_journal","config":{"tool_modules":[]}}]}' \
+  '{"api_version":1,"patches":[{"id":"workflow","config":{"startup":true,"search":{},"tool_modules":[]}}]}' \
   > "$SEARCH_PATCH"
 SEARCH_ARGS=(--patch "$SEARCH_PATCH")
 RUN_LENGTH_ARGS=(--max-iters "$MAX_ITERS")
 REFERENCE_ARGS=()
 if ((${#AGENT_REFERENCE_DIRS[@]})); then
-  REFERENCE_ARGS=(--agent-reference-dir "${AGENT_REFERENCE_DIRS[@]}")
+  for directory in "${AGENT_REFERENCE_DIRS[@]}"; do
+    REFERENCE_ARGS+=(--agent-reference-paths "$directory")
+  done
 fi
 
-aka optimize --repo-root "$AKA_REPO" "${PROFILE_ARGS[@]}" "${SEARCH_ARGS[@]}" -- \
-  --op-dir "$ATREX_BENCH_ROOT/data/native-atrex-bench-vector-add" \
+aka optimize --repo-root "$AKA_REPO" "${PROFILE_ARGS[@]}" "${SEARCH_ARGS[@]}" \
+  --problem "$ATREX_BENCH_ROOT/data/native-atrex-bench-vector-add" \
   --platform "$TARGET_PLATFORM" \
   --agent-cli "$AGENT_CLI" \
   "${MODE_ARGS[@]}" \
   "${REFERENCE_ARGS[@]}" \
   "${RUN_LENGTH_ARGS[@]}" \
-  --workspace "$CAMPAIGN_ROOT"
+  --workspace-base "$CAMPAIGN_ROOT"
 ```
 
 Treat that block as the validated launch argv, not as a requirement to keep an interactive terminal
@@ -222,12 +224,12 @@ Inside Aone Sandbox, submit it as one durable Sandbox command and retain the ret
 do not append shell `&`. Use a foreground invocation only when the user explicitly requests one.
 
 After submission, use the `atrex-aka-light-observability` skill to inspect the Campaign. Begin with
-`light_lineage_status.py "$CAMPAIGN_ROOT" --json`; use the other observability views for Kernel
+`light_lineage_status.py /path/to/created/kernel_opt_campaign --json`; use the other observability views for Kernel
 history/best, Runtime calls, Agate calls, Gateway-to-Job tracing, or evidence export instead of
 recursively scanning the workspace or relying only on the launcher log.
 
-If the Agate worker token differs from `TARGET_PLATFORM`, add `--sandbox-hardware WORKER_TOKEN`. Use the
-installed revision's `aka optimize --repo-root "$AKA_REPO" -- --help` before launch.
+If the Agate worker token differs from `TARGET_PLATFORM`, add `--hardware WORKER_TOKEN`. Use the
+installed revision's `aka optimize --repo-root "$AKA_REPO" --help` before launch.
 The command explicitly runs one Campaign repeat with one independent trajectory, disables
 Direction and Experiment annotations, and uses the run length selected by the user; it does not use Light's pooled schedule
 or a preselected smoke-test iteration count. `MAX_ITERS` counts Episode audit segments rather than

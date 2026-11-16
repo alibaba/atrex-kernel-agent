@@ -32,10 +32,10 @@ This example uses the default headless profile with the official DeepSeek route:
 ```sh
 export ATREX_DSH_SESSION_SETTINGS='{"provider":"deepseek-official","model":"deepseek-flash"}'
 
-aka optimize --repo-root /path/to/aka -- \
+aka optimize --repo-root /path/to/aka \
   --op-dir /path/to/operator \
   --platform '<gpu-target>' --framework Triton \
-  --agent-cli dsh --workspace /path/to/runs
+  --agent-cli dsh --workspace-base /path/to/runs
 ```
 
 Use the GPU target configured for your AKA environment and the framework used by

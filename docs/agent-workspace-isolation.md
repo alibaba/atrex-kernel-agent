@@ -8,10 +8,10 @@ when the host cannot provide it; it does not fall back to native execution.
 ## Launch and configuration
 
 ```bash
-aka optimize --repo-root "$PWD" --profile light-sandbox -- \
-  --op-dir /path/to/atrex-bench/operator \
-  --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
-  --workspace /path/to/new-runs
+aka optimize --repo-root "$PWD" --profile light-sandbox \
+  --problem /path/to/atrex-bench/operator \
+  --platform '<gpu_arch>' --optimization-mode ultra --framework Cuda --agent-cli claude \
+  --workspace-base /path/to/new-runs
 ```
 
 The coordinator needs the `bwrap` executable and permission to create the required
@@ -34,33 +34,31 @@ Install AKA, the Agent CLI and its credentials inside the guest, then launch
 `--profile light-sandbox` there. The GPU workload remains remote in Agate; Lima does not need GPU
 passthrough.
 
-Configure custom isolation through the Agent provider, with a composition patch before `--`:
+Configure custom isolation through the Agent provider, with a composition patch:
 
 ```json
 {
   "api_version": 1,
   "patches": [{"id": "agent", "config": {
     "sandbox": "bwrap",
-    "capture": true,
     "bwrap_executable": "bwrap",
-    "proc_mode": "private",
-    "read_only_paths": ["/absolute/path/to/required/runtime"]
+    "proc_mode": "private"
   }}]
 }
 ```
 
-Replace the illustrative runtime path with an existing narrowly scoped directory, or omit it.
 Optional engineering references are selected per optimization launch, independently of the Agent
 composition patch. They work with both Agent boundaries:
 
 ```bash
-aka optimize --repo-root /path/to/agent --profile light-sandbox -- \
-  --op-dir /path/to/problem --platform L20N --framework Cuda \
-  --agent-reference-dir /knowledge/nvidia /knowledge/cuda-guides
+aka optimize --repo-root /path/to/agent --profile light-sandbox \
+  --problem /path/to/problem --platform L20N --optimization-mode ultra --framework Cuda \
+  --agent-reference-paths /knowledge/nvidia \
+  --agent-reference-paths /knowledge/cuda-guides
 ```
 
-The option may be repeated. Each directory appears at
-`references/<directory-basename>/` inside the Agent workspace. Basenames must be unique. Bubblewrap
+The option may be repeated. Use `[NAME=]DIR` to name an entry. Each directory appears at
+`references/<name-or-directory-basename>/` inside the Agent workspace. Basenames must be unique. Bubblewrap
 mounts the directory read-only. Native `light` creates a symbolic link to the original directory;
 because the Agent runs as the coordinator OS user, Light cannot prevent modification of those
 original files. Retain an independent copy or backup before exposing knowledge to a native Agent.
@@ -68,8 +66,8 @@ The Prompt identifies these directories as optional engineering knowledge rather
 contract, measurement evidence, or candidate source. References are excluded from Kernel Git,
 candidate snapshots, and remote command uploads, and cannot be selected as GPU request files. The
 final Kernel must not import or depend on them.
-A patch replaces the whole Agent configuration. Include both sandbox and capture settings
-when preserving `light-sandbox` behavior; the provider's standalone capture default is false.
+A patch replaces the whole Agent configuration. Preserve the selected sandbox and proc mode.
+Session capture is built into shared execution and has no `capture` patch option.
 The former `--agent-sandbox`, `--bwrap-executable`, and `--agent-read-only-path` optimizer
 flags are not the installed configuration surface. The provider generates its internal
 environment from these options.
@@ -77,22 +75,20 @@ environment from these options.
 | Option | Meaning |
 | --- | --- |
 | `sandbox` | `none` or `bwrap` |
-| `capture` | Diagnostic capture, independent of filesystem isolation |
 | `bwrap_executable` | Bubblewrap executable, default `bwrap` |
-| `read_only_paths` | Explicit extra installation/runtime paths |
 | `proc_mode` | `private` procfs, or the existing complete `host` procfs and PID namespace |
-| `timeout_seconds` | Per-invocation active-time ceiling; Workflow Episode budget is separate |
+| `timeout_seconds` | Optional provider active-time ceiling; omitted by default |
 
 ## Launch lifecycle
 
-`aka.light.agent.provider` owns the process policy. It prepares the Session Home before
+`aka.agent.provider` owns the process policy. It prepares the Session Home before
 native transcript discovery and Codex ledger observation, constructs the allowed filesystem
 view, passes environment values through an anonymous argument FD, and launches the owned
 process tree. Capture observes the same Home throughout Session resume and close.
 
-The managed draft keeps its absolute path. The controller worktree, Git common directory,
-private Journal, evaluator checkout, and Gateway credentials are not mounted into an isolated
-optimization Session. The Agent receives a scoped HTTP Runtime capability instead.
+The persistent Agent workspace keeps its absolute path and its own Git repository. Campaign-private
+stores, evaluator inputs and Gateway credentials are outside the isolated optimization Session.
+The Agent receives a scoped Runtime capability through the shared Unix-socket ToolHost.
 
 Same-Session resume retains its Home and sandbox selection. A changed Home/config root or
 sandbox mode requires a new Session. Recorded campaign continuations restore their frozen
@@ -120,23 +116,20 @@ Native mode retains the operating-system authority of the launching user.
 
 ## Auxiliary sessions
 
-Supervisor reviewers and preprocessing calls use a temporary allowlist view: declared
-inputs are read-only, and declared outputs are copied back through bounded no-follow reads
-only after successful completion without policy/environment termination.
-Timeouts, interruption, failure, and guard termination do not publish auxiliary outputs.
+Claim Review uses an independent workspace and follows the selected Agent sandbox configuration.
+With `sandbox: bwrap`, supplied evidence is mounted read-only and `review.json` is writable.
+With `sandbox: none`, the Reviewer runs natively in that workspace without a Bubblewrap dependency.
+A separate directory organizes inputs and outputs; it is not an OS access boundary in native mode.
+Final-source reviews and preprocessing also use declared auxiliary workspace roles.
 
-Public problem preprocessing is the explicit trusted exception allowed to read detailed
-inputs when creating the generalized contract. Optimization Sessions do not inherit that
-private input view. Provider-created child agents inherit the optimizer namespace rather
-than obtaining a new reviewer grant.
+Public problem preprocessing can read detailed inputs to create the generalized contract.
+Optimization Sessions do not inherit that private input view.
 
 ## Scratch and reusable state
 
-Every new managed Light Episode starts with empty scratch, in native and sandbox modes.
-Same-Episode continuations preserve it. Candidate source and custom Skills/tools have
-separate snapshot rules; reusable state can survive an unpromoted kernel.
-Reserved assets are refreshed from trusted sources. See
-[reusable workspace](optional-light-modules.md#reusable-workspace).
+Episodes resume the same workspace, Git repository, scratch files and Session. Runtime refreshes
+managed clients and visibility-filtered evidence in place; it does not reset source, branches,
+uncommitted edits or scratch at an Episode boundary.
 
 ## Restricted containers
 
@@ -153,14 +146,12 @@ that retains the complete `light-sandbox` settings:
   "api_version": 1,
   "patches": [{"id": "agent", "config": {
     "sandbox": "bwrap",
-    "capture": true,
     "proc_mode": "host"
   }}]
 }
 ```
 
-Pass it as `--profile light-sandbox --patch /path/to/patch.json` before the optimizer's `--`
-separator. No compiler, compatibility shim or `LD_PRELOAD` configuration is required. Because
+Pass it as `--profile light-sandbox --patch /path/to/patch.json`. No compiler, compatibility shim or `LD_PRELOAD` configuration is required. Because
 the Agent can see every process in the Aone Sandbox, use a dedicated Sandbox and do not treat
 host mode as process isolation.
 

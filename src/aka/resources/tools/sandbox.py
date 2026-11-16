@@ -1,0 +1,201 @@
+#!/usr/bin/env python3
+"""Session-scoped Agent tool client; GPU/Wiki authority stays in the Supervisor.
+
+Preferred typed GPU commands select their managed evaluator inputs automatically:
+  python3 tools/sandbox.py --kind run --no-sync
+  python3 tools/sandbox.py --kind profile --no-sync
+An explicit command after ``--`` is an operation-specific override; use it only when the installed
+GPU-measurement Skill documents that exact form.
+Custom execution examples:
+  python3 tools/sandbox.py --kind dev --input scratch/probe.py -- python3 scratch/probe.py
+  python3 tools/sandbox.py --kind command -- python3 -m scratch.probe
+Use module form for Python Command scripts below scratch/ so the uploaded workspace root remains
+on Python's import path and root modules such as kernel.py stay importable.
+Additional typed operations: check, disassemble, env; Wiki: wiki-query, wiki-search,
+wiki-hardware. Use --kind OPERATION --help for the operation's request options.
+Successful terminal measurement calls print a compact receipt. Env is read-only discovery and
+prints the complete redacted capability response directly; the observation is retained privately.
+Read saved measurement results with ordinary file or JSON operations on
+``records/GATEWAY_ID.json`` and inspect exact Kernel source with local Git commits and refs. ABBA
+accepts --baseline-commit FULL_GIT_COMMIT; Runtime exports it internally.
+Root PROGRESS.md includes enabled Direction state and each Shape's fastest measured Kernel;
+Experiments are versioned under research-library/experiments/ when enabled.
+Possible Runtime mutations include update-direction, prioritize-direction, record-experiment,
+and submit-kernel --request-file FILE. The installed
+runtime-records Skill lists the module-specific subset available in this Episode; disabled calls
+are rejected. Research and submission tools require an active Campaign Session.
+No direct Agate fallback is performed when the Runtime is unavailable.
+"""
+from __future__ import annotations
+
+import json
+import argparse
+import os
+import stat
+import sys
+from pathlib import Path
+
+# Wire contract with the Supervisor; keep this client independent of its modules.
+MAX_REQUEST_BYTES = 2 * 1024 * 1024
+MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
+WIKI_KINDS = {"wiki-query": "query_nl", "wiki-search": "query_wiki", "wiki-hardware": "query_hardware"}
+REQUEST_KINDS = {
+    "update-direction": "direction_update",
+    "prioritize-direction": "direction_prioritize",
+    "record-experiment": "experiment_record",
+    "submit-kernel": "kernel_submit",
+}
+
+
+def client_error(code: str, message: str, instruction: str, *, repairable=False, path="$", **details) -> None:
+    """Keep the standalone tool client independent of private Supervisor modules."""
+    print(json.dumps({
+        "ok": False, "repairable": repairable, "detail": message,
+        "error": {"code": code, "message": message, "next_action": instruction, **details},
+        "issues": [{"path": path, "code": code, "message": message}],
+        "recovery": [{"instruction": instruction}],
+    }), file=sys.stderr)
+
+
+class _ClientParser(argparse.ArgumentParser):
+    def error(self, message):
+        client_error("invalid_request", message,
+                     "Correct the CLI arguments or JSON request file and retry; no request was sent. "
+                     "Use --kind OPERATION --help and skills/runtime-records/references/journal.md.",
+                     repairable=True)
+        raise SystemExit(2)
+
+
+def journal_request(kind: str, argv: list[str]) -> dict:
+    parser = _ClientParser(allow_abbrev=False, description="Runtime research and submission mutations; request schemas: skills/runtime-records/references/journal.md")
+    parser.add_argument("--kind", choices=[*REQUEST_KINDS], required=True)
+    parser.add_argument(
+        "--request-file",
+        required=True,
+        help=(
+            f"JSON object; at most {MAX_REQUEST_FILE_BYTES} bytes "
+            "(2 MiB minus 4 KiB envelope reserve)"
+        ),
+    )
+    args = parser.parse_args(argv)
+    try:
+        with Path(args.request_file).open("rb") as source:
+            raw = source.read(MAX_REQUEST_FILE_BYTES + 1)
+        if len(raw) > MAX_REQUEST_FILE_BYTES:
+            raise ValueError(
+                f"request file exceeds {MAX_REQUEST_FILE_BYTES} bytes "
+                "(2 MiB minus 4 KiB reserved for the request envelope). "
+                "Shorten request text or lists before retrying; no request was sent"
+            )
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("request file must contain one JSON object")
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    return {"operation": REQUEST_KINDS[kind], "request": value}
+
+
+def proxy_command(path: str, payload: dict) -> int:
+    client_path = os.environ.get("AKA_AGENT_TOOL_CLIENT_PATH")
+    if client_path:
+        sys.path.insert(0, client_path)
+        from tools.client import call_tool, ToolSessionError
+    else:
+        from aka.agent.tools.client import call_tool, ToolSessionError
+    names = {"/v1/gateway/execute": "workflow.gateway", "/v1/journal/execute": "workflow.journal",
+             "/v1/wiki/query": "workflow.wiki", "/v1/plugins/execute": "workflow.plugins"}
+    body = json.dumps(payload).encode()
+    if len(body) > MAX_REQUEST_BYTES:
+        client_error("request_too_large", "Encoded request exceeds 2 MiB.",
+                     "Shorten the request; no operation was sent.", repairable=True)
+        return 2
+    try:
+        raw = call_tool(names[path], body, workspace=Path.cwd())
+    except ToolSessionError as error:
+        if error.payload is None:
+            client_error(error.code, "The tool session or operation outcome could not be confirmed.",
+                         "Inspect saved records and ask the operator; do not resubmit blindly.")
+            return 75
+        raw = error.payload
+    try:
+        envelope = json.loads(raw)
+        if (not isinstance(envelope, dict) or type(envelope.get("status")) is not int
+                or not isinstance(envelope.get("result"), dict)):
+            raise ValueError("invalid tool reply")
+        execution_exit_code = envelope.get("execution_exit_code")
+        status = envelope["status"]
+        result = envelope["result"]
+        if status >= 400:
+            print(json.dumps(result), file=sys.stderr)
+            return 2 if status in {400, 404, 413, 422} else 75
+        raw = json.dumps(result, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()
+    except (ValueError, UnicodeError):
+        client_error("invalid_runtime_response", "The operation reply is invalid.",
+                     "Inspect saved records; do not resubmit blindly.")
+        return 75
+    try:
+        result = json.loads(raw)
+        if (isinstance(result, dict) and isinstance(result.get("operation"), str)
+                and result.get("status") in {"completed", "failed", "cancelled", "unknown"}
+                and isinstance(result.get("result"), dict)):
+            print(json.dumps(result, ensure_ascii=False, allow_nan=False, sort_keys=True))
+            if result["status"] == "unknown" or result["result"].get("outcome") == "unknown":
+                return 75
+            # Preserve the executor's tempfail/candidate exit classification
+            # without putting the compatibility stream envelope back in JSON.
+            if execution_exit_code is not None:
+                code = int(execution_exit_code)
+                if not -255 <= code <= 255:
+                    raise ValueError("invalid execution exit code")
+                if code:
+                    return code
+            detail = result["result"]
+            if detail.get("outcome") == "unknown" or (
+                isinstance(detail.get("error"), dict) and detail["error"].get("error_class") == "infra"
+            ):
+                return 75
+            return 0 if result["status"] == "completed" and detail.get("correct") is not False else 1
+        if not isinstance(result, dict) or type(result.get("exit_code")) is not int:
+            raise ValueError("response omitted exit_code")
+        for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
+            value = result.get(key, "")
+            if not isinstance(value, str):
+                raise ValueError(f"invalid {key}")
+            if value:
+                print(value, end="" if value.endswith("\n") else "\n", file=stream)
+        if result.get("truncated"):
+            print("[sandbox] output shortened by Supervisor; ask the operator to inspect request diagnostics.", file=sys.stderr)
+        return result["exit_code"]
+    except (ValueError, UnicodeError) as error:
+        client_error("invalid_runtime_response", f"Invalid Runtime response ({error}); outcome may be unknown.",
+                     "Inspect saved records and ask the operator to reconcile the request. Do not resubmit blindly.")
+        return 75
+
+
+def proxy_wiki(tool: str, argv: list[str]) -> int:
+    return proxy_command("/v1/wiki/query", {"tool": tool, "argv": argv})
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = list(sys.argv[1:] if argv is None else argv)
+    if args in (["--help"], ["-h"]):
+        print(__doc__)
+        return 0
+    # Only recognize the full client-side dispatcher; the Supervisor validates
+    # every argument using parsers with allow_abbrev=False.
+    for index, value in enumerate(args):
+        if value == "--":
+            break
+        kind = args[index + 1] if value == "--kind" and index + 1 < len(args) else (
+            value.split("=", 1)[1] if value.startswith("--kind=") else None
+        )
+        if kind in REQUEST_KINDS:
+            return proxy_command("/v1/journal/execute", journal_request(kind, args))
+        if kind in WIKI_KINDS:
+            count = 2 if value == "--kind" else 1
+            return proxy_wiki(WIKI_KINDS[kind], args[:index] + args[index + count:])
+    return proxy_command("/v1/gateway/execute", {"argv": args})
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

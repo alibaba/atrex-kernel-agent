@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from aka.light.evaluation.public_result import compact_receipt
+from aka.evaluation.public_result import compact_receipt
 
 from observability._internal.common import (
     discover_scopes,

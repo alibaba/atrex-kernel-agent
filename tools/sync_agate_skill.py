@@ -8,7 +8,7 @@ import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
-from aka.light.workspace.skill_manifest import SKILL_MANIFEST
+from aka.execution.skill_manifest import SKILL_MANIFEST
 
 
 def main():
@@ -18,7 +18,7 @@ def main():
     args = parser.parse_args()
     manifest = SKILL_MANIFEST["atrex-gpu-gateway"]
     source = args.gateway / "skills/atrex-gpu-gateway"
-    target = ROOT / "src/aka/light/workspace/resources" / manifest.root
+    target = ROOT / "src/aka/execution" / manifest.root
     actual = {p.relative_to(source).as_posix() for p in source.rglob("*")
               if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
     if actual != set(manifest.files):

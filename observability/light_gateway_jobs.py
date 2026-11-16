@@ -14,7 +14,7 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.light.experiment.store import RECORD_ID  # noqa: E402
+from aka.experiment.measurement_store import RECORD_ID  # noqa: E402
 from observability._internal.common import (  # noqa: E402
     add_output_arguments,
     discover_scopes,

@@ -79,15 +79,15 @@ Functional output waits for both pipe readers to reach EOF. A configured timeout
 
 | Responsibility | Implementation |
 | --- | --- |
-| Process execution, timeout/interruption, finalization hook | [`run_bounded()`](../src/aka/light/agent/runtime/process.py) |
-| Capture setup, pipe readers, monitor, finalization, stdout-bound observation | [`session_capture.py`](../src/aka/light/agent/session_capture.py) |
-| Current-session and descendant transcript discovery | [`session_native.py`](../src/aka/light/agent/session_native.py) |
-| Incremental native reads, invocation-local limits, separate resume-history scan | [`session_tail.py`](../src/aka/light/agent/session_tail.py) |
-| De-duplicated conversation projection | [`session_transcript.py`](../src/aka/light/agent/session_transcript.py) |
-| Provider counters, reconciliation, partial/unavailable usage | [`session_usage.py`](../src/aka/light/agent/session_usage.py) |
-| Stream normalization and Capture/Ledger selection | [`adapter.py`](../src/aka/light/agent/runtime/adapter.py), [`codex_ledger.py`](../src/aka/light/agent/runtime/codex_ledger.py) |
-| Conservative merge of overlapping usage evidence | [`merge_token_usage_evidence()`](../src/aka/light/agent/runtime/model.py) |
-| Observation consumers and Codex exception fallback | [`agent_runtime/runtime.py`](../src/aka/light/agent/runtime/runtime.py), [`agent/provider.py`](../src/aka/light/agent/provider.py), [`workflow/session.py`](../src/aka/light/workflow/session.py) |
+| Process execution, timeout/interruption, finalization hook | [`run_bounded()`](../src/aka/workflow/light/agent/runtime/process.py) |
+| Capture setup, pipe readers, monitor, finalization, stdout-bound observation | [`session_capture.py`](../src/aka/workflow/light/agent/session_capture.py) |
+| Current-session and descendant transcript discovery | [`session_native.py`](../src/aka/workflow/light/agent/session_native.py) |
+| Incremental native reads, invocation-local limits, separate resume-history scan | [`session_tail.py`](../src/aka/workflow/light/agent/session_tail.py) |
+| De-duplicated conversation projection | [`session_transcript.py`](../src/aka/workflow/light/agent/session_transcript.py) |
+| Provider counters, reconciliation, partial/unavailable usage | [`session_usage.py`](../src/aka/workflow/light/agent/session_usage.py) |
+| Stream normalization and Capture/Ledger selection | [`adapter.py`](../src/aka/workflow/light/agent/runtime/adapter.py), [`codex_ledger.py`](../src/aka/workflow/light/agent/runtime/codex_ledger.py) |
+| Conservative merge of overlapping usage evidence | [`merge_token_usage_evidence()`](../src/aka/workflow/light/agent/runtime/model.py) |
+| Observation consumers and Codex exception fallback | [`agent_runtime/runtime.py`](../src/aka/workflow/light/agent/runtime/runtime.py), [`agent/provider.py`](../src/aka/workflow/light/agent/provider.py), [`workflow/session.py`](../src/aka/workflow/light/long_horizon/session.py) |
 
 ## Where records live
 
@@ -241,7 +241,7 @@ The CLI import/argument smoke check requires no GPU or model credentials:
 
 ```bash
 aka optimize --help
-aka optimize --repo-root "$PWD" -- --help
+aka optimize --repo-root "$PWD" --help
 ```
 
 Regression tests are maintained outside this repository. Local validation uses recorded-format fixtures and real Python subprocesses instead of paid Agent CLIs. It covers native children, duplicate/cumulative counters, resume deltas, phase ordering, scoped shared-home discovery, capture limits, complete functional stdout/stderr, pipe draining after write/parser failures, ledger-failure diagnostics and resume qualification, normal exit, timeout, Long Horizon invocation archives, and the kill switch (including destination precedence, stale-observation clearing, environment propagation, and stream/ledger fallback). Boundary regressions also cover a larger ledger versus incomplete Capture, partial-fallback cursor invalidation, output arriving more than five seconds after the root exits, timeout/interruption after leader exit, and oversized native lines spanning multiple polls. The CLI smoke check alone does not verify these behaviors.

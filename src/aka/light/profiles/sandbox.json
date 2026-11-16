@@ -1,9 +1,0 @@
-{
-  "extends": "aka.legacy.workflow:profiles/workflow.json",
-  "api_version": 2,
-  "composition": "sandbox",
-  "environment_values": {
-    "AKA_LEGACY_REPO_ROOT": "${aka:repo_root}"
-  },
-  "doc": "Explicit Legacy Workflow with Bubblewrap Agent execution; no managed Light Workflow."
-}

@@ -1,11 +1,11 @@
 ---
 name: atrex-aka-light
-description: Use AKA Light to validate accepted operator inputs and to install, launch, resume and inspect supervised GPU-kernel optimization campaigns. Covers Native Atrex-Bench and SOL contracts, Fast/Performance/Ultra final-source policy, persistent Agent Sessions and Git, Runtime evaluation, submit-kernel review, pooled search, observability, diagnosis and evidence export. Use for Light, not the Legacy workflow or standalone Aone Sandbox lifecycle.
+description: Use AKA Light to validate accepted operator inputs and to install, launch, resume and inspect supervised GPU-kernel optimization campaigns. Covers Native Atrex-Bench and SOL contracts, Fast/Performance/Ultra final-source policy, persistent Agent Sessions and Git, Runtime evaluation, submit-kernel review, pooled search, observability, diagnosis and evidence export. Use for Light; standalone Aone Sandbox lifecycle is covered by its dedicated skill.
 ---
 
 # AKA Light
 
-AKA Light runs persistent GPU-kernel optimization Sessions and sends GPU work to Agate. The coordinator needs matching AKA packages, an Agent CLI and Agate access; it does not need the target GPU locally. Treat the selected checkout as authoritative and run `aka optimize --repo-root REPO -- --help` before constructing a non-trivial launch.
+AKA Light runs persistent GPU-kernel optimization Sessions and sends GPU work to Agate. The coordinator needs matching AKA packages, an Agent CLI and Agate access; it does not need the target GPU locally. Treat the selected checkout as authoritative and run `aka optimize --repo-root REPO --help` before constructing a non-trivial launch.
 
 ## Route the request
 
@@ -18,7 +18,7 @@ AKA Light runs persistent GPU-kernel optimization Sessions and sends GPU work to
 | Configure CLI or composition | Read [configuration](references/configuration.md) |
 | Inspect a live campaign or export evidence | Prefer the dedicated `atrex-aka-light-observability` skill; otherwise read [observability](references/observability.md) |
 
-Do not use this skill for the Legacy `workflow` Profile or standalone Aone Sandbox lifecycle.
+For standalone Aone Sandbox lifecycle, use its dedicated skill.
 
 ## Required launch intake
 
@@ -35,9 +35,9 @@ nearby checkout:
 3. **Target GPU/platform token.** Require the user to select an explicit value such as `L20N` or
    `L20D`. Never infer it from the operator, an older Campaign, a currently available Sandbox or
    queue availability. If the Agate worker alias differs, ask the user to confirm that token
-   separately and pass it through `--sandbox-hardware`.
+   separately and pass it through `--hardware`.
 4. **Agent CLI.** Present all supported choices and require one: `claude` (Claude Code), `codex`
-   (OpenAI Codex), `qodercli`, or `pi`. Check that the selected CLI is installed and authenticated;
+   (OpenAI Codex), `qodercli`, `pi`, or `dsh`. Check that the selected CLI is installed and authenticated;
    do not default to Claude Code or Codex.
 5. **Optimization mode.** Present the following choices before asking the user to select one:
    - **Fast:** the Agent chooses any evaluator-supported DSL or mixture; explicitly declared reproducible libraries or prebuilt implementations may perform core computation. Use it for the fastest path to a working/high-performance result when external implementation reuse is acceptable.
@@ -59,7 +59,7 @@ nearby checkout:
    ordinary launch creates one Campaign repeat; ask for a repeat count only when the user requests
    repeated independent Campaigns.
 8. **Optional reference knowledge.** Ask whether the user wants to expose one or more existing
-   knowledge directories through `--agent-reference-dir`; `none` is a valid explicit answer. Each
+   knowledge directories through `--agent-reference-paths`; `none` is a valid explicit answer. Each
    directory appears at `references/<basename>/`, and basenames must be unique. With
    `light-sandbox`, Bubblewrap mounts the directories read-only. With native `light`, Light creates
    workspace links but cannot prevent the Agent from modifying the original directories because it
@@ -68,7 +68,7 @@ nearby checkout:
 
 When any required value is missing, pause the launch and ask one concise question containing the missing fields. A suitable prompt is:
 
-> 启动前请逐项选择：① Agate AK/SK 的安全注入方式（将 `AGATE_AK`、`AGATE_SK` 预先放入 Supervisor 环境，不要在聊天中粘贴明文）；② 已有 canonical `atrex-bench` 路径，或从 `https://github.com/alibaba/atrex-bench` clone 到哪个自选路径；③ Agate 的确切目标 GPU token，例如 `L20N` 或 `L20D`，示例不是默认值；④ Agent CLI：`claude`（Claude Code）、`codex`、`qodercli` 或 `pi`；⑤ 优化模式：`fast`（允许声明清楚的外部核心实现）、`performance`（核心计算自行实现，Agent 选 DSL）或 `ultra`（核心计算自行实现并固定用户指定 DSL），Ultra 还需选择 DSL；⑥ Agent 边界：`light`（原生进程）或 `light-sandbox`（Bubblewrap），后者还需选择 `private` 或 `host`，Aone Sandbox 只支持 `host`；⑦ 单线独立运行多少个 Episode audit segment，即明确给出正整数 `max-iters`；⑧ 是否通过 `--agent-reference-dir` 提供一个或多个参考知识目录，或明确选择 `none`。Bubblewrap 下为只读挂载；原生 `light` 无法阻止 Agent 修改原目录，使用前必须自行保留原始副本。Direction/Experiment 默认关闭，普通启动不询问；只有明确要求高级 Research 或多线搜索时才展开相关选项。未明确选择时不会根据最小试跑、Mac 环境或 CLI 默认值启动。
+> 启动前请逐项选择：① Agate AK/SK 的安全注入方式（将 `AGATE_AK`、`AGATE_SK` 预先放入 Supervisor 环境，不要在聊天中粘贴明文）；② 已有 canonical `atrex-bench` 路径，或从 `https://github.com/alibaba/atrex-bench` clone 到哪个自选路径；③ Agate 的确切目标 GPU token，例如 `L20N` 或 `L20D`，示例不是默认值；④ Agent CLI：`claude`（Claude Code）、`codex`、`qodercli`、`pi` 或 `dsh`；⑤ 优化模式：`fast`（允许声明清楚的外部核心实现）、`performance`（核心计算自行实现，Agent 选 DSL）或 `ultra`（核心计算自行实现并固定用户指定 DSL），Ultra 还需选择 DSL；⑥ Agent 边界：`light`（原生进程）或 `light-sandbox`（Bubblewrap），后者还需选择 `private` 或 `host`，Aone Sandbox 只支持 `host`；⑦ 单线独立运行多少个 Episode audit segment，即明确给出正整数 `max-iters`；⑧ 是否通过 `--agent-reference-paths` 提供一个或多个参考知识目录，或明确选择 `none`。Bubblewrap 下为只读挂载；原生 `light` 无法阻止 Agent 修改原目录，使用前必须自行保留原始副本。Direction/Experiment 默认关闭，普通启动不询问；只有明确要求高级 Research 或多线搜索时才展开相关选项。未明确选择时不会根据最小试跑、Mac 环境或 CLI 默认值启动。
 
 After the user answers, validate the checkout markers, supported operator input, non-empty credential presence, target platform, selected and authenticated Agent CLI, explicitly selected optimization mode, any Ultra DSL, explicitly selected Agent boundary, whether the selected host supports the chosen proc mode, optional reference directories, and the complete explicit search schedule before creating remote work or a Campaign workspace. Never start `private` proc mode inside an Aone Sandbox. In Aone, ask the user to accept `host` or choose no inner Agent Sandbox; do not silently select `host`. For native `light`, confirm that the reference-directory warning was shown; Light cannot make those originals read-only.
 
@@ -81,7 +81,7 @@ Light accepts exactly two problem families:
 | Native Atrex-Bench | `reference.py`, `input.py`, non-empty `shapes.json` | Operator must be inside a canonical checkout containing `scripts/run_eval.py` and `src/atrex_bench/` |
 | SOL-ExecBench | `definition.json`, `workload.jsonl`, `reference.py` | Uses the SOL definition/workload contract |
 
-An arbitrary `reference.py`, custom evaluator script, or setup command is not a Light problem. Convert it to a supported layout or intentionally use Legacy. The Native V0 is derived from `reference.py`; an adjacent candidate tree is not treated as the initial source.
+An arbitrary `reference.py`, custom evaluator script, or setup command is not a Light problem. Convert it to a supported layout. The Native V0 is derived from `reference.py`; an adjacent candidate tree is not treated as the initial source.
 
 ## Install matching packages
 
@@ -98,11 +98,14 @@ bash ~/.codex/skills/atrex-aka-light/scripts/install_light.sh \
   /path/to/atrex-kernel-agent
 ```
 
+Claim Review follows the selected Agent boundary: Bubblewrap in sandbox mode, or a native
+process in its independent review workspace without sandbox mode.
+
 The checkout later supplied through `--repo-root` must match the installed wheels. Package version strings alone are insufficient; rebuild after source changes.
 
 ## Understand the current workflow
 
-1. Light prepares and full-workload measures deterministic V0.
+1. Light prepares initial source and a common Agent Git root; initial-source evaluation is optional and Agent-requested.
 2. Each trajectory receives one persistent workspace, Agent conversation and Agent-owned Git repository.
 3. An Episode is only an audit segment created when the Agent stops; the next Episode inherits the same conversation, workspace and Git history.
 4. The Agent may probe, edit, commit, Evaluate, Profile, Check, Disassemble, use Dev/Command, and manage optional Direction/Experiment records throughout the Session.
@@ -112,7 +115,7 @@ The checkout later supplied through `--repo-root` must match the installed wheel
 
 There is no Framework Baseline stage, `episode-report`, candidate sealing, terminal handoff, automatic terminal ABBA, or Supervisor promotion threshold in the current Light workflow. Explicit ABBA remains available as an Agent-requested measurement operation.
 
-Public Kernel identities are full Agent Git commit IDs. `--workspace` names a non-Git Campaign container; only `lineages/tNNNN/agent-workspace` repositories own Kernel history. Campaign-level V0 authority and audit storage live directly below that root. Peer Git is imported through read-only refs and never overwrites local HEAD.
+Public Kernel identities are full Agent Git commit IDs. `--workspace-base` selects the parent of named non-Git Campaign containers; only `lineages/tNNNN/agent-workspace` repositories own Kernel history. Campaign-level V0 authority and audit storage live directly below that root. Peer Git is imported through read-only refs and never overwrites local HEAD.
 
 ## Choose mode and profile
 
@@ -124,8 +127,6 @@ defaults document implementation behavior only; they are not permission for the 
 |---|---|
 | `light` | Current Light workflow with native Agent execution and capture |
 | `light-sandbox` | Current Light workflow with Bubblewrap Agent isolation and capture |
-| `workflow` | Legacy workflow, not Light |
-| `observed` / `sandbox` | Legacy workflow with an alternate Agent boundary, not Light |
 
 Bubblewrap profiles require Linux. On macOS the user must choose native `light` or run Linux through
 Lima and choose `light-sandbox`. When `light-sandbox` is selected, require an explicit proc-mode
@@ -192,7 +193,7 @@ IDs, peer Agent Git refs, accepted-submission winners and the aggregated Directi
 quality controls evidentiary weight, not visibility. Light does not merge scratch files or
 conversations or rewrite another trajectory's checkout.
 
-The Campaign root has no `.git`, `.atrex-supervisor-runtime`, path-hash wrapper, `search/`, `peer-git/` or `git-sharing/`. Campaign scheduling and all synchronization artifacts are represented by `coordinator.json`, `coordinator.lock` and self-contained `publications/pNNNNNNNN/` directories; common V0 Git bootstrap state lives in `bootstrap/`; lineage-owned mutable state and Agent workspaces live in `lineages/`. V0 is a private full-Evaluate Gateway Record in `measurements/`; there is no separate baseline store. It is reference evidence, not an accepted submission or Pareto/winner candidate.
+The Campaign root has no `.git`, `.atrex-supervisor-runtime`, path-hash wrapper, `search/`, `peer-git/` or `git-sharing/`. Campaign scheduling and all synchronization artifacts are represented by `coordinator.json`, `coordinator.lock` and self-contained `publications/pNNNNNNNN/` directories; common V0 Git bootstrap state lives in `bootstrap/`; lineage-owned mutable state and Agent workspaces live in `lineages/`. The initial source is archived in `measurements/kernels/` without an automatic V0 Evaluate. The Agent decides which measurements to request. Unsubmitted measurements do not enter the accepted-submission winner or Pareto set.
 
 ## Launch
 
@@ -202,14 +203,14 @@ user selections, not defaults. Include `--framework USER_SELECTED_ULTRA_DSL` onl
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
   --profile USER_SELECTED_PROFILE \
-  --patch /path/to/user-selected-search-schedule.json -- \
-  --op-dir /path/to/atrex-bench/data/operator \
+  --patch /path/to/user-selected-search-schedule.json \
+  --problem /path/to/atrex-bench/data/operator \
   --platform USER_SELECTED_GPU \
   --agent-cli USER_SELECTED_AGENT_CLI \
   --optimization-mode USER_SELECTED_MODE \
   USER_SELECTED_AGENT_REFERENCE_DIRS_IF_ANY \
   USER_SELECTED_SERIAL_MAX_ITERS_IF_APPLICABLE \
-  --workspace /path/to/campaign-root
+  --workspace-base /path/to/campaign-root
 ```
 
 The search patch is mandatory for an ordinary Skill-constructed new launch and contains explicit
@@ -267,7 +268,7 @@ Do not print credentials. Preserve uncommitted user changes before syncing or in
 
 ## Runtime evaluation defaults
 
-For standard Evaluate and explicit ABBA, current Light batches at most 10 Shapes per outer Ray Data request and sets `shape_shards=1`. Standard Evaluate retains the complete operator bundle and selects the batch with native `shape_ids`. As a temporary Agate compatibility layer, ABBA instead rebuilds each batch as a complete shard-local operator reference and sends no `shape_ids`, because current Agate ABBA requires every Shape in its submitted reference. The compatibility is isolated in `aka.light.evaluation.abba_shape_compat` so it can be removed when Agate accepts native ABBA Shape selection. Light uses 20 warmups, 100 timing iterations, deterministic correctness cases, and best-effort `lock_clocks=true` without a fixed MHz. Aggregation follows the benchmark's declared performance objective after all batches are merged.
+For standard Evaluate and explicit ABBA, current Light batches at most 10 Shapes per outer Ray Data request and sets `shape_shards=1`. Standard Evaluate retains the complete operator bundle and selects the batch with native `shape_ids`. As a temporary Agate compatibility layer, ABBA instead rebuilds each batch as a complete shard-local operator reference and sends no `shape_ids`, because current Agate ABBA requires every Shape in its submitted reference. The compatibility is isolated in `aka.evaluation.abba_shape_compat` so it can be removed when Agate accepts native ABBA Shape selection. Light uses 10 warmups, 20 timing iterations, deterministic correctness cases, and best-effort `lock_clocks=true` without a fixed MHz. Aggregation follows the benchmark's declared performance objective after all batches are merged.
 
 Use Runtime tool help for exact operation-specific Agate fields. Endpoint, credentials, source selection and other authority-bearing options remain Supervisor-owned.
 
@@ -312,6 +313,6 @@ views expose `evidence_health`. In Agate timing, `queue_seconds` is queue time a
 |---|---|
 | Installation, Bubblewrap, Lima or Aone host-proc mode | [Installation](references/installation.md) |
 | Native/SOL contracts, Shapes, hidden flow or layouts | [Problem inputs](references/problem-inputs.md) |
-| CLI flags, defaults, patches and Legacy-only parser flags | [Configuration](references/configuration.md) |
+| CLI flags, defaults and patches | [Configuration](references/configuration.md) |
 | Launch, modes, V0, persistent Episodes, resume and cleanup | [Operations](references/operations.md) |
 | Live state, Agate, tokens, winners and evidence export | [Observability](references/observability.md) |

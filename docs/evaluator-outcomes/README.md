@@ -1,5 +1,7 @@
 # Evaluator outcomes across transport, cache, and version reports
 
+> Historical design and validation record, preserved from [revision 1abdf3f3](https://github.com/alibaba/atrex-kernel-agent/tree/1abdf3f36cbb7797fdedec7924ff40431975df7b). This is a documentation snapshot, not a runtime compatibility claim: commands and private module paths below describe earlier implementations. Reproduction requires the original implementation revisions named in the record. For current usage, see the [current guide](../measurement-records.md).
+
 A successful Dev allocation can contain a failed evaluator process. Earlier behavior treated that allocation as a completed evaluation, could cache unavailable results, lost diagnostic detail, and conflated objective-score ratios with latency ratios. The current contracts below separate transport success from evaluator verdicts and preserve bounded repair evidence.
 
 This document retains implementation-specific validation records. The before/after curve is tied to the revisions and environment listed below; its test counts are historical evidence, not a fresh validation of every subsequent checkout.
@@ -77,10 +79,10 @@ python - <<'PY'
 import contextlib, io, json, os, subprocess, tempfile, types
 from pathlib import Path
 from unittest.mock import patch
-from aka.light.evaluation import gateway
-from aka.light.experiment.store import JOB_ROOT_ENV, MeasurementStore
-from aka.light.evaluation.public_result import PREFIXES, canonical_result
-from aka.light.evaluation.native_abba import _terminal_abba_timeout_error
+from aka.evaluation import gateway
+from aka.experiment.store import JOB_ROOT_ENV, MeasurementStore
+from aka.evaluation.public_result import PREFIXES, canonical_result
+from aka.evaluation.native_abba import _terminal_abba_timeout_error
 
 source = subprocess.check_output(["git", "show", "0df128c:src/aka/light/evaluation/gateway.py"], text=True)
 before = types.ModuleType("baseline_gateway")
@@ -152,11 +154,11 @@ Validation for this bug fix used Python 3.14 on macOS, without GPU execution: 16
 
 ## Diagnostic size and cache contract
 
-There is no assumed upstream guarantee that captured stdout/stderr fit a measurement record. AKA bounds the projected response in `public_result.bound_diagnostic_response` to **8 MiB of ASCII-escaped JSON**, before deriving `agent_result`. This counts JSON escaping of Unicode and embedded structured markers, not just raw UTF-8 stream length. Normal responses pass through unchanged. An oversized response retains valid result markers, verdicts, case execution status, scores, and non-diagnostic numeric evidence. It shortens diagnostic strings and, when needed, diagnostic/failure lists, with `diagnostic_truncation` reporting the original response bytes, limit, omitted text characters and omitted diagnostic entries. Unstructured stdout receives a shared text budget, including when a kernel prints many short lines. Numerical and ABBA markers use the same boundary.
+Complete redacted diagnostics are retained in the Gateway Record. `aka.evaluation.tool_results.bound_diagnostic_response` does not trim by serialized length: compiler tails often contain the actionable error. The terminal receipt contains a compact error summary, actionable diagnostics, Record ID/path, and bounded stdout/stderr previews with explicit locations for the complete fields. Env returns its complete capability response.
 
-Diagnostic truncation is distinct from the existing transport `truncated` flag: shortening repair text does not invalidate a completed negative verdict or make it pass. Upstream incomplete execution/transport evidence still fails canonical validation. Original executor output and Gateway job checkpoints remain private; truncation is explicit, not a claim that the Agent received every byte. Operators can inspect that retained evidence when omitted detail is needed.
+A receipt preview is distinct from incomplete execution/transport evidence. Preview shortening never changes the verdict or cache eligibility. Original executor output and Gateway Job checkpoints remain private and auditable.
 
-`MeasurementTask.finish` checks the **entire serialized record plus its trailing newline against 32 MiB**, including request, identity, response and the derived Agent payload, before writing it. If non-diagnostic structure or the envelope still exceeds the hard bound, publication stops while the reservation remains resumable; no unreadable `record.json` or `validation_pending` marker is published. Original job IDs and evidence survive recovery. These limits bound the public response and record, not total private job-artifact retention.
+`MeasurementTask.finish` checks the **entire serialized record plus its trailing newline against 32 MiB**, including request, identity, response and the derived Agent payload, before writing it. If non-diagnostic structure or the envelope still exceeds the hard bound, publication stops while the reservation remains resumable; no unreadable `record.json` or `validation_pending` marker is published. Original job IDs and evidence survive recovery. The record size limit bounds durable record serialization, not terminal previews or total private job-artifact retention; an oversized record fails explicitly rather than silently losing diagnostics.
 
 A stage-level failure reason appears once at stage scope, rather than once per allowed shape. A generic stage failure is omitted when more specific diagnostics already exist; distinct producer reasons remain visible. Malformed `input_artifact` fields cannot abort extraction, and malformed/empty rank results fall back to direct shape cases.
 

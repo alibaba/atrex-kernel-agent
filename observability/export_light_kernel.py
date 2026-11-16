@@ -16,7 +16,7 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.light.runtime.paths import supervisor_campaign_root
+from aka.workflow.light.support.paths import supervisor_campaign_root
 from observability._internal.common import (
     discover_scopes,
     evaluation_result,

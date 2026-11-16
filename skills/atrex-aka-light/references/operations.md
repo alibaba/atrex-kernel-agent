@@ -12,11 +12,11 @@ Before every new launch, explain the mode choices and explicitly ask the user fo
 - the canonical Atrex-Bench checkout root containing `scripts/run_eval.py` and `src/atrex_bench/`;
 - the target GPU/platform token, for example `L20N` or `L20D`; never infer it from the problem,
   available Sandbox, queue state or an older Campaign.
-- the Agent CLI: `claude` (Claude Code), `codex`, `qodercli`, or `pi`;
+- the Agent CLI: `claude` (Claude Code), `codex`, `qodercli`, `pi`, or `dsh`;
 - the optimization mode: Fast, Performance or Ultra; when Ultra is selected, also require its DSL.
 - whether to run the Agent with Bubblewrap Sandbox (`light-sandbox`) or without it (`light`); when
   Sandbox is selected, ask for `private` or `host` proc mode.
-- whether to expose optional knowledge directories with `--agent-reference-dir`, or explicitly use
+- whether to expose optional knowledge directories with `--agent-reference-paths`, or explicitly use
   none. Bubblewrap mounts them read-only; native Light cannot protect the original directories from
   modification, so tell the user to retain an independent copy.
 
@@ -76,7 +76,7 @@ Do not reuse these values from an older Campaign or silently select a GPU based 
 Do not silently select a nearby checkout. Do not ask
 the user to paste AK/SK values into chat. Credentials must already be present in the launch
 environment or come from an existing secure credential source; verify presence without printing
-values. Ask separately for `--sandbox-hardware` only when its Agate worker token differs from the
+values. Ask separately for `--hardware` only when its Agate worker token differs from the
 logical platform, and require the user to confirm both tokens.
 
 Resolve before launch:
@@ -102,30 +102,23 @@ The uppercase values below are required user selections, not defaults. Include
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile USER_SELECTED_PROFILE -- \
-  --op-dir /path/to/atrex-bench/data/operator \
+  --profile USER_SELECTED_PROFILE \
+  --problem /path/to/atrex-bench/data/operator \
   --platform USER_SELECTED_GPU \
   --agent-cli USER_SELECTED_AGENT_CLI \
   --optimization-mode USER_SELECTED_MODE \
-  --workspace /path/to/campaign-root
+  --workspace-base /path/to/campaign-root
 ```
 
-`--workspace` is a dedicated non-Git Campaign directory and must be empty on a
-new launch (the composition bootstrap may already have created `.atrex_plugins/`).
-Light writes Campaign evidence directly below this root and creates Agent Git
-repositories only at `lineages/tNNNN/agent-workspace`. It does not create a
-parent `.atrex-supervisor-runtime/<hash>` namespace, a nested
-`.atrex-supervisor-runtime/` wrapper, or Controller Git clones.
-
-Launch options precede `--`; campaign options follow it. Pass `--profile light` for the explicitly
-selected native boundary or `--profile light-sandbox` for the explicitly selected Bubblewrap
-boundary. `light-sandbox` is the Bubblewrap boundary on the coordinator, not an Aone Sandbox
-request.
+`--workspace-base` is the parent for named Campaign directories. Light derives
+`kernel_opt_<problem>_<mode>_<dsl>_<gpu>` below it; use `--workspace-suffix` to distinguish
+repeated runs. Each Campaign is non-Git; only `lineages/tNNNN/agent-workspace` is an Agent repository.
+All launch and Campaign arguments use the same parser, with no `--` separator.
 
 Run checkout-specific help first:
 
 ```bash
-aka optimize --repo-root /path/to/atrex-kernel-agent -- --help
+aka optimize --repo-root /path/to/atrex-kernel-agent --help
 ```
 
 Before constructing an ordinary command, use one independent serial trajectory: carry a patch with
@@ -151,11 +144,6 @@ launcher process is not sufficient evidence of lineage progress or GPU execution
 |---|---|---|
 | `light` | Current Light | Native process, capture enabled |
 | `light-sandbox` | Current Light | Bubblewrap, capture enabled |
-| `workflow` | Legacy | Legacy Agent behavior |
-| `observed` | Legacy | Native Light Agent/capture only |
-| `sandbox` | Legacy | Bubblewrap Agent only |
-
-Only `light` and `light-sandbox` select the current persistent Session, Agent Git, Runtime/MeasurementStore, Research Store and accepted-submission workflow. `observed` and `sandbox` do not turn Legacy into Light.
 
 Bubblewrap requires Linux. On macOS the user must choose native Light or a Lima Linux VM. In Lima,
 the user may explicitly select `private` or `host`. Aone Sandbox allows only explicit `host`, which
@@ -168,9 +156,7 @@ Bubblewrap is not a network allowlist or another OS account.
 ### Fast
 
 The Agent chooses any evaluator-supported DSL or mixture. Explicitly declared, reproducible
-third-party or prebuilt implementations may perform core computation. Review still rejects hidden
-dispatch, undeclared downloads, secret external paths, incomplete dependency inventory and manifest
-mismatch.
+third-party or prebuilt implementations may perform core computation. Fast skips independent final-source review; input packaging and full Evaluate requirements still apply.
 
 ### Performance
 
@@ -196,8 +182,7 @@ projection, it fails instead of silently exposing Shapes under a hidden label.
 The current workflow is:
 
 ```text
-prepare deterministic V0
-→ full-workload V0 Evaluate
+prepare initial source and common Agent Git root
 → persistent Agent Session + Agent Git
 → repeated probe/edit/commit/measure cycles
 → optional submit-kernel for exact evaluated commits
@@ -215,7 +200,7 @@ Explicit ABBA remains available when the Agent wants paired comparison evidence.
 `--platform` is the logical product shown to the Agent and normally sent to Agate. If the worker alias differs:
 
 ```bash
---platform L20D --sandbox-hardware AGATE_WORKER_ALIAS
+--platform L20D --hardware AGATE_WORKER_ALIAS
 ```
 
 `--platform` is not the compiler architecture. Runtime probing should determine values such as `sm_103a`, `sm_100a`, or `gfx942`; use `--arch` only for an intentional override or failed probe.

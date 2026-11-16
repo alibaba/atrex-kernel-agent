@@ -1,9 +1,9 @@
 # Quick Start
 
 The installed `aka optimize` command starts the default **Light** workflow: managed
-source drafts, private HTTP tools, one persistent optimization Session, and auditable segments.
+Agent-owned source trees, private Runtime tools, one persistent optimization Session, and auditable segments.
 The primary path is native Atrex-Bench evaluation through Agate. For SOL-ExecBench,
-OpenSSH, or the explicit Fast/Full workflow, use the [Legacy guide](legacy-workflow.md).
+OpenSSH execution, see [SSH backend](ssh-backend.md).
 
 ## Prerequisites
 
@@ -32,14 +32,14 @@ git clone https://github.com/alibaba/atrex-kernel-agent.git
 cd atrex-kernel-agent
 python3 -m pip install build
 python3 tools/build_distributions.py --output /tmp/aka-wheels \
-  atrex-aka-framework atrex-aka-legacy atrex-aka-light
+  atrex-aka-framework atrex-aka-light
 python3 -m pip install --force-reinstall --no-index \
   --find-links /tmp/aka-wheels atrex-aka-light
 aka optimize --help
 ```
 
-Keep all three distributions and the resource checkout at the same revision. Their current
-package metadata uses `0.1.0`, so installing a changed checkout requires reinstalling its
+Keep both distributions and the resource checkout at the same revision. Their current
+package metadata uses `0.2.0`, so installing a changed checkout requires reinstalling its
 wheels even when the version string has not changed. Missing Light is an installation error.
 See [installed startup](application-plugin-migration.md) for package and continuation details.
 
@@ -84,7 +84,6 @@ the Aone Sandbox. Do not omit this patch and fall back to the provider-wide `pri
   "api_version": 1,
   "patches": [{"id": "agent", "config": {
     "sandbox": "bwrap",
-    "capture": true,
     "proc_mode": "host"
   }}]
 }
@@ -96,14 +95,14 @@ Install Bubblewrap in the same Aone execution image:
 sudo dnf install -y bubblewrap
 ```
 
-Launch with the patch before the `--` separator:
+Launch with the patch:
 
 ```bash
 aka optimize --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox --patch /path/to/aone-host-proc.json -- \
-  --op-dir /path/to/atrex-bench/operator \
-  --platform L20D --specify-dsl --framework Cuda --agent-cli claude \
-  --optimization-mode ultra --workspace /workspace/aka-opt
+  --profile light-sandbox --patch /path/to/aone-host-proc.json \
+  --problem /path/to/atrex-bench/operator \
+  --platform L20D --framework Cuda --agent-cli claude \
+  --optimization-mode ultra --workspace-base /workspace/aka-opt
 ```
 
 Light binds the Aone Sandbox's existing `/proc` directly into Bubblewrap. It does not compile or
@@ -131,7 +130,7 @@ The selected workspace is a non-Git Campaign container. Light stores Campaign
 state directly inside it and creates Git repositories only for
 `lineages/tNNNN/agent-workspace`; do not initialize the Campaign root as Git or
 reuse a legacy Controller repository in place.
-The initial V0 full Evaluate is stored as an ordinary private Gateway Record in
+The Agent chooses whether to evaluate V0; any requested measurement is stored in
 `measurements/`. Light does not create a separate `baseline/` directory, and V0
 does not participate in accepted-submission winner or Pareto selection.
 
@@ -140,36 +139,35 @@ does not participate in accepted-submission winner or Pareto selection.
 From the AKA checkout, use an explicit fixed-DSL Ultra launch:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/atrex-bench/operator \
-  --platform '<gpu_arch>' --specify-dsl --framework Cuda --agent-cli claude \
+aka optimize --repo-root "$PWD" \
+  --problem /path/to/atrex-bench/operator \
+  --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
   --optimization-mode ultra \
-  --workspace "$HOME/aka-opt" --max-iters 20
+  --workspace-base "$HOME/aka-opt" --max-iters 20
 ```
 
 For one Fast campaign in which the Agent chooses or mixes supported GPU DSLs and may use
 declared reproducible compute libraries:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/atrex-bench/operator \
+aka optimize --repo-root "$PWD" \
+  --problem /path/to/atrex-bench/operator \
   --platform '<gpu_arch>' --agent-cli claude \
   --optimization-mode fast \
-  --workspace "$HOME/aka-opt-fast" --max-iters 20
+  --workspace-base "$HOME/aka-opt-fast" --max-iters 20
 ```
 
 The startup line for the second command must contain
 `optimization_mode=fast ... frameworks=open_dsl`. If it reports
 `frameworks=Cuda`, the launch is still CUDA-pinned.
 
-Replace the operator and platform with your workload and worker. `--sandbox-hardware`
-can specify a worker alias different from the logical platform. Use `--sandbox-profile prod`
-or `pre` to select an Agate endpoint profile, or `--sandbox-url URL` for an explicit endpoint;
-otherwise the configured endpoint is retained.
+Replace the operator and platform with your workload and worker. `--hardware`
+can specify a worker alias different from the logical platform. Configure the Agate endpoint
+in the selected Execution provider or Supervisor environment (`AGATE_URL`); otherwise the
+SDK uses its configured endpoint.
 
-Launch options (`--repo-root`, `--profile`, `--patch`) go **before** `--`.
-Optimization arguments go after it. Omitting `--profile` selects Light.
-Use `--profile light-sandbox` before the separator for Bubblewrap.
+Launch and optimization options share one parser; no `--` separator is needed.
+Omitting `--profile` selects Light. Use `--profile light-sandbox` for Bubblewrap.
 
 To launch through a coding agent, ask it to translate the workload, worker, framework,
 workspace, mode, and budgets into this same installed command.
@@ -190,21 +188,19 @@ The three policies own DSL selection directly:
 | Performance | `--optimization-mode performance` | Agent-selected DSL guided by expertise; self-authored core compute required |
 | Ultra | `--optimization-mode ultra --framework Cuda` | Configured DSL enforced; self-authored core compute required |
 
-Fast and Performance normalize to one open-DSL campaign. Ultra rejects a missing framework,
-`--no-specify-dsl`, and automatic framework dispatch before workspace creation. Historical
-`leaderboard` and `production` names remain compatibility aliases for resuming existing runs;
-new runs should use the three explicit policies above.
+Fast and Performance use an open-DSL campaign. Ultra rejects a missing framework
+before workspace creation. Only these three policy names are accepted.
 
-The first optimization segment starts directly from measured V0, and the same persistent Agent
+The first optimization segment starts directly from the initial source, and the same persistent Agent
 Session may perform framework bring-up, correctness work, diagnostics and optimization before or
 between commit reviews.
 
 ## What happens after launch
 
 1. Resolve the selected providers, freeze the problem/runtime inputs, and create or resume
-   a campaign below `--workspace`.
-2. Evaluate V0 from the selected initial source, then start one persistent Agent Session directly
-   from that source.
+   a campaign below `--workspace-base`.
+2. Prepare the initial source and common Git root, then start the persistent Agent Session.
+   The Agent decides whether to measure the initial implementation.
 3. The Agent researches, edits, profiles and evaluates freely in its own persistent Git repository.
    It may call `submit-kernel` with a reachable commit after that exact commit has a passing full
    Evaluate. Submission verifies the saved evidence and applies the selected final-source policy
@@ -215,11 +211,11 @@ between commit reviews.
 5. Continue until campaign limits stop admission or the Agent/campaign finishes. Research files,
    Gateway Records and commit-review receipts remain auditable without selecting an incumbent.
 
-Light does not use the Legacy Fast/Full stage split or an automatic promotion state machine.
+Light uses only persistent Sessions and accepted submissions.
 
 ## Configure optional features
 
-Save a composition patch, then pass `--patch /path/to/options.json` before `--`:
+Save a composition patch, then pass `--patch /path/to/options.json` alongside the launch flags:
 
 ```json
 {
@@ -228,22 +224,20 @@ Save a composition patch, then pass `--patch /path/to/options.json` before `--`:
     {"id": "workflow", "config": {
       "startup": true,
       "numerical_validation": true,
-      "episode_timeout_seconds": 14400
-    }},
-    {"id": "light_journal", "config": {"tool_modules": ["directions"]}}
+      "tool_modules": ["directions"]
+    }}
   ]
 }
 ```
 
-This example explicitly enables supplemental numerical probes, adds a four-hour Episode limit,
-and selects Direction-only research recording. Direction and Experiment
-modules are both enabled by default; use `[]` for report-only mode. Standard evaluator correctness,
-measurement records, report validation, and ABBA remain required regardless of these options.
+This example enables optional numerical probes and Direction-only research. Both research modules
+are disabled by default. Agent Sessions and Reviews have no active-time limit. All measurement
+evidence is retained centrally; explicit ABBA is optional.
 
 A patch replaces the provider's **whole configuration**; omitted values take provider
 defaults. A Workflow patch used by `aka optimize` must retain `"startup": true` to
 provide the launch entry point. An Agent patch for `light-sandbox` should retain
-`"sandbox": "bwrap"` and `"capture": true` when those behaviors are desired.
+`"sandbox": "bwrap"`  when those behaviors are desired.
 See [all module options](optional-light-modules.md#other-module-options).
 
 ### Candidate layouts
@@ -280,7 +274,7 @@ Native Atrex-Bench `source_tree`, CUDA manifest, Evaluate, ABBA and typed diagno
 
 Light uses three persistent search islands by default; set the Workflow plugin's `search`
 configuration to `{}` for an explicit serial run. Use a new workspace when switching
-Legacy/Light or serial/island search. Do not edit
+serial/island search. Do not edit
 locks, private records, or job checkpoints to bypass an identity failure.
 See [execution recovery](measurement-records.md#failure-and-recovery-policy).
 
@@ -298,5 +292,4 @@ stores and Session traces are not public submission artifacts. The optional
 does not package complete multi-file source trees. Use the workflow's source-aware export
 for those candidates.
 
-Run `aka optimize --repo-root "$PWD" -- --help` for CLI syntax; the parser retains Legacy
-options, so use the [Light guide](optional-light-modules.md) for their workflow applicability.
+Run `aka optimize --repo-root "$PWD" --help` for the native `WorkflowLaunch` CLI. All flags use one parser; no `--` separator is needed.

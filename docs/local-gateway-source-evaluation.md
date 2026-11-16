@@ -1,5 +1,7 @@
 # Local source-tree evaluation and terminal evidence
 
+> Historical design and validation record, preserved from [revision 1abdf3f3](https://github.com/alibaba/atrex-kernel-agent/tree/1abdf3f36cbb7797fdedec7924ff40431975df7b). This is a documentation snapshot, not a runtime compatibility claim: commands and private module paths below describe earlier implementations. Reproduction requires the original implementation revisions named in the record. For current usage, see the [current guide](local_gateway.md).
+
 Local optimization clients upload source-tree candidates before calling Eval. The old localhost gateway returned HTTP 404 for `/v1/uploads`; it accepted inline Python but could not execute the client's archive request. Light also omitted final attempted-source exports, preventing independent verification after an episode worktree was removed. The target callers are local Light workflows and clients using the existing source-upload protocol.
 
 This change enables local archive transport and native Atrex-Bench ABBA evaluation, preserves complete evaluator evidence, and exports the exact final candidate with source-bound measurements. A successful gateway job means the evaluator completed and returned evidence; it does **not** turn a failed correctness verdict into a pass.

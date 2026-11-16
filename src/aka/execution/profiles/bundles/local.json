@@ -1,0 +1,6 @@
+{
+  "api_version": 1,
+  "entries": [
+    {"id": "executor", "name": "aka.execution.local.plugin", "required": true}
+  ]
+}

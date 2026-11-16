@@ -14,7 +14,7 @@
 
 Atrex Kernel Agent (AKA) optimizes GPU kernels through an iterative loop of research,
 implementation, profiling, and evaluation. In the lightweight workflow, one persistent coding
-Session owns its Git history from measured V0 onward. The Supervisor provides measured evidence,
+Session owns its Git history from the initial source onward. The Supervisor provides measured evidence,
 final-source policy review, private audit storage, and optional peer-history exchange; it does not
 install a winner or force one trajectory to follow another.
 
@@ -24,11 +24,15 @@ lets users configure and replace agents, workspaces, evaluation, execution, and 
 AKA supports Claude, Qoder, Codex, Pi, and [DSH](docs/dsh-harness-adapter.md),
 with CUDA, Triton, CuTeDSL, FlyDSL, and TileLang
 tooling for supported NVIDIA, AMD, and T-Head PPU environments. Native Atrex-Bench evaluation
-runs through Agate; GPU Wiki provides optimization knowledge.
+runs through Agate or a provisioned [OpenSSH GPU backend](docs/ssh-backend.md);
+GPU Wiki provides optimization knowledge. The [Light skill](skills/atrex-aka-light/SKILL.md)
+provides installation and launch guidance. [Observation tools](observability/README.md)
+report retained execution, performance and session evidence. Both are checkout resources;
+keep a checkout matching the installed module distributions.
 
 ## How AKA works
 
-1. **Establish V0.** Freeze evaluator inputs, measure the initial implementation, and create one canonical Agent Git root.
+1. **Prepare the initial source.** Freeze evaluator inputs and create one canonical Agent Git root. The Agent decides whether to measure the initial implementation.
 2. **Explore and measure.** The Agent researches, edits, commits, and calls Runtime Evaluate/Profile/Dev/Command as needed.
 3. **Submit a measured commit when useful.** `submit-kernel` requires a saved full Evaluate whose correctness check passed and whose per-Shape performance result is complete and parseable for the exact commit, then applies the selected Fast, Performance or Ultra final-source policy. Submission imposes no performance threshold. It does not launch another Evaluate, run ABBA, promote, or roll back.
 4. **Continue in the same Session.** An Episode is only an Agent-chosen audit segment; the next segment resumes the same conversation, workspace, branches, and WIP.

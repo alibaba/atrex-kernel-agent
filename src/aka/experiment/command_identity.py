@@ -1,0 +1,42 @@
+"""Freeze public command handoff inputs without owning execution policy."""
+from dataclasses import asdict
+import hashlib
+
+
+def handoff_identity(command, *, prepared_path_identities=None):
+    """Omit absent additions so unchanged historical commands retain identity."""
+    result = {}
+    path_identities = prepared_path_identities or {}
+    access = command.filesystem_access
+    if access is not None:
+        result["filesystem_access"] = {
+            "mounts": [{"source": str(item.source), "target": str(item.target),
+                        "writable": item.writable} for item in access.mounts],
+            "hidden_paths": [str(path) for path in access.hidden_paths],
+            "read_only_paths": [str(path) for path in access.read_only_paths],
+        }
+    if command.profile_options is not None:
+        value = asdict(command.profile_options)
+        value["counters"] = list(value["counters"])
+        result["profile_options"] = value
+    if command.output_options is not None:
+        result["output_options"] = asdict(command.output_options)
+    if command.input_files:
+        result["input_files"] = [
+            {"path": item.path, "mode": item.mode, "size_bytes": len(item.content),
+             "sha256": hashlib.sha256(item.content).hexdigest()}
+            for item in command.input_files
+        ]
+    if command.source_archives:
+        result["source_archives"] = [{"role": item.role, "path": item.path, "entry_point": item.entry_point,
+            "sha256": hashlib.sha256(item.content).hexdigest(), "size_bytes": len(item.content)} for item in command.source_archives]
+    if command.idempotency_key is not None:
+        result["idempotency_key"] = command.idempotency_key
+    if command.prepared_inputs is not None:
+        result["prepared_inputs"] = {
+            name: [{"path": path_identities.get(item.path, item.path), "mode": item.mode, "size_bytes": len(item.content),
+                    "sha256": hashlib.sha256(item.content).hexdigest()} for item in getattr(command.prepared_inputs, name)]
+            for name in ("files", "runtime_files")
+        }
+        result["prepared_inputs"]["private_paths"] = [path_identities.get(path, path) for path in command.prepared_inputs.private_paths]
+    return result

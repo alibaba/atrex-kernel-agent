@@ -13,10 +13,10 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.light.evaluation.provider import result_from_response  # noqa: E402
-from aka.light.experiment.store import KERNEL_ID, RECORD_ID  # noqa: E402
-from aka.light.runtime.paths import supervisor_submission_root  # noqa: E402
-from aka.light.workflow.submissions import submissions as stored_submissions  # noqa: E402
+from aka.evaluation.response import result_from_response  # noqa: E402
+from aka.experiment.measurement_store import KERNEL_ID, RECORD_ID  # noqa: E402
+from aka.workflow.light.support.paths import supervisor_submission_root  # noqa: E402
+from aka.workflow.light.long_horizon.submissions import submissions as stored_submissions  # noqa: E402
 from observability._internal.common import (  # noqa: E402
     Scope, discover_scopes, existing_store, finite_positive, iter_records,
 )

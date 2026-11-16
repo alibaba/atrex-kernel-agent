@@ -30,7 +30,7 @@ from observability._internal.common import (
     startup_stage,
     table,
 )
-from aka.legacy.workflow.public_state import writer_active
+from aka.workflow.legacy.public_state import writer_active
 from observability._internal.runtime_audit import _audit_calls
 
 

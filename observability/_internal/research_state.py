@@ -15,7 +15,7 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.light.research.store import _apply, _empty  # noqa: E402
+from aka.workflow.light.research.store import _apply, _empty  # noqa: E402
 from observability._internal.common import (  # noqa: E402
     add_output_arguments,
     discover_scopes,
@@ -107,7 +107,7 @@ def _claim_review_summary(scope) -> dict:
     qualities = Counter()
     statuses = Counter()
     total = 0
-    from aka.light.runtime.paths import supervisor_campaign_base_root
+    from aka.workflow.light.support.paths import supervisor_campaign_base_root
 
     library = supervisor_campaign_base_root(scope.workspace) / "research-library"
     paths = [
@@ -130,7 +130,7 @@ def _claim_review_summary(scope) -> dict:
         quality = review.get("claim_review_quality") if isinstance(review, dict) else None
         qualities[str(quality or "unavailable")] += 1
     # Read-only compatibility for pre-object-bound Campaigns.
-    from aka.light.runtime.paths import supervisor_research_catalog_root
+    from aka.workflow.light.support.paths import supervisor_research_catalog_root
 
     legacy_paths = [
         *(scope.audit_root / "claim-audit").glob("*/outcome.json"),

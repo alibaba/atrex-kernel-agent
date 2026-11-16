@@ -19,20 +19,20 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
     if str(entry) not in sys.path:
         sys.path.insert(0, str(entry))
 
-from aka.legacy.workflow.export import RetainedWorkflowExport  # noqa: E402
-from aka.light.evaluation.provider import result_from_response  # noqa: E402
-from aka.light.experiment.store import (  # noqa: E402
+from aka.workflow.legacy.export import RetainedWorkflowExport  # noqa: E402
+from aka.evaluation.response import result_from_response  # noqa: E402
+from aka.experiment.measurement_store import (  # noqa: E402
     MeasurementStore,
     RECORD_ID,
 )
-from aka.light.runtime.paths import (  # noqa: E402
+from aka.workflow.light.support.paths import (  # noqa: E402
     campaign_runtime_configuration,
     legacy_supervisor_campaign_root,
     supervisor_campaign_base_root,
     supervisor_campaign_root,
     supervisor_measurement_root,
 )
-from aka.light.workflow.search import (  # noqa: E402
+from aka.workflow.light.search import (  # noqa: E402
     COORDINATOR_STATE,
     read_state as read_search_state,
 )

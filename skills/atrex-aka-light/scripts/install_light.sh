@@ -5,12 +5,13 @@ usage() {
   cat <<'EOF'
 Usage: install_light.sh [OPTIONS] AKA_REPO_ROOT
 
-Build and install matching atrex-aka-framework, atrex-aka-legacy, and
+Build and install matching atrex-aka-framework and
 atrex-aka-light wheels from one AKA checkout.
 
 Options:
   --python PATH                     Python interpreter (default: python3)
   --wheel-dir PATH                  Keep wheels in this directory
+  --offline                         Require a complete local wheelhouse (including build dependencies)
   --no-install-build-dependency     Fail instead of installing `build` if absent
   -h, --help                        Show this help
 EOF
@@ -19,6 +20,7 @@ EOF
 python_bin="python3"
 wheel_dir=""
 install_build_dependency=1
+offline=0
 
 while (($#)); do
   case "$1" in
@@ -34,6 +36,10 @@ while (($#)); do
       ;;
     --no-install-build-dependency)
       install_build_dependency=0
+      shift
+      ;;
+    --offline)
+      offline=1
       shift
       ;;
     -h|--help)
@@ -67,7 +73,7 @@ if [[ ! -f "$repo_root/tools/build_distributions.py" ]]; then
   echo "install_light.sh: missing tools/build_distributions.py under $repo_root" >&2
   exit 2
 fi
-for package in atrex-aka-framework atrex-aka-legacy atrex-aka-light; do
+for package in atrex-aka-framework atrex-aka-light; do
   if [[ ! -f "$repo_root/packages/$package/pyproject.toml" ]]; then
     echo "install_light.sh: missing package metadata for $package" >&2
     exit 2
@@ -84,6 +90,10 @@ if ! "$python_bin" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3,
 fi
 
 temporary_wheels=0
+if ((offline)) && [[ -z "$wheel_dir" ]]; then
+  echo "install_light.sh: --offline requires --wheel-dir with all external and build dependencies" >&2
+  exit 2
+fi
 if [[ -z "$wheel_dir" ]]; then
   wheel_dir="$(mktemp -d "${TMPDIR:-/tmp}/aka-light-wheels.XXXXXX")"
   temporary_wheels=1
@@ -92,7 +102,15 @@ else
   wheel_dir="$(cd "$wheel_dir" && pwd -P)"
 fi
 
+# Build into a fresh directory so an older same-named AKA wheel cannot win resolution.
+build_dir="$(mktemp -d "${TMPDIR:-/tmp}/aka-light-build.XXXXXX")"
+if ((offline)); then
+  export PIP_NO_INDEX=1
+  export PIP_FIND_LINKS="$wheel_dir"
+fi
+
 cleanup() {
+  rm -rf -- "$build_dir"
   if ((temporary_wheels)); then
     rm -rf -- "$wheel_dir"
   fi
@@ -117,12 +135,33 @@ echo "Installing AKA Light from: $repo_root"
 echo "Source commit: $commit"
 echo "Wheel directory: $wheel_dir"
 
-"$python_bin" "$repo_root/tools/build_distributions.py" \
-  --output "$wheel_dir" \
-  atrex-aka-framework atrex-aka-legacy atrex-aka-light
+if ! "$python_bin" "$repo_root/tools/build_distributions.py" \
+  --output "$build_dir" \
+  atrex-aka-framework atrex-aka-light; then
+  if ((offline)); then
+    echo "install_light.sh: offline build failed; verify the complete build dependency wheelhouse (see diagnostics above)" >&2
+  fi
+  exit 1
+fi
 
-"$python_bin" -m pip install --force-reinstall --no-index \
-  --find-links "$wheel_dir" atrex-aka-light
+local_wheels=()
+for package in atrex_aka_framework atrex_aka_light; do
+  matches=("$build_dir"/"$package"-*.whl)
+  if ((${#matches[@]} != 1)) || [[ ! -f "${matches[0]}" ]]; then
+    echo "install_light.sh: expected one newly built wheel for $package" >&2
+    exit 1
+  fi
+  local_wheels+=("${matches[0]}")
+done
+if ((offline)); then
+  if ! "$python_bin" -m pip install --dry-run --ignore-installed --no-index \
+      --find-links "$wheel_dir" "${local_wheels[@]}"; then
+    echo "install_light.sh: incomplete offline wheelhouse; supply every transitive runtime dependency" >&2
+    exit 1
+  fi
+fi
+"$python_bin" -m pip install --force-reinstall --find-links "$wheel_dir" "${local_wheels[@]}"
+cp "$build_dir"/* "$wheel_dir/"
 
 "$python_bin" -m aka --help
 "$python_bin" -m aka optimize --help >/dev/null

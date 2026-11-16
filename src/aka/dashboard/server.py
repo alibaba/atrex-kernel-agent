@@ -69,6 +69,8 @@ def create_server(reader: ObservationReader, host: str, port: int, refresh_ms: i
                 self.respond_json(404, {"error": "Artifact is no longer available" if download else "Record not found"})
             except OSError:
                 self.respond_json(503, {"error": "Workspace temporarily unavailable"})
+            except ValueError:
+                self.respond_json(503, {"error": "Public snapshot temporarily unavailable"})
 
         def do_POST(self):
             self.respond_json(405, {"error": "Dashboard is read-only"})

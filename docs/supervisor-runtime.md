@@ -8,21 +8,20 @@ while credentials, private evaluator inputs, source snapshots, and records stay 
 
 ## Lifecycle and authority
 
-The `tool_runtime` provider injects Execution, Experiment, Acceptance, Research, and Wiki
-services. A Session capability authorizes the exact draft and allowed operations. Every
+The Workflow composes public Execution, Experiment and Acceptance services with its Research
+and Wiki services. A Session capability authorizes the exact draft and allowed operations. Every
 request checks authorization, workspace binding, deadlines, and revocation.
 
 | Owner | Implementation |
 | --- | --- |
-| HTTP routing and capabilities | `aka.light.runtime.server` |
-| Provider composition | `aka.light.runtime.provider`, `services` |
-| Agent clients | `aka.light.runtime.client.sandbox`, `client.plugin` |
-| Measurement records and reuse | `aka.light.experiment` |
-| Native Eval/ABBA and public results | `aka.light.evaluation` |
-| Physical dispatch and recovery | `aka.light.execution` |
-| Knowledge lifecycle | `aka.light.wiki.service` |
-| Research mutation and submit-kernel validation | `aka.light.workflow.journal_service` |
-| Immutable submit-kernel audit | `aka.light.workflow.submissions` |
+| Scoped tool transport | `aka.agent.tools` (Unix socket ToolHost) |
+| Runtime orchestration | `aka.workflow.light.orchestration.supervisor_runtime` |
+| Agent clients and resources | `aka.resources.tools` |
+| Measurement records and reuse | `aka.experiment` |
+| Native Eval/ABBA and public results | `aka.evaluation` |
+| Physical dispatch and recovery | `aka.execution` |
+| Research and submit-kernel validation | `aka.workflow.light.host.journal` |
+| Submission audit | `aka.workflow.light.long_horizon.submissions` |
 
 Direction and Experiment validation uses an in-memory snapshot of the Campaign Research Store.
 The Runtime does not materialize a compatibility Episode Journal or
@@ -36,7 +35,7 @@ are durable across requests; Session tokens are not durable recovery credentials
 
 The Campaign root has one authoritative `campaign.json`, serialized by `campaign.lock`. Schema v3
 contains the immutable launch composition, the Campaign-wide SourceProvider file-system/contract
-binding, the latest effective `runtime_configuration`, and—after V0 succeeds—the V0 Agent commit
+binding, the latest effective `runtime_configuration`, and—after initial source preparation—the V0 Agent commit
 and canonical source-tree digest. Current Runtime writes neither a detached `source/` tree, a
 detached `runtime-config.json`, nor a persistent `initial-source/` snapshot. Source preparation uses
 temporary staging; the only durable complete V0 source is archived at
@@ -82,7 +81,7 @@ uploaded correctly.
 | Profile | Profiler evidence for a selected shape; not correctness or promotion evidence |
 | Dev | Bounded exploratory commands; a source-bound record does not prove the command measured that source |
 | Check / Disassemble | Supported source diagnostics, subject to layout and worker capabilities |
-| Env | Worker capabilities; not a Kernel measurement |
+| Env | Full worker capability response, archived in the central Measurement Store without Kernel performance |
 
 Profile uses `--profile-shape-id`, not Evaluate's `--shape-id`.
 For hidden-shape production inputs, the Supervisor selects the requested opaque case without
@@ -111,9 +110,10 @@ CLI outcomes. Legacy marker streams are private executor evidence, not the Agent
 
 Feedback retains compiler/runner errors, rank-local checks, output identity, numerical errors,
 tolerances, and failing-case seeds. Private dimensions and credentials are redacted.
-The projected diagnostic response is bounded to 8 MiB of ASCII-escaped JSON, with explicit
-truncation metadata. Complete record serialization has a separate 32 MiB limit.
-See [diagnostic and cache contracts](evaluator-outcomes/README.md#diagnostic-size-and-cache-contract).
+The terminal receives a compact receipt with actionable diagnostics and explicit Record paths.
+Complete redacted output is saved in the Record; it is not trimmed to a serialized length budget.
+Dev/Command receipts include bounded previews and the fields containing the full streams.
+Env returns the complete capability output.
 
 Malformed agent requests return field-level repair guidance. A confirmed candidate-source
 rejection returns `candidate_source_rejected` with known-not-submitted evidence.
@@ -123,7 +123,7 @@ require operator repair; they are not reasons to alter the kernel or bypass vali
 ## Wiki
 
 Wiki is enabled by default and is independently configurable through the `wiki` provider
-and `tool_runtime.wiki_options`. The bundled catalog and schemas are package-owned;
+and its selected configuration. The bundled catalog and schemas are package-owned;
 the local corpus comes from the selected checkout and is pinned on first query.
 A replacement provider can supply a remote knowledge service.
 
@@ -141,8 +141,8 @@ See [Wiki providers](optional-light-modules.md#wiki-providers).
 
 ## Deadlines, isolation and recovery
 
-`tool_runtime.config` controls measurement repetitions, queue/request timeouts,
-Wiki options, and agent suspension. Blocking authenticated Runtime requests pause the
+The selected Workflow, Evaluation and Execution configuration controls measurement repetitions,
+queue/request timeouts and Wiki options. Blocking authenticated Runtime requests pause the
 requesting agent tree; that time is excluded from its active-time budget.
 The handler continues running and resumes the agent before sending its response.
 Cancellation and capability revocation terminate owned work rather than granting more authority.
@@ -153,8 +153,9 @@ whole-request limit. GPU allocation deadlines and Wiki execution budgets remain 
 See [module options](optional-light-modules.md#other-module-options) and
 [active-time accounting](optional-light-modules.md#agent-active-time-limit-and-blocking-runtime-calls).
 
-Accepted jobs are polled by ID. Direct HTTP replay uses a persisted idempotency key.
-An uncertain CLI submission without an accepted ID cannot be blindly repeated.
+All Agate control-plane calls use the public SDK. Accepted jobs are short-polled by ID within
+the request budget. An uncertain submission without an accepted ID is not replayed unless
+the transport provides a persistent idempotency guarantee.
 The current [measurement recovery policy](measurement-records.md#failure-and-recovery-policy)
 defines which failed jobs can be replaced and how completed ABBA batches are retained.
 
@@ -165,9 +166,8 @@ See [workspace isolation](agent-workspace-isolation.md).
 
 ## Operator interfaces
 
-The installed host-side Gateway CLI is `python -m aka.light.evaluation.gateway`.
-Its requests are operator-owned and do not automatically acquire a campaign's Session
-capability or measurement history. Agent clients outside a live Session fail explicitly.
-Use `--help` for host-side arguments rather than calling removed checkout scripts.
+The Agent uses `python3 tools/sandbox.py --kind KIND --help` for operation-specific arguments.
+The client requires a live Session capability. Operator inspection uses the eight supported
+observability scripts; direct Agate SDK probes are outside the Campaign measurement history.
 
 For evidence and limitations, see [Light verification](optional-light-modules.md#verification-scope).

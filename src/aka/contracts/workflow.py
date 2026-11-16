@@ -1,4 +1,4 @@
-"""Explicit optimization requests; legacy entry conversion lives outside this contract."""
+"""Explicit AKA Light optimization requests."""
 
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -12,6 +12,9 @@ from .evaluation import (
     DEFAULT_SHAPE_BATCH_SIZE,
     derived_evaluation_timeout,
 )
+
+
+DEFAULT_LIGHT_EPISODE_TIMEOUT = None
 
 
 @dataclass(frozen=True)
@@ -29,31 +32,14 @@ class WorkflowSettings:
     token_budget: int = 0
     target_util: float = 90.0
     setup_timeout: int = 7200
-    max_stall: int = 0
-    fast_episodes: int = 2
-    fast_trials: int = 5
-    convert_after: int = 3
     agent_cli: str = "claude"
     optimization_mode: str = "fast"
-    # Translate a reference-wrapper V0 into the target framework before normal
-    # optimization Episodes. ``never`` remains an explicit opt-out.
-    framework_baseline: str = "auto"
-    gateway_candidate_recovery: str = "disabled"
-    framework_baseline_timeout: int = 28800
-    handoff_resumes: int = 2
-    review_trace_mode: str = "errors"
-    long_reviewer_session: str = ""
-    framework_baseline_reviewers: tuple[str, ...] = ()
-    fast_episode_reviewers: tuple[str, ...] = ()
-    full_episode_reviewers: tuple[str, ...] = ()
-    conversion_budget_action: str = "fail"
-    resume_framework_candidate: bool = False
 
     def __post_init__(self):
         if type(self.specify_dsl) is not bool:
             raise TypeError("specify_dsl must be a boolean")
         if self.optimization_mode not in {
-            "fast", "performance", "ultra", "leaderboard", "production"
+            "fast", "performance", "ultra"
         }:
             raise ValueError(
                 f"unsupported optimization_mode: {self.optimization_mode!r}"
@@ -87,14 +73,10 @@ class WorkflowSettings:
         if len(names) != len(set(names)):
             raise ValueError("agent_reference_paths contain duplicate mount names")
         object.__setattr__(self, "agent_reference_paths", references)
-        for name in ("setup_timeout", "framework_baseline_timeout"):
+        for name in ("setup_timeout",):
             value = getattr(self, name)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if self.review_trace_mode not in {"off", "errors", "all"}:
-            raise ValueError(
-                "review_trace_mode must be one of: off, errors, all"
-            )
         if type(self.expose_evaluator_shapes) is not bool:
             raise TypeError("expose_evaluator_shapes must be a boolean")
 
@@ -116,13 +98,19 @@ class CampaignRuntimeSettings:
     timeout: int | None = None
     verify_repeats: int = DEFAULT_ABBA_REPEATS
     evaluation_step_timeout: int = DEFAULT_EVALUATION_STEP_TIMEOUT
+    warmup_iters: int = 10
+    bench_iters: int = 20
     min_improvement_pct: float = 0.0
     shape_batch_size: int = DEFAULT_SHAPE_BATCH_SIZE
-    # None selects a verified product default when one is known (L20N: 2370).
-    # Eval always requests clock locking; this field selects the graphics bin.
+    # Retained for decoding existing requests. Light only requests clock locking;
+    # Agate selects the graphics frequency.
     gpu_clock_mhz: int | None = None
 
     def __post_init__(self):
+        if type(self.warmup_iters) is not int or self.warmup_iters < 0:
+            raise ValueError("warmup_iters must be a non-negative integer")
+        if type(self.bench_iters) is not int or self.bench_iters <= 0:
+            raise ValueError("bench_iters must be a positive integer")
         if self.timeout is None:
             object.__setattr__(self, "timeout", derived_evaluation_timeout(
                 repeats=self.verify_repeats,

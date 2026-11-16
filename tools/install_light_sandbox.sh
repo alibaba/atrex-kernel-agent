@@ -70,7 +70,6 @@ fi
 python3 -m pip install --no-index --no-deps --force-reinstall \
   "${agate_wheels[0]}" \
   "${deploy_root}"/wheels/atrex_aka_framework-*.whl \
-  "${deploy_root}"/wheels/atrex_aka_legacy-*.whl \
   "${deploy_root}"/wheels/atrex_aka_light-*.whl
 
 command -v bwrap >/dev/null
@@ -78,6 +77,6 @@ command -v bwrap >/dev/null
 export ATREX_SANDBOX_ATREX_BENCH_VERSION="${required_atrex_bench_version}"
 
 aka optimize --help >/dev/null
-python3 -m aka.light.agent.preflight \
+python3 -m aka.agent.preflight \
   --require-agate-version "${required_agate_version}" \
   --require-atrex-bench-version "${required_atrex_bench_version}"

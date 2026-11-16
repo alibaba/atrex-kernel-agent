@@ -281,7 +281,7 @@ across progress-only refreshes.
 Use Python 3.10 or later. From a source checkout:
 
 ```sh
-PYTHONPATH=src python -m aka.dashboard --workspace /path/to/runs --port 0
+PYTHONPATH=src python -m aka.dashboard --workspace-base /path/to/runs --port 0
 PYTHONPATH=src python -m aka.dashboard --demo --port 0
 ```
 
@@ -305,8 +305,8 @@ Find the installed profile:
 
 ```sh
 python -c 'from pathlib import Path; import aka.dashboard; print(Path(aka.dashboard.__file__).parent / "profiles/dashboard.json")'
-aka run --profile /absolute/path/to/dashboard/profiles/dashboard.json -- \
-  --workspace /path/to/runs --port 0
+aka run --profile /absolute/path/to/dashboard/profiles/dashboard.json \
+  --workspace-base /path/to/runs --port 0
 ```
 
 The launch manifest targets `startup`, declares the `observation_source` token and

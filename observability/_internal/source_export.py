@@ -19,10 +19,10 @@ if str(REPOSITORY_ROOT) not in sys.path:
 if str(SOURCE_ROOT) not in sys.path:
     sys.path.insert(0, str(SOURCE_ROOT))
 
-from aka.light.experiment.store import MeasurementStore  # noqa: E402
-from aka.light.runtime.paths import supervisor_measurement_root  # noqa: E402
-from aka.light.workspace.sources import Artifact, from_git  # noqa: E402
-from aka.light.workspace.sources.registry import for_policy  # noqa: E402
+from aka.experiment.measurement_store import MeasurementStore  # noqa: E402
+from aka.workflow.light.support.paths import supervisor_measurement_root  # noqa: E402
+from aka.task.source.formats import Artifact, from_git  # noqa: E402
+from aka.task.source.formats.registry import for_policy  # noqa: E402
 
 from observability._internal.measurement_sources import measurement_workspaces  # noqa: E402
 

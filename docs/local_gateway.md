@@ -1,9 +1,9 @@
 # Community Local Gateway
 
-`python -m aka.legacy.execution.runtime_tools.local_gateway` starts a small,
+`python -m aka.execution.runtime_tools.local_gateway` starts a small,
 standard-library-only scheduler for maintaining and testing the localhost optimization path. It
 accepts native source-archive Eval/ABBA requests from Light as well as requests from
-`python -m aka.legacy.execution.cli`, and queues local GPU commands FIFO. Native evaluation
+`aka execution`, and queues local GPU commands FIFO. Native evaluation
 requires a compatible Atrex-Bench installation on the local GPU host.
 
 ## Start the Server
@@ -11,7 +11,7 @@ requires a compatible Atrex-Bench installation on the local GPU host.
 Run it from the repository root in the Python environment that contains the workload's GPU stack:
 
 ```bash
-python -m aka.legacy.execution.runtime_tools.local_gateway serve \
+python -m aka.execution.runtime_tools.local_gateway serve \
   --host 127.0.0.1 \
   --port 8000 \
   --state-dir .atrex-local-gateway
@@ -21,7 +21,7 @@ If an existing workflow uses a hardware token instead of `local`, register it as
 the optimizer arguments:
 
 ```bash
-python -m aka.legacy.execution.runtime_tools.local_gateway serve --gpu-alias YOUR_GPU_TOKEN
+python -m aka.execution.runtime_tools.local_gateway serve --gpu-alias YOUR_GPU_TOKEN
 ```
 
 The default `--workers 1` serializes commands for one local GPU. A larger value enables parallel command
@@ -36,14 +36,15 @@ silently executed twice.
 Point the default optimizer at the local endpoint:
 
 ```bash
-aka optimize --repo-root "$PWD" -- \
-  --op-dir /path/to/operator \
+ATREX_SANDBOX_URL=http://127.0.0.1:8000 ATREX_SANDBOX_QUEUE_WAIT_GRACE=120 \
+aka optimize --repo-root "$PWD" \
+  --problem /path/to/operator \
   --platform H20 --framework Triton \
-  --sandbox-hardware local \
-  --sandbox-url http://127.0.0.1:8000
+  --hardware local
 ```
 
-Use `--profile workflow` before `--` for the explicit Legacy workflow. The native path
+Clear inherited `ATREX_SANDBOX_PROFILE` and `ATREX_SANDBOX_SSH` first.
+Use `--profile workflow` for the explicit Legacy workflow. The native path
 uploads source archives and retains complete Atrex-Bench correctness and ABBA receipts;
 Legacy retains its evaluator/command compatibility path.
 
@@ -52,7 +53,7 @@ parallel. Their sandbox requests still enter this scheduler's FIFO queue, and th
 uses flat framework/hardware-suffixed names such as `kernel_opt_<name>_triton_h20`. Production
 campaigns use a separate path ending in `_production`.
 
-`--sandbox-hardware local` selects the local executor independently of the logical `--platform` value.
+`--hardware local` selects the local executor independently of the logical `--platform` value.
 The optimizer does not compare platform and inventory names because inventory may expose an alias or a
 desensitized GPU description. It uses the runtime architecture probe for automatic framework dispatch.
 
@@ -76,7 +77,7 @@ The community scheduler implements:
 - `POST /v1/jobs/<job_id>/cancel`
 - legacy `GET /v1/evals/<job_id>` polling compatibility
 
-`python -m aka.legacy.execution.cli` prefers typed `eval` and `profile` requests when the workspace fits their source
+`aka execution` prefers typed `eval` and `profile` requests when the workspace fits their source
 contract, and falls back to a self-contained `dev` request for SOL, aggregate, custom-input, or otherwise
 unrepresentable commands. `disassemble` remains unsupported and returns a structured HTTP 501
 `kind_not_supported` response.
