@@ -8,7 +8,7 @@ authentication, Gateway operations, parameters, file transfer, and client limits
 Load only the references required by the request, such as custom SOL problems or
 multi-GPU configuration. This Skill does not duplicate that manual.
 
-The selected legacy plugin contributes the complete Gateway Skill tree when its
+The selected remote plugin contributes the complete Gateway Skill tree when its
 `gateway_skill_path` configuration names an existing resource directory. The
 application installs it into this optimization workspace alongside `aka-execution`
 and publishes both entry points in the Skill catalog and prompt instructions.
@@ -51,7 +51,7 @@ change.
 ## SSH and Local
 
 The current Execution implementation supplies no separate SSH or direct Local
-Skill. Use [Legacy requests](legacy-request.md) and the matching guidance
+Skill. Use [Remote requests](remote-request.md) and the matching guidance
 provided by this run. When a backend supplies its own Skill, resource selection
 must publish its actual catalog name and entry point.
 

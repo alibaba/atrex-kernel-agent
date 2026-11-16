@@ -1,5 +1,5 @@
 """Register the shared remote Execution provider."""
-from .executor import LegacyExecutor
+from .executor import RemoteExecutor
 from pathlib import Path
 
 from aka.contracts.agent_resources import AgentSkill
@@ -11,11 +11,12 @@ identity_files = ("plugin.py", "executor.py", "runtime.py")
 identity_packages = ("aka.execution", "aka.contracts.execution")
 Config = {"type": "object", "properties": {"gateway_skill_path": {"type": "string"}, "profiling": PROFILING_CONFIG,
           "idempotent_replay":{"type":"boolean"},
+          "dev_dependencies":{"type":"array", "items":{"type":"string"}},
           "url":{"type":"string"}, "profile":{"type":"string"},
           "recovery_retry_delays":{"type":"array", "items":{"type":"number", "minimum":0}},
           "recovery_retry_budget_s":{"type":"number", "minimum":0}},
           "additionalProperties": False}
-Defaults = {"gateway_skill_path": "", "profiling": [], "idempotent_replay":False,
+Defaults = {"gateway_skill_path": "", "profiling": [], "dev_dependencies": [], "idempotent_replay":False,
             "recovery_retry_delays":[], "recovery_retry_budget_s":0}
 
 
@@ -34,7 +35,7 @@ def validate_config(config):
 
 def apply(ctx, config):
     contribute(ctx, config["profiling"])
-    ctx.provide("executor", LegacyExecutor(configuration=config))
+    ctx.provide("executor", RemoteExecutor(configuration=config))
     ctx.contribute("agent_skills", "aka-execution", AgentSkill(
         "aka-execution", Path(__file__).resolve().parent.parent / "skills" / "aka-execution",
         "Prepare requests for the selected AKA Execution entry point and preserve complete results."))

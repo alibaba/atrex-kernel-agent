@@ -1,6 +1,6 @@
-# Legacy Execution requests
+# Remote Execution requests
 
-The `legacy` Execution provider runs the existing sandbox launcher. It supports
+The `remote` Execution provider runs the existing sandbox launcher. It supports
 SSH, Agate Gateway, and direct HTTP transport through one provider. The selected
 Execution module contributes this Skill to the optimization Agent's workspace
 through the application's resource installer.
@@ -23,7 +23,7 @@ aka execution \
 
 | Option | Current meaning |
 | --- | --- |
-| `--profile` | Execution profile; the only explicit choice is legacy. Omission inherits the selection |
+| `--profile` | Execution profile; select `remote` or `local`. Omission inherits the selection |
 | `--profiles-dir` / `--patch` | Profile root and Core patches; explicit patches append to inherited patches |
 | `--gateway-profile` / `--url` / `--ssh` | Mutually exclusive endpoints; omission retains original environment / client resolution |
 | `--hardware` | Required sandbox hardware token; the backend determines its validity |
@@ -61,11 +61,11 @@ automatic consequence of reading the Skill.
 
 The public interface is `Executor.run(CommandSpec) -> JobResult`. CommandSpec
 contains workspace, command, timeout, environment, hardware, artifacts,
-operation, and optional cooperative cancellation. Legacy requires an application
+operation, and optional cooperative cancellation. Remote execution requires an application
 adapter's private runtime binding; use the CLI or existing application entry
-point rather than calling an unbound LegacyExecutor directly.
+point rather than calling an unbound RemoteExecutor directly.
 
-The sandbox host adapter supports the Legacy provider. Original wall timeout,
+The sandbox host adapter supports the remote provider. Original wall timeout,
 host hooks, and cooperative cancellation remain active inside that implementation.
 Other synchronous Executors can be injected into consumers using their own
 binding; the sandbox adapter does not supply supervision for them.

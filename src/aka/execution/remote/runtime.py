@@ -1,4 +1,4 @@
-"""Private host binding for the original sandbox launcher and recovery hooks."""
+"""Private host binding for the shared remote launcher and recovery hooks."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
@@ -63,7 +63,7 @@ def transport_arguments(arguments: tuple[str, ...]):
 
 
 def default_binding(context):
-    """Resolve Legacy-owned configuration once; returned instances need no invocation scope."""
+    """Resolve remote configuration once; returned instances need no invocation scope."""
     import sys
     from aka.execution.configuration import connection_settings, queue_wait_grace
     from aka.execution.processes import spawn_owned_session

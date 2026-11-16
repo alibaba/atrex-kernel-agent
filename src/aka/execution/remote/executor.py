@@ -1,4 +1,4 @@
-"""Main sandbox command construction and owned-process execution.
+"""Shared remote command construction and owned-process execution.
 
 The launcher retains SSH/gateway transport, staging and remote recovery. This
 module owns argv construction, queue/wall budgets and the host process lifetime;
@@ -15,12 +15,12 @@ from .runtime import ExecutionHooks, SandboxRequest, current_transport_arguments
 from aka.execution.job_recovery import GatewayRecoveryMixin, recovery_policy
 
 
-class LegacyExecutor(GatewayRecoveryMixin):
+class RemoteExecutor(GatewayRecoveryMixin):
     sandbox_cli_options = True
     sandbox_cli_endpoint_environment = False
     capabilities = BackendCapabilities(
         operations=frozenset(("auto", "run", "profile", "dev", "preflight", "check", "disassemble", "same_allocation_abba")), cancellation=True, prepared_requests=True,
-        input_files=True, output_options=True, prepared_inputs=True,
+        input_files=True, output_options=True, prepared_inputs=True, source_archives=True,
     )
     resource_identity = ResourceIdentity("remote")
 
@@ -28,6 +28,10 @@ class LegacyExecutor(GatewayRecoveryMixin):
         self.request = request
         self.hooks = hooks
         self.configuration = dict(configuration or {})
+        if {"retry_delays", "warmup_iters"}.intersection(self.configuration):
+            raise ValueError("execution timing/retry policy fields are retired; use Evaluation requests and Experiment retry configuration")
+        if "requirements_file" in self.configuration:
+            raise ValueError("worker requirements belong to Task, not execution provider configuration")
         if request is not None and request.ssh:
             self.capabilities = replace(type(self).capabilities, source_archives=True, prepared_inputs=False)
         recovery_policy(self.configuration)
@@ -78,8 +82,17 @@ class LegacyExecutor(GatewayRecoveryMixin):
             prepared_operation(json.loads(command.submission), command.operation)
         if self.request is None:
             from aka.contracts.execution import ExecutionContext
-            return self.bind(ExecutionContext(command.environment, command.hardware, command.timeout,
-                filesystem_access=command.filesystem_access))._run(command)
+            bound = self.bind(ExecutionContext(command.environment, command.hardware, command.timeout,
+                filesystem_access=command.filesystem_access))
+            try:
+                return bound._run(command)
+            finally:
+                if hasattr(bound, "_selected_job_transport"):
+                    self._selected_job_transport = bound._selected_job_transport
+        if type(command.timeout) is not int or command.timeout <= 0:
+            raise ValueError("execution timeout must be a positive integer")
+        from aka.execution.gateway.source_archives import prepared_payload
+        submission = prepared_payload(command, ssh=bool(self.request.ssh))
         from aka.execution.environment_query import command_query, require_supported
         support = self._environment_backend().check(command_query(command), discover=False)
         require_supported(support, require_known=command.operation == NATIVE_ABBA)
@@ -99,17 +112,15 @@ class LegacyExecutor(GatewayRecoveryMixin):
             timeout=command.timeout, environment=bound_limits(command.environment, support), hardware=command.hardware,
             sync=command.artifacts,
             gateway_kind=self.request.gateway_kind if command.operation == "preflight" else command.operation,
-            preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=command.submission, num_gpus=command.num_gpus,
+            preflight=command.operation == "preflight", cancel_event=command.cancel_event, submission=submission, num_gpus=command.num_gpus,
             on_observation=observed if command.on_observation is not None else None,
             input_files=command.input_files, output_options=command.output_options, profile_options=command.profile_options)
         request = replace(request, prepared_inputs=command.prepared_inputs)
-        if request.ssh and command.submission is not None:
-            from aka.execution.gateway.source_archives import prepared_payload
-            request = replace(request, submission=prepared_payload(command, ssh=True))
-        if command.requirements:
+        requirements = command.requirements or tuple(self.configuration.get("dev_dependencies", ()))
+        if requirements:
             import json
             request = replace(request, environment={**request.environment,
-                "AKA_GATEWAY_DEV_DEPENDENCIES": json.dumps(command.requirements)})
+                "AKA_GATEWAY_DEV_DEPENDENCIES": json.dumps(requirements)})
         if not request.ssh:
             transport = self._job_transport()
             environment = dict(request.environment)
