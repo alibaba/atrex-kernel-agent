@@ -1,30 +1,8 @@
 #!/usr/bin/env python3
-"""Session-scoped Agent tool client; GPU/Wiki authority stays in the Supervisor.
-
-Preferred typed GPU commands select their managed evaluator inputs automatically:
-  python3 tools/sandbox.py --kind evaluate --no-sync
-  python3 tools/sandbox.py --kind profile --no-sync
-An explicit command after ``--`` is an operation-specific override; use it only when the installed
-GPU-measurement Skill documents that exact form.
-Custom execution examples:
-  python3 tools/sandbox.py --kind dev --input scratch/probe.py -- python3 scratch/probe.py
-  python3 tools/sandbox.py --kind command -- python3 -m scratch.probe
-Use module form for Python Command scripts below scratch/ so the uploaded workspace root remains
-on Python's import path and root modules such as kernel.py stay importable.
-Additional typed operations: check, disassemble, env; Wiki: wiki-query, wiki-search,
-wiki-hardware. Use --kind OPERATION --help for the operation's request options.
-Runtime calls print the complete canonical operation/status/result receipt. Env is read-only
-discovery; its complete redacted observation uses the same receipt and is retained privately.
-Read saved measurement results with ordinary file or JSON operations on
-``records/GATEWAY_ID.json`` and inspect exact Kernel source with local Git commits and refs. ABBA
-accepts --baseline-commit FULL_GIT_COMMIT; Runtime exports it internally.
-Root PROGRESS.md includes enabled Direction state and each Shape's fastest measured Kernel;
-Experiments are versioned under research-library/experiments/ when enabled.
-Possible Runtime mutations include update-direction, prioritize-direction, record-experiment,
-and submit-kernel --request-file FILE. The installed
-runtime-records Skill lists the module-specific subset available in this Episode; disabled calls
-are rejected. Research and submission tools require an active Campaign Session.
-No direct Agate fallback is performed when the Runtime is unavailable.
+"""Session-scoped Runtime client. Use --help for this Campaign's enabled tools,
+and --kind OPERATION --help for its request schema. Wiki, research and submission
+operations follow their independently installed Skills. Runtime returns the full
+canonical receipt and saves observations in records/. No direct Agate fallback.
 """
 from __future__ import annotations
 
@@ -168,7 +146,10 @@ def proxy_wiki(tool: str, argv: list[str]) -> int:
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if args in (["--help"], ["-h"]):
-        print(__doc__)
+        kinds = json.loads(os.environ.get("AKA_AGATE_TOOLS", '["env", "evaluate", "command"]'))
+        print("Agate Runtime tools: " + ", ".join(kinds))
+        print("Use --kind OPERATION --help for enabled tool options. "
+              "Wiki and research tools use their separately installed Skills; submit-kernel uses --request-file.")
         return 0
     # Only recognize the full client-side dispatcher; the Supervisor validates
     # every argument using parsers with allow_abbrev=False.

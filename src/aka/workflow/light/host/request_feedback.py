@@ -195,6 +195,10 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                         "gateway-", minimum=0, maximum=64
                     )
             else:
+                properties["analysis"] = {
+                    **_text(),
+                    "description": "Optional current assessment or interim findings. Omit to preserve the previous analysis; lifecycle status stays unchanged.",
+                }
                 properties["direction_id"] = {
                     "type": "string",
                     "pattern": "^direction_[0-9a-f]{32}$",
@@ -232,7 +236,7 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
     return None
 
 
-def gateway_schema(kind, parser):
+def gateway_schema(kind, parser, *, enabled_kinds=None):
     """Read option types/choices from the real parser; never expose its defaults."""
     groups = {
         "evaluate": {"--mode", "--version", "--shape-id", "--timed-runs", "--baseline-commit",
@@ -248,6 +252,8 @@ def gateway_schema(kind, parser):
         "env": {"--env-gpu", "--env-capabilities", "--env-force", "--force",
                 "--frameworks", "--limits", "--counters"},
     }
+    if enabled_kinds is not None:
+        groups = {key: value for key, value in groups.items() if key in enabled_kinds}
     if kind not in groups:
         return {"supported_kinds": list(groups), "instruction": "Use an explicit --kind and full option names."}
     allowed = groups[kind] | {"--kind"}

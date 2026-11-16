@@ -81,6 +81,7 @@ DIRECTION_PROPOSAL_FIELDS = {
 }
 DIRECTION_PROPOSAL_OPTIONAL_FIELDS = {"stop_conditions"}
 DIRECTION_REVISION_FIELDS = DIRECTION_PROPOSAL_FIELDS | {"direction_id"}
+DIRECTION_REVISION_OPTIONAL_FIELDS = DIRECTION_PROPOSAL_OPTIONAL_FIELDS | {"analysis"}
 DIRECTION_CHANGE_SCOPES = {"incremental", "major_redesign"}
 DIRECTION_UPDATE_FIELDS = {"action", "direction_id", "analysis"}
 DIRECTION_CLOSURE_FIELDS = DIRECTION_UPDATE_FIELDS
@@ -997,6 +998,8 @@ def _apply_direction_events(
                     _text(event.get("rationale"), "Direction rationale")
                 if "success_criteria" in event:
                     _text_list(event.get("success_criteria"), "Direction success_criteria")
+                if "analysis" in event:
+                    _text(event["analysis"], "Direction analysis")
                 revision = event.get("revision", 0)
                 if type(revision) is not int or revision < 0:
                     raise ValueError("Direction revision must be a non-negative integer")
@@ -1052,6 +1055,8 @@ def _apply_direction_events(
                     event.get("objective", event.get("hypothesis"))
                     if field == "objective" else event[field]
                 )
+            if "analysis" in event:
+                direction["analysis"] = event["analysis"]
             direction["change_scope"] = _change_scope(event["change_scope"])
             direction["revision"] = event["revision"]
             direction["updated_at"] = event["recorded_at"]
@@ -2882,6 +2887,7 @@ def _progress_markdown(
                     ("Objective", "objective"),
                     ("Applicability", "applicability"),
                     ("Expected benefit", "expected_benefit"),
+                    ("Current assessment", "analysis"),
                     ("Reopen when", "reopen_condition"),
                 ):
                     if item.get(field):
@@ -3110,7 +3116,7 @@ def update_direction(
                 "Direction genealogy is immutable; propose a new derived Direction instead of "
                 "changing ancestry in a revision"
             )
-        revision_optional = set(DIRECTION_PROPOSAL_OPTIONAL_FIELDS)
+        revision_optional = set(DIRECTION_REVISION_OPTIONAL_FIELDS)
         if not experiments_enabled:
             revision_optional.add("gateway_record_ids")
         require_fields(
@@ -3176,6 +3182,10 @@ def update_direction(
             ),
             "recorded_at": _now(),
         }
+        if "analysis" in value:
+            event["analysis"] = _text(value["analysis"], "Direction analysis")
+        elif previous.get("analysis") is not None:
+            event["analysis"] = previous["analysis"]
         if status_before_mutation == "proposed":
             # Editing an unstarted draft does not spend a reviewer Session.
             event["claim_review_quality"] = "review_not_requested"
@@ -5609,6 +5619,7 @@ __all__ = [
     "DIRECTION_PROPOSAL_FIELDS",
     "DIRECTION_PROPOSAL_OPTIONAL_FIELDS",
     "DIRECTION_REVISION_FIELDS",
+    "DIRECTION_REVISION_OPTIONAL_FIELDS",
     "DIRECTION_UPDATE_FIELDS",
     "EXPERIMENT_FIELDS",
     "EXPERIMENT_OPTIONAL_FIELDS",

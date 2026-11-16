@@ -11,7 +11,7 @@ from unittest.mock import patch
 from aka.bootstrap.host import run_profile
 from aka.bootstrap.workflow_cli import profile_path
 from aka.bootstrap.launch import create_launch
-from aka.contracts.workflow import WorkflowSettings
+from aka.contracts.workflow import WorkflowSettings, CampaignRuntimeSettings
 from aka.contracts.workflow_launch import encode_launch
 from aka.contracts.startup import Invocation
 from aka.contracts.execution import JobResult, ExecutionFacts
@@ -36,8 +36,9 @@ class ComposedCampaignTest(unittest.TestCase):
         self.problem=bench/'data/vector-add'
         shutil.copytree(ROOT/'skills/atrex-aka-light/examples/native-atrex-bench-vector-add',self.problem)
 
-    def run_campaign(self,mode,modules,search=None, evaluate=False):
+    def run_campaign(self,mode,modules,search=None, evaluate=False, agate_tools=("env", "evaluate", "command")):
         launch=create_launch(self.problem,workspace_base=self.root/('runs-'+mode+'-'+'-'.join(modules)+'-'+str(search)),
+            runtime=CampaignRuntimeSettings(agate_tools=agate_tools),
             settings=WorkflowSettings(platform='L20N', framework='cuda' if mode=='ultra' else '',optimization_mode=mode,max_iters=2))
         calls=[];tool_replies=[];gpu_calls=[]
         def fake_gpu(owner,command):
@@ -72,8 +73,19 @@ class ComposedCampaignTest(unittest.TestCase):
                 return value['result']
             help_result=subprocess.run([sys.executable,'tools/sandbox.py','--kind','profile','--help'],
                 cwd=cwd,env={**os.environ,**env,'PYTHONPATH':str(ROOT/'src')},capture_output=True,text=True)
-            self.assertEqual(help_result.returncode,0,help_result.stderr)
-            self.assertIn('--profiler',help_result.stdout)
+            available=json.loads(env['AKA_AGATE_TOOLS'])
+            self.assertEqual(available,list(launch.request.runtime.agate_tools))
+            if 'profile' in available:
+                self.assertEqual(help_result.returncode,0,help_result.stderr)
+                self.assertIn('--profiler',help_result.stdout)
+            else:
+                self.assertNotEqual(help_result.returncode,0)
+                self.assertIn('runtime_tool_disabled',help_result.stderr)
+                self.assertNotIn('invalid_runtime_response',help_result.stderr)
+            overview=subprocess.run([sys.executable,'tools/sandbox.py','--help'],cwd=cwd,
+                env={**os.environ,**env},capture_output=True,text=True)
+            self.assertEqual(overview.returncode,0)
+            self.assertIn('Agate Runtime tools: ' + ', '.join(available),overview.stdout)
             process=subprocess.run([sys.executable,'tools/sandbox.py','--kind','command','--','python3','-m','scratch.probe'],
                 cwd=cwd,env={**os.environ,**env,'PYTHONPATH':str(ROOT/'src')},capture_output=True,text=True)
             self.assertEqual(process.returncode,0,process.stderr)

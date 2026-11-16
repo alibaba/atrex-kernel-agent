@@ -105,8 +105,11 @@ class CampaignRuntimeSettings:
     # Retained for decoding existing requests. Light only requests clock locking;
     # Agate selects the graphics frequency.
     gpu_clock_mhz: int | None = None
+    agate_tools: tuple[str, ...] = ("env", "evaluate", "command")
 
     def __post_init__(self):
+        from .agate_tools import normalize_agate_tools
+        object.__setattr__(self, "agate_tools", normalize_agate_tools(self.agate_tools))
         if type(self.warmup_iters) is not int or self.warmup_iters < 0:
             raise ValueError("warmup_iters must be a non-negative integer")
         if type(self.bench_iters) is not int or self.bench_iters <= 0:

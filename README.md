@@ -54,6 +54,13 @@ keep a checkout matching the installed module distributions.
 
 ## Quick Start
 
+Agent-visible Agate tools default to `env`, `evaluate` (including ABBA), and `command`.
+Select them with `--agate-tools env evaluate command profile`, or use `--agate-tools all`
+to also expose `profile`, `dev`, `check`, and `disassemble`. This is a replacement list,
+not an additive flag. Disabled tools are rejected before GPU submission. Wiki,
+Direction/Experiment, and `submit-kernel` keep their independent configuration.
+
+
 Choose one final-source policy:
 
 - **Fast:** `--optimization-mode fast`; the Agent chooses a DSL and may use declared,

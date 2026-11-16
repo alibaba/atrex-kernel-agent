@@ -62,7 +62,8 @@ class ManagedRuntimeFactory:
         services = RuntimeServices(w.agent, executor, experiments, evaluator, command,
             evaluation_input, selected, c._module_resources, workspace_provider,
             JournalFactory(tool_modules=w.options.tool_modules), w.problem.snapshot(c.problem).identity)
-        configured = replace(configuration, measurement_repetitions=self.measurement_repetitions,
+        configured = replace(configuration, agate_tools=c.request.runtime.agate_tools,
+            measurement_repetitions=self.measurement_repetitions,
             wiki_enabled=self.wiki, wiki_options=WikiConfig(**(w.options.wiki_options or {})),
             request_timeout=w.options.request_timeout if w.options.request_timeout is not None
                 else configuration.request_timeout, queue_timeout=w.options.queue_timeout)

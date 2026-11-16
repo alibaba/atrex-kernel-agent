@@ -26,7 +26,11 @@ def register_request_options(parser):
             if type(None) in get_args(annotation):
                 annotation = next(value for value in get_args(annotation) if value is not type(None))
             options = {"dest": field.name, "default": argparse.SUPPRESS}
-            if annotation is bool:
+            if field.name == "agate_tools":
+                from aka.contracts.agate_tools import AGATE_TOOLS
+                options.update(nargs="+", choices=(*AGATE_TOOLS, "all"),
+                    help="Agent-visible Agate Runtime tools (default: env evaluate command); all enables every kind. Wiki/research/submission tools are independent.")
+            elif annotation is bool:
                 options["action"] = argparse.BooleanOptionalAction
             elif annotation in (str, int, float):
                 options["type"] = annotation

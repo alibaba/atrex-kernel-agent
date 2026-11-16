@@ -163,12 +163,15 @@ class RuntimeConfig:
     measurement_repetitions: int = 1
     pause_agent_during_requests: bool = True
     research_synchronization: str = "independent"
+    agate_tools: tuple[str, ...] = ("env", "evaluate", "command")
     wiki_enabled: bool = True
     wiki_options: WikiConfig = field(default_factory=WikiConfig)
     # Selected aka.contracts.wiki.WikiProvider; None selects the built-in local store.
     wiki_provider: object | None = field(default=None, compare=False, repr=False)
 
     def __post_init__(self):
+        from aka.contracts.agate_tools import normalize_agate_tools
+        object.__setattr__(self, "agate_tools", normalize_agate_tools(self.agate_tools))
         if not isinstance(self.workspace_policy, str):
             raise TypeError("Runtime workspace_policy must be text")
         if type(self.pause_agent_during_requests) is not bool:
@@ -474,6 +477,7 @@ class SupervisorRuntime:
                 "warmup_iters": services.configuration.warmup_iters,
                 "bench_iters": services.configuration.bench_iters,
                 "shape_batch_size": services.configuration.shape_batch_size,
+                "agate_tools": list(config.agate_tools),
                 "request_timeout_seconds": self.request_timeout_seconds,
                 "queue_timeout_seconds": config.queue_timeout,
                 "measurement_repetitions": config.measurement_repetitions,
@@ -589,6 +593,7 @@ class SupervisorRuntime:
             "ATREX_TELEMETRY_ITERATION_ID", "ATREX_ENVIRONMENT_STATE_FILE") if key in environment})
         capability.journal = self.journals.get(workspace)
         values = scrub_environment(environment)
+        values["AKA_AGATE_TOOLS"] = json.dumps(self.config.agate_tools)
         if capability.journal and capability.journal.view:
             with capability.journal.lock:
                 protected = capability.journal.view.prepare_session()
@@ -826,13 +831,14 @@ class SupervisorRuntime:
                 deadline = min(deadline, parent.deadline)
             with self.request_lock(capability, deadline, "acceptance"):
                 return self.execute(capability, "/v1/gateway/execute", {"argv": argv}, reuse_completed=True,
-                                    execution_timeout=execution_timeout, reference_snapshot=reference_snapshot)
+                                    execution_timeout=execution_timeout, reference_snapshot=reference_snapshot, trusted=True)
         finally:
             self.revoke(token)
 
     def execute(self, capability: Capability, route: str, request: dict, *,
                 reuse_completed=False, reuse_correctness=False, candidate_source=None,
-                execution_timeout: int | None = None, reference_snapshot: Path | None = None) -> dict:
+                execution_timeout: int | None = None, reference_snapshot: Path | None = None,
+                trusted: bool = False) -> dict:
         if route == "/v1/plugins/execute":
             return self.execute_plugin(capability, request)
         if route == "/v1/journal/execute":
@@ -842,6 +848,28 @@ class SupervisorRuntime:
             if set(request) != allowed:
                 raise ValueError(f"Request fields must be {sorted(allowed)}")
             argv = validated_argv(request["argv"])
+        if route == "/v1/gateway/execute" and not trusted:
+            words = argv[:argv.index("--")] if "--" in argv else argv
+            if words in (["--help"], ["-h"]):
+                return {"operation": "help", "status": "completed", "result": {
+                    "available_kinds": list(self.config.agate_tools),
+                    "instruction": "Use --kind OPERATION --help. Wiki, research and submit-kernel have separate enablement."}}
+            with _validating_request():
+                from aka.evaluation.tool_requests import parse_tool_arguments
+                from aka.execution.command_syntax import requested_operation
+                access_argv = [word for word in words if word not in {"--help", "-h"}]
+                access_argv.extend(argv[len(words):])  # Preserve remote argv, including its --help.
+                parsed_access = parse_tool_arguments(access_argv)
+                kind = parsed_access.kind
+                if kind == "auto":
+                    kind = requested_operation("auto", parsed_access.command) if parsed_access.command else "run"
+                    kind = {"run": "evaluate", "same_allocation_abba": "evaluate"}.get(kind, kind)
+            if kind not in self.config.agate_tools:
+                raise AgentRequestError(f"Agate Runtime tool {kind!r} is disabled for this Campaign.",
+                    code="runtime_tool_disabled", next_action=(
+                        "Use one of the enabled tools: " + ", ".join(self.config.agate_tools)
+                        if self.config.agate_tools else "No Agate tools are enabled; use existing saved evidence."),
+                    available_kinds=list(self.config.agate_tools), job_submitted=False)
         if route == "/v1/gateway/execute" and any(arg in {"--help", "-h"} for arg in argv[:argv.index("--") if "--" in argv else len(argv)]):
             from aka.evaluation.tool_requests import tool_argument_parser
             from aka.workflow.light.host.request_feedback import gateway_schema
@@ -851,7 +879,7 @@ class SupervisorRuntime:
             kinds += [word.split("=", 1)[1] for word in words if word.startswith("--kind=")]
             kind = kinds[0] if len(kinds) == 1 else None
             with _validating_request():
-                schema = gateway_schema(kind, parser)
+                schema = gateway_schema(kind, parser, enabled_kinds=self.config.agate_tools)
                 if "supported_kinds" in schema:
                     raise ValueError(f"--help requires one supported --kind ({', '.join(schema['supported_kinds'])}); got {kind!r}")
             return {"operation": "help", "status": "completed", "result": {

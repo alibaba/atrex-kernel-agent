@@ -1596,9 +1596,7 @@ class Campaign:
                 "performance_score is a reference-relative diagnostic. "
                 "Use --kind evaluate --mode full --no-sync for the complete workload. "
                 "Correctness-only, custom-input or subset results do not qualify as full Evaluate evidence for submit-kernel. "
-                "For diagnostic Profile, use --kind profile --profile-shape-id ID --no-sync "
-                "with a Shape ID from a saved result. " + profile_shapes + " The same option selects the "
-                "privately supplied case in Typed Profile or a compatible Dev fallback. "
+                + profile_shapes + " Use tools/sandbox.py --help for available diagnostic tools. "
                 "Never substitute a custom timing/correctness harness for official evaluation."
             )
         if is_sol_op(Path(self.kernel_demo).resolve().parent):
@@ -1612,12 +1610,15 @@ class Campaign:
         raise ValueError("A canonical Atrex-Bench or SOL evaluator is required")
 
     def _sandbox_directive(self) -> str:
-        return sandbox_directive(
+        directive = sandbox_directive(
             self.sandbox_hardware,
             self.sandbox_profile,
             self.sandbox_url,
             self.sandbox_ssh,
         )
+        tools = getattr(getattr(getattr(self, "request", None), "runtime", None),
+                        "agate_tools", ("env", "evaluate", "command"))
+        return directive + "\nAvailable Agate Runtime tools: " + ", ".join(tools) + ". Wiki, research and submit-kernel are configured separately.\n"
 
 
     def _mode_directive(self) -> str:

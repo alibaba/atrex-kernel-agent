@@ -32,7 +32,8 @@ tree read-only; native-mode edits are discarded on the next Runtime refresh.
 
 Root `PROGRESS.md` is the bounded research projection and includes a capped accepted-submission per-Shape Pareto
 summary, an independently ordered Local work queue, paused and terminal sections, and an advisory Shared direction pool
-when Direction recording is enabled. Global aggregation orders only the shared pool and never
+when Direction recording is enabled. Each listed Direction includes its current assessment (`analysis`)
+when recorded, alongside its objective and expected benefit. Global aggregation orders only the shared pool and never
 overwrites local priorities. Read root `frontier.json` for the complete eligible accepted-submission frontier.
 Peer Directions may appear as `in_progress(Tn)` in `PROGRESS.md`. Choose executable work from the
 Local work queue. Use the Shared pool to absorb compatible mechanisms, evidence, and applicability
@@ -131,11 +132,15 @@ Correct an existing open local Direction without inventing a replacement identit
   "objective": "Remove repeated KV work and expose enough parallelism across decode regimes",
   "applicability": "Short-query, long-KV and GQA-dominated workloads",
   "expected_benefit": "Reduce decode-side full-workload latency",
-  "plan": ["Measure GQA packing", "Evaluate KSPLIT=1/2/4", "Compare combine families"]
+  "plan": ["Measure GQA packing", "Evaluate KSPLIT=1/2/4", "Compare combine families"],
+  "analysis": "Packing improved the measured long-KV regimes; split and combine variants remain open."
 }
 ```
 
-`revise` keeps `direction_id`, lifecycle status and genealogy and increments `revision`. Revising a
+`revise` keeps `direction_id`, lifecycle status and genealogy and increments `revision`. Optional `analysis`
+updates the current assessment or interim findings; omitting it preserves the previous value.
+Supply non-empty text when updating it. The assessment is included in the revision, active-state
+Review, shared projection and `PROGRESS.md`; no close/restart is needed. Revising a
 proposed draft remains `review_not_requested`; revising an active Direction reruns Review. It replaces the objective,
 scope and plan in the latest projection. Only `proposed` or
 `in_progress` local Directions can be revised; restart a deferred or blocked Direction first.

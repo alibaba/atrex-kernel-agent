@@ -32,6 +32,20 @@ A new Campaign creates initial source without mandatory V0 Evaluate. Agent Sessi
 and Reviews have no active-time limit. Continuation restores the recorded launch
 selection; do not replace its profile or patch while resuming.
 
+## Agent-visible Agate tools
+
+`--agate-tools env evaluate command` is the default. Supply a replacement list, for example
+`--agate-tools env evaluate command profile`, or `--agate-tools all` for all seven kinds:
+`env`, `evaluate`, `command`, `profile`, `dev`, `check`, `disassemble`.
+The typed JSON equivalent is `--runtime '{"agate_tools":["env","evaluate","command"]}'`;
+an empty array exposes no Agate tools. `all` must appear alone. Unknown and duplicate names
+are rejected at launch. The selection persists in WorkflowLaunch and applies to every lineage.
+
+Agent help and Prompt identify the enabled kinds. Runtime rejects disabled kinds before staging
+or submitting a remote job. ABBA remains part of `evaluate`; internal evaluation implementation
+and Supervisor-owned checks are unaffected. Wiki, Direction/Experiment, and `submit-kernel`
+retain their independent enablement. Agent-side inspection uses `python3 tools/sandbox.py --help`.
+
 ## Measurement defaults
 
 | Option | Default | Meaning |

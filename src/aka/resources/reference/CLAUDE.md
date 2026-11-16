@@ -41,10 +41,10 @@ operations and request schemas. Do not infer a different workflow from unrelated
   local GPU/toolchain with `torch`, `cuda`, `nvidia-smi`, `nvcc`, `ptxas`, `ncu`, or equivalents.
   Use `python3 tools/sandbox.py` and `skills/gpu-measurement/SKILL.md` for compilation, execution,
   evaluation, profiling, and diagnostics. Do not invoke Agate directly or obtain its credentials.
-- Typed Runtime operations select managed evaluator inputs automatically. Use Dev only for a
-  self-contained single-file probe that reads no candidate or other workspace file. Use Command
-  whenever custom code reads the candidate, helpers, prior artifacts, or other workspace state.
-  Both are remote, fresh, stateless diagnostics and do not replace official evaluation evidence.
+- `python3 tools/sandbox.py --help` lists the enabled operations. Typed Evaluate selects managed
+  inputs automatically. Use an enabled Command for custom remote probes; it uploads the engineering
+  workspace and returns scratch artifacts. Remote jobs are fresh and stateless, and custom probes
+  do not replace official evaluation evidence.
 - Keep Runtime calls in the foreground and wait for the same invocation. Do not add shell timeouts,
   background a call, or edit the candidate while it is pending. The Session Prompt states whether
   waiting pauses Agent active time. A lost client does not prove that no job ran.
