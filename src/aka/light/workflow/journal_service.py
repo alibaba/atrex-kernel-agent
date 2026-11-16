@@ -1628,12 +1628,21 @@ def _publish_research_library_tree(
                 expected_files.add(
                     reference_manifest.relative_to("research-library").as_posix()
                 )
-    _prune_managed_projection(
-        root if canonical else root / "research-library",
-        expected_files,
-        expected_directories,
-        preserve_private_reviews=canonical,
-    )
+    if not canonical:
+        _prune_managed_projection(
+            root / "research-library",
+            expected_files,
+            expected_directories,
+        )
+    # The canonical Campaign Library is an append-only authority, not a
+    # disposable projection.  In particular, record-experiment archives its
+    # reference files before appending the corresponding Catalog event.  An
+    # asynchronous peer may refresh the Catalog in that small interval.  If a
+    # canonical refresh prunes paths absent from its snapshot, it can delete
+    # the new Experiment's .references.json and payloads before publication.
+    # Claim versions never disappear from the append-only Catalog, so there is
+    # nothing legitimate to prune here; only Agent workspace projections are
+    # regenerated destructively.
     return expected_files, expected_directories
 
 
@@ -4657,7 +4666,12 @@ class SupervisorJournalService:
         correctness = baseline.get("correctness")
         correctness = correctness if isinstance(correctness, Mapping) else {}
         board["v0_baseline"] = {
-            "kernel_commit_id": self.base_kernel_id,
+            # V0 owns a stable Agent Git identity in its immutable Campaign
+            # Measurement Record.  ``base_kernel_id`` is the starting commit
+            # of the *current* Episode and advances with the trajectory, so
+            # using it here mixes a later comparison base with V0's latency
+            # and Gateway Record.
+            "kernel_commit_id": baseline.get("git_commit_hash"),
             "latency_us_geomean": performance.get("latency_us_geomean"),
             "measured_shape_count": performance.get("measured_shape_count"),
             "correctness_status": correctness.get("status"),
