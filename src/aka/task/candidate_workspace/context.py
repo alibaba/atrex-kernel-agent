@@ -266,23 +266,26 @@ def _retain(workspace, digest, payload, *, store=None):
         if _retained(workspace, digest, store=directory) != payload:
             raise ValueError("retained Workspace context collision")
         return
-    with tempfile.NamedTemporaryFile(prefix=".retain-", dir=directory, delete=False) as stream:
-        temporary = Path(stream.name)
-        try:
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(prefix=".retain-", dir=directory, delete=False) as stream:
+            temporary = Path(stream.name)
             stream.write(payload)
             stream.flush()
             os.fchmod(stream.fileno(), 0o444)
             os.fsync(stream.fileno())
-            try:
-                os.link(temporary, path)
-            except FileExistsError:
-                # The canonical retained identity is never overwritten.
-                if path.read_bytes() != payload:
-                    raise ValueError("retained Workspace context collision")
-            temporary.unlink()
-            _sync_directory(directory)
-            _retained(workspace, digest, store=directory)
-        finally:
+        # Close before publishing/unlinking: NFS otherwise keeps a .nfs alias.
+        try:
+            os.link(temporary, path)
+        except FileExistsError:
+            # The canonical retained identity is never overwritten.
+            if path.read_bytes() != payload:
+                raise ValueError("retained Workspace context collision")
+        temporary.unlink()
+        _sync_directory(directory)
+        _retained(workspace, digest, store=directory)
+    finally:
+        if temporary is not None:
             temporary.unlink(missing_ok=True)
 
 
