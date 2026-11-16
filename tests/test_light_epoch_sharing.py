@@ -57,6 +57,7 @@ from aka.light.runtime.request_feedback import augment_error, journal_schema
 from aka.light.runtime.server import RuntimeConfig, SupervisorRuntime
 from aka.light.workflow.journal_service import (
     SupervisorJournalService,
+    _archive_experiment_references,
     _progress_markdown,
     _shared_research,
     initialize_journal,
@@ -893,6 +894,81 @@ def test_campaign_research_catalog_sync_watermark_and_async_head(tmp_path):
     )
     assert async_latest["revision"] == 3
     assert async_latest["owner_lineage"] == "T1"
+
+
+def test_async_projection_does_not_prune_unpublished_experiment_references(tmp_path):
+    """A peer refresh cannot delete references staged before Catalog append."""
+    catalog_root = tmp_path / "research-catalog"
+    library_root = tmp_path / "research-library"
+    writer_workspace = tmp_path / "writer"
+    reader_workspace = tmp_path / "reader"
+    (writer_workspace / "scratch").mkdir(parents=True)
+    reader_workspace.mkdir()
+    evidence = writer_workspace / "scratch" / "profile_sol0.json"
+    evidence.write_text('{"latency_us": 4.25}\n', encoding="utf-8")
+    experiment_id = "experiment_" + "e" * 32
+
+    archived = _archive_experiment_references(
+        writer_workspace,
+        library_root,
+        experiment_id,
+        1,
+        ["scratch/profile_sol0.json"],
+    )
+    archive_root = library_root / "experiments" / experiment_id / "v1"
+    assert (archive_root / ".references.json").is_file()
+
+    # Model the real async race: another lineage refreshes from the current
+    # Catalog after the attachment copy completed but before the Experiment
+    # event was appended.  The canonical Library must retain that staged
+    # immutable material.
+    project_campaign_research_library(
+        catalog_root=catalog_root,
+        library_root=library_root,
+        workspace=reader_workspace,
+        trajectory=2,
+        synchronization="asynchronous",
+    )
+    assert (archive_root / ".references.json").is_file()
+    assert (
+        archive_root / "references" / "scratch" / "profile_sol0.json"
+    ).read_bytes() == evidence.read_bytes()
+
+    catalog = ResearchStore(catalog_root / "events")
+    catalog.observe_experiment(
+        {
+            "experiment_id": experiment_id,
+            "revision": 1,
+            "sequence": 1,
+            "name": "Profile the first implementation",
+            "intent": "Measure the implementation before selecting the next branch.",
+            "gateway_record_ids": [],
+            "interpretation": "The profile identifies the next bottleneck.",
+            "references": archived,
+            "reference_revision": 1,
+            "owner_lineage": "T1",
+            "access": "local_writable",
+        },
+        origin={"epoch": 1, "trajectory": 1, "episode": 1},
+    )
+    project_campaign_research_library(
+        catalog_root=catalog_root,
+        library_root=library_root,
+        workspace=reader_workspace,
+        trajectory=2,
+        synchronization="asynchronous",
+    )
+    projected = (
+        reader_workspace
+        / "research-library"
+        / "experiments"
+        / experiment_id
+        / "v1"
+        / "references"
+        / "scratch"
+        / "profile_sol0.json"
+    )
+    assert projected.read_bytes() == evidence.read_bytes()
 
 
 def test_claim_review_verdict_ignores_noncritical_limitations():
