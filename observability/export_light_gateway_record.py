@@ -107,7 +107,7 @@ def _location(location: dict[str, Any]) -> dict:
                     "raw_process",
                     "snapshot_path",
                 )
-            }
+            } | ({"execution_attempt": attempt["execution_attempt"]} if "execution_attempt" in attempt else {})
             for attempt in location["attempts"]
         ],
     }

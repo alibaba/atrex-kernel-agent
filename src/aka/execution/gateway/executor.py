@@ -138,8 +138,8 @@ class GatewayExecutor(GatewayRecoveryMixin):
         from aka.execution.outcomes import run_owned
         from aka.execution.prepared_inputs import payload as prepared_payload
         def decorate(result):
-            return replace(result, environment_snapshot=support.environment,
-                environment_identity=support.environment.identity, environment_support=support,
+            from .environment import with_job_environment
+            return replace(with_job_environment(result, support=support),
                 budgets=(*result.budgets, *wait_budget_records(wait_timeout,
                     scope="local-wait", emit=False)))
         def observed(result):

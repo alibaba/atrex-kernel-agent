@@ -109,10 +109,11 @@ def result_from_job(job, reference, *, operation="query", diagnostics=(), cancel
         basis=("confirmed-job-query",) + (("backend-job-terminal",) if terminal else ()),
         remote_cleanup="unknown",
     )
-    return JobResult(0 if status == "succeeded" else 75 if status == "infrastructure" else 1,
+    from .environment import with_job_environment
+    return with_job_environment(JobResult(0 if status == "succeeded" else 75 if status == "infrastructure" else 1,
         stdout=json.dumps(job), exit_code=exit_code, resource=resource,
         transport_status=status, facts=facts, attempts=(observed,), diagnostics=tuple(diagnostics),
-        causes=causes, job_references=(reference,))
+        causes=causes, job_references=(reference,)))
 
 
 def unknown_result(reference, code, *, operation="query", cancellation_requested=False):

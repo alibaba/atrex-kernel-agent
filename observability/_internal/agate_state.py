@@ -304,7 +304,11 @@ def snapshot(workspace: Path) -> dict:
     current_checkpoint_references = 0
     submission_references = 0
     scanned_measurement_roots: set[Path] = set()
-    for scope in discover_scopes(workspace):
+    scanned_records: set[Path] = set()
+    scopes = list(discover_scopes(workspace))
+    request_scopes = {path.stem.removeprefix("request-"): scope
+                      for scope in scopes for path in runtime_audit_paths(scope)}
+    for scope in scopes:
         measurement_root = scope.measurement_root.resolve()
         if measurement_root not in scanned_measurement_roots:
             scanned_measurement_roots.add(measurement_root)
@@ -317,8 +321,13 @@ def snapshot(workspace: Path) -> dict:
                         **value,
                     })
         for row in iter_records(scope, include_incomplete=True):
+            directory = row["directory"].resolve()
+            if directory in scanned_records:
+                continue  # A shared Record is one physical execution, not one per consumer.
+            scanned_records.add(directory)
             record = row.get("record", {})
             request = row.get("request", {})
+            record_scope = request_scopes.get(record.get("runtime_request_id") or request.get("runtime_request_id"), scope)
             response = record.get("response") if isinstance(record, dict) else None
             jobs, raw_job_count = _deduplicate_states(
                 job_state_rows(row["directory"])
@@ -336,7 +345,7 @@ def snapshot(workspace: Path) -> dict:
                 if found:
                     errors.append(found)
                 physical_jobs.append(_physical_job(
-                    scope,
+                    record_scope,
                     state,
                     source="measurement_record",
                     record_id=row["gateway_record_id"],
@@ -345,12 +354,12 @@ def snapshot(workspace: Path) -> dict:
                 ))
             for state in attempts:
                 submission_attempts.append(_physical_job(
-                    scope, state, source="measurement_record",
+                    record_scope, state, source="measurement_record",
                     record_id=row["gateway_record_id"],
                     operation=operation_name(record or request), response=response,
                 ))
             attempt_errors = [item["error"] for item in submission_attempts
-                              if item["scope"] == scope.label
+                              if item["scope"] == record_scope.label
                               and item["gateway_record_id"] == row["gateway_record_id"]
                               and item.get("error")]
             primary_error = attempt_errors[-1] if attempt_errors else errors[-1] if errors else job_error_details(None, response)
@@ -362,8 +371,8 @@ def snapshot(workspace: Path) -> dict:
                 error=primary_error,
             )
             call = {
-                "scope": scope.label,
-                "trajectory": scope.trajectory,
+                "scope": record_scope.label,
+                "trajectory": record_scope.trajectory,
                 "gateway_record_id": row["gateway_record_id"],
                 "operation": operation_name(record or request),
                 "created_at": record.get("created_at") if isinstance(record, dict) else None,

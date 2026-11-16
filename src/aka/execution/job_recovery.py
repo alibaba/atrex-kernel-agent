@@ -71,8 +71,8 @@ class GatewayRecoveryMixin:
         support = backend.check(command_query(command), discover=False)
         require_supported(support, require_known=command.operation == NATIVE_ABBA)
         def decorate(result):
-            return replace(result, environment_snapshot=support.environment,
-                           environment_identity=support.environment.identity, environment_support=support)
+            from .gateway.environment import with_job_environment
+            return with_job_environment(result, support=support)
         def observed(result):
             command.on_observation(decorate(result))
         bound = replace(command, environment=bound_limits(command.environment, support),

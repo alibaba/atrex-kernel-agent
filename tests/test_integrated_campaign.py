@@ -58,11 +58,16 @@ class ComposedCampaignTest(unittest.TestCase):
                     self.assertNotIn('graphics_mhz',values)
                 shapes=request['options'].get('shape_ids') or list(request['reference']['shapes'])
                 stdout=json.dumps({'job_id':'ev-offline-test','status':'succeeded','result':{
+                    'environment': {'gpu_name': 'NVIDIA RTX PRO 5000 72GB Blackwell',
+                        'gpu_arch': 'sm_120', 'driver_version': '580.126.09',
+                        'runtime_version': '13.0', 'torch_version': '2.9.0+cu130',
+                        'clock_locked': False},
                     'passed':{'compile':{'status':'passed'},'correctness':{shape:{'status':'passed'} for shape in shapes}},
                     'correctness':{'shapes':{shape:{} for shape in shapes}},
                     'performance':{'shapes':{shape:{'samples':[{'end_to_end_time_ms':0.005}]} for shape in shapes}}}})
-            return JobResult(0,stdout=stdout,stderr='',exit_code=0,
-                environment_identity='offline-L20N',transport_status='succeeded',facts=ExecutionFacts(disposition='terminal'))
+            from aka.execution.gateway.environment import with_job_environment
+            return with_job_environment(JobResult(0,stdout=stdout,stderr='',exit_code=0,
+                transport_status='succeeded',facts=ExecutionFacts(disposition='terminal')))
         def fake_agent(owner,command,cwd,timeout,env):
             calls.append((cwd,command,timeout))
             self.assertIsNone(timeout)

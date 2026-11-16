@@ -84,7 +84,8 @@ def project_attempt(state: dict[str, Any]) -> dict[str, Any]:
         "error": job_error_details(job),
         "snapshot_path": state.get("path"),
         "agate_sdk_submission_payload": sdk_payload,
-        "agate_response": job,
+        "agate_response": state.get("raw_job", job),
+        **({"execution_attempt": state["execution_attempt"]} if "execution_attempt" in state else {}),
         "raw_process": state.get("process"),
     }
 
@@ -158,7 +159,9 @@ def gateway_record_locations(
             if matched:
                 audit_scopes.append(scope)
         owner = next(
-            (scope for scope in audit_scopes if scope.trajectory is not None),
+            (scope for scope in audit_scopes if any(
+                path.stem == "request-" + str(record.get("runtime_request_id"))
+                for path in runtime_audit_paths(scope))),
             audit_scopes[0] if audit_scopes else source_scopes[0],
         )
         locations.append(

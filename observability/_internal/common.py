@@ -365,7 +365,8 @@ def telemetry_documents(scope: Scope) -> list[dict[str, Any]]:
 
 
 def job_state_rows(record_directory: Path) -> list[dict[str, Any]]:
-    rows = []
+    from .execution_archive import execution_attempt_rows
+    rows = execution_attempt_rows(record_directory, latest=True)
     for path in sorted(record_directory.glob("**/jobs/*/state.json")):
         state = read_json(path, default={})
         if not isinstance(state, dict):
@@ -427,7 +428,8 @@ def job_attempt_rows(record_directory: Path) -> list[dict[str, Any]]:
     submission into one row, preferring the most advanced phase, while still
     supporting legacy checkpoints that only contain ``state.json``.
     """
-    rows: list[dict[str, Any]] = []
+    from .execution_archive import execution_attempt_rows
+    rows: list[dict[str, Any]] = execution_attempt_rows(record_directory)
     for state_path in sorted(record_directory.glob("**/jobs/*/state.json")):
         job_directory = state_path.parent
         snapshots = sorted(job_directory.glob("submission-*.json"))
