@@ -161,11 +161,19 @@ class LongSessionRunner:
             if resume_session
             else (session_id if assigns_session_id else "")
         )
+        # Declare Workflow-owned per-turn fields before the shared Agent freezes
+        # the scoped Session environment allowlist (also used by recovery Sessions).
+        session_environment = {
+            **(telemetry_environment or {}),
+            "ATREX_AGENT_STAGE_NAME": stage_name,
+            "ATREX_OUTPUT_LIMIT_RECOVERY_RETRIES": str(output_limit_recovery_retries),
+            "ATREX_OUTPUT_LIMIT_RECOVERY_SCOPE": session_id,
+        }
         native = self.agent.open_session(
             self.agent_cli,
             workspace,
             session_id=session_id,
-            environment=telemetry_environment,
+            environment=session_environment,
             output_directory=output_directory,
             access=access,
         )
@@ -342,7 +350,7 @@ class LongSessionRunner:
                         active_session_id = str(uuid.uuid4())
                         native = self.agent.open_session(
                             self.agent_cli, workspace, session_id=active_session_id,
-                            environment=telemetry_environment,
+                            environment=session_environment,
                             output_directory=output_directory,
             access=access,
                         )
@@ -409,7 +417,7 @@ class LongSessionRunner:
                             self.agent_cli,
                             workspace,
                             session_id=active_session_id,
-                            environment=telemetry_environment,
+                            environment=session_environment,
                             output_directory=output_directory,
             access=access,
                         )
@@ -517,7 +525,7 @@ class LongSessionRunner:
                             self.agent_cli,
                             workspace,
                             session_id=active_session_id,
-                            environment=telemetry_environment,
+                            environment=session_environment,
                             output_directory=output_directory,
             access=access,
                         )

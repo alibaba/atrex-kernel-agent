@@ -177,7 +177,7 @@ def route(endpoint="", profile="", environment=None):
 def request(endpoint, method, path, payload, timeout, *, environment=None, allow_list=False):
     """Adapt the retained owner request protocol to public SDK methods only."""
     from atrex_gateway_client.errors import GatewayError
-    from .sandbox import GatewayHTTPError
+    from .errors import GatewayHTTPError
     api = client(endpoint=endpoint, timeout=timeout, environment=environment)
     parsed = urllib.parse.urlsplit(path)
     bits = [urllib.parse.unquote(x) for x in parsed.path.strip('/').split('/')]

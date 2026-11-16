@@ -5,6 +5,7 @@ import sys
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -36,7 +37,7 @@ class ComposedCampaignTest(unittest.TestCase):
         self.problem=bench/'data/vector-add'
         shutil.copytree(ROOT/'skills/atrex-aka-light/examples/native-atrex-bench-vector-add',self.problem)
 
-    def run_campaign(self,mode,modules,search=None, evaluate=False, agate_tools=("env", "evaluate", "command")):
+    def run_campaign(self,mode,modules,search=None, evaluate=False, abba=False, agate_tools=("env", "evaluate", "command")):
         launch=create_launch(self.problem,workspace_base=self.root/('runs-'+mode+'-'+'-'.join(modules)+'-'+str(search)),
             runtime=CampaignRuntimeSettings(agate_tools=agate_tools),
             settings=WorkflowSettings(platform='L20N', framework='cuda' if mode=='ultra' else '',optimization_mode=mode,max_iters=2))
@@ -46,6 +47,10 @@ class ComposedCampaignTest(unittest.TestCase):
             stdout='probe-result\n'
             if command.operation == 'run':
                 request=json.loads(command.submission)['request']
+                self.assertNotIn('ANTHROPIC_API_KEY',request.get('env_vars',{}))
+                self.assertNotIn('HOME',request.get('env_vars',{}))
+                self.assertNotIn('PATH',request.get('env_vars',{}))
+                self.assertNotIn('AKA_HOST_CANARY',request.get('env_vars',{}))
                 self.assertIs(request['lock_clocks'],True)
                 self.assertNotIn('lock_clocks',request['options'])
                 for values in (request,request['options'],request.get('runner_overrides',{})):
@@ -68,12 +73,22 @@ class ComposedCampaignTest(unittest.TestCase):
             self.assertFalse((cwd/'profile_driver.py').exists())
             (cwd/'scratch/probe.py').write_text('print("probe-result")\n')
             def invoke(name,body):
-                value=json.loads(call_tool(name,json.dumps(body).encode(),workspace=cwd,environment=env))
-                self.assertEqual(value['status'],200,value)
-                return value['result']
+                for attempt in range(100):
+                    value=json.loads(call_tool(name,json.dumps(body).encode(),workspace=cwd,environment=env))
+                    self.assertEqual(value['status'],200,value)
+                    result=value['result']
+                    if result.get('status') != 'running':
+                        return result
+                    time.sleep(0.05)  # Another lineage owns this exact shared measurement.
+                self.fail(f'Concurrent measurement did not finish: {result}')
             help_result=subprocess.run([sys.executable,'tools/sandbox.py','--kind','profile','--help'],
                 cwd=cwd,env={**os.environ,**env,'PYTHONPATH':str(ROOT/'src')},capture_output=True,text=True)
             available=json.loads(env['AKA_AGATE_TOOLS'])
+            discovery=subprocess.run([sys.executable,'-m','aka.resources.cli','list'],cwd=cwd,
+                env={**os.environ,**env,'PYTHONPATH':str(ROOT/'src')},capture_output=True,text=True)
+            self.assertEqual(discovery.returncode,0,discovery.stdout+discovery.stderr)
+            self.assertNotIn('gpu-wiki',discovery.stdout)
+            self.assertNotIn('kernel-wiki',discovery.stdout)
             self.assertEqual(available,list(launch.request.runtime.agate_tools))
             if 'profile' in available:
                 self.assertEqual(help_result.returncode,0,help_result.stderr)
@@ -95,6 +110,7 @@ class ComposedCampaignTest(unittest.TestCase):
             tool_replies.append(receipt)
             if evaluate:
                 measured=invoke('workflow.gateway',{'argv':['--kind','evaluate']})
+                self.assertIn('result',measured,measured)
                 self.assertTrue(measured['result'].get('correct'),measured)
                 self.assertEqual(measured['status'],'completed',measured)
                 commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=cwd,text=True).strip()
@@ -102,6 +118,15 @@ class ComposedCampaignTest(unittest.TestCase):
                 accepted=submission['result']
                 self.assertTrue(accepted['accepted'],accepted)
                 self.assertIn(commit,(cwd/'PROGRESS.md').read_text())
+                if abba:
+                    comparison=invoke('workflow.gateway',{'argv':['--kind','evaluate','--baseline-commit',commit]})
+                    record=json.loads((cwd/comparison['record_path']).read_text())
+                    self.assertIn('gateway_record_id',comparison,record)
+                    from aka.task.source.formats.artifacts import read
+                    artifact=read(cwd)
+                    stored=MeasurementStore(launch.request.workspace/'measurements').read(comparison['gateway_record_id'])
+                    self.assertTrue(artifact.verify_measurement_inputs(stored['request'],'candidate'))
+                    self.assertTrue(artifact.verify_measurement_inputs(stored['request'],'baseline'))
             direction=None
             if 'directions' in modules:
                 result=invoke('workflow.journal',{'operation':'direction_update','request':{
@@ -122,13 +147,14 @@ class ComposedCampaignTest(unittest.TestCase):
             invalid=json.loads(call_tool('workflow.gateway',b'{"argv":["--kind","evaluate","--warmup","-1"]}',workspace=cwd,environment=env))
             self.assertEqual(invalid['status'],400,invalid)
             self.assertTrue((cwd/invalid['result']['record_path']).exists())
-            environment=invoke('workflow.gateway',{'argv':['--kind','env']})
+            environment=invoke('workflow.gateway',{'argv':['--kind','env','--env-capabilities']})
             self.assertEqual(environment['operation'],'env')
             self.assertIn('counters',json.dumps(environment['result']))
             self.assertTrue((cwd/environment['record_path']).exists())
             return json.dumps({'type':'result','subtype':'success','usage':{'input_tokens':12,'output_tokens':3}})+'\n','',0,False
         config={'tool_modules':list(modules),**({'search':search} if search else {})}
-        with patch('aka.workflow.light.runtime_preparation.prepare_runtime',return_value=('sm_89','fake')), \
+        with patch.dict(os.environ, {'AKA_HOST_CANARY':'must-stay-on-host','ANTHROPIC_API_KEY':'host-only-test-key'}), \
+             patch('aka.workflow.light.runtime_preparation.prepare_runtime',return_value=('sm_89','fake')), \
              patch('aka.agent.provider.Agent._execute',fake_agent), \
              patch('aka.execution.binding.SandboxExecutor.run',fake_gpu), \
              patch('aka.workflow.light.orchestration.supervisor_runtime.SupervisorRuntime._measurement_environment'), \
@@ -153,6 +179,9 @@ class ComposedCampaignTest(unittest.TestCase):
 
     def test_full_evaluate_and_submission(self):
         self.run_campaign("fast",(),evaluate=True)
+
+    def test_abba_retains_candidate_and_baseline_evidence(self):
+        self.run_campaign("fast",(),evaluate=True,abba=True)
 
     def test_modes_and_research_modules(self):
         for mode,modules in [('fast',()),('performance',('directions',)),('ultra',('experiments',)),('fast',('directions','experiments'))]:

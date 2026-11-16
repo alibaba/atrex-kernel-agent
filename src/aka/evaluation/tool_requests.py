@@ -25,8 +25,9 @@ def tool_argument_parser():
     parser = _Parser(add_help=False, allow_abbrev=False)
     parser.add_argument("--kind", choices=("auto", "evaluate", "profile", "dev", "command", "check", "disassemble", "env"), default="auto")
     for flag in ("--version", "--baseline-commit", "--input-path", "--shapes-path",
-                 "--kernel-name", "--kernel-regex", "--profile-shape-id", "--arch", "--sanitize", "--deps-mode", "--env-gpu"):
+                 "--kernel-name", "--kernel-regex", "--profile-shape-id", "--arch", "--sanitize", "--deps-mode"):
         parser.add_argument(flag)
+    parser.add_argument("--env-gpu", help="GPU product token; omitted uses the Campaign hardware (for example L20N).")
     parser.add_argument("--mode", dest="evaluation_mode", choices=("full", "correctness_only"))
     parser.add_argument("--correctness-max-rel-l2", type=float)
     for flag in ("--multi-seed", "--timed-runs", "--warmup", "--shape-batch-size", "--comparison-repeats", "--comparison-run-timeout",
@@ -97,8 +98,6 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         validate_native(native, selected_kind)
     if selected_kind != "env" and any((args.env_force, args.frameworks, args.counters, args.limits)):
         raise ValueError("environment capability options require --kind env")
-    if selected_kind == "env" and any((args.env_capabilities, args.frameworks, args.counters, args.limits)) and not args.env_gpu:
-        raise ValueError("environment capability options require --env-gpu")
     if args.kind == "env":
         return ToolRequest(args.kind, None, args)
     if args.no_sync and args.sync:

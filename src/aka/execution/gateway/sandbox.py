@@ -1610,11 +1610,7 @@ def _auth_headers(environment=None) -> dict[str, str]:
     return {"Access-Key": ak, "Timestamp": ts, "Token": token}
 
 
-class GatewayHTTPError(RuntimeError):
-    def __init__(self, status: int, detail: str) -> None:
-        self.status = status
-        self.detail = detail
-        super().__init__(f"gateway HTTP {status}: {detail}")
+from aka.execution.gateway.errors import GatewayHTTPError
 
 
 def _gateway_json(base_url, method, path, payload, timeout, *, allow_list=False, environment=None):
@@ -1767,8 +1763,6 @@ def _run_sdk_dev(
         queue_wait_grace=queue_wait_grace,
         payload={
             **(native_options or {}),
-            "intent": (native_options or {}).get("intent", intent),
-            "note": (native_options or {}).get("note", "AKA command workspace"),
             "spec": spec,
             "command": command,
             "timeout_s": _dev_gateway_job_timeout(timeout),

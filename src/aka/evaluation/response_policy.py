@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from typing import Any
+from collections.abc import Mapping
 import re
 
 from aka.contracts.execution import JobResult
@@ -13,10 +14,24 @@ SOURCE_VIOLATION = re.compile(
 INFORMATION_CATEGORIES = frozenset({"recovery", "observation", "budget"})
 
 
+def _json_value(value):
+    if isinstance(value, Mapping):
+        return {key: _json_value(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_json_value(item) for item in value]
+    return value
+
+
+def _cause_value(cause):
+    return {"code": cause.code, "error_class": cause.category,
+            "message": cause.message, "details": _json_value(cause.details),
+            **({"causes": [_cause_value(item) for item in cause.causes]} if cause.causes else {})}
+
+
 def execution_error(result: JobResult) -> dict[str, Any] | None:
     """Interpret captured execution failure facts without inferring dispatch from text."""
     diagnostics = tuple(item for item in result.diagnostics if item.category not in INFORMATION_CATEGORIES)
-    if result.returncode == 0 and not diagnostics and result.transport_status in {"succeeded", "failed", "unknown"}:
+    if result.returncode == 0 and not diagnostics and not result.causes and result.transport_status in {"succeeded", "failed", "unknown"}:
         return None
     candidate_rejected = (
         result.facts.disposition == "not_submitted" and not result.job_references
@@ -40,7 +55,8 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
             "code": "candidate_source_rejected", "error_class": "code",
             "message": "Agate rejected candidate source before GPU submission.",
             "reason": "source_validation_failed", "job_submitted": False,
-            "candidate_repairable": True, "violations": violations},
+            "candidate_repairable": True, "violations": violations, "http_status": 400,
+            **({"causes": [_cause_value(item) for item in result.causes]} if result.causes else {})},
             "next_action": "Replace the reported forbidden names, imports or attribute accesses in the candidate. "
                 "Use the documented APIs for the pinned runtime version, then validate the repaired source. "
                 "Do not bypass source validation through Dev."}
@@ -54,6 +70,24 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
             "candidate_repairable": False, "execution_status": "timed_out"},
             "next_action": "The Runtime request has returned. No correctness or performance conclusion "
                 "is available; do not change the kernel based on this timeout or blindly resubmit."}
+    if result.causes:
+        error = _cause_value(result.causes[0])
+        error.update(candidate_repairable=False, execution_status=result.transport_status)
+        if len(result.causes) > 1:
+            error["causes"] = [_cause_value(item) for item in result.causes]
+        http_status = next((item.details["http_status"] for item in diagnostics
+                            if isinstance(item.details.get("http_status"), int)), None)
+        if http_status is not None:
+            error["http_status"] = http_status
+        rejected = result.facts.disposition == "not_submitted" and not result.job_references
+        if rejected:
+            error["job_submitted"] = False
+        return {"status": "failed", "outcome": result.facts.disposition, "error": error,
+                "next_action": ("Agate rejected the request before submission; no GPU Job was created. "
+                    "Use the returned validation details to correct the indicated request, source or "
+                    "configuration; report Runtime-generated invalid fields to the operator."
+                    if rejected else "Inspect the returned upstream error and its structured details. "
+                    "Do not infer a correctness or performance result from this execution failure.")}
     message = result.stderr.strip() or result.stdout.strip()
     if not message:
         message = "; ".join(f"{item.category}/{item.code}: {dict(item.details)}"

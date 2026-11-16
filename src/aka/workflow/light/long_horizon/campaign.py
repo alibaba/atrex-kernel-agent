@@ -484,6 +484,9 @@ class LongHorizonCampaign:
             telemetry_environment.update(
                 self.base_campaign.agent_environment()
             )
+            telemetry_environment.update(
+                self.base_campaign.plugin_registry.environment(agent_workspace)
+            )
             # Both the Agent repository and provider transcript are stable for
             # the whole trajectory. Measurement and research records remain
             # independently durable across audit segments.

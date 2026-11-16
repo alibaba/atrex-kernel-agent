@@ -438,7 +438,13 @@ class MeasurementStore:
             else None
         )
         with open_private_directory(self.root / "tasks") as directory:
-            descriptor = os.open(key + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=directory)
+            try:
+                descriptor = os.open(key + ".lock", os.O_CREAT | os.O_EXCL | os.O_RDWR | os.O_NOFOLLOW,
+                                     0o600, dir_fd=directory)
+            except FileExistsError:
+                # Open an existing reservation separately from creation. This
+                # also avoids APFS openat(O_CREAT) races between lineages.
+                descriptor = os.open(key + ".lock", os.O_RDWR | os.O_NOFOLLOW, dir_fd=directory)
         acquired = False
         try:
             try:

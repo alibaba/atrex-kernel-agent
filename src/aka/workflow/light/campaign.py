@@ -163,7 +163,9 @@ class ManagedCampaign(Campaign):
         from .runtime import ManagedRuntimeFactory
         from aka.resources.plugins import PluginRegistry
         campaign.tool_runtime = ManagedRuntimeFactory(workflow, campaign)
-        campaign._module_resources = PluginRegistry()
+        campaign._module_resources = PluginRegistry(
+            excluded_plugins=() if workflow.options.wiki else ("gpu-wiki",),
+            excluded_skills=() if workflow.options.wiki else ("kernel-wiki",))
         campaign._prepared_initial_content = initial_content
         campaign._selected_initial_source = initial_source
         return campaign

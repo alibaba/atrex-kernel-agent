@@ -915,7 +915,9 @@ class SupervisorRuntime:
                     self.workspace_provider.install_source(staged, candidate_source)
                 # Input authority belongs to the retained Task, never a mutable
                 # Agent copy. Evaluation prepares its selected references.
-                configuration = replace(self.evaluation_configuration, environment=environment)
+                from aka.evaluation.command_inputs import host_evaluation_environment
+                configuration = replace(self.evaluation_configuration,
+                    environment=host_evaluation_environment(environment))
                 evaluation_input = self.evaluation_input
                 if reference_snapshot is not None:
                     # Only execute_trusted supplies this host-owned probe bundle.
@@ -983,6 +985,7 @@ class SupervisorRuntime:
             from aka.task.source.formats.artifacts import Artifact
             from aka.task.candidate_workspace.agent_git import AgentGit, DirtyKernelWorktree
             kernels, inputs, snapshots = {}, {}, {}
+            baseline_path = None
             source = pack_source(command.workspace)
             if capability.journal and converted.kind in {"run", "same_allocation_abba", "profile", "check", "disassemble", "dev", "command"}:
                 try:
@@ -1001,10 +1004,11 @@ class SupervisorRuntime:
                 artifact = Artifact(baseline_bytes)
                 snapshots["baseline"] = artifact.digest
                 inputs.update({"baseline/" + name: hashlib.sha256(data).hexdigest() for name, data in artifact.files.items()})
+                baseline_path = "baseline" if artifact.layout.archived else "baseline/" + artifact.layout.python_entrypoint
             operation = "evaluate" if converted.kind == "run" else converted.kind
             options = {"evaluation_mode": args.evaluation_mode or "full", "source_snapshots": snapshots,
                 "command": list(command.command),
-                "baseline_path": "baseline" if parsed.baseline_commit else None, "shape_ids": args.shape_id}
+                "baseline_path": baseline_path, "shape_ids": args.shape_id}
             identity = {"operation": operation, "options": options, "inputs": inputs,
                 "typed_request_digest": request_digest, "kernels": kernels,
                 "hardware": self.config.hardware}

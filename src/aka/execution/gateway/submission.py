@@ -81,6 +81,14 @@ def submit_prepared(args, workspace, grace, prepared):
         # No second route is submitted here. The owning experiment receives admission facts.
         emit_diagnostic({"failure_class": "infrastructure" if error.status in {429,502,503,504} else "request",
                          "http_status": error.status, "reason": "gateway-http-rejection"})
+        # Keep the SDK's structured validation body in the captured execution
+        # output, not only its HTTP status or private attempt diagnostics.
+        try:
+            detail = json.loads(error.detail)
+        except (TypeError, ValueError):
+            detail = {"message": str(error.detail)}
+        payload = detail.get("error", detail) if isinstance(detail, dict) else {"message": str(detail)}
+        print(json.dumps({"status": "failed", "http_status": error.status, "error": payload}))
         if error.status in {429,502,503,504}:
             print(transport.INFRASTRUCTURE_MARKER, file=sys.stderr)
             return transport.ENVIRONMENT_TEMPFAIL
