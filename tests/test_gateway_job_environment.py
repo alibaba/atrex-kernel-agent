@@ -12,6 +12,8 @@ from aka.contracts.execution_recovery import JobReference
 from aka.execution.gateway.environment import with_job_environment
 from aka.execution.gateway.executor import GatewayExecutor
 from aka.execution.gateway.jobs import result_from_job
+from aka.execution.remote.executor import LegacyExecutor
+from aka.execution.remote.runtime import SandboxRequest
 
 
 # Actual result.environment fields from ev_a16d47820512, without timing noise.
@@ -33,17 +35,35 @@ def support(identity=None):
         EnvironmentSnapshot("gateway", None, "L20N", identity), {}, (), "")
 
 
-def test_actual_receipt_replaces_discovery_for_normal_and_recovery_execution(tmp_path):
-    raw = JobResult(0, stdout=json.dumps(job()), transport_status="succeeded", hardware="L20N")
-    executor = GatewayExecutor()
-    executor._bound_context = True
-    executor._environment_backend = Mock(return_value=Mock(check=Mock(return_value=support("stale-env"))))
+def executor_for(tmp_path, executor_type, discovery):
+    if executor_type is LegacyExecutor:
+        request = SandboxRequest(tmp_path, ("python",), "L20N", "", "", 60, (), {})
+        executor = executor_type(request=request)
+    else:
+        executor = executor_type()
+        executor._bound_context = True
+    executor._environment_backend = Mock(return_value=Mock(check=Mock(return_value=discovery)))
     executor._job_transport = Mock(return_value=Mock(environment={}, endpoint="", profile=""))
+    return executor
+
+
+def launcher_for(executor, run):
+    if isinstance(executor, LegacyExecutor):
+        return patch.object(executor, "_run_sandbox", side_effect=lambda request, **kw: run(
+            on_observation=request.on_observation))
+    return patch("aka.execution.outcomes.run_owned", side_effect=run)
+
+
+@pytest.mark.parametrize("executor_type", [GatewayExecutor, LegacyExecutor])
+@pytest.mark.parametrize("discovery_identity", [None, "stale-env"])
+def test_actual_receipt_replaces_discovery_for_normal_and_recovery_execution(tmp_path, executor_type, discovery_identity):
+    raw = JobResult(0, stdout=json.dumps(job()), transport_status="succeeded", hardware="L20N")
+    executor = executor_for(tmp_path, executor_type, support(discovery_identity))
     observed = []
     def run(*args, **kwargs):
         kwargs["on_observation"](raw)
         return raw
-    with patch("aka.execution.outcomes.run_owned", side_effect=run):
+    with launcher_for(executor, run):
         result = executor.run(CommandSpec(tmp_path, ("true",), operation="run", on_observation=observed.append))
     recovered = result_from_job(job(), JobReference("gateway", "ev_test"))
     assert result.environment_identity == recovered.environment_identity == observed[0].environment_identity
@@ -53,6 +73,40 @@ def test_actual_receipt_replaces_discovery_for_normal_and_recovery_execution(tmp
     assert result.stdout == raw.stdout
     # Reapplying support during replay must not replace this with discovery.
     assert with_job_environment(result, support=support("stale-env")).environment_identity == result.environment_identity
+
+
+@pytest.mark.parametrize("executor_type", [GatewayExecutor, LegacyExecutor])
+def test_exception_receipt_uses_actual_job_environment_without_hiding_failure(tmp_path, executor_type):
+    raw = JobResult(1, stdout=json.dumps(job()), transport_status="failed", hardware="L20N")
+    error = RuntimeError("launcher failed after retaining Job")
+    error.execution_outcome = raw
+    executor = executor_for(tmp_path, executor_type, support())
+    def run(*args, **kwargs):
+        raise error
+    with launcher_for(executor, run), pytest.raises(RuntimeError) as raised:
+        executor.run(CommandSpec(tmp_path, ("true",), operation="run"))
+    assert raised.value is error
+    assert error.execution_outcome.environment_identity == with_job_environment(raw).environment_identity
+    assert error.execution_outcome.returncode == 1
+    assert error.execution_outcome.transport_status == "failed"
+
+
+def test_remote_without_worker_environment_does_not_invent_identity(tmp_path):
+    raw = JobResult(0, stdout=json.dumps(job({})))
+    executor = executor_for(tmp_path, LegacyExecutor, support())
+    with launcher_for(executor, lambda **kwargs: raw):
+        result = executor.run(CommandSpec(tmp_path, ("true",), operation="run"))
+    assert result.environment_identity is None
+
+
+def test_ssh_retains_its_own_environment_contract(tmp_path):
+    executor = executor_for(tmp_path, LegacyExecutor, support("ssh-env"))
+    executor.request = replace(executor.request, ssh="example")
+    raw = JobResult(0, stdout="SSH output")
+    with launcher_for(executor, lambda **kwargs: raw):
+        result = executor.run(CommandSpec(tmp_path, ("true",), operation="run"))
+    assert result.environment_identity == "ssh-env"
+    executor._job_transport.assert_not_called()
 
 
 def test_volatile_fields_do_not_split_identical_execution_environments():

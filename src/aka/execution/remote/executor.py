@@ -84,10 +84,17 @@ class LegacyExecutor(GatewayRecoveryMixin):
         support = self._environment_backend().check(command_query(command), discover=False)
         require_supported(support, require_known=command.operation == NATIVE_ABBA)
         from aka.execution.gateway.requests import bound_limits
+        def decorate(result):
+            if self.request.ssh:
+                return replace(result, environment_snapshot=support.environment,
+                    environment_identity=support.environment.identity, environment_support=support)
+            # Discovery may describe a different worker (or have no identity).
+            # Qualify Agate evidence using the environment in the actual Job receipt.
+            from aka.execution.gateway.environment import with_job_environment
+            return with_job_environment(result, support=support)
         def observed(result):
             if command.on_observation is not None:
-                command.on_observation(replace(result, environment_snapshot=support.environment,
-                    environment_identity=support.environment.identity, environment_support=support))
+                command.on_observation(decorate(result))
         request = replace(self.request, workspace=command.workspace, command=command.command,
             timeout=command.timeout, environment=bound_limits(command.environment, support), hardware=command.hardware,
             sync=command.artifacts,
@@ -118,12 +125,9 @@ class LegacyExecutor(GatewayRecoveryMixin):
             result = self._run_sandbox(request, hooks=self.hooks)
         except BaseException as error:
             if isinstance(getattr(error, "execution_outcome", None), JobResult):
-                error.execution_outcome = replace(error.execution_outcome,
-                    environment_snapshot=support.environment,
-                    environment_identity=support.environment.identity, environment_support=support)
+                error.execution_outcome = decorate(error.execution_outcome)
             raise
-        return replace(result, environment_snapshot=support.environment,
-                       environment_identity=support.environment.identity, environment_support=support)
+        return decorate(result)
 
     def _run_sandbox(self, request: SandboxRequest, *, hooks: ExecutionHooks) -> JobResult:
         workspace = request.workspace
