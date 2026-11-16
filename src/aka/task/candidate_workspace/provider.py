@@ -155,12 +155,17 @@ class GitCandidateWorkspace(GitSnapshots):
 
     def initialize_kernel(self, workspace, content, *, runtime_files, context_directories=()):
         from .initial import initialize_kernel
-        return initialize_kernel(workspace, content, runtime_files=runtime_files,
-                                 context_directories=context_directories)
+        from aka.resources.workspace import independent_resources
+        with independent_resources(runtime_files) as (runtime,):
+            return initialize_kernel(workspace, content, runtime_files=runtime,
+                                     context_directories=context_directories)
 
     def prepare_sol(self, workspace, content, *, problem_files, harness, runtime_files,
                     context_directories=()):
         from .initial import prepare_sol
-        return prepare_sol(workspace, content, problem_files=problem_files,
-                           harness=harness, runtime_files=runtime_files,
-                           context_directories=context_directories)
+        from aka.resources.workspace import independent_resources
+        with independent_resources(problem_files, () if harness is None else (harness,), runtime_files) as groups:
+            problem, selected_harness, runtime = groups
+            return prepare_sol(workspace, content, problem_files=problem,
+                               harness=selected_harness[0] if selected_harness else None,
+                               runtime_files=runtime, context_directories=context_directories)

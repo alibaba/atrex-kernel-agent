@@ -7,9 +7,9 @@ import os
 from pathlib import Path, PurePosixPath
 import stat
 import subprocess
-import tempfile
 
 from aka.contracts.workspace import SourceSnapshot
+from aka.core.publication import publish_immutable, replace_bytes
 
 MANIFEST = ".atrex_context.json"
 FORMAT = "aka-workspace-context-v1"
@@ -208,20 +208,10 @@ def _encoded(value):
 
 
 def _write_manifest(workspace, value):
-    path = workspace / MANIFEST
-    temporary = workspace / (MANIFEST + ".tmp")
-    if temporary.exists() or temporary.is_symlink():
-        raise ValueError("workspace context manifest transaction already exists")
-    try:
-        with temporary.open("xb") as stream:
-            stream.write(_encoded(value))
-            stream.flush()
-            os.fchmod(stream.fileno(), 0o644)
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _sync_directory(workspace)
-    finally:
-        temporary.unlink(missing_ok=True)
+    # Keep the writer lock out of the candidate tree. The temporary file stays
+    # beside the manifest so publication also works with a separate Git store.
+    replace_bytes(workspace / MANIFEST, _encoded(value), mode=0o644,
+                  temporary_name=MANIFEST + ".tmp", lock_directory=context_store(workspace).parent)
 
 
 def _sync_directory(path):
@@ -261,29 +251,10 @@ def _retain(workspace, digest, payload, *, store=None):
     directory.mkdir(exist_ok=True)
     if created:
         _sync_directory(directory.parent)
-    path = directory / digest
-    if path.exists() or path.is_symlink():
-        if _retained(workspace, digest, store=directory) != payload:
-            raise ValueError("retained Workspace context collision")
-        return
-    with tempfile.NamedTemporaryFile(prefix=".retain-", dir=directory, delete=False) as stream:
-        temporary = Path(stream.name)
-        try:
-            stream.write(payload)
-            stream.flush()
-            os.fchmod(stream.fileno(), 0o444)
-            os.fsync(stream.fileno())
-            try:
-                os.link(temporary, path)
-            except FileExistsError:
-                # The canonical retained identity is never overwritten.
-                if path.read_bytes() != payload:
-                    raise ValueError("retained Workspace context collision")
-            temporary.unlink()
-            _sync_directory(directory)
-            _retained(workspace, digest, store=directory)
-        finally:
-            temporary.unlink(missing_ok=True)
+    if hashlib.sha256(payload).hexdigest() != digest:
+        raise ValueError("retained Workspace context identity differs from payload")
+    publish_immutable(directory / digest, payload)
+    _retained(workspace, digest, store=directory)
 
 
 def load_context(workspace):
