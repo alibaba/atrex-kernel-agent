@@ -37,14 +37,18 @@ The next call with the same requested bytes can reconcile these states:
 | Interrupted operation | Retry behavior |
 | --- | --- |
 | Partial staging write | A single-link, ordinary staging file containing a prefix of the requested bytes can be discarded and rewritten. |
-| Staging complete, before link | Reuse the complete readonly staging object. |
-| Link complete, before staging unlink | Require exactly two links, matching bytes and modes, and the same inode for the destination and its reserved staging name; remove only that staging alias. |
-| Staging unlink complete | Verify the existing canonical single-link object and reuse it. |
+| Staging complete, before link | Revalidate and fsync the complete readonly staging object, close its descriptor, then publish it. |
+| Link complete, before staging unlink | Require exactly two links, matching bytes and modes, and the same inode for the destination and its reserved staging name; fsync that verified inode, close its descriptor, then remove only that staging alias. |
+| Staging unlink complete | Verify and fsync the existing canonical single-link object, then reuse it. |
 
 A different payload, unexpected mode, symlink, third link, or alias outside the
 reserved transaction name is an error. Recovery does not scan for arbitrary
 aliases or delete unknown files. Data from a rejected transaction is retained
-for diagnosis.
+for diagnosis. Readonly mode does not prove a previous file fsync completed.
+Every recovered object and same-content collision is therefore file-fsynced
+before reuse or staging cleanup. Identity, mode and link count are rechecked
+across fsync; errors preserve the uncommitted recovery inputs. Every such file
+descriptor is closed before linking or unlinking, including recovery paths.
 
 `aka.core.publication.replace_bytes` supplies durable replacement for mutable
 management content. The Workspace context manifest keeps its existing
@@ -89,35 +93,26 @@ editing frozen Campaign state or provide a Campaign-version migration API.
 
 ## Verification
 
-From a source checkout:
+Downstream acceptance checks should exercise both source builds and isolated
+wheel installations through the public `GitCandidateWorkspace.initialize_kernel`
+entry point. This repository does not carry a standalone test suite for that
+matrix. A local descriptor-lifetime check is insufficient evidence of real NFS
+acceptance: the same checks must also run on an actual writable NFS mount.
 
-```bash
-PYTHONPATH=src python -m unittest discover -s tests -p test_publication.py -v
-```
+The filesystem acceptance matrix covers actual `SIGKILL` during partial writes,
+before and after data fsync, hard-link publication, staging unlink, and both the
+initial and post-runtime manifest replacements. It verifies retries preserve
+expected bytes, readonly permissions and single-link retained identities. It
+also covers concurrent same-content writers, unknown aliases, symlinks,
+restrictive umasks and content collisions.
 
-With the built wheel installed, run the same test file in isolated mode:
+Durability fault injection must include a fully written readonly staging file
+whose data was never fsynced, an interrupted two-link publication, an existing
+canonical object and an unsynced same-content competing creator. Reuse requires
+a successful file fsync before any recovery cleanup or publication. An injected
+fsync failure must preserve the relevant staging or alias pair, and mutation
+during fsync must fail validation.
 
-```bash
-python -I /path/to/checkout/tests/test_publication.py -v
-```
-
-The suite kills disposable child processes with actual `SIGKILL` at write,
-fsync, link, unlink and manifest-replace boundaries. It retries the public
-`GitCandidateWorkspace.initialize_kernel` entry point, checks retained bytes,
-permissions and link counts, and covers collisions, unknown aliases,
-symlinks, partial transactions, concurrent writers and a descriptor-lifetime
-guard for NFS publication.
-
-To run these same contracts on a real mounted NFS filesystem, set
-`ATREX_TEST_NFS_ROOT` to an existing writable directory on that mount. The
-suite creates and removes only its own temporary test directory:
-
-```bash
-ATREX_TEST_NFS_ROOT=/mounted/nfs/test-root \
-  python -I /path/to/checkout/tests/test_publication.py -v
-```
-
-Passing the local suite or its descriptor guard is not evidence of real NFS
-acceptance. It also does not substitute for optimization, measured candidate
+Filesystem checks do not substitute for optimization, measured candidate
 results, full source export, cumulative/reset budgets or Campaign resume
 acceptance. Those require their own integration environment and evidence.

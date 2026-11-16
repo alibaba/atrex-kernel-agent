@@ -15,7 +15,7 @@ from pathlib import Path
 import stat
 import tempfile
 
-from aka.core.filesystem import _open_regular
+from aka.core.filesystem import file_signature, open_regular_file
 
 
 _ASSETS = {
@@ -23,6 +23,13 @@ _ASSETS = {
     "atrex-aka-legacy": ("aka/evaluation/drivers/", "aka/evaluation/assets/", "aka/task/problem/"),
 }
 _MAX_BYTES = 16 * 1024 * 1024
+
+
+def _asset_path(source):
+    # Installation parents may be symlinked (for example /tmp or a venv root).
+    # Resolve only the parents: leaf symlinks never become trusted assets.
+    source = Path(source).absolute()
+    return source.parent.resolve(strict=True) / source.name
 
 
 def _owned_assets(owners=None):
@@ -46,24 +53,27 @@ def _owned_assets(owners=None):
         for entry in owner.files or ():
             if (not entry.is_absolute() and ".." not in entry.parts
                     and any(str(entry).startswith(prefix) for prefix in prefixes)):
-                result[Path(owner.locate_file(entry)).absolute()] = entry
+                located = _asset_path(owner.locate_file(entry))
+                if not located.is_symlink():
+                    result[located] = entry
     return result
 
 
 def _read_asset(source, entry):
-    signature = lambda value: (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
-                                value.st_size, value.st_mtime_ns, value.st_ctime_ns)
-    initial = source.lstat()
-    with _open_regular(source) as stream:
+    selected = _asset_path(source)
+    initial = selected.lstat()
+    with open_regular_file(selected) as stream:
         before = os.fstat(stream.fileno())
         if (not stat.S_ISREG(before.st_mode)
                 or before.st_mode & (stat.S_ISUID | stat.S_ISGID | stat.S_ISVTX)
-                or before.st_size > _MAX_BYTES or signature(initial) != signature(before)):
+                or before.st_size > _MAX_BYTES or file_signature(initial) != file_signature(before)):
             raise ValueError(f"invalid installed workspace resource: {source}")
         content = stream.read(_MAX_BYTES + 1)
         after = os.fstat(stream.fileno())
     if (len(content) > _MAX_BYTES or len(content) != before.st_size
-            or signature(before) != signature(after) or signature(before) != signature(source.lstat())):
+            or file_signature(before) != file_signature(after)
+            or _asset_path(source) != selected
+            or file_signature(before) != file_signature(selected.lstat())):
         raise ValueError(f"installed workspace resource changed while reading: {source}")
     expected = entry.hash
     digest = base64.urlsafe_b64encode(hashlib.sha256(content).digest()).rstrip(b"=").decode("ascii")
@@ -81,6 +91,8 @@ def independent_resources(*groups, owners=None):
     extend the first-party policy with explicit distribution-to-directory-prefix
     mappings, e.g. ``{"my-plugin": ("my_plugin/assets/",)}``. This is an
     application-owned trust declaration, not a way to relax Workspace checks.
+    Downstream integrations use it for their own packaged harness and worker
+    requirements without adding private distribution names to this module.
     Copies exist only during the synchronous call; installed/cache files are
     never modified. Text, unlinked files and undeclared paths pass unchanged.
     """
@@ -95,7 +107,7 @@ def independent_resources(*groups, owners=None):
                 if source is not None and source.lstat().st_nlink > 1:
                     if owned is None:
                         owned = _owned_assets(owners)
-                    entry = owned.get(source.absolute())
+                    entry = owned.get(_asset_path(source))
                     if entry is not None:
                         content, mode = _read_asset(source, entry)
                         if stage is None:

@@ -13,14 +13,9 @@ import os
 from pathlib import Path
 import stat
 
-from .filesystem import open_private_directory
+from .filesystem import file_signature, open_private_directory
 
 _LOCK = ".aka-publication.lock"
-
-
-def _signature(value):
-    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
-            value.st_size, value.st_mtime_ns, value.st_ctime_ns)
 
 
 def _same_file(left, right):
@@ -40,7 +35,7 @@ def _read(parent, name, limit):
         raise ValueError("publication requires an ordinary regular file")
     descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
     try:
-        if _signature(os.fstat(descriptor)) != _signature(before):
+        if file_signature(os.fstat(descriptor)) != file_signature(before):
             raise ValueError("publication file replaced during read")
         with os.fdopen(os.dup(descriptor), "rb") as stream:
             payload = stream.read(limit + 1)
@@ -48,9 +43,30 @@ def _read(parent, name, limit):
     finally:
         os.close(descriptor)
     final = os.stat(name, dir_fd=parent, follow_symlinks=False)
-    if _signature(before) != _signature(after) or _signature(before) != _signature(final):
+    if file_signature(before) != file_signature(after) or file_signature(before) != file_signature(final):
         raise ValueError("publication file changed during read")
     return payload, final
+
+
+def _sync_verified(parent, name, expected):
+    """Persist the already-verified inode, rejecting changes across fsync.
+
+    A complete readonly staging file may have survived death before its data
+    fsync. Closing this descriptor before publication or alias cleanup is also
+    required for NFS; a directory fsync alone never establishes file durability.
+    """
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+    try:
+        if file_signature(os.fstat(descriptor)) != file_signature(expected):
+            raise ValueError("publication file changed before data fsync")
+        os.fsync(descriptor)
+        if file_signature(os.fstat(descriptor)) != file_signature(expected):
+            raise ValueError("publication file changed during data fsync")
+    finally:
+        os.close(descriptor)
+    current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+    if file_signature(current) != file_signature(expected):
+        raise ValueError("publication file changed after data fsync")
 
 
 def _optional(parent, name, limit):
@@ -109,7 +125,7 @@ def _locked(path, lock_directory=None):
 
 def _unlink(parent, name, expected):
     current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-    if _signature(current) != _signature(expected):
+    if file_signature(current) != file_signature(expected):
         raise ValueError("publication staging file changed before cleanup")
     os.unlink(name, dir_fd=parent)
     os.fsync(parent)
@@ -152,6 +168,7 @@ def publish_immutable(path, payload):
                         or data != payload or existing[0] != payload):
                     raise ValueError("unknown immutable publication alias")
                 _ordinary(value, 0o444, links=2)
+                _sync_verified(parent, temporary, value)
                 _unlink(parent, temporary, value)
                 staged = None
                 existing = _optional(parent, path.name, len(payload))
@@ -166,11 +183,16 @@ def publish_immutable(path, payload):
             _ordinary(existing[1], 0o444)
             if existing[0] != payload:
                 raise ValueError("immutable publication identity collision")
+            _sync_verified(parent, path.name, existing[1])
             if staged is not None:
                 _unlink(parent, temporary, staged[1])
             return
         if staged is None:
             _stage(parent, temporary, payload, 0o444)
+        else:
+            # A previous writer may have set readonly mode but died before
+            # fsync returned. Verify and persist the retained intent again.
+            _sync_verified(parent, temporary, staged[1])
         # The lock serializes participating publishers; link still protects
         # against an unrelated creator, without any replacing rename fallback.
         try:
@@ -181,6 +203,7 @@ def publish_immutable(path, payload):
             _ordinary(value, 0o444)
             if other != payload:
                 raise ValueError("immutable publication identity collision")
+            _sync_verified(parent, path.name, value)
         os.fsync(parent)
         data, value = _read(parent, temporary, len(payload))
         if data != payload or value.st_nlink not in (1, 2):
