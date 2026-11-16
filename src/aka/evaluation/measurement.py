@@ -153,7 +153,8 @@ def gateway_identity(request, reference_files, kind="run", *, full_request=None,
     candidate_checksum = source_parameters.get("candidate_source_sha256") or _bytes(request["candidate"].encode())
     input_digest = _digest({"request": frozen, "reference_files": reference_files,
         **({"sources": source_parameters} if source_parameters else {})})
-    shapes = tuple(str(value) for value in request.get("reference", {}).get("shapes", {})) or (None,)
+    from .shapes import request_shape_ids
+    shapes = (tuple(request_shape_ids(request)) if request.get("reference", {}).get("shapes") else ()) or (None,)
     candidate = "sha256:" + candidate_checksum
     abba = request.get("abba")
     if abba:

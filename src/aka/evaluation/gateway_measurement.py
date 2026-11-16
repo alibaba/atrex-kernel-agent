@@ -8,11 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .transport_results import (
-    _request_shape_ids, _shape_batches, _shape_batch_request, _shape_batch_reference,
+    _shape_batch_reference,
     _optimizer_result_from_eval, _merge_optimizer_results, _with_workspace_performance_score, _hydrate_result_lines,
     _public_numerical_result_line, _hydrate_abba_result_lines,
     TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX,
 )
+from .shapes import request_shape_ids, batch_shape_ids, shape_batch_request
 
 
 class GatewayMeasurement:
@@ -25,13 +26,20 @@ class GatewayMeasurement:
         self.workspace = workspace
         self.hardware = hardware
         self.private = private
-        self.shape_ids = _request_shape_ids(request)
-        self.batches = ([self.shape_ids] if profiling or request.get("options", {}).get("shape_shards") is not None
-                        else _shape_batches(self.shape_ids, batch_size))
+        self.profiling = profiling
+        self.shape_ids = request_shape_ids(request)
+        self.batches = ([self.shape_ids] if profiling
+                        else batch_shape_ids(self.shape_ids, batch_size))
 
     def request_for(self, index):
-        return (_shape_batch_request(self.request, self.batches[index])
-                if len(self.batches) > 1 else self.request)
+        if self.profiling:
+            return self.request
+        # Even a single outer batch must freeze the one-worker policy. ABBA
+        # requires the batch to be a complete reference, without a selector.
+        if self.request.get("abba"):
+            from .abba_shape_compat import full_reference_abba_batch_request
+            return full_reference_abba_batch_request(self.request, self.batches[index])
+        return shape_batch_request(self.request, self.batches[index])
 
     def reference_content(self, index):
         return _shape_batch_reference(self.request_for(index)["reference"])

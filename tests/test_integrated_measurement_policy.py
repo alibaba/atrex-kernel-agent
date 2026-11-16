@@ -129,6 +129,7 @@ class MeasurementPolicyTest(unittest.TestCase):
                     self.assert_managed_clocks(json.loads(tool.request.submission)['request'])
                     prepared=evaluator.prepare(tool.request)
                     self.assertEqual(len(prepared.steps),1 if shapes==1 else 2)
+                    covered=[]
                     for step,identity in zip(prepared.steps,prepared.measurement_identities):
                         payload=json.loads(step.submission)['request']
                         api=Mock()
@@ -136,6 +137,34 @@ class MeasurementPolicyTest(unittest.TestCase):
                             sdk.request('endpoint','POST','/v1/jobs/eval',operation_request(payload,'run'),30)
                         self.assert_managed_clocks(api.submit_job.call_args.args[1])
                         self.assertIs(identity.parameters['lock_clocks'],True)
+                        self.assertEqual(api.submit_job.call_args.args[1]['options']['shape_shards'],1)
+                        selected=list(dict.fromkeys(point.shape_id for point in identity.points))
+                        covered.extend(selected)
+                        if mode=='abba':
+                            self.assertNotIn('shape_ids',payload['options'])
+                            self.assertEqual(set(payload['reference']['shapes']),set(selected))
+                        else:
+                            self.assertEqual(payload['options']['shape_ids'],selected)
+                            self.assertEqual(len(payload['reference']['shapes']),shapes)
+                    self.assertEqual(covered,[str(i) for i in range(shapes)])
+
+    def test_native_selector_keeps_outer_batches_and_exact_measurement_coverage(self):
+        from aka.evaluation.gateway_measurement import GatewayMeasurement
+        from aka.evaluation.measurement import gateway_identity
+        payload=self.request(CampaignRuntimeSettings())
+        payload['reference']['shapes']={str(i):{'N':i+1} for i in range(12)}
+        payload['options'].update(shape_ids=['11','2'],shape_shards=8)
+        original=copy.deepcopy(payload)
+        measurement=GatewayMeasurement(payload,workspace=self.root,hardware='L20N',private=False,batch_size=1)
+        self.assertEqual(measurement.shape_ids,['2','11'])
+        self.assertEqual(measurement.batches,[['2'],['11']])
+        for index,selected in enumerate(measurement.batches):
+            request=measurement.request_for(index)
+            self.assertEqual(request['options']['shape_shards'],1)
+            self.assertEqual(request['options']['shape_ids'],selected)
+            self.assertEqual(request['reference'],original['reference'])
+            self.assertEqual([point.shape_id for point in gateway_identity(request,{}).points],selected)
+        self.assertEqual(payload,original)
 
     def test_prepared_requests_remove_stale_clock_fields_without_mutation(self):
         from aka.evaluation.gateway_measurement import GatewayMeasurement

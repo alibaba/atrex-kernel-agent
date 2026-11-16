@@ -63,10 +63,11 @@ class GatewayCommandEvaluator:
                 content = harness.source.read_bytes() if harness.source is not None else harness.text.encode()
                 method_inputs[harness.path] = hashlib.sha256(content).hexdigest()
         explicit_subset = any(token == "--shape-id" or token.startswith("--shape-id=") for token in command.command)
+        from .shapes import request_shape_ids
         full_scope = (kind == "run" and bool(expected_shapes) and context.get("task_matches", False)
                       and not explicit_subset and not command.input_files
                       and request.get("mode") in {"full", "correctness_only"}
-                      and set(request.get("reference", {}).get("shapes", {})) == set(expected_shapes))
+                      and set(request_shape_ids(request)) == set(expected_shapes))
         if request.get("candidate") is not None:
             from .source_archives import request_sources
             context["source_parameters"], context["candidate_artifact"] = request_sources(request, command.source_archives)
