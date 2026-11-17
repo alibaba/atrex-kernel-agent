@@ -2,7 +2,7 @@
  "schema": "clean-1.3",
  "generated_by": "build_kernel_records.py",
  "builder_version": "1.1",
- "count": 854,
+ "count": 858,
  "records": [
   {
    "id": "amd.cdna3.any.converter.cdna3",
@@ -43420,6 +43420,153 @@
    "refk_status": null
   },
   {
+   "id": "apple.m-series.metal.pitfalls.q4-gemm.double-commit-hangs",
+   "type": "anti-strategy",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal|pitfalls|pitfalls#q4-gemm|cross-operator",
+   "path": "records/anti-strategy/apple/m-series/metal/any/apple.m-series.metal.pitfalls.q4-gemm.double-commit-hangs.json",
+   "title": "Avoid a known trap on Apple M-series Metal: committing a Met",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "metal",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "command-buffer",
+     "driver-pitfall"
+    ],
+    "triggers": [
+     "a Metal kernel risks the 'committing a Metal command buffer twice hangs forever' trap"
+    ]
+   },
+   "worth_score": 0.6,
+   "tier": "provisional",
+   "gain_pct": null,
+   "page_path": null,
+   "search_text": "apple.m-series.metal.pitfalls.q4-gemm.double-commit-hangs  {\"goal\": \"Avoid a known trap on Apple M-series Metal: committing a Metal command buffer twice hangs forever\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, Metal 4 toolchains\", \""
+  },
+  {
+   "id": "apple.m-series.metal.pitfalls.q4-gemm.thread-elements-unreliable",
+   "type": "anti-strategy",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal|pitfalls|pitfalls#q4-gemm|cross-operator",
+   "path": "records/anti-strategy/apple/m-series/metal/any/apple.m-series.metal.pitfalls.q4-gemm.thread-elements-unreliable.json",
+   "title": "Avoid a known trap on Apple M-series Metal: writing b fragme",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "metal",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "simdgroup-mma",
+     "fragment-layout",
+     "toolchain-pitfall"
+    ],
+    "triggers": [
+     "a Metal kernel risks the 'writing b fragments via thread_elements() with a guessed layout produces wrong numerics' trap"
+    ]
+   },
+   "worth_score": 0.6,
+   "tier": "provisional",
+   "gain_pct": null,
+   "page_path": null,
+   "search_text": "apple.m-series.metal.pitfalls.q4-gemm.thread-elements-unreliable  {\"goal\": \"Avoid a known trap on Apple M-series Metal: writing b fragments via thread_elements() with a guessed layout produces wrong numerics\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-"
+  },
+  {
+   "id": "apple.m-series.metal.kernel-opt.q4-gemm.per-shape-dispatch-flip",
+   "type": "technique-card",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal|kernel-opt|kernel-opt#q4-gemm|cross-operator",
+   "path": "records/technique-card/apple/m-series/metal/any/apple.m-series.metal.kernel-opt.q4-gemm.per-shape-dispatch-flip.json",
+   "title": "Per-shape dispatch flip",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "metal",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "dispatch",
+     "tile-selection",
+     "small-m"
+    ],
+    "triggers": [
+     "choosing one Metal GEMM kernel for all shapes",
+     "an MMA kernel loses to a scalar tile kernel at small m"
+    ]
+   },
+   "worth_score": 0.6,
+   "tier": "provisional",
+   "gain_pct": 68.8,
+   "page_path": null,
+   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.per-shape-dispatch-flip Per-shape dispatch flip {\"goal\": \"Dispatch per shape instead of crowning one GEMM kernel.\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, Metal 3/4\", \"statement\": \"A single promoted kernel for every sha"
+  },
+  {
    "id": "apple.m-series.metal.kernel-opt.q4-gemm.simdgroup-mma-dequant-fp16",
    "type": "technique-card",
    "level": "cross-operator",
@@ -43465,18 +43612,18 @@
    },
    "worth_score": 0.6,
    "tier": "provisional",
-   "gain_pct": 50.7,
+   "gain_pct": 68.8,
    "page_path": null,
-   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.simdgroup-mma-dequant-fp16 simdgroup MMA with single-round fp16 dequant Stage activation tiles as fp16 in threadgroup memory; unpack q4 nibbles, apply the fp32 group scale once, round the product to fp16, and feed fixed 8x8 half fragments to simdgroup_multiply_accumulate "
+   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.simdgroup-mma-dequant-fp16 simdgroup MMA with single-round fp16 dequant {\"goal\": \"Replace scalar FMA inner loops with simdgroup-MMA tensor-core execution.\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, Metal 3/4\", \"statement\": \"Metal GEMM kernels wr"
   },
   {
-   "id": "apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable",
+   "id": "apple.m-series.metal.kernel-opt.q4-gemm.small-m-scalar-ceiling",
    "type": "technique-card",
    "level": "cross-operator",
    "status": "active",
-   "episode_key": "m-series|metal|kernel-opt|q4-gemm#transpose-load-unusable|cross-operator",
-   "path": "records/technique-card/apple/m-series/metal/any/apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable.json",
-   "title": "avoid simdgroup_load transpose=true; verify fragment layout with a collective probe",
+   "episode_key": "m-series|metal|kernel-opt|kernel-opt#q4-gemm|cross-operator",
+   "path": "records/technique-card/apple/m-series/metal/any/apple.m-series.metal.kernel-opt.q4-gemm.small-m-scalar-ceiling.json",
+   "title": "MMA-based split-k for small m",
    "retrieval": {
     "scope": {
      "vendor": "apple",
@@ -43504,19 +43651,21 @@
      "symptoms": []
     },
     "technique_tags": [
-     "simdgroup-load",
-     "transpose",
-     "toolchain-pitfall"
+     "gemv",
+     "split-k",
+     "small-m",
+     "compute-bound"
     ],
     "triggers": [
-     "transposed staging produces wrong numerics or partial zero fragments on Metal 4 toolchains"
+     "a small-m Metal GEMV/GEMM cannot approach memory bandwidth",
+     "split-k GEMV stays far below MLX at decode shapes"
     ]
    },
    "worth_score": 0.6,
    "tier": "provisional",
    "gain_pct": null,
    "page_path": null,
-   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable avoid simdgroup_load transpose=true; verify fragment layout with a collective probe Writing a transposed-staging kernel that then loads A fragments with transpose_matrix=true."
+   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.small-m-scalar-ceiling MMA-based split-k for small m {\"goal\": \"Explain why scalar small-M Metal kernels cannot approach bandwidth and what does.\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, Metal 3/4\", \"statement\": \"At m=16 the "
   },
   {
    "id": "apple.m-series.metal.kernel-opt.q4-gemm.staging-loop-latency-beats-coalescing",
@@ -43566,7 +43715,56 @@
    "tier": "provisional",
    "gain_pct": null,
    "page_path": null,
-   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.staging-loop-latency-beats-coalescing fewer staging iterations beat coalesced staging; L2 absorbs non-coalesced global reads Threadgroup-staged GEMM kernels on M-series GPUs, especially with k-steps of 8 or 16 where a coalesced mapping needs one loop iteration per tile row."
+   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.staging-loop-latency-beats-coalescing fewer staging iterations beat coalesced staging; L2 absorbs non-coalesced global reads {\"goal\": \"Choose staging topology by measurement, not by CUDA coalescing intuition.\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, Metal 3/4\", \"statement\": \"CUDA-style reasoning"
+  },
+  {
+   "id": "apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable",
+   "type": "technique-card",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal|kernel-opt|q4-gemm#transpose-load-unusable|cross-operator",
+   "path": "records/technique-card/apple/m-series/metal/any/apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable.json",
+   "title": "avoid simdgroup_load transpose=true; verify fragment layout with a collective probe",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "metal",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "simdgroup-load",
+     "transpose",
+     "toolchain-pitfall"
+    ],
+    "triggers": [
+     "transposed staging produces wrong numerics or partial zero fragments on Metal 4 toolchains"
+    ]
+   },
+   "worth_score": 0.6,
+   "tier": "provisional",
+   "gain_pct": null,
+   "page_path": null,
+   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable avoid simdgroup_load transpose=true; verify fragment layout with a collective probe {\"goal\": \"Do not rely on the transpose flag of simdgroup_load; verify fragment-layout semantics empirically.\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, Metal 3/4\", \"statemen"
   }
  ]
 }

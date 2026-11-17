@@ -1,0 +1,104 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal.kernel-opt.q4-gemm.small-m-scalar-ceiling",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal|kernel-opt|kernel-opt#q4-gemm|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "metal",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "gemv",
+   "split-k",
+   "small-m",
+   "compute-bound"
+  ],
+  "triggers": [
+   "a small-m Metal GEMV/GEMM cannot approach memory bandwidth",
+   "split-k GEMV stays far below MLX at decode shapes"
+  ]
+ },
+ "payload": {
+  "goal": "Explain why scalar small-M Metal kernels cannot approach bandwidth and what does.",
+  "problem": {
+   "target": "Apple Silicon (M-series) unified-memory GPU, Metal 3/4",
+   "statement": "At m=16 the q4 GEMM is bandwidth-bound in theory (14-58 MB streamed once) but scalar-FMA implementations top out near 8 TFLOPS fp32-equivalent."
+  },
+  "technique": "MMA-based split-k for small m",
+  "what": "Thread-per-column GEMV (with or without split-k) is limited by per-thread scalar FMA rate: measured 8.2 TFLOPS ceiling matches decode-qkv latency (14.8 GFLOP / 1.81 ms). Beating MLX at decode needs small-M MMA tiles plus split-k with an fp32 scratch and a reduce kernel; parallelism must come from k, not just n.",
+  "when": "Decode-shaped quantized GEMMs (m <= 32) where the incumbent still trails MLX.",
+  "how": "Split k into BKS-aligned chunks (chunk multiple of 32 keeps uint4 nibble loads aligned), write fp32 partials [split][column][row] to scratch, and reduce with a second kernel in the same command buffer or the next; keep the partial and reduce scratch layouts IDENTICAL.",
+  "caveats": [
+   "thread-per-column GEMV parallelism is capped by n/threads_per_group threadgroups - 42 threadgroups cannot saturate a 32-core M5 Max"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": null,
+  "_gain": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent/q4-mma episodes E1-E8, ABBA-measured on Apple M5 Max (Mac17,14, Metal 4, metalfe-32023.921.6), 2026-11-17"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.6,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.6,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-17T09:50:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": [],
+   "primary": null
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}

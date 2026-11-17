@@ -60,8 +60,10 @@ python3 plugins/metal-backend/adapter.py --input request.json
 
 ## Metal knowledge (validated lessons, also seeded into gpu-wiki)
 
-These are ABBA-measured on an Apple M5 Max during the onyx-infer
-`kernel-agent/q4-mma` episode (27.0 ms → 13.3 ms, 2.03×, correctness green):
+These are ABBA-measured on an Apple M5 Max across the onyx-infer
+`kernel-agent/q4-mma` episodes E1-E8 (final: tile16 26.9 ms → mma64 8.4 ms
+on the linear shape, 107.2 → 33.2 ms on qkv, 3.2x; decode-linear 0.473 ms
+beats MLX 0.726 ms; correctness green throughout):
 
 1. **simdgroup MMA with single-round fp16 dequant** — stage activations as
    fp16, unpack q4 nibbles, apply the fp32 group scale once, round to fp16,
@@ -77,6 +79,17 @@ These are ABBA-measured on an Apple M5 Max during the onyx-infer
    ran ~13.3 ms on the same kernel: serialized staging dominated, and unified
    memory L2 absorbed the strided reads. Choose staging topology by ABBA
    measurement, not by CUDA intuition.
+4. **Per-shape dispatch flips at small m** — the MMA kernel wins 3.2x at
+   m=1024 but loses to the 16x16 scalar tile at m=16, where the scalar tile
+   itself already beats MLX. Dispatch by shape regime, never one kernel for
+   all shapes.
+5. **Small-m scalar kernels are compute-bound near 8 TFLOPS** — thread-per-
+   column GEMV (even split-k) cannot approach bandwidth; decode shapes that
+   still trail MLX need an MMA-based split-k small-M kernel.
+6. **Two driver pitfalls**: committing a Metal command buffer twice hangs
+   the process permanently; `thread_elements()` is read-unreliable on the
+   metal4 toolchain, so register-side fragment dequant cannot be verified
+   cheaply — stage through threadgroup memory instead.
 
 ## Upstream integration status
 

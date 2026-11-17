@@ -1,0 +1,116 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal.kernel-opt.q4-gemm.per-shape-dispatch-flip",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal|kernel-opt|kernel-opt#q4-gemm|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "metal",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "dispatch",
+   "tile-selection",
+   "small-m"
+  ],
+  "triggers": [
+   "choosing one Metal GEMM kernel for all shapes",
+   "an MMA kernel loses to a scalar tile kernel at small m"
+  ]
+ },
+ "payload": {
+  "goal": "Dispatch per shape instead of crowning one GEMM kernel.",
+  "problem": {
+   "target": "Apple Silicon (M-series) unified-memory GPU, Metal 3/4",
+   "statement": "A single promoted kernel for every shape leaves large gains on the table in both regimes."
+  },
+  "technique": "Per-shape dispatch flip",
+  "what": "On M5 Max, the 64x64 four-simdgroup MMA kernel wins 3.2x at m=1024 (q4 GEMM n=5376/21504, k=5376) but LOSES to the 16x16 scalar tile kernel at m=16 (0.473 vs 0.797 ms). Dispatch m>=512 to the MMA kernel and m<=32 to the small tile; both regimes stay correctness-green.",
+  "when": "Operators with widely varying m (prefill vs decode) hitting the same quantized GEMM.",
+  "how": "Promote candidates per shape regime with ABBA blocks; keep a dispatch table keyed by m threshold; re-validate thresholds on each new chip generation.",
+  "caveats": [
+   "threshold measured only at m in {16, 1024}; the m=17..511 middle regime is unmeasured"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": 68.8,
+  "_gain": {
+   "pct": 68.8,
+   "metric": "gpu_median_latency",
+   "metric_entry": {
+    "metric": "gpu_median_latency",
+    "delta_pct": 68.8
+   }
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent/q4-mma episodes E1-E8, ABBA-measured on Apple M5 Max (Mac17,14, Metal 4, metalfe-32023.921.6), 2026-11-17"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.6,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.6,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-17T09:50:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "measured",
+   "kind": "measured",
+   "pct": 68.8,
+   "primary": "gpu_median_latency",
+   "metrics": [
+    {
+     "metric": "gpu_median_latency",
+     "delta_pct": 68.8,
+     "source": "ABBA 2-block alternation, onyx-infer kernel-agent episodes E1-E8, M5 Max"
+    }
+   ]
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}

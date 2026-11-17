@@ -1,0 +1,106 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal.pitfalls.q4-gemm.thread-elements-unreliable",
+ "type": "anti-strategy",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal|pitfalls|pitfalls#q4-gemm|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "metal",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "simdgroup-mma",
+   "fragment-layout",
+   "toolchain-pitfall"
+  ],
+  "triggers": [
+   "a Metal kernel risks the 'writing b fragments via thread_elements() with a guessed layout produces wrong numerics' trap"
+  ]
+ },
+ "payload": {
+  "goal": "Avoid a known trap on Apple M-series Metal: writing b fragments via thread_elements() with a guessed layout produces wrong numerics",
+  "problem": {
+   "target": "Apple Silicon (M-series) unified-memory GPU, Metal 4 toolchains",
+   "statement": "writing b fragments via thread_elements() with a guessed layout produces wrong numerics"
+  },
+  "attempted": "Materializing dequantized weights directly into simdgroup fragments using the two documented thread-element mappings ([t/4][(t%4)*2+{0,1}] and [(t%4)*2+{0,1}][t/4]); a read-back probe also returned zeros for every thread.",
+  "verdict": "rejected",
+  "lesson": "Stage fragments through threadgroup memory with simdgroup_load/store and measure; treat thread_elements() as write-only-opaque on metal4 toolchains until Apple documents the layout.",
+  "established_fact": {
+   "condition": {
+    "toolchain": "metal4.0 (metalfe-32023.921.6)"
+   },
+   "mechanism": "The per-thread element mapping of simdgroup_matrix fragments is not stable API on this toolchain: thread_elements() read-back returns zeros and neither documented layout matches hardware placement, so register-side dequant cannot be verified cheaply."
+  },
+  "observed": "Correctness failures on small/ragged/ungrouped shapes (max_abs 1.1-3.6) for both layouts.",
+  "root_cause": "The per-thread element mapping of simdgroup_matrix fragments is not stable API on this toolchain: thread_elements() read-back returns zeros and neither documented layout matches hardware placement, so register-side dequant cannot be verified cheaply.",
+  "typical_gain_pct": null,
+  "success_rate_pct": null,
+  "_gain": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent/q4-mma episodes E1-E8, ABBA-measured on Apple M5 Max (Mac17,14, Metal 4, metalfe-32023.921.6), 2026-11-17"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.6,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.6,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-17T09:50:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "qualitative",
+   "kind": "none",
+   "pct": null,
+   "metrics": [],
+   "primary": null
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}

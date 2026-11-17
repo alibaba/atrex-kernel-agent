@@ -50,13 +50,13 @@
   "technique": "simdgroup MMA with single-round fp16 dequant",
   "what": "Stage activation tiles as fp16 in threadgroup memory; unpack q4 nibbles, apply the fp32 group scale once, round the product to fp16, and feed fixed 8x8 half fragments to simdgroup_multiply_accumulate with an fp32 accumulator. One simdgroup (32 threads) per threadgroup owning a 32x32 output tile is a simple, correct starting topology.",
   "when": "Quantized GEMM/MLP operators on M-series GPUs where the packing format must stay unchanged and numeric profile requires fp32 accumulation.",
-  "how": "1. Declare simdgroup_matrix<half,8,8> fragment registers outside the k-loop. 2. Step k by 8; stage A as thread lane=row (8 iterations), dequant B nibbles per output column. 3. Load a/b fragments into registers once per step, then run a pure 4x4 MMA loop. 4. Accumulate in fp32 fragments, store through a threadgroup float tile. Never place simdgroup ops inside thread-conditional branches: they are collective over the simdgroup.",
+  "how": "1. Declare simdgroup_matrix<half,8,8> fragment registers outside the k-loop. 2. Step k by 8; stage A as thread lane=row (8 iterations), dequant B nibbles per output column. 3. Load a/b fragments into registers once per step, then run a pure 4x4 MMA loop. 4. Accumulate in fp32 fragments, store through a threadgroup float tile. Never place simdgroup ops inside thread-conditional branches: they are collective over the simdgroup. 64x64 output tile with four simdgroups (one 32x32 quadrant each) is the promoted topology: it cuts global A/W re-reads 4x versus one simdgroup per 32x32 tile.",
   "caveats": [
    "simdgroup_multiply_accumulate in metal4 toolchains takes 4 args (d, a, b, c), not 3",
    "hoisting fragment loads into a conditional branch broke MMA/load pipelining and regressed 13.3ms -> 55ms"
   ],
   "success_rate_pct": null,
-  "typical_gain_pct": 50.7
+  "typical_gain_pct": 68.8
  },
  "evidence": {
   "summary": {
@@ -87,17 +87,16 @@
   "gain": {
    "basis": "measured",
    "kind": "measured",
-   "pct": 50.7,
+   "pct": 68.8,
+   "primary": "gpu_median_latency",
    "metrics": [
     {
      "metric": "gpu_median_latency",
-     "delta_pct": 50.7,
-     "unit": null,
-     "source": "ABBA 4-block alternation, onyx-infer kernel-agent/q4-mma episode, M5 Max",
-     "note": "candidate simdgroup-MMA kernel vs tile16 incumbent; direction normalized as latency-reduction percentage"
+     "delta_pct": 68.8,
+     "source": "Final ABBA (2 blocks), onyx-infer E1-E8, M5 Max: tile16 26.87ms vs mma64 8.40/8.52ms; qkv shape 107.2 vs 33.2ms",
+     "note": "latency-reduction percentage of the promoted per-shape winner vs tile16 incumbent"
     }
-   ],
-   "primary": "gpu_median_latency"
+   ]
   },
   "track": {
    "counters": {
