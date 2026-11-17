@@ -1,0 +1,17 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["operator_root", "bench_source", "kernel_source", "baseline_variant", "candidate_variant"],
+  "properties": {
+    "operator_root": {"type": "string", "description": "Absolute path to the operator workspace containing the kernel and bench sources."},
+    "kernel_source": {"type": "string", "description": "Path (relative to operator_root) of the .metal source containing both variants."},
+    "bench_source": {"type": "string", "description": "Path (relative to operator_root) of the Objective-C++ bench driver. It must accept --variant <name>, print a JSON result with gpu_median_ms and correct fields, and exit 2 on numeric failure."},
+    "baseline_variant": {"type": "string"},
+    "candidate_variant": {"type": "string"},
+    "build_args": {"type": "array", "items": {"type": "string"}, "description": "Extra xcrun metal compile arguments. Defaults to -std=metal4.0 -mmacosx-version-min=27.0; relax for older targets."},
+    "bench_args": {"type": "array", "items": {"type": "string"}, "description": "Arguments appended to every bench invocation, e.g. --m 1024 --n 5376 --k 5376 --group 64."},
+    "blocks": {"type": "integer", "minimum": 2, "maximum": 8, "description": "ABBA block count (default 4). Each block runs both variants with the configured iteration count."},
+    "iterations": {"type": "integer", "minimum": 1, "maximum": 100, "description": "Measured iterations per variant per block (default 10). One warmup run is always discarded."},
+    "output": {"type": "string", "description": "Optional path for the full measurement record JSON. When absent the record is only echoed in the response."}
+  }
+}

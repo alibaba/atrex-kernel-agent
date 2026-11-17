@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal.kernel-opt.q4-gemm.simdgroup-mma-dequant-fp16",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal|kernel-opt|q4-gemm#simdgroup-mma-dequant-fp16|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "metal",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "simdgroup-mma",
+   "quantized-gemm",
+   "q4"
+  ],
+  "triggers": [
+   "a scalar-FMA Metal GEMM runs far below MMA-peak TFLOPS",
+   "an LLM-generated or hand-written Metal GEMM lacks simdgroup_matrix usage"
+  ]
+ },
+ "payload": {
+  "goal": "Replace scalar FMA inner loops with simdgroup-MMA tensor-core execution.",
+  "problem": {
+   "target": "Apple Silicon (M-series) unified-memory GPU, Metal 3/4",
+   "statement": "Metal GEMM kernels written with scalar multiply-accumulate reach only single-digit percent of the MMA peak; a measured onyx-infer tile16 q4 kernel ran at ~2.1 TFLOPS vs MLX quantized_matmul at an estimated roofline on the same shape."
+  },
+  "technique": "simdgroup MMA with single-round fp16 dequant",
+  "what": "Stage activation tiles as fp16 in threadgroup memory; unpack q4 nibbles, apply the fp32 group scale once, round the product to fp16, and feed fixed 8x8 half fragments to simdgroup_multiply_accumulate with an fp32 accumulator. One simdgroup (32 threads) per threadgroup owning a 32x32 output tile is a simple, correct starting topology.",
+  "when": "Quantized GEMM/MLP operators on M-series GPUs where the packing format must stay unchanged and numeric profile requires fp32 accumulation.",
+  "how": "1. Declare simdgroup_matrix<half,8,8> fragment registers outside the k-loop. 2. Step k by 8; stage A as thread lane=row (8 iterations), dequant B nibbles per output column. 3. Load a/b fragments into registers once per step, then run a pure 4x4 MMA loop. 4. Accumulate in fp32 fragments, store through a threadgroup float tile. Never place simdgroup ops inside thread-conditional branches: they are collective over the simdgroup.",
+  "caveats": [
+   "simdgroup_multiply_accumulate in metal4 toolchains takes 4 args (d, a, b, c), not 3",
+   "hoisting fragment loads into a conditional branch broke MMA/load pipelining and regressed 13.3ms -> 55ms"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": 50.7
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent/q4-mma episode, ABBA-measured on Apple M5 Max (Mac17,14, Metal 4, metalfe-32023.921.6), 2026-11-17"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.6,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.6,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-17T08:30:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "measured",
+   "kind": "measured",
+   "pct": 50.7,
+   "metrics": [
+    {
+     "metric": "gpu_median_latency",
+     "delta_pct": 50.7,
+     "unit": null,
+     "source": "ABBA 4-block alternation, onyx-infer kernel-agent/q4-mma episode, M5 Max",
+     "note": "candidate simdgroup-MMA kernel vs tile16 incumbent; direction normalized as latency-reduction percentage"
+    }
+   ],
+   "primary": "gpu_median_latency"
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}

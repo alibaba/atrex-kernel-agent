@@ -2,7 +2,7 @@
  "schema": "hw-1.0",
  "generated_by": "build_index.py",
  "builder_version": "1",
- "count": 30,
+ "count": 31,
  "records": [
   {
    "id": "amd.cdna3.spec-sheet.mi300x",
@@ -525,6 +525,24 @@
    "available_sm_arch": [],
    "available_products": [],
    "evidence_class": "architecture-analysis"
+  },
+  {
+   "id": "apple.m-series.spec-sheet.m5-max",
+   "type": "spec-sheet",
+   "status": "current",
+   "path": "records/spec-sheet/apple/m-series/m5-max.json",
+   "vendor": "apple",
+   "arch": "m-series",
+   "product": "m5-max",
+   "compute_capability": null,
+   "sm_arch": null,
+   "mnemonic": null,
+   "feature": null,
+   "available_sm_arch": [],
+   "available_products": [
+    "m5-max"
+   ],
+   "evidence_class": "runtime-probe"
   }
  ]
 }

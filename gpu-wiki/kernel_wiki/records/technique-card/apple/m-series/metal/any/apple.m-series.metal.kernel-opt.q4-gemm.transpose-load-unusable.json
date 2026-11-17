@@ -1,0 +1,100 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal|kernel-opt|q4-gemm#transpose-load-unusable|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "metal",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "simdgroup-load",
+   "transpose",
+   "toolchain-pitfall"
+  ],
+  "triggers": [
+   "transposed staging produces wrong numerics or partial zero fragments on Metal 4 toolchains"
+  ]
+ },
+ "payload": {
+  "goal": "Do not rely on the transpose flag of simdgroup_load; verify fragment-layout semantics empirically.",
+  "problem": {
+   "target": "Apple Silicon (M-series) unified-memory GPU, Metal 3/4",
+   "statement": "The transpose_matrix flag of simdgroup_load in the metal4.0 toolchain (metalfe-32023.921.6) applies stride semantics that do not match the documented row-major intuition: a probe kernel loading a known 8x8 tile returned partially-populated fragments."
+  },
+  "technique": "avoid simdgroup_load transpose=true; verify fragment layout with a collective probe",
+  "what": "Writing a transposed-staging kernel that then loads A fragments with transpose_matrix=true.",
+  "when": "When fragment layout must be transposed, stage into the layout the identity load expects instead, or validate first with a 10-line probe kernel: fill a known tile, load with the candidate flags, store out, compare. The probe itself must run simdgroup ops unconditionally across all 32 threads.",
+  "how": [
+   "the same flag may behave differently across Metal toolchain versions; re-probe on upgrade"
+  ],
+  "caveats": null,
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent/q4-mma episode, ABBA-measured on Apple M5 Max (Mac17,14, Metal 4, metalfe-32023.921.6), 2026-11-17"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.6,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.6,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-17T08:30:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "abba-measured",
+   "kind": "measured",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}

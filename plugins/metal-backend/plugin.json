@@ -1,0 +1,17 @@
+{
+  "id": "metal-backend",
+  "version": "0.1.0",
+  "api_version": 1,
+  "tools": {
+    "metal-eval": {
+      "description": "Compile a Metal kernel candidate, verify correctness against the operator's CPU reference, and produce ABBA-alternated measurement evidence between a baseline and candidate variant on the local Apple Silicon GPU. Local-only execution backend: no Agate or SSH GPU allocation is required on macOS.",
+      "command": ["{python}", "{plugin_root}/adapter.py"],
+      "input_schema": "schemas/eval.input.json",
+      "output_schema": "schemas/eval.output.json",
+      "timeout_seconds": 1800
+    }
+  },
+  "instructions": {
+    "common": "instructions.md"
+  }
+}

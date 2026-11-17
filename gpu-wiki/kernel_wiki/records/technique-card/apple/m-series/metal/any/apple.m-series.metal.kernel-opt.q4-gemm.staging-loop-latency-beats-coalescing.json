@@ -1,0 +1,101 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal.kernel-opt.q4-gemm.staging-loop-latency-beats-coalescing",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal|kernel-opt|q4-gemm#staging-loop-latency-beats-coalescing|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "metal",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "staging",
+   "coalescing",
+   "abba",
+   "l2"
+  ],
+  "triggers": [
+   "a threadgroup-staged Metal GEMM is slower than expected despite fully coalesced global reads"
+  ]
+ },
+ "payload": {
+  "goal": "Choose staging topology by measurement, not by CUDA coalescing intuition.",
+  "problem": {
+   "target": "Apple Silicon (M-series) unified-memory GPU, Metal 3/4",
+   "statement": "CUDA-style reasoning says global loads must coalesce. On Apple unified memory, a 32-iteration coalesced A-staging loop (thread owns a k-column) ran ~30ms while an 8-iteration non-coalesced loop (thread owns a row) ran ~13.3ms on the same 32x32-tile q4 kernel: the extra serialized staging iterations dominated, and L2 absorbed the strided reads."
+  },
+  "technique": "fewer staging iterations beat coalesced staging; L2 absorbs non-coalesced global reads",
+  "what": "Threadgroup-staged GEMM kernels on M-series GPUs, especially with k-steps of 8 or 16 where a coalesced mapping needs one loop iteration per tile row.",
+  "when": "Benchmark both staging topologies under ABBA alternation (A/B/B/A blocks, median per block) before committing to one; keep the loop with fewer iterations unless measurement contradicts it. Record the decision in the candidate evidence.",
+  "how": [
+   "unified-memory L2 behavior differs by chip generation; re-measure per target before generalizing"
+  ],
+  "caveats": null,
+  "success_rate_pct": null,
+  "typical_gain_pct": null
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent/q4-mma episode, ABBA-measured on Apple M5 Max (Mac17,14, Metal 4, metalfe-32023.921.6), 2026-11-17"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.6,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.6,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-17T08:30:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "abba-measured",
+   "kind": "measured",
+   "pct": null,
+   "metrics": []
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}

@@ -1,0 +1,50 @@
+{
+ "schema": "hw-1.0",
+ "id": "apple.m-series.spec-sheet.m5-max",
+ "type": "spec-sheet",
+ "status": "current",
+ "identity": {
+  "vendor": "apple",
+  "arch": "m-series",
+  "product": "m5-max",
+  "sm_arch": null,
+  "compute_capability": null
+ },
+ "facts": {
+  "summary": "Apple M5 Max unified-memory GPU (Mac17,14) compute specification",
+  "peak_compute": [
+   {
+    "dtype": "fp16",
+    "unit": "TFLOPS",
+    "unit_kind": "tensor-core",
+    "dense": null,
+    "provenance": "vendor-specification",
+    "note": "Apple does not publish a dense MMA TFLOPS figure; measure the per-chip roofline before quoting one"
+   }
+  ],
+  "memory": {
+   "bandwidth_gb_per_s": 546,
+   "bandwidth_provenance": "vendor-specification",
+   "unified_memory": true,
+   "max_buffer_bytes": 22613000192,
+   "recommended_working_set_bytes": 30150672384,
+   "physical_memory_bytes": 38654705664,
+   "provenance": "runtime-probe (Metal device query)"
+  },
+  "compute_units": {
+   "gpu_cores": 32,
+   "cpu_cores": 18,
+   "provenance": "runtime-probe"
+  },
+  "toolchain": {
+   "metal": "Metal 4",
+   "metal_compiler": "metalfe-32023.921.6",
+   "macos": "27.0 (26A425)"
+  },
+  "notes": [
+   "simdgroup MMA is 8x8 fixed-k fragments via metal::simdgroup_matrix",
+   "no ncu equivalent; profiling is via Metal command-buffer GPU timing and MTKView/Instruments"
+  ]
+ },
+ "evidence_class": "runtime-probe"
+}

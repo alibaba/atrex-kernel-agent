@@ -13,6 +13,9 @@ AMD_FRAMEWORKS = ("Triton", "FlyDSL", "TileLang")
 PPU_FRAMEWORKS = ("Triton", "Cuda", "TileLang")
 
 
+APPLE_FRAMEWORKS = ("Metal",)
+
+
 DEFAULT_FRAMEWORKS = ("Triton", "TileLang")
 
 
@@ -40,9 +43,13 @@ def hardware_vendor(platform: str, arch: str = "") -> str:
         return "nvidia"
     if re.fullmatch(r"gfx[0-9a-f]+", runtime_arch):
         return "amd"
+    if re.fullmatch(r"m\d+(?:\s?(?:pro|max|ultra))?", runtime_arch):
+        return "apple"
 
     if re.match(r"^(?:AMD|MI\d|RADEON|INSTINCT)", token):
         return "amd"
+    if re.match(r"^(?:APPLE|MAC|MACBOOK|MAC\s?MINI|MAC\s?STUDIO)", token):
+        return "apple"
     if re.match(
         r"^(?:NVIDIA|CUDA|GEFORCE|RTX|QUADRO|TESLA|DGX|GB\d|[BHALTVP]\d|PRO\d)",
         token,
@@ -60,6 +67,8 @@ def supported_frameworks(platform: str, arch: str = "") -> tuple[str, ...]:
         return AMD_FRAMEWORKS
     if vendor == "ppu":
         return PPU_FRAMEWORKS
+    if vendor == "apple":
+        return APPLE_FRAMEWORKS
     return DEFAULT_FRAMEWORKS
 
 
