@@ -5,6 +5,7 @@ import json
 import hashlib
 import math
 import statistics
+from .objectives import latency_only_result
 from .tool_results import PREFIXES, correctness_summary
 from .result_json import parse_evaluation_result_line
 
@@ -29,7 +30,7 @@ def _median_side(sides: list[dict]) -> dict:
     if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0
            for values in maps for value in values.values()):
         raise ValueError("Repeated measurement contains an invalid latency")
-    result = dict(sides[-1])
+    result = latency_only_result(sides[-1])
     values = {key: statistics.median(row[key] for row in maps) for key in maps[0]}
     result["latency_us_by_shape"] = values
     result["latency_us_geomean"] = math.exp(statistics.mean(math.log(value) for value in values.values()))
@@ -40,25 +41,20 @@ def _median_side(sides: list[dict]) -> dict:
             result[key] = max(errors)
     result["correctness"] = correctness_summary(sides, passed=all(
         side.get("correct", side.get("all_pass")) is True for side in sides))
-    # Scores computed on an individual run must not be mislabeled as median facts.
-    for key in ("performance_score", "speedup_vs_ref_geomean", "speedup_vs_ref_mean", "utilization_pct", "sol_utilization_pct"):
-        result.pop(key, None)
     return result
 
 
 def aggregate(results: list[dict], operation: str) -> dict:
     if len(results) == 1:
-        return results[0]
+        return latency_only_result(results[0])
     if operation == "evaluate":
         if any(row.get("all_pass") is not True for row in results):
             raise ValueError("Cannot aggregate incomplete or rejected evaluations")
         return _median_side(results)
     if any(row.get("correct") is not True for row in results):
         raise ValueError("Cannot aggregate incomplete or rejected comparisons")
-    value = dict(results[-1])
+    value = latency_only_result(results[-1])
     value["baseline"] = _median_side([row["baseline"] for row in results])
     value["candidate"] = _median_side([row["candidate"] for row in results])
-    value["speedup"] = value["baseline"]["latency_us_geomean"] / value["candidate"]["latency_us_geomean"]
-    value["improvement_pct"] = (value["speedup"] - 1.0) * 100
     value.pop("measurements", None)
     return value

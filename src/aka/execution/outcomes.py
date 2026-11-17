@@ -283,9 +283,20 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
         has_result = True
     disposition = "unknown"
     termination = None
-    if attempts and all(item.disposition != "unknown" for item in attempts):
-        disposition = "terminal" if any(item.disposition == "terminal" for item in attempts) else "not_submitted"
-        termination = attempts[-1].termination if disposition == "terminal" else None
+    # A confirmed submission resolves earlier HTTP failures only for the exact
+    # same keyed wire request. Keep every attempt in the audit, but do not let a
+    # recovered 503 make a later valid Job result permanently inconclusive.
+    accepted_keys = {(item.get("operation"), item.get("idempotency_key"), item.get("request_identity"))
+                     for item in submitted.values()
+                     if item.get("idempotency_key") and item.get("request_identity")}
+    resolved_attempts = {item.attempt_id for item in attempts
+        if item.attempt_id is not None and item.disposition == "unknown"
+        and not (item.resource and item.resource.identifier)
+        and (item.operation, item.idempotency_key, item.request_identity) in accepted_keys}
+    effective_attempts = [item for item in attempts if item.attempt_id not in resolved_attempts]
+    if effective_attempts and all(item.disposition != "unknown" for item in effective_attempts):
+        disposition = "terminal" if any(item.disposition == "terminal" for item in effective_attempts) else "not_submitted"
+        termination = effective_attempts[-1].termination if disposition == "terminal" else None
     if not attempts and diagnostics and all(item.category in {"request", "authentication"} for item in diagnostics):
         disposition = "not_submitted"
     if any(record.get("event") == "invalid" for record in records):
@@ -311,6 +322,8 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
     confirmations = {}
     for record in records:
         if record.get("event") != "attempt":
+            continue
+        if record.get("attempt_id") in resolved_attempts:
             continue
         if record.get("disposition") == "not_submitted":
             continue

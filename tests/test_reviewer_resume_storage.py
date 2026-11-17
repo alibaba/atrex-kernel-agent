@@ -228,7 +228,8 @@ def test_claim_revision_resumes_and_archives_in_measurements(tmp_path, monkeypat
         service.measurement_root = store
         service.campaign_root = campaign.workspace
         session = None
-        for revision in (1, 2):
+        # Direction v2 is a lifecycle-only start, so its next Review is v3.
+        for revision in ((1, 3) if claim_type == "direction" else (1, 2)):
             source = tmp_path / f"inputs-{revision}"
             (source / "submissions").mkdir(parents=True)
             target = {claim_type + "_id": claim_id, "revision": revision}
@@ -239,7 +240,7 @@ def test_claim_revision_resumes_and_archives_in_measurements(tmp_path, monkeypat
             assert review["verdict"] == "supported"
             attempts = review.pop("_review_session_audit")["attempts"]
             assert len(attempts) == 1
-            assert attempts[0]["resumed"] == (revision == 2)
+            assert attempts[0]["resumed"] == (revision > 1)
             if session:
                 assert attempts[0]["session_id"] == session
             session = attempts[0]["session_id"]

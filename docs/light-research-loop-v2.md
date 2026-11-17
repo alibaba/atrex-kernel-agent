@@ -93,8 +93,9 @@ records/<gateway_record_id>.json
 PROGRESS.md
 ```
 
-Direction 的未启动草稿使用可更新的 `v0`，首次 `start` Review 写入不可变 `v1`，后续受审查
-状态依次写入 `v2`、`v3`；Experiment 首次提交即 Review，因此从不可变 `v1` 开始。编号最大的
+Direction 在 `propose` 时进行准入 Review，不要求已有 Experiment 或测量，首次归档为不可变
+`v1`。`revise` 和关闭操作仍需 Review；`start` 只变更生命周期、沿用已有 Review。每次归档更新
+依次写入 `v2`、`v3`；Experiment 首次提交即 Review，也从不可变 `v1` 开始。编号最大的
 可见 `vN` 是当前版本，对应 JSON 同时保留该版的精简 Review 结论。Direction 文件包含完整的决策字段、生命周期与
 当前 plan。Experiment 的 `experiment.json` 只包含研究语义与 Gateway Record 引用；根目录 `records/` 平铺当前可见的全部
 标准化公开结果，不再在各 Experiment 下复制一份。它不包含私有请求、输入哈希或兼容执行流。

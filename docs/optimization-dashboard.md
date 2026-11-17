@@ -5,6 +5,11 @@ It shows lineage activity, Direction/Experiment state, tokens, passing full Eval
 reviews, accepted winners, Runtime calls, Agate attempts, and Gateway evidence. It does not launch
 jobs, submit Kernels, retry, cancel, or change Campaign state.
 
+The [Dashboard Skill](../skills/atrex-aka-light-dashboard/SKILL.md) provides a local-user workflow,
+including a Vector Add example, background startup, verification and captured snapshots in
+[Chinese](../skills/atrex-aka-light-dashboard/references/local-dashboard.md) and
+[English](../skills/atrex-aka-light-dashboard/references/local-dashboard.en.md).
+
 ## Run locally
 
 Use the merged AKA checkout and the Python environment used by Light:

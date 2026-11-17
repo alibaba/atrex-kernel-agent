@@ -1,4 +1,6 @@
 import hashlib
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import json
 import subprocess
 import tempfile
@@ -40,22 +42,79 @@ class RuntimeIntegrationTest(unittest.TestCase):
             command_evaluator=self.evaluator, namespace_workspace=path, evaluation_input=None,
             workspace_provider=self.task, store=self.store), path
 
-    def test_cross_lineage_reuse_returns_normal_receipt_and_one_gateway_record(self):
-        identity = {'operation': 'dev', 'options': {}, 'inputs': {}, 'command': ['measure']}
-        first, w1 = self.bridge('t0001')
-        second, w2 = self.bridge('t0002')
-        a = first.execute(CommandSpec(w1, ('measure',), operation='dev'), request_id='first', identity=identity, kernels={})
-        b = second.execute(CommandSpec(w2, ('measure',), operation='dev'), request_id='second', identity=identity, kernels={})
-        self.assertEqual(self.executor.run.call_count, 1)
-        self.assertEqual(a['agent_result'], b['agent_result'])
-        self.assertEqual(a['agent_result']['status'], 'completed')
-        self.assertNotIn('duplicate', json.dumps(b))
-        self.assertEqual(len(self.store.record_ids()), 1)
-        self.assertEqual(len(list(self.store.execution_records().iter_records())), 1)
-        record = self.store.read(a['agent_result']['gateway_record_id'])
-        self.assertEqual(record['runtime_request_id'], 'first')
-        self.assertEqual(a['agent_result']['record_path'], f"records/{record['gateway_record_id']}.json")
-        self.assertEqual(record['response']['stdout'].splitlines()[0], 'raw-dev')
+    def test_non_evaluate_calls_execute_independently_and_ignore_old_cache(self):
+        from aka.experiment.runner import Experiment
+        for operation in ('command', 'dev', 'profile', 'check', 'disassemble'):
+            with self.subTest(operation=operation):
+                identity = {'operation': operation, 'options': {}, 'inputs': {}, 'command': ['measure']}
+                # Older Campaigns may still have a cacheable result for this exact request.
+                with self.store.reserve(identity, {}, request_id='old') as task:
+                    task.finish({'exit_code': 0, 'stdout': 'old cached output', 'stderr': ''}, cacheable=True)
+                    old_record_id = task.record_id
+                count_before = len(self.store.record_ids())
+                executions_before = len(list(self.store.execution_records().iter_records()))
+                first, w1 = self.bridge('t0001')
+                second, w2 = self.bridge('t0002')
+                first.environment_identity = second.environment_identity = 'confirmed-test-environment'
+                entered = {w1: threading.Event(), w2: threading.Event()}
+                release = threading.Event()
+                def slow_execution(command):
+                    entered[command.workspace].set()
+                    self.assertTrue(release.wait(10))
+                    return TestExecutor().run(command)
+                self.executor.run = Mock(side_effect=slow_execution)
+                # Even explicit reuse flags must not admit lower-level evidence reuse.
+                with patch.object(Experiment, 'correctness_reuse', side_effect=AssertionError('unexpected correctness reuse')), \
+                     patch.object(Experiment, 'reusable', side_effect=AssertionError('unexpected measurement reuse')):
+                    with ThreadPoolExecutor(max_workers=2) as pool:
+                        original = pool.submit(first.execute, CommandSpec(w1, ('measure',), operation=operation),
+                            request_id='first', identity=identity, kernels={}, reuse_completed=True, reuse_correctness=True)
+                        try:
+                            self.assertTrue(entered[w1].wait(5))
+                            concurrent = pool.submit(second.execute, CommandSpec(w2, ('measure',), operation=operation),
+                                request_id='second', identity=identity, kernels={}, reuse_completed=True, reuse_correctness=True)
+                            # Both physical executions start before either returns.
+                            self.assertTrue(entered[w2].wait(5))
+                            self.assertEqual(self.executor.run.call_count, 2)
+                        finally:
+                            release.set()
+                        responses = [original.result(5), concurrent.result(5)]
+                    responses.append(second.execute(CommandSpec(w2, ('measure',), operation=operation),
+                        request_id='later', identity=identity, kernels={}, reuse_completed=True, reuse_correctness=True))
+                self.assertEqual(self.executor.run.call_count, 3)
+                record_ids = {item['agent_result']['gateway_record_id'] for item in responses}
+                self.assertEqual(len(record_ids), 3)
+                self.assertNotIn(old_record_id, record_ids)
+                self.assertNotIn('invocation_id', identity)  # Do not mutate caller input.
+                self.assertEqual(len(self.store.record_ids()), count_before + 3)
+                self.assertEqual(len(list(self.store.execution_records().iter_records())), executions_before + 3)
+                for response in responses:
+                    self.assertFalse(response['reused'])
+                    self.assertEqual(response['stdout'].splitlines()[0], f'raw-{operation}')
+                    record_id = response['agent_result']['gateway_record_id']
+                    self.assertEqual(response['agent_result']['record_path'], f'records/{record_id}.json')
+                    self.assertFalse(self.store.read(record_id)['cacheable'])
+
+    def test_normal_evaluate_response_is_reused_without_qualified_measurement(self):
+        for command in (('measure',), ('compile-error',)):
+            with self.subTest(command=command):
+                owner, workspace = self.bridge('t0001')
+                identity = {'operation': 'evaluate', 'options': {}, 'command': list(command)}
+                request = CommandSpec(workspace, command, operation='run')
+                before = self.executor.run.call_count
+                original = owner.execute(request, identity=identity, kernels={})
+                record_id = original['agent_result']['gateway_record_id']
+                # The test evaluator supplies no correctness or performance verdict.
+                self.assertIsNone(original['agent_result']['result']['correct'])
+                self.assertTrue(original['evaluation_response_received'])
+                self.assertNotIn('evaluation_response_received', original['agent_result'])
+                self.assertTrue(self.store.read(record_id)['cacheable'])
+                cached = owner.execute(request, identity=identity, kernels={})
+                self.assertEqual(self.executor.run.call_count, before + 1)
+                self.assertEqual(cached['agent_result'], dict(original['agent_result'],
+                    reused_gateway_record_id=record_id))
+                self.assertEqual(cached['exit_code'], original['exit_code'])
+                self.assertEqual(cached['stderr'], original['stderr'])
 
     def test_failed_execution_and_preparation_remain_in_both_audit_layers(self):
         bridge, path = self.bridge('t0001')

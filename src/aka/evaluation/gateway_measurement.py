@@ -1,7 +1,7 @@
 """Measurement policy for the retained typed/dev CLI adapter.
 
 Execution supplies raw typed receipts in planned batch order. This adapter owns
-shape slicing, scoring and privacy, and never submits jobs or writes records.
+shape slicing, latency aggregation and privacy, and never submits jobs or writes records.
 The legacy CLI input inference remains a separate compatibility boundary.
 """
 from pathlib import Path
@@ -9,7 +9,7 @@ from typing import Any
 
 from .transport_results import (
     _shape_batch_reference,
-    _optimizer_result_from_eval, _merge_optimizer_results, _with_workspace_performance_score, _hydrate_result_lines,
+    _optimizer_result_from_eval, _merge_optimizer_results, _hydrate_result_lines,
     _public_numerical_result_line, _hydrate_abba_result_lines,
     TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX,
 )
@@ -93,7 +93,6 @@ def _mask_generalized_result(
     workspace: Path, result: dict[str, Any], *, private: bool, baseline=None
 ) -> dict[str, Any]:
     """Hide exact inputs and failures but retain real latency keyed by opaque shape id."""
-    result = _with_workspace_performance_score(workspace, result, baseline=baseline)
     if not private:
         return result
     masked = dict(result)

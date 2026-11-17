@@ -25,6 +25,10 @@ Implementation shared by these commands lives under `_internal/` and is not a su
 
 ## Read-only dashboard
 
+Use the [Dashboard Skill](../skills/atrex-aka-light-dashboard/SKILL.md) to open a Dashboard for an
+existing local Campaign or save a point-in-time view. It collects through the tools below and
+does not require new GPU credentials or a Campaign launch.
+
 The Light dashboard renders the same snapshots as the supported commands; it does not maintain a
 second index or reinterpret Campaign files. It binds only to loopback and exposes no mutation
 routes:

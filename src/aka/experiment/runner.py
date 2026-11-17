@@ -30,11 +30,13 @@ class Experiment:
         records=None,
         purpose: str = "development",
         command_evaluator=None,
+        submission_retry_policy=None,
 
     ):
         self.executor = executor
         self.evaluator = evaluator
         self.retry = retry
+        self.submission_retry_policy = submission_retry_policy
         self.check_result = check_result
         self.records = records
         self.purpose = purpose
@@ -351,8 +353,12 @@ class Experiment:
             cached[index] = records.result_for(ref, attempt.attempt_id)
         return cached
 
-    @staticmethod
-    def _observed_command(command, records, ref, attempt_id):
+    def _observed_command(self, command, records, ref, attempt_id):
+        if self.submission_retry_policy is not None:
+            from aka.execution.gateway.admission_retry import POLICY_ENV
+            policy = self.submission_retry_policy
+            command = replace(command, environment={**command.environment, POLICY_ENV:
+                json.dumps({"delays": policy.delays, "max_elapsed_s": policy.max_elapsed_s})})
         if records is None:
             return command
         def observe(value):

@@ -1607,7 +1607,6 @@ class Campaign:
             return (
                 "## Evaluation contract: Atrex-Bench\n\n" + public +
                 "The Supervisor supplies the official evaluator. Minimize latency_us_geomean; "
-                "performance_score is a reference-relative diagnostic. "
                 "Use --kind evaluate --mode full --no-sync for the complete workload. "
                 "Correctness-only, custom-input or subset results do not qualify as full Evaluate evidence for submit-kernel. "
                 + profile_shapes + " Use tools/sandbox.py --help for available diagnostic tools. "
@@ -1617,8 +1616,7 @@ class Campaign:
             return (
                 "## Evaluation contract: SOL-ExecBench\n\n"
                 "The Supervisor runs the official evaluator over workload.jsonl. "
-                "Minimize GeoMean workload latency. performance_score relative to "
-                "the SOL reference is diagnostic only. Use --kind evaluate --no-sync; never replace the evaluator. "
+                "Minimize GeoMean workload latency. Use --kind evaluate --no-sync; never replace the evaluator. "
                 "Atrex-Bench typed --mode controls do not apply to SOL-ExecBench."
             )
         raise ValueError("A canonical Atrex-Bench or SOL evaluator is required")

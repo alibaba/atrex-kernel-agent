@@ -12,6 +12,7 @@ from .result_json import (
 )
 from aka.evaluation.correctness_summary import correctness_summary, finite_number
 from .response_policy import INFORMATION_CATEGORIES, known_gateway_error, execution_error
+from .objectives import latency_only_result
 
 PREFIXES = {
     "evaluate": LEGACY_TEST_RESULT_PREFIX,
@@ -33,6 +34,8 @@ IDENTITIES = (*PRIVATE_IDENTITIES, *PUBLIC_IDENTITIES)
 def compact_receipt(agent_result: dict) -> dict:
     """Return the complete canonical Agent result stored in the Gateway Record."""
     receipt = deepcopy(agent_result)
+    if receipt.get("operation") in {"evaluate", "same_allocation_abba"}:
+        receipt = latency_only_result(receipt)
     record_id = receipt.get("gateway_record_id")
     if isinstance(record_id, str):
         receipt["record_path"] = f"records/{record_id}.json"
@@ -110,7 +113,7 @@ def input_scope(options: dict) -> str:
 
 
 def _metrics(raw: dict, *, verdict, mode="full", known=True) -> dict:
-    value = deepcopy(raw)
+    value = latency_only_result(deepcopy(raw))
     for key in (*IDENTITIES, "all_pass", "max_abs_err", "max_rel_err", "rel_err"):
         value.pop(key, None)
     value["correct"] = verdict if known and isinstance(verdict, bool) else None
@@ -143,7 +146,8 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             result["baseline_kernel_commit_id"] = result.pop("baseline_kernel_id")
         if "baseline_kernel_commit_id" in result and "kernel_commit_id" in result:
             result["candidate_kernel_commit_id"] = result.pop("kernel_commit_id")
-        return result
+        return (latency_only_result(result) if result.get("operation", request.get("operation"))
+                in {"evaluate", "same_allocation_abba"} else result)
     operation = request["operation"]
     if operation in {"dev", "command"}:
         result = {"stdout": response.get("stdout", ""), "stderr": response.get("stderr", ""),
@@ -235,7 +239,7 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
         result = _metrics(sample, verdict=verdict, mode=mode, known=status == "completed")
         result.update(mode=mode, input_scope=input_scope(options))
     elif operation == "same_allocation_abba":
-        result = deepcopy(sample)
+        result = latency_only_result(deepcopy(sample))
         for key in (*IDENTITIES, "status", "operation", "schedule", "measurements",
                     "measurement_aggregation", "shape_batch_count", "completed_shape_batch_count"):
             result.pop(key, None)
@@ -244,9 +248,6 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             result[side] = _metrics(raw, verdict=raw.get("correct", raw.get("all_pass")), known=status == "completed")
         result.update(mode="full", input_scope=input_scope(options),
                       correct=verdict if status == "completed" and isinstance(verdict, bool) else None)
-        a, b = (finite_number(result[side].get("latency_us_geomean")) for side in ("baseline", "candidate"))
-        speedup = a / b if verdict is True and status == "completed" and a and b and a > 0 and b > 0 else None
-        result.update(speedup=speedup, improvement_pct=(speedup - 1) * 100 if speedup is not None else None)
     else:
         result = {key: value for key, value in sample.items() if key not in IDENTITIES}
     # Probe output is data, not an Evaluate verdict. Preserve it even on failure.
@@ -296,9 +297,69 @@ def seal_response(response: dict, request: dict, *, record_id=None, kernels=None
     return {**response, "agent_result": canonical_result(response, request, record_id=record_id, kernels=kernels)}
 
 
+_RESPONSE_FAILURE_CLASSES = frozenset({
+    "infra", "infrastructure", "gateway", "transport", "network", "protocol",
+    "authentication", "authorization", "request", "validation", "capability",
+    "configuration", "timeout", "timed_out", "cancelled", "interrupted",
+})
+
+
+def _response_failure(value) -> bool:
+    """Inspect structured failures only; probe text is not an error classification."""
+    if isinstance(value, (list, tuple)):
+        return any(_response_failure(item) for item in value)
+    from collections.abc import Mapping
+    if not isinstance(value, Mapping):
+        return False
+    if any(isinstance(value.get(key), str) and value[key] in _RESPONSE_FAILURE_CLASSES
+           for key in ("error_class", "category", "failure_class")):
+        return True
+    return any(_response_failure(value.get(key)) for key in ("error", "errors", "causes", "diagnostics"))
+
+
+def normal_evaluation_execution(receipt) -> bool:
+    """A terminal response, independent of the candidate's correctness or metrics."""
+    from .response_policy import _cause_value
+    # Older failed submissions remain in the audit, but the last attempt owns
+    # the returned response once recovery has produced a terminal result.
+    latest = receipt.attempts[-1] if receipt.attempts else receipt
+    return (receipt.facts.disposition == "terminal"
+            and receipt.transport_status in {"succeeded", "failed"}
+            and not _response_failure([_cause_value(cause) for cause in latest.causes])
+            and not _response_failure([{"category": item.category} for item in latest.diagnostics]))
+
+
 def cacheable_evaluation(response: dict, request: dict) -> bool:
-    """One verdict contract for measurement publication and subsequent reuse."""
+    """Reuse normal Evaluate responses, not infrastructure/Gateway failures.
+
+    This is a request-cache policy, not qualification for submit-kernel. A
+    compilation/correctness failure or missing performance data is reusable.
+    """
     outcome = canonical_result(response, request)
-    return (outcome["status"] == "completed"
-            and isinstance(outcome["result"].get("correct"), bool)
-            and outcome["result"].get("outcome") not in {"unknown", "unavailable"})
+    result = outcome["result"]
+    if response.get("truncated") or _response_failure(result):
+        return False
+    from .device_failures import embedded_device_failure
+    if embedded_device_failure({"status": "succeeded", "result": result}):
+        return False
+    for line in response.get("stdout", "").splitlines():
+        raw = parse_evaluation_result_line(line)
+        if raw is None and line.startswith(PREFIXES["same_allocation_abba"]):
+            try:
+                raw = json.loads(line[len(PREFIXES["same_allocation_abba"]):])
+            except ValueError:
+                return False
+        if isinstance(raw, dict) and (_response_failure(raw)
+                or embedded_device_failure({"status": "succeeded", "result": raw})):
+            return False
+    # The owner records receipt availability separately from measurement
+    # qualification, which can be unknown despite a normal terminal response.
+    received = response.get("evaluation_response_received")
+    if type(received) is bool:
+        return received
+    if result.get("outcome") in {"unknown", "unavailable", "timeout", "not_submitted"}:
+        return False
+    error = result.get("error")
+    candidate_failure = (isinstance(error, dict)
+                         and error.get("error_class") in {"candidate", "code", "compilation", "correctness"})
+    return outcome["status"] == "completed" or outcome["status"] == "failed" and candidate_failure

@@ -140,8 +140,7 @@ class RecordedMeasurements:
         result = {**feedback, "all_pass": passed, "correct": passed, "mode": mode,
                   "error": feedback.get("error") or (selected.error if selected is not None else None),
                   "latency_us_by_shape": dict(selected.candidate_latency_us_by_shape) if selected is not None else {},
-                  "latency_us_geomean": selected.candidate_latency_us if selected is not None else None,
-                  "performance_score": selected.candidate_performance_score if selected is not None else None}
+                  "latency_us_geomean": selected.candidate_latency_us if selected is not None else None}
         if selected is not None and selected.failure is not None:
             result["failure"] = asdict(selected.failure)
         native_incomplete = False
@@ -336,6 +335,14 @@ class SharedMeasurements(RecordedMeasurements):
         for key in ("gateway_record_id", "kernel_id", "baseline_kernel_id"):
             agent.pop(key, None)
         if operation in {"evaluate", "same_allocation_abba"}:
+            from aka.evaluation.tool_results import normal_evaluation_execution
+            latest = {attempt.task_id: attempt for attempt in record.attempts}
+            # A candidate rejection can finish evaluation before later planned
+            # steps run. Coverage is an acceptance concern, not a cache gate.
+            response["evaluation_response_received"] = (
+                record.lifecycle == "terminal" and record.phase == "complete" and bool(latest)
+                and all(attempt.result is not None and normal_evaluation_execution(attempt.result)
+                        for attempt in latest.values()))
             agent["result"]["correct"] = evidence["result"]["correct"]
             if "qualification" in evidence["result"]:
                 agent["result"]["qualification"] = evidence["result"]["qualification"]
@@ -397,19 +404,28 @@ class SharedMeasurements(RecordedMeasurements):
             return self._response(experiment, record)
 
     def execute(self, request, *, request_id=None, reuse_completed=False, reuse_correctness=False,
-                identity, kernels, deadline=None):
+                identity, kernels, deadline=None, check_wait=None):
         """Archive every typed execution once in the Campaign Measurement Store.
 
         The public Experiment owns preparation, attempts, receipts and recovery.
         The Campaign store owns the public Gateway ID, Git identity and deduplication.
         """
         from copy import deepcopy
-        from aka.experiment.measurement_store import DuplicateTask, TaskRunning
+        from aka.experiment.measurement_store import DuplicateTask
+        # Only Evaluate (including ABBA) shares executions or completed results.
+        # Other tools may have side effects or intentionally repeat a probe. Give
+        # each invocation its own reservation, Record and physical execution key;
+        # retries within that invocation still use the normal Experiment policy.
+        deduplicate = identity.get("operation") in {"evaluate", "same_allocation_abba"}
+        if not deduplicate:
+            identity = {**identity, "invocation_id": uuid.uuid4().hex}
         try:
-            with self.store.reserve(identity, kernels, deadline=deadline, request_id=request_id or "") as task:
+            with self.store.reserve(identity, kernels, deadline=deadline, request_id=request_id or "",
+                                    check_wait=check_wait) as task:
                 try:
                     response = self._execute(request, request_id=task.record_id,
-                        reuse_completed=True, reuse_correctness=reuse_correctness)
+                        reuse_completed=deduplicate,
+                        reuse_correctness=deduplicate and reuse_correctness)
                 except Exception as error:
                     # Preparation/transport exceptions are auditable even without a Job.
                     # Keep the exception class and message, never invent a GPU outcome.
@@ -437,9 +453,12 @@ class SharedMeasurements(RecordedMeasurements):
                     agent["baseline_kernel_commit_id"] = kernels["baseline"]["kernel_id"]
                     agent["candidate_kernel_commit_id"] = agent.pop("kernel_commit_id")
                 response["agent_result"] = agent
-                record = task.finish(response, cacheable=agent.get("status") == "completed")
+                record = task.finish(response, cacheable=deduplicate)
                 return record["response"]
-        except TaskRunning:
-            raise
         except DuplicateTask as duplicate:
-            return {**deepcopy(self.store.read(duplicate.record_id)["response"]), "reused": True}
+            from aka.evaluation.tool_results import canonical_result, cacheable_evaluation
+            response = deepcopy(self.store.read(duplicate.record_id)["response"])
+            response["agent_result"] = canonical_result(response, identity)
+            if cacheable_evaluation(response, identity):
+                response["agent_result"]["reused_gateway_record_id"] = duplicate.record_id
+            return {**response, "reused": True}

@@ -234,7 +234,7 @@ def portable_profile_identity(command, reference):
 
 def assess_payload(identity, result, payload=None):
     """Interpret one physical receipt without altering the incumbent/candidate score."""
-    from .abba import _result_latency, _result_performance_score
+    from .abba import _result_latency
     observed = []
     diagnostics = []
     rows = payload.get("runs", ()) if isinstance(payload, dict) else ()
@@ -285,8 +285,7 @@ def assess_payload(identity, result, payload=None):
         if correctness_only and passed:
             observed.extend(point for point in points if point not in observed)
             valid_rows.append(True)
-        elif passed and numeric and shape_numeric and _result_latency(measured) is not None and (
-                identity.parameters.get("comparison_method") == "native-abba" or _result_performance_score(measured) is not None):
+        elif passed and numeric and shape_numeric and _result_latency(measured) is not None:
             valid_rows.append(True)
         elif measured.get("all_pass") is False:
             invalid = True

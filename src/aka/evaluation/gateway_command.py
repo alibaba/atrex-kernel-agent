@@ -502,11 +502,8 @@ class GatewayCommandEvaluator:
             if context["repetitions"] > 1:
                 from .evaluator import result_from_stdout
                 from .aggregation import aggregate
-                from .transport_results import _with_workspace_performance_score
                 payload = aggregate([result_from_stdout(prepare_dev_output(command.workspace, item.stdout,
                     evaluator=context["evaluator"], private=context["private"], baseline=context.get("baseline"))) for item in results], "evaluate")
-                payload.pop("performance_objective", None)
-                payload = _with_workspace_performance_score(command.workspace, payload, baseline=context.get("baseline"))
                 stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
                 result = replace(results[-1], transport_returncode=0 if all(item.returncode == 0 for item in results) else 1,
                     exit_code=None)
@@ -545,13 +542,6 @@ class GatewayCommandEvaluator:
             from .aggregation import aggregate
             failed = next((sample for sample in samples if sample.get("all_pass") is not True), None)
             payload = failed if failed is not None else aggregate(samples, "evaluate")
-            if len(samples) > 1 and failed is None:
-                from .transport_results import _metadata_speedup_mean
-                score, failures = _metadata_speedup_mean(measurement.request["reference"].get("metadata"),
-                    measurement.shape_ids, payload["latency_us_by_shape"], command.hardware)
-                payload.update(performance_score=score, speedup_vs_ref_mean=score)
-                if failures:
-                    payload.update(all_pass=False, failures=failures)
             stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
             stdout = with_measurement_conditions(stdout, gateway_warmup_iters=measurement.request.get("runner_overrides", {}).get("warmup_iters", "default"))
             code = 0 if payload["all_pass"] else 1
@@ -617,7 +607,6 @@ class GatewayCommandEvaluator:
             payload.get("latency_us_geomean"), None, None,
             error=error,
             failure=failure,
-            candidate_performance_score=payload.get("performance_score"),
             candidate_latency_us_by_shape=shape_latency_facts(payload.get("latency_us_by_shape")))
         content = json.dumps(payload).encode()
         retained = ()

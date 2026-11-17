@@ -2,7 +2,7 @@
 
 The Direction module is enabled and the Experiment module is disabled. Runtime maintains
 `PROGRESS.md`, `research-library/directions/<direction_id>/vN/direction.json` versions, and flat
-`records/<gateway_record_id>.json`. Draft `v0` is updated before start; reviewed `v1+` is immutable.
+`records/<gateway_record_id>.json`. `propose` is reviewed and creates immutable `v1`; every archived update creates the next `vN`. `start` changes lifecycle without Review.
 The greatest visible `vN` is current. Read these
 generated files directly; do not edit them.
 

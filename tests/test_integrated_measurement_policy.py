@@ -14,9 +14,9 @@ from aka.contracts.workflow_launch import decode_launch
 from aka.evaluation.abba_shape_compat import full_reference_abba_batch_request
 from aka.evaluation.gateway_request import prepare_request
 from aka.evaluation.native_abba import parse_native_abba
-from aka.evaluation.objectives import metadata_performance_metrics
+from aka.evaluation.objectives import SCORE_FIELDS
 from aka.evaluation.shapes import shape_batch_request
-from aka.evaluation.transport_results import _merge_optimizer_results, _with_workspace_performance_score
+from aka.evaluation.transport_results import _merge_optimizer_results
 
 
 class MeasurementPolicyTest(unittest.TestCase):
@@ -186,22 +186,18 @@ class MeasurementPolicyTest(unittest.TestCase):
         profile=GatewayMeasurement(payload,workspace=self.root,hardware='L20N',private=False,batch_size=1,profiling=True)
         self.assertEqual(profile.request_for(0),original)
 
-    def test_complete_shape_union_uses_task_objective(self):
-        metadata = {"performance_objective": "shape_latency_geometric_mean"}
+    def test_complete_shape_union_reports_latency_independent_of_metadata(self):
         rows = [{"all_pass": True, "latency_us_by_shape": {"0": 1, "1": 1}},
                 {"all_pass": True, "latency_us_by_shape": {"2": 64}}]
-        result = _merge_optimizer_results(rows, ["0", "1", "2"], metadata)
-        self.assertTrue(result["all_pass"])
-        self.assertAlmostEqual(result["performance_score"], 4)
-        self.assertIs(_with_workspace_performance_score(self.root, result), result)
-        metadata = {"performance_objective": "shape_speedup_geometric_mean", "shapes": {
-            "0": {"production_performance": {"performance_us": 16}},
-            "1": {"production_performance": {"performance_us": 1}},
-        }}
-        metrics, errors = metadata_performance_metrics(metadata, ["0", "1"], {"0": 1, "1": 1})
-        self.assertEqual(errors, [])
-        self.assertAlmostEqual(metrics["performance_score"], 4)
-        self.assertAlmostEqual(metrics["speedup_vs_ref_mean"], 8.5)
+        for metadata in (None, {}, {"performance_objective": "shape_speedup_geometric_mean",
+                "shapes": {"0": {"production_performance": {"performance_us": 100,
+                    "basis": "fixed_scoring_normalization", "measured": False}}}}):
+            result = _merge_optimizer_results(rows, ["0", "1", "2"], metadata)
+            self.assertTrue(result["all_pass"])
+            self.assertAlmostEqual(result["latency_us_geomean"], 4)
+            self.assertEqual(result["latency_us_arith_mean"], 22)
+            self.assertFalse(SCORE_FIELDS.intersection(result))
+        self.assertFalse(_merge_optimizer_results(rows, ["0", "1", "2", "3"], {})["all_pass"])
 
     def test_sdk_verdict_cannot_be_overridden_by_successful_rows(self):
         result = {"passed": {"compile": {"status": "passed"},

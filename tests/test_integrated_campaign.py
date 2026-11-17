@@ -78,14 +78,12 @@ class ComposedCampaignTest(unittest.TestCase):
             self.assertFalse((cwd/'profile_driver.py').exists())
             (cwd/'scratch/probe.py').write_text('print("probe-result")\n')
             def invoke(name,body):
-                for attempt in range(100):
-                    value=json.loads(call_tool(name,json.dumps(body).encode(),workspace=cwd,environment=env))
-                    self.assertEqual(value['status'],200,value)
-                    result=value['result']
-                    if result.get('status') != 'running':
-                        return result
-                    time.sleep(0.05)  # Another lineage owns this exact shared measurement.
-                self.fail(f'Concurrent measurement did not finish: {result}')
+                value=json.loads(call_tool(name,json.dumps(body).encode(),workspace=cwd,environment=env))
+                self.assertEqual(value['status'],200,value)
+                result=value['result']
+                self.assertNotEqual(result.get('status'),'running',result)
+                self.assertNotIn('gateway_task_running',json.dumps(result))
+                return result
             help_result=subprocess.run([sys.executable,'tools/sandbox.py','--kind','profile','--help'],
                 cwd=cwd,env={**os.environ,**env,'PYTHONPATH':str(ROOT/'src')},capture_output=True,text=True)
             available=json.loads(env['AKA_AGATE_TOOLS'])
@@ -124,6 +122,7 @@ class ComposedCampaignTest(unittest.TestCase):
                 self.assertIn('result',measured,measured)
                 self.assertTrue(measured['result'].get('correct'),measured)
                 self.assertEqual(measured['status'],'completed',measured)
+                self.assertTrue((cwd/measured['record_path']).exists(),measured)
                 commit=subprocess.check_output(['git','rev-parse','HEAD'],cwd=cwd,text=True).strip()
                 submission=invoke('workflow.journal',{'operation':'kernel_submit','request':{'kernel_commit_id':commit}})
                 accepted=submission['result']
@@ -145,7 +144,20 @@ class ComposedCampaignTest(unittest.TestCase):
                     'objective':'Reduce memory and launch overhead','applicability':'All supported vector sizes',
                     'expected_benefit':'Reduce full-workload latency','plan':['Compare launch families','Measure occupancy regimes'],
                     'stop_conditions':['All promising families measured']}})
-                direction=result['result']['direction_id']
+                proposed=result['result']
+                direction=proposed['direction_id']
+                self.assertEqual(proposed['review']['claim_review_quality'],'supported')
+                self.assertEqual(proposed['revision'],1)
+                self.assertTrue(proposed['archive_path'].endswith('/v1/direction.json'))
+                proposal_path=cwd/proposed['archive_path']
+                proposal_bytes=proposal_path.read_bytes()
+                started=invoke('workflow.journal',{'operation':'direction_update','request':{
+                    'action':'start','direction_id':direction,'analysis':'Explore the planned strategy families'}})['result']
+                self.assertNotIn('review',started)
+                self.assertEqual(started['revision'],2)
+                self.assertTrue(started['archive_path'].endswith('/v2/direction.json'))
+                self.assertEqual(proposal_path.read_bytes(),proposal_bytes)
+                self.assertEqual(json.loads((cwd/started['archive_path']).read_text())['status'],'in_progress')
             if 'experiments' in modules:
                 result=invoke('workflow.journal',{'operation':'experiment_record','request':{
                     'name':'Probe output','intent':'Check the command transport','interpretation':'The script printed probe-result.',
@@ -180,6 +192,10 @@ class ComposedCampaignTest(unittest.TestCase):
         self.assertFalse(list(root.rglob('journal.json')))
         records=MeasurementStore(root/'measurements').record_ids()
         self.assertTrue(records)
+        if 'directions' in modules:
+            for claim in (root/'measurements/reviews').glob('direction_*'):
+                self.assertTrue((claim/'v1/result.json').exists())
+                self.assertFalse((claim/'v2/result.json').exists())  # Start creates no Review.
         self.assertGreaterEqual(len(gpu_calls),len(tool_replies))
         for cwd in {Path(call[0]) for call in calls}:
             own=[call for call in calls if call[0]==cwd]

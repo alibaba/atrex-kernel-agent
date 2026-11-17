@@ -101,7 +101,7 @@ def result_from_job(job, reference, *, operation="query", diagnostics=(), cancel
     observed = ExecutionAttempt(operation, "terminal" if terminal else "unknown", resource,
                                 termination, exit_code, tuple(diagnostics), causes=causes,
                                 idempotency_key=reference.idempotency_key,
-                                request_identity=reference.request_identity)
+                                request_identity=reference.request_identity, backend_response=job)
     facts = ExecutionFacts(
         "terminal" if terminal else "unknown", termination,
         cancellation_requested=cancellation_requested, local_stopped=True,
@@ -340,11 +340,14 @@ class GatewayJobs:
                     attempts=(attempt,), diagnostics=(diag, *budget_diagnostics), causes=native_causes, budgets=budgets)
                 if command.on_observation is not None:
                     command.on_observation(last)
-                if category != "infrastructure" or index == len(retry.delays):
+                from .admission_retry import retry_delay
+                # Use the same explicit infra override as ordinary SDK admission.
+                delay = retry_delay(error, index, retry) if hasattr(error, "status") else (
+                    retry.delays[index] if category == "infrastructure" and index < len(retry.delays) else None)
+                if delay is None:
                     break
                 if recovery_deadline is None:
                     recovery_deadline = self.clock() + retry.max_elapsed_s
-                delay = retry.delays[index]
                 if delay >= min(deadline, recovery_deadline) - self.clock():
                     break
                 self.sleep(delay)
@@ -366,7 +369,23 @@ class GatewayJobs:
                 last = replace(queried, budgets=(*budgets, *queried.budgets),
                                diagnostics=(*budget_diagnostics, *queried.diagnostics))
                 attempts.extend(last.attempts)
-            break  # Confirmed IDs proceed exclusively to original-job GET.
+            from .admission_retry import infrastructure_failure
+            latest_job = next((item.backend_response for item in reversed(last.attempts)
+                               if item.backend_response is not None), None)
+            if (last.facts.disposition == "terminal" and not last.facts.cancellation_requested
+                    and infrastructure_failure(latest_job)
+                    and index < len(retry.delays)):
+                if recovery_deadline is None:
+                    recovery_deadline = self.clock() + retry.max_elapsed_s
+                delay = retry.delays[index]
+                if delay < min(deadline, recovery_deadline) - self.clock():
+                    self.sleep(delay)
+                    import uuid
+                    idempotency_key = uuid.uuid4().hex
+                    payload["idempotency_key"] = idempotency_key
+                    identity = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+                    continue
+            break
         if last is None:
             raise ValueError("replay budget exhausted before submission")
         last = replace(last, attempts=tuple(attempts), diagnostics=tuple(diagnostics) + last.diagnostics,

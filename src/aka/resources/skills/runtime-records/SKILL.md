@@ -34,16 +34,16 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
 - Direction lifecycle is `proposed --start--> in_progress`. Only `in_progress` may be completed,
   abandoned, deferred, or blocked. Direction records an optimization objective, not a single
   supported/refuted hypothesis; concrete falsifiable work and outcomes belong in Experiments.
-- `propose` and revisions made while a Direction remains proposed use `review_not_requested`. `start`
-  runs the admission Review; active revisions and closures are reviewed again. Every archived state
-  is published to peers with its actual review quality; only eligible evidence may support research
-  conclusions.
+- `propose` runs admission Review without requiring an Experiment or prior measurement. Every
+  `revise` and closure is reviewed; `start` only changes lifecycle and retains the prior review.
+  Every archived state is published to peers with its actual review quality; only eligible evidence
+  may support research conclusions.
 - Record an Experiment immediately when a probe or measurement changes the keep, repair, restore,
   or next-branch decision, before launching another candidate or switching paths. Disposable probes
   that change no decision need not be recorded. Use `name`, concrete `intent`, and bounded
   `interpretation`. Records and archived references are independent optional evidence. Keep measured
-  facts in Records. A note without a Record is not promotion evidence. A proposed local Direction
-  may own an Experiment when existing evidence informs its admission Review. Revise only
+  facts in Records. A note without a Record does not establish a measured result. A proposed local
+  Direction may own an Experiment, but proposing or starting it does not require one. Revise only
   `local_writable` Experiments; extend `peer_read_only` evidence with a new local Experiment.
 - Use local Git for candidate history. Imported peer history is available through remote-tracking refs such as `atrex/T2`; inspect it with `git log`/`git diff`, or continue it with `git switch -c <branch> atrex/T2`. Runtime moves the ref at its configured publication boundary without changing your HEAD. Commit or restore local work before switching.
 - Continue bounded probe/edit/measurement/revert-or-keep cycles while the selected path has a
@@ -52,7 +52,7 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
   program is genuinely completed or exhausted, strategically deferred, concretely blocked, or
   reasonably abandoned.
 - Runtime returns the full Review once with the mutation result. `archive_status` reports storage,
-  `claim_review_quality` reports `review_not_requested`, `review_unavailable`, or scientific support, and
+  `claim_review_quality` reports `review_unavailable` or scientific support, and
   `evidence_eligible` controls whether the record may support a research conclusion, not visibility.
   `runtime_action` is workflow guidance; `scientific_next_check` is the evidence follow-up. Only projected
   `claim_review_quality`, `scope_safe_interpretation`, and `scientific_next_check` remain Agent-visible afterward; full receipts and reviewer

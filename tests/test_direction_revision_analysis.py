@@ -7,16 +7,17 @@ from aka.workflow.light.host.journal import (
 )
 
 
-@pytest.fixture
-def direction(tmp_path):
+@pytest.fixture(params=[('directions',), ('directions', 'experiments')])
+def direction(tmp_path, request):
     state = initialize_journal(tmp_path / 'state.json', episode=1,
                                base_commit='a' * 40, branch='work',
-                               tool_modules=('directions',))
+                               tool_modules=request.param)
     proposal = dict(action='propose', name='Memory traffic architecture',
                     change_scope='major_redesign', objective='Reduce memory traffic',
                     applicability='All vector sizes', expected_benefit='Lower latency',
                     plan=['Compare layouts', 'Measure launch families'])
-    result = update_direction(state, tmp_path, proposal)
+    result = update_direction(state, tmp_path, proposal,
+                              review_claim=lambda *_: {'claim_review_quality': 'supported'})
     revision = dict(proposal, action='revise', direction_id=result['direction_id'])
     return state, tmp_path, revision
 
@@ -44,15 +45,73 @@ def test_active_analysis_preserved_and_reviewed(direction):
     assert _direction_views(state, root)[revision['direction_id']]['analysis'] == view['analysis']
 
 
-def test_proposed_revision_stays_unreviewed(direction):
+def test_proposed_revision_is_reviewed_without_experiments(direction):
     state, root, revision = direction
-    def unexpected(*args):
-        pytest.fail('Draft revision must not trigger review')
-    update_direction(state, root, dict(revision, analysis='Preliminary assessment'), review_claim=unexpected)
+    reviewed = []
+    def review(kind, event):
+        reviewed.append(deepcopy(event))
+        return {'claim_review_quality': 'supported'}
+    result = update_direction(state, root, dict(revision, analysis='Preliminary assessment'), review_claim=review)
     view = _direction_views(state, root)[revision['direction_id']]
     assert view['status'] == 'proposed'
-    assert view['analysis'] == 'Preliminary assessment'
-    assert view['claim_review_quality'] == 'review_not_requested'
+    assert view['analysis'] == reviewed[0]['analysis'] == 'Preliminary assessment'
+    assert view['claim_review_quality'] == 'supported'
+    assert result['revision'] == 2
+    assert state['experiments'] == []
+
+
+@pytest.mark.parametrize('quality', ['supported', 'partially_supported', 'unsupported'])
+def test_propose_reviews_before_archival_without_experiments(direction, quality):
+    state, root, revision = direction
+    proposal = {k: v for k, v in revision.items() if k != 'direction_id'}
+    proposal['action'] = 'propose'
+    before = deepcopy(state)
+    reviewed = []
+    def review(kind, event):
+        assert state == before  # Review is before mutation, not after publication.
+        assert kind == 'direction'
+        assert event['action'] == 'propose'
+        assert event['revision'] == 1
+        assert not event.get('supporting_experiment_ids')
+        assert not event.get('derived_from_experiment_ids')
+        reviewed.append(deepcopy(event))
+        return {'claim_review_quality': quality}
+    if quality == 'unsupported':
+        with pytest.raises(ValueError, match='nothing was archived'):
+            update_direction(state, root, proposal, review_claim=review)
+        assert state == before
+    else:
+        result = update_direction(state, root, proposal, review_claim=review)
+        assert result['review']['claim_review_quality'] == quality
+        assert result['revision'] == 1
+        view = _direction_views(state, root)[result['direction_id']]
+        assert view['status'] == 'proposed'
+        assert view['claim_review_quality'] == quality
+    assert len(reviewed) == 1
+    assert state['experiments'] == []
+
+
+def test_start_and_restart_preserve_review_without_running_reviewer(direction):
+    state, root, revision = direction
+    def unexpected(*args):
+        pytest.fail('Start must not trigger review')
+    request = dict(action='start', direction_id=revision['direction_id'], analysis='Begin the investigation')
+    result = update_direction(state, root, request, review_claim=unexpected)
+    view = _direction_views(state, root)[revision['direction_id']]
+    assert 'review' not in result
+    assert result['revision'] == 2
+    assert view['status'] == 'in_progress'
+    assert view['claim_review_quality'] == 'supported'
+    # A paused Direction also restarts without a new reviewer invocation.
+    update_direction(state, root, dict(request, action='defer', reopen_condition='Resources available'),
+                     review_claim=lambda *_: {'claim_review_quality': 'partially_supported'})
+    result = update_direction(state, root, request, review_claim=unexpected)
+    view = _direction_views(state, root)[revision['direction_id']]
+    assert 'review' not in result
+    assert result['revision'] == 4
+    assert view['status'] == 'in_progress'
+    assert view['claim_review_quality'] == 'partially_supported'
+    assert state['experiments'] == []
 
 
 @pytest.mark.parametrize('analysis', [None, '', 12, []])

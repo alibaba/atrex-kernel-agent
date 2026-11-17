@@ -9,8 +9,8 @@ jobs. Research revisions and exact-commit submission review are separate central
 
 1. Freeze the complete candidate and trusted evaluator inputs.
 2. Compute task identity and acquire its private reservation.
-3. Return an existing record reference for an Agent duplicate, or let trusted acceptance
-   reuse compatible completed evidence.
+3. Reuse validated completed evidence, or wait inside Runtime for an identical active
+   request and return its normal result with the same Gateway Record ID.
 4. Dispatch a new job or reconcile its durable accepted ID.
 5. Retain raw outcomes and complete ABBA batch checkpoints.
 6. Validate the canonical result, seal its public projection, and publish the record.
@@ -57,6 +57,40 @@ Completed evidence is integrity-checked before reuse. A temporary storage failur
 the reservation and stops dispatch; it does not justify another GPU allocation.
 Moving the campaign root changes its storage scope. No automatic retention cleanup is provided.
 
+## Agate submission recovery
+
+HTTP 429/502/503/504 during unified Job submission are retried inside the Runtime
+using the same endpoint, complete wire body and explicit idempotency key. This
+includes HTML proxy errors on Dev/Command. The Experiment `retry_delays` and
+`retry_budget_s` configuration also controls these retries: defaults are 5 and
+10 seconds (three total attempts), with a 120-second recovery window. An empty
+delay list disables resubmission. `Retry-After` is respected; neither recovery
+nor collection extends the original request deadline.
+
+Every explicit `error.error_class=infra` response is automatically retryable, including
+`logs_unavailable` and `dev_submission_ambiguous`. This applies across Evaluate/ABBA,
+Dev/Command, Profile, Check, Disassemble, Env and upload preparation. The explicit
+infrastructure class overrides backend `retry_advice=never`, `replay_policy=never`
+and `execution_state=unknown`; no inference is made from words in stdout/stderr.
+Confirmed failed Jobs are resubmitted with a **new idempotency key**. Before a Job ID
+is confirmed, HTTP retries retain the existing key. An accepted Job whose GET fails
+transiently is queried again rather than replaced solely because that read failed.
+The original command may still run when an ambiguous Job is replaced.
+
+HTTP admission and failed-Job resubmission share one attempt counter, delays and
+recovery window; they do not multiply retry budgets. Exhaustion returns the last
+original failure. Env and upload preparation use the same configured policy within
+their request deadline. Cancellation and non-infrastructure candidate/validation
+errors do not trigger this override. An empty retry schedule still disables retries.
+
+Every HTTP attempt and its original error remains in the private execution
+archive. A later accepted Job for the identical key and wire request resolves
+earlier admission uncertainty for result qualification without erasing those
+failed attempts. Each ambiguous Dev resubmission retains its own Job ID, key and
+raw response in the same execution archive. The successful replacement result
+does not assert that the original command stopped. Query retries continue to use
+the Job ID of their own submission attempt.
+
 ## Agent interface
 
 Run these commands in an active managed draft, using IDs returned by the campaign:
@@ -84,9 +118,25 @@ and selected winners therefore expose their complete Evaluate evidence automatic
 Agent operation for publishing arbitrary local Records; all trajectories read the same Campaign
 Measurement Store rather than receiving copied records.
 
-An exact completed duplicate reuses the existing validated Record and returns the same normal
-completed receipt without submitting another Agate task. Cache reuse is not exposed as an Agent
-error. In-progress duplicates still instruct the caller to wait because no terminal Record exists.
+Only Evaluate requests, including ABBA, are deduplicated. Command, Dev, Profile, Check and
+Disassemble always execute independently, even for the same commit and identical parameters or
+concurrent callers. Each invocation receives its own Gateway Record and execution archive;
+previous non-Evaluate cache entries are not reused. This does not disable retries within a call.
+
+For Evaluate, the first normal terminal response for an exact request is reusable, regardless of
+correctness, compilation success or available performance fields. Subsequent identical calls return
+that response without another Agate task, with `reused_gateway_record_id` pointing to the original
+Record. This is a reuse notice, not an error or a passing correctness verdict. Infrastructure,
+Gateway, transport and request-admission failures are not cached; a later call may retry. All failed
+attempts remain archived. An in-progress duplicate blocks inside Runtime until the original result is archived,
+then receives that result and a Record projection in its own workspace. Concurrent callers share
+failures as well as successes; they do not each dispatch a replacement for a non-cacheable failure.
+A later independent Evaluate retry still follows the normal cache and recovery policy.
+
+The waiting caller retains its own request deadline and cancellation. Expiry returns an explicit
+`measurement_wait_timeout`; cancellation ends only that caller's wait. Neither cancels the
+original request or submits another GPU job. If the original owner is interrupted before archival,
+the next owner resumes the same reservation and its existing execution checkpoints.
 Do not change labels or delete indexes to force a new random sample.
 
 ## Failure and recovery policy
@@ -95,8 +145,9 @@ Do not change labels or delete indexes to force a new random sample.
 | --- | --- |
 | Proven not submitted, transient infrastructure failure | Experiment retries at most twice, after 5 and 10 seconds, within a 120-second recovery admission window |
 | Accepted job ID, collection interrupted | Query the original job; a read timeout does not authorize another submission |
+| Explicit `error.error_class=infra` | Automatically retry within the configured budget, overriding backend `never`; a confirmed failed Job gets a new key, and duplicate execution is possible |
 | Unknown submission without a job ID | Retain pending state; replay only with an explicitly verified stable-key capability |
-| Confirmed failed or terminated job | Preserve the result; remeasurement or backend change requires explicit opt-in |
+| Confirmed failed or terminated job without an infrastructure error | Preserve the result; candidate errors do not trigger infrastructure retries |
 | Candidate correctness/compilation failure | Preserve the rejection; source repair creates a different task |
 | Cancelled, malformed, contradictory or incomplete result | Preserve uncertainty and job identity; do not record a passing verdict |
 
@@ -124,8 +175,9 @@ an operator failure before dispatch.
 
 Cancellation, liveness, and enclosing deadlines bound every retry. Complete ABBA batches
 must have the exact schedule and coverage; unrelated standalone measurements cannot reconstruct
-a comparison. Unavailable or incomplete historical records retain raw evidence but cannot
-satisfy a new completed-result cache check; completed candidate rejections remain cacheable.
+a comparison. Unavailable responses retain raw evidence but cannot satisfy a new cache check.
+Normal terminal responses remain cacheable even when their correctness or performance fields are
+incomplete; that does not qualify them for submission or winner selection.
 
 ## Optional repeated measurement
 
@@ -151,9 +203,10 @@ must be explicit, and its ordinary evaluation support does not imply Light ABBA 
 
 ## Public feedback and limits
 
-Canonical publication/reuse requires a completed boolean verdict and known outcome.
-A successful transport with a failed or missing evaluator receipt is not a successful evaluation.
-Completed candidate rejection remains useful evidence; infrastructure unavailability does not.
+Response reuse requires a normal terminal Evaluate response, not a boolean correctness verdict
+or complete performance data. Runtime records response availability separately from measurement
+qualification. Candidate rejections can be reused; infrastructure and Gateway failures cannot.
+`submit-kernel` still requires passing full Evaluate evidence and complete performance results.
 
 Feedback retains actionable compiler, runner, rank-local, numerical, and tolerance details.
 Private dimensions/credentials are redacted; failing-case seeds are exposed repair metadata.

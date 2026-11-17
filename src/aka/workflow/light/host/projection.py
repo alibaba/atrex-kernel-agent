@@ -883,10 +883,9 @@ def _positive_number(value: object) -> float | None:
 
 def evaluation(result: dict) -> dict:
     keys = {"all_pass", "latency_us_geomean", "latency_us_arith_mean",
-            "performance_score", "performance_objective", "max_abs_err", "max_rel_err",
+            "max_abs_err", "max_rel_err",
             "shape_ids_are_opaque", "hidden_case_details", "mode", "n_shapes",
-            "correctness_passed", "correctness_total", "speedup_vs_ref_geomean",
-            "speedup_vs_ref_mean", "kernel_sha256", "utilization_pct", "sol_utilization_pct"}
+            "correctness_passed", "correctness_total", "kernel_sha256"}
     value = {key: item for key, item in result.items()
              if key in keys and (item is None or isinstance(item, (str, int, float, bool)))
              and (not isinstance(item, float) or math.isfinite(item))}
@@ -1148,12 +1147,6 @@ def _abba_side_metrics(
         if len(valid_run_latencies) == repeats
         else None
     )
-    scores = [_positive_number(row["result"].get("performance_score")) for row in successful]
-    score = (
-        sum(value for value in scores if value is not None) / repeats
-        if len(scores) == repeats and all(value is not None for value in scores)
-        else None
-    )
     result = {
         "correct": (
             len(successful) == repeats and set(by_shape) == set(shape_ids)
@@ -1161,7 +1154,6 @@ def _abba_side_metrics(
         ),
         "latency_us_geomean": latency,
         "latency_us_by_shape": by_shape,
-        "performance_score": score,
         "max_abs_err": max(
             (row["result"].get("max_abs_err") or 0 for row in successful), default=0,
         ),
@@ -1205,8 +1197,6 @@ def _agent_abba_public_result(
     # two individually-valid feedback budgets overflow the transport projection.
     for side in (baseline, candidate):
         side.update(bound_feedback(side))
-    baseline_us = _positive_number(baseline.get("latency_us_geomean"))
-    candidate_us = _positive_number(candidate.get("latency_us_geomean"))
     terminal_failure = payload.get("terminal_failure")
     correct = (
         baseline["correct"] is True
@@ -1214,7 +1204,6 @@ def _agent_abba_public_result(
         and not payload.get("error")
         and not terminal_failure
     )
-    speedup = baseline_us / candidate_us if correct and baseline_us and candidate_us else None
     return {
         "status": "succeeded" if correct and payload.get("error") is None else "failed",
         "operation": "same_allocation_abba",
@@ -1229,8 +1218,6 @@ def _agent_abba_public_result(
         ],
         "baseline": baseline,
         "candidate": candidate,
-        "speedup": speedup,
-        "improvement_pct": (speedup - 1.0) * 100.0 if speedup is not None else None,
         "measurements": [
             {
                 "side": "A" if row.get("revision") == "incumbent" else "B",

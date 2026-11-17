@@ -27,7 +27,6 @@ from typing import Any
 RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ATREX_BENCH_DIR = "atrex-bench"
 FP4_MAX_REL_L2 = 0.2
-PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 
 # Shared Evaluation defaults. Keep these here so a copied worker script needs
 # only the standard library; host preparation imports this same definition.
@@ -308,30 +307,6 @@ def _metadata_shape_latency_us(
     return candidates[0][1] if not matching and len(candidates) == 1 else None
 
 
-def _metadata_speedup_mean(
-    metadata: object,
-    shape_ids: list[str],
-    latency_by_shape: dict[str, float],
-    hardware: str = "",
-) -> tuple[float | None, list[str]]:
-    if any(shape_id not in latency_by_shape for shape_id in shape_ids):
-        return None, []
-    speedups: list[float] = []
-    failures: list[str] = []
-    for shape_id in shape_ids:
-        reference_us = _metadata_shape_latency_us(metadata, shape_id, hardware)
-        if reference_us is None:
-            failures.append(
-                f"sid={shape_id}: metadata has no unambiguous positive "
-                "production_performance.performance_us"
-            )
-            continue
-        speedups.append(reference_us / latency_by_shape[shape_id])
-    if failures or len(speedups) != len(shape_ids) or not speedups:
-        return None, failures
-    return sum(speedups) / len(speedups), []
-
-
 def result_from_eval(
     payload: dict[str, Any],
     shape_ids: list[str],
@@ -451,12 +426,6 @@ def result_from_eval(
     latency_arith_mean = (
         sum(latencies) / len(latencies) if complete_performance and latencies else 0.0
     )
-    speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape, hardware)
-        if require_performance
-        else (None, [])
-    )
-    failures.extend(metadata_failures)
 
     result = {
         "all_pass": not failures,
@@ -466,10 +435,6 @@ def result_from_eval(
         "latency_us_geomean": latency_geomean,
         "latency_us_arith_mean": latency_arith_mean,
         "latency_us_by_shape": latency_by_shape,
-        "speedup_vs_ref_mean": speedup_mean,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": speedup_mean,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max_abs,
         "max_rel_err": max_rel,
         "evaluator": "atrex-bench/run_eval",
@@ -619,10 +584,6 @@ def main(argv: list[str] | None = None) -> int:
                 "latency_us_geomean": 0.0,
                 "latency_us_arith_mean": 0.0,
                 "latency_us_by_shape": {},
-                "speedup_vs_ref_mean": None,
-                "speedup_vs_ref_geomean": None,
-                "performance_score": None,
-                "performance_objective": PERFORMANCE_OBJECTIVE,
                 "max_abs_err": 0.0,
                 "max_rel_err": 0.0,
                 "evaluator": "atrex-bench/run_eval",

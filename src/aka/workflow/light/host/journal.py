@@ -1076,7 +1076,7 @@ def _apply_direction_events(
             )
             if type(revision) is not int or revision < 1:
                 raise RuntimeStateError(
-                    "Reviewed Direction state has an invalid revision"
+                    "Direction state has an invalid revision"
                 )
             direction["revision"] = revision
             direction["status"] = _DIRECTION_STATUS[action]
@@ -1279,9 +1279,9 @@ def _catalog_claim_version(
 ) -> int:
     """Return the stable Agent-visible version number at a catalog position.
 
-    Direction drafts share mutable ``v0`` until ``start`` performs the first
-    independent Review. Every reviewed Direction state is immutable ``v1+``.
-    Experiments are reviewed on first submission and therefore start at ``v1``.
+    Directions and Experiments are reviewed on first submission and start at
+    immutable ``v1``. Lifecycle-only Direction updates retain their prior review
+    and create the next version. Historical unreviewed drafts remain ``v0``.
     """
     identity_field = "direction_id" if claim_type == "directions" else "experiment_id"
     version = 0
@@ -3041,7 +3041,6 @@ def update_direction(
     experiments_enabled = _module_enabled(current, "experiments")
     value = dict(request)
     action = value.get("action")
-    status_before_mutation: str | None = None
     history = _visible_history(path, campaign_root)
     views, statuses = _direction_state(path, campaign_root, history=history)
     if action == "propose":
@@ -3081,7 +3080,7 @@ def update_direction(
             "direction_event_id": f"directionevent_{uuid.uuid4().hex}",
             "direction_id": direction_id,
             "action": "propose",
-            "revision": 0,
+            "revision": 1,
             "name": _text(value["name"], "Direction name"),
             "change_scope": _change_scope(value["change_scope"]),
             "objective": _text(value["objective"], "Direction objective"),
@@ -3096,10 +3095,6 @@ def update_direction(
                 value.get("stop_conditions", []), "Direction stop_conditions"
             ),
             "recorded_at": _now(),
-            # A proposal is an exploration draft, not an established research
-            # claim.  Independent review is intentionally deferred until the
-            # trajectory commits resources with action=start.
-            "claim_review_quality": "review_not_requested",
             **ancestry,
         }
         if not experiments_enabled:
@@ -3156,7 +3151,6 @@ def update_direction(
             )
         advance_direction(dict(statuses), direction_id, action)
         previous = views[direction_id]
-        status_before_mutation = str(previous.get("status"))
         previous_revision = previous.get("revision", 0)
         if type(previous_revision) is not int or previous_revision < 0:
             raise RuntimeStateError("Visible Direction has an invalid revision")
@@ -3164,9 +3158,7 @@ def update_direction(
             "direction_event_id": f"directionevent_{uuid.uuid4().hex}",
             "direction_id": direction_id,
             "action": action,
-            "revision": (
-                0 if status_before_mutation == "proposed" else previous_revision + 1
-            ),
+            "revision": previous_revision + 1,
             "name": _text(value["name"], "Direction name"),
             "change_scope": _change_scope(value["change_scope"]),
             "objective": _text(value["objective"], "Direction objective"),
@@ -3186,9 +3178,6 @@ def update_direction(
             event["analysis"] = _text(value["analysis"], "Direction analysis")
         elif previous.get("analysis") is not None:
             event["analysis"] = previous["analysis"]
-        if status_before_mutation == "proposed":
-            # Editing an unstarted draft does not spend a reviewer Session.
-            event["claim_review_quality"] = "review_not_requested"
         if not experiments_enabled:
             event["gateway_record_ids"] = _validate_record_ids(
                 campaign_root,
@@ -3243,7 +3232,6 @@ def update_direction(
             if lifecycle_statuses.get(shared_id) == "in_progress":
                 lifecycle_statuses[shared_id] = "deferred"
         advance_direction(lifecycle_statuses, direction_id, action)
-        status_before_mutation = str(statuses.get(direction_id))
         supporting = (
             _closure_support(
                 path,
@@ -3296,14 +3284,10 @@ def update_direction(
                 label="Direction",
             )
             event["gateway_record_ids"] = records
-    review_required = (
-        action == "start"
-        or action in _CLOSURES
-        or (
-            action == _DIRECTION_REVISION_ACTION
-            and status_before_mutation == "in_progress"
-        )
-    )
+    # Admission is reviewed before archiving the proposal. Revisions must also
+    # be reviewed while proposed, so editing a plan cannot bypass admission.
+    # Starting/restarting work changes lifecycle only and retains that review.
+    review_required = action in {"propose", _DIRECTION_REVISION_ACTION} or action in _CLOSURES
     review = (
         review_claim("direction", event)
         if review_claim is not None
@@ -4949,14 +4933,12 @@ class SupervisorJournalService:
                 for item in _visible_experiments(self._research_state, self.campaign_root)
                 if isinstance(item, dict)
             }
-            # Admission Review must see evidence already recorded against the
-            # draft Direction. Requiring a supporting edge on ``start`` made
-            # the evidence impossible to attach naturally: the Experiment was
-            # forced to wait for an in-progress Direction, while the Direction
-            # Review was already evaluating measured prose without it.
+            # Interim analysis may refer to Experiments already bound to this
+            # Direction. Include them for revisions without requiring any
+            # Experiment for admission of a new proposal.
             if (
                 isinstance(direction_id, str)
-                and target.get("action") == "start"
+                and target.get("action") == _DIRECTION_REVISION_ACTION
             ):
                 experiment_ids.extend(
                     str(experiment_id)

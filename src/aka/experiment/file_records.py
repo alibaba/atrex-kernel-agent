@@ -445,9 +445,21 @@ class FileExperimentRecords:
         disposition = result.facts.disposition if result else "unknown"
         settled = {(item.resource.backend, item.resource.identifier) for item in result.attempts
                    if item.disposition == "terminal" and item.resource and item.resource.identifier} if result else set()
+        settled_submissions = {(item.resource.backend, item.operation, item.idempotency_key, item.request_identity)
+            for item in result.attempts if item.disposition == "terminal"
+            and item.resource and item.resource.identifier and item.idempotency_key and item.request_identity} if result else set()
+        def unresolved(item):
+            if item.disposition != "unknown":
+                return False
+            if item.resource and item.resource.identifier:
+                return (item.resource.backend, item.resource.identifier) not in settled
+            # The exact keyed admission was recovered; its failed HTTP attempts
+            # remain in result.attempts but no longer prevent terminal recording.
+            return (not item.resource or
+                (item.resource.backend, item.operation, item.idempotency_key, item.request_identity)
+                not in settled_submissions)
         if disposition not in {"terminal", "not_submitted"} or (result and any(
-            item.disposition == "unknown" and (not item.resource or not item.resource.identifier or (item.resource.backend, item.resource.identifier) not in settled)
-            for item in result.attempts)):
+            unresolved(item) for item in result.attempts)):
             disposition = "unknown"
         failure = ExperimentFailure("execute", "execution_error", type(error).__name__, str(error)) if error else None
 

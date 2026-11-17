@@ -15,9 +15,10 @@ First classify the submission from `target.json`, then apply the matching standa
 
 ## Direction standard
 
-- A Direction `start`, or a `revise` after work has started, asks whether the optimization objective is important enough to organize durable work, its applicability is clear, and its plan covers a meaningful strategy space that can contain multiple candidates and Experiments. A Direction is not one falsifiable hypothesis. The expected benefit is a prioritization estimate, not a fact that must already be proven.
+- A Direction `propose` or `revise` asks whether the optimization objective is important enough to organize durable work, its applicability is clear, and its plan covers a meaningful strategy space that can contain multiple candidates and Experiments. A Direction is not one falsifiable hypothesis. The expected benefit is a prioritization estimate, not a fact that must already be proven.
 - Reject a proposed Direction when it describes a single candidate, parameter choice, isolated probe, or one-step mechanism that belongs as an Experiment under an existing optimization program. Explain that classification error in `primary_issue` and use `next_check` to identify the existing Direction or the broader optimization objective under which the Experiment belongs.
-- When an active revision includes `analysis`, assess its interim findings against the supplied evidence; unresolved branches are expected and do not imply completion.
+- Admission does not require an Experiment, a Gateway Record, or a prior measurement. Judge whether the proposed investigation is worthwhile; do not demand proof of the expected benefit. If the proposal asserts an already measured result, check its cited evidence separately from the prospective plan.
+- When a revision includes `analysis`, assess its interim findings against the supplied evidence; unresolved branches are expected and do not imply completion.
 - A Direction closure asks whether the optimization program is genuinely completed, exhausted, strategically deferred, concretely blocked, or reasonably abandoned. For `complete`, verify that the meaningful branches in its objective, applicability, plan, and stop conditions were addressed or shown to have insufficient remaining value. Do not treat one supported Experiment or one supported mechanism as completion of the Direction, and do not require a global supported/refuted verdict.
 - Uncertain mechanism details or imprecise benefit magnitudes do not downgrade the review when they do not change admission or the lifecycle decision; narrow them in `scope_safe_interpretation` instead.
 - Use `partially_supported` only when a decision-critical premise, stop-condition assessment, or closure decision remains genuinely uncertain but still has useful support. Use `unsupported` only when a decision-critical premise or action is contradicted or lacks enough evidence to justify the investigation or terminal decision.
@@ -28,7 +29,7 @@ First classify the submission from `target.json`, then apply the matching standa
 - Mechanistic interpretation is useful but not required for `supported`. A result may be supported even when the exact root cause, theoretical explanation, generality outside the measured scope, or precise expected magnitude remains uncertain. Preserve those limitations in `scope_safe_interpretation` and `next_check` without downgrading the whole Experiment.
 - Use `partially_supported` when a decision-critical measurement, comparator, attribution, candidate identity, or action is incomplete or ambiguous but the Experiment still contains a useful observation. Use `unsupported` only when the core result or action is contradicted, untraceable, or not justified by the supplied evidence.
 
-Unstarted `propose` and `revise` drafts are not sent for review. A `start` is the admission review before resources are committed; judge the effective Direction proposal supplied beside the lifecycle event.
+`propose` runs admission Review; every `revise` reviews the effective Direction supplied beside the revision event. `start` only changes lifecycle and is not sent for review.
 
 Use exactly one verdict:
 

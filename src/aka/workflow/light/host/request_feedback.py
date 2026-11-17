@@ -123,7 +123,7 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                 "pattern": "^direction_[0-9a-f]{32}$",
                 "description": (
                     "Intended local Direction. An explicitly named proposed Direction is valid "
-                    "when this evidence informs its admission Review; omission is inferred only "
+                    "without requiring it to start first; omission is inferred only "
                     "when exactly one local Direction is in progress."
                 ),
             }
@@ -203,8 +203,8 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                     "type": "string",
                     "pattern": "^direction_[0-9a-f]{32}$",
                     "description": (
-                        "Editable local Direction identity. Proposed-state revisions remain "
-                        "review_not_requested drafts; active revisions receive independent Review."
+                        "Editable local Direction identity. Proposed and active revisions receive "
+                        "independent Review without changing lifecycle status."
                     ),
                 }
                 if not experiments_enabled:

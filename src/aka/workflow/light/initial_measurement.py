@@ -136,10 +136,6 @@ def _baseline_summary(record: Mapping[str, object], record_directory: Path) -> d
         "measurement_scope": "real_evaluator_shapes",
         "measurement_status": "complete" if latencies else "incomplete",
         "measured_shape_count": len(latencies),
-        "performance_objective": result.get("performance_objective"),
-        "performance_score": result.get("performance_score"),
-        "speedup_vs_ref_mean": result.get("speedup_vs_ref_mean"),
-        "speedup_vs_ref_geomean": result.get("speedup_vs_ref_geomean"),
     }
     return {
         "version": "v0",
@@ -256,10 +252,6 @@ def _baseline_result(record: Mapping[str, object]) -> dict[str, object]:
         "latency_us_geomean": performance.get("latency_us_geomean"),
         "latency_us_arith_mean": performance.get("latency_us_arith_mean"),
         "latency_us_by_shape": performance.get("latency_us_by_shape"),
-        "performance_score": performance.get("performance_score"),
-        "performance_objective": performance.get("performance_objective"),
-        "speedup_vs_ref_mean": performance.get("speedup_vs_ref_mean"),
-        "speedup_vs_ref_geomean": performance.get("speedup_vs_ref_geomean"),
         "max_abs_err": correctness.get("max_abs_err"),
         "max_rel_err": correctness.get("max_rel_err"),
     }

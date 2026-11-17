@@ -24,6 +24,11 @@ and complete per-Shape performance supports submit-kernel. Subsets, custom input
 diagnostic and do not replace it. ABBA compares the current candidate with the specified baseline
 commit; Runtime exports both source trees. There is no separate comparison tool.
 SOL uses its official workload; Atrex-Bench-specific input/mode options do not apply to SOL.
+Evaluate returns correctness and measured `latency_us_geomean`, `latency_us_arith_mean`, and
+`latency_us_by_shape` (microseconds), plus measurement scope and diagnostics. ABBA returns these
+latencies separately for baseline and candidate. No reference-relative speedup, normalization score
+or improvement percentage is generated. `gateway_record_id` and `record_path` locate the saved
+result; Kernel identities are Agent Git commit IDs. Raw Agate evidence remains in the private archive.
 Omitted timing options inherit Campaign policy; explicit options are validated without silent
 clipping. Query this tool's help for effective warmup, benchmark and timeout settings.
 

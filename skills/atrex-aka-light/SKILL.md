@@ -17,6 +17,7 @@ AKA Light runs persistent GPU-kernel optimization Sessions and sends GPU work to
 | Run a minimal functional launch | Follow the [Native Vector Add example](examples/native-atrex-bench-vector-add/README.md) after completing the required launch intake below |
 | Configure CLI or composition | Read [configuration](references/configuration.md) |
 | Inspect a live campaign or export evidence | Prefer the dedicated `atrex-aka-light-observability` skill; otherwise read [observability](references/observability.md) |
+| Open or capture a local Campaign Dashboard | Use `atrex-aka-light-dashboard`; this is inspection and does not require the launch intake below |
 
 For standalone Aone Sandbox lifecycle, use its dedicated skill.
 
@@ -268,7 +269,7 @@ Do not print credentials. Preserve uncommitted user changes before syncing or in
 
 ## Runtime evaluation defaults
 
-For standard Evaluate and explicit ABBA, current Light batches at most 10 Shapes per outer Ray Data request and sets `shape_shards=1`. Standard Evaluate retains the complete operator bundle and selects the batch with native `shape_ids`. As a temporary Agate compatibility layer, ABBA instead rebuilds each batch as a complete shard-local operator reference and sends no `shape_ids`, because current Agate ABBA requires every Shape in its submitted reference. The compatibility is isolated in `aka.evaluation.abba_shape_compat` so it can be removed when Agate accepts native ABBA Shape selection. Light uses 10 warmups, 20 timing iterations, deterministic correctness cases, and best-effort `lock_clocks=true` without a fixed MHz. Aggregation follows the benchmark's declared performance objective after all batches are merged.
+For standard Evaluate and explicit ABBA, current Light batches at most 10 Shapes per outer Ray Data request and sets `shape_shards=1`. Standard Evaluate retains the complete operator bundle and selects the batch with native `shape_ids`. As a temporary Agate compatibility layer, ABBA instead rebuilds each batch as a complete shard-local operator reference and sends no `shape_ids`, because current Agate ABBA requires every Shape in its submitted reference. The compatibility is isolated in `aka.evaluation.abba_shape_compat` so it can be removed when Agate accepts native ABBA Shape selection. Light uses 10 warmups, 20 timing iterations, deterministic correctness cases, and best-effort `lock_clocks=true` without a fixed MHz. Runtime reports measured per-Shape latency, geometric mean latency and arithmetic mean latency after all batches are merged. Accepted-submission winners minimize geometric mean latency; Runtime does not derive reference-relative speedups or normalization scores.
 
 Use Runtime tool help for exact operation-specific Agate fields. Endpoint, credentials, source selection and other authority-bearing options remain Supervisor-owned.
 

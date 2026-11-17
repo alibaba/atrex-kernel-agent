@@ -2,8 +2,9 @@
 
 Read this file when installing or updating the 0.2.0 module distributions from a matching AKA source checkout. The skill and `observability/` are checkout resources, not installed Python modules; keep the checkout available. Copy the complete skill directory into the Agent's configured skill root when installing the skill there.
 
-Update both `skills/atrex-aka-light/` and `skills/atrex-aka-light-observability/`, including their
-references and examples. Run the observability scripts from this same checkout. The optional
+Update `skills/atrex-aka-light/`, `skills/atrex-aka-light-observability/` and
+`skills/atrex-aka-light-dashboard/`, including their references and examples. Run the observability
+scripts from this same checkout. The optional
 `observability/light_dashboard.py` also runs directly from the checkout; no Legacy observation
 adapter or additional Dashboard wheel is needed for that entry point.
 

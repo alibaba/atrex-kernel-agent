@@ -1630,42 +1630,89 @@ def _run_sdk_job(
 ) -> subprocess.CompletedProcess[str]:
     """Submit and poll a public Gateway job through the Agate SDK."""
     import uuid
-    from .jobs import GatewayJobs
+    from .admission_retry import (fresh_key_required, infrastructure_failure,
+                                  policy_from_environment, retry_delay, retryable_job_failure)
     from aka.execution.outcomes import observe_attempt
-    attempt_id = uuid.uuid4().hex
     endpoint, profile = _submission_route(url)
-    identity = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-    key = payload.get("idempotency_key")
+    # Client.submit_job otherwise creates a new key on each call. Freeze both
+    # the key and wire body here, including Dev's uploaded workspace, so an HTTP
+    # retry can recover the same logical submission without executing it twice.
+    payload = json.loads(json.dumps(payload))
+    if not payload.get("idempotency_key"):
+        payload["idempotency_key"] = uuid.uuid4().hex
+    policy = policy_from_environment()
     started = time.monotonic()
     budget = client_wait_timeout(timeout, queue_wait_grace)
     deadline = None if budget is None else started + budget
-    emit_fact({"event": "attempt_started", "attempt_id": attempt_id, "operation": kind, "backend": "gateway"})
-    emit_fact({"event": "submission_intent", "attempt_id": attempt_id, "request_identity": identity,
-               "idempotency_key": key})
-    try:
-        accepted = _gateway_json(endpoint or url, "POST", f"/v1/jobs/{kind}", payload,
-                                 30 if deadline is None else min(30, max(0, deadline - time.monotonic())))
-    except GatewayHTTPError as error:
+    retry_deadline = None
+
+    def wait_to_retry(delay):
+        nonlocal retry_deadline
+        now = time.monotonic()
+        if retry_deadline is None:
+            retry_deadline = now + policy.max_elapsed_s
+        limit = min(value for value in (deadline, retry_deadline) if value is not None)
+        if delay is None or now + delay >= limit:
+            return False
+        # Cancellation propagates; no retry extends the enclosing deadline.
+        time.sleep(delay)
+        return time.monotonic() < limit
+
+    for index in range(len(policy.delays) + 1):
+        identity = hashlib.sha256(json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+        key = payload["idempotency_key"]
+        attempt_id = uuid.uuid4().hex
+        emit_fact({"event": "attempt_started", "attempt_id": attempt_id, "operation": kind, "backend": "gateway"})
+        emit_fact({"event": "submission_intent", "attempt_id": attempt_id, "request_identity": identity,
+                   "idempotency_key": key})
+        attempt_deadline = min(value for value in (deadline, retry_deadline, time.monotonic() + 30)
+                               if value is not None)
         try:
-            native = json.loads(error.detail)
-        except (TypeError, ValueError):
-            native = error.detail
-        if isinstance(native, dict):
-            native = native.get("error", native)
-        observe_attempt(subprocess.CompletedProcess((), 1, json.dumps({"http_status": error.status, "error": native}), f"agate: [{error.status}]"),
-                        operation=kind, attempt_id=attempt_id)
-        raise
-    job_id = accepted.get("job_id")
-    if not isinstance(job_id, str) or not job_id:
-        raise RuntimeError("gateway submission returned no confirmed job identity")
-    emit_fact({"event": "submitted", "attempt_id": attempt_id, "identifier": job_id,
-               "operation": kind, "backend": "gateway", "endpoint": endpoint, "profile": profile,
-               "request_identity": identity, "idempotency_key": key})
-    if on_submitted is not None:
-        on_submitted(accepted)
-    return _wait_sdk_job(url=endpoint or url, kind=kind, job_id=job_id,
-        deadline=deadline, started=started, attempt_id=attempt_id, profile=profile,
-        identity=identity, key=key)
+            accepted = _gateway_json(endpoint or url, "POST", f"/v1/jobs/{kind}", payload,
+                                     max(0, attempt_deadline - time.monotonic()))
+        except GatewayHTTPError as error:
+            try:
+                native = json.loads(error.detail)
+            except (TypeError, ValueError):
+                native = error.detail
+            returned = {**native, "http_status": error.status} if isinstance(native, dict) else {
+                "http_status": error.status, "error": native}
+            observe_attempt(subprocess.CompletedProcess((), 1, json.dumps(returned), f"agate: [{error.status}]"),
+                            operation=kind, attempt_id=attempt_id)
+            if not wait_to_retry(retry_delay(error, index, policy)):
+                raise  # Preserve the last original HTTP body on exhaustion.
+            if infrastructure_failure(native) and fresh_key_required(native):
+                payload["idempotency_key"] = uuid.uuid4().hex
+            continue
+        job_id = accepted.get("job_id")
+        if not isinstance(job_id, str) or not job_id:
+            if retryable_job_failure(accepted, kind=kind):
+                process = subprocess.CompletedProcess(["agate-sdk", kind], 1, json.dumps(accepted), "")
+                observe_attempt(process, operation=kind, attempt_id=attempt_id)
+                delay = policy.delays[index] if index < len(policy.delays) else None
+                if not wait_to_retry(delay):
+                    return process
+                if fresh_key_required(accepted):
+                    payload["idempotency_key"] = uuid.uuid4().hex
+                continue
+            raise RuntimeError("gateway submission returned no confirmed job identity")
+        emit_fact({"event": "submitted", "attempt_id": attempt_id, "identifier": job_id,
+                   "operation": kind, "backend": "gateway", "endpoint": endpoint, "profile": profile,
+                   "request_identity": identity, "idempotency_key": key})
+        if on_submitted is not None:
+            on_submitted(accepted)
+        process = _wait_sdk_job(url=endpoint or url, kind=kind, job_id=job_id,
+            deadline=deadline, started=started, attempt_id=attempt_id, profile=profile,
+            identity=identity, key=key)
+        job = json.loads(process.stdout)
+        if not retryable_job_failure(job, kind=kind):
+            return process
+        delay = policy.delays[index] if index < len(policy.delays) else None
+        if not wait_to_retry(delay):
+            return process
+        # Explicitly permitted replay: the original command may still exist.
+        # A new key is necessary; reusing the old key returns the failed Job.
+        payload["idempotency_key"] = uuid.uuid4().hex
 
 
 def _observe_job_wait(job_id, job, started):
@@ -1712,7 +1759,13 @@ def _wait_sdk_job(*, url, kind, job_id, deadline, started, attempt_id=None,
             except (OSError, RuntimeError, ValueError) as error:
                 _observe_job_wait(job_id, None, started)
                 if isinstance(error, GatewayHTTPError) and error.status in {400, 401, 403}:
-                    return _permanent_job_query_failure(["agate-sdk", kind, job_id], last, error.status)
+                    from .admission_retry import infrastructure_failure
+                    try:
+                        transient = infrastructure_failure(json.loads(error.detail))
+                    except (TypeError, ValueError):
+                        transient = False
+                    if not transient:
+                        return _permanent_job_query_failure(["agate-sdk", kind, job_id], last, error.status)
                 time.sleep(2 if deadline is None else min(2, max(0, deadline - time.monotonic())))
                 continue
             last = job
@@ -1810,7 +1863,6 @@ def _report_infrastructure_failure(job: dict) -> bool:
     if (isinstance(error, dict) and (error.get("error_class") or error.get("class")) == "infra"
             or _queue_timeout_before_start(job) or _cancelled_without_outcome(job)):
         emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})
-        print(INFRASTRUCTURE_MARKER, file=sys.stderr)
         return True
     return False
 
@@ -1838,7 +1890,6 @@ def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
             or any(message in detail for message in (
                 "Connection refused", "Connection reset by peer", "Temporary failure in name resolution"))):
         emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})
-        print(INFRASTRUCTURE_MARKER, file=sys.stderr)
         return True
     return False
 
@@ -2165,14 +2216,6 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
             f"sandbox: packaged payload is {bundle_bytes / 1024:.1f} KiB, "
             "above the 20 MiB direct gateway request limit"
         )
-    print(
-        f"[sandbox] sandbox_kind=dev hardware={args.hardware} files={file_count} "
-        f"payload={bundle_bytes / 1024:.1f} KiB "
-        f"input_transport={workspace_transport} "
-        f"output_transport={output_transport} "
-        f"atrex_runtime={runtime_bundle_bytes / 1024:.1f} KiB command={command!r}",
-        file=sys.stderr,
-    )
     if skipped:
         print("[sandbox] inputs skipped: " + ", ".join(skipped), file=sys.stderr)
     if args.dry_run:
@@ -2372,10 +2415,6 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                 stderr="",
             )
         elif sdk_transport:
-            print(
-                "[sandbox] using Agate SDK",
-                file=sys.stderr,
-            )
             try:
                 direct_files = {
                     "__atrex_command.sh": command_path,
@@ -2425,8 +2464,7 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
 
     hide_evaluator_details = evaluator_command and bool(private_paths)
     if proc.stderr and not hide_evaluator_details:
-        print("\n".join(line for line in proc.stderr.rstrip().splitlines()
-                              if line != INFRASTRUCTURE_MARKER), file=sys.stderr)
+        sys.stderr.write(proc.stderr)
     try:
         job = json.loads(proc.stdout)
     except json.JSONDecodeError:
@@ -2447,8 +2485,7 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
         return ENVIRONMENT_TEMPFAIL
     result = job.get("result") or {}
     remote_stdout = str(result.get("stdout") or "")
-    remote_stderr = "\n".join(line for line in str(result.get("stderr") or "").splitlines()
-                              if line != INFRASTRUCTURE_MARKER)
+    remote_stderr = str(result.get("stderr") or "")
     try:
         if output_transport == "oss":
             artifact = _oss_artifact(job, OSS_OUTPUT_ARCHIVE)
@@ -2467,14 +2504,14 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
         if remote_stdout and not hide_evaluator_details:
             print(remote_stdout.rstrip())
         if remote_stderr and not hide_evaluator_details:
-            print(remote_stderr.rstrip(), file=sys.stderr)
+            sys.stderr.write(remote_stderr)
         print(f"sandbox: {exc}; job_id={job.get('job_id')}", file=sys.stderr)
         return int(result.get("exit_code") or proc.returncode or 2)
 
     if command_stdout:
         print(command_stdout)
     if remote_stderr and not hide_evaluator_details:
-        print(remote_stderr.rstrip(), file=sys.stderr)
+        sys.stderr.write(remote_stderr)
     remote_rc = result.get("exit_code")
     if isinstance(remote_rc, int):
         return remote_rc

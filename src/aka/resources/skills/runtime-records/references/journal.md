@@ -14,9 +14,9 @@ records/<gateway_record_id>.json
 PROGRESS.md
 ```
 
-Direction `v0` is the current unreviewed draft; `v1+` and every Experiment `vN` are immutable,
-per-identity catalog versions containing the claim plus the compact Review result that applied to
-that version. The greatest visible `vN` is current for this lineage. Direction files contain their full decision-useful state, immutable `owner_lineage`,
+Direction and Experiment versions start at immutable `v1`. Each archived update creates the next
+per-identity catalog version containing the claim and its compact Review state. A Direction `start`
+retains the prior Review without running another one. The greatest visible `vN` is current for this lineage. Direction files contain their full decision-useful state, immutable `owner_lineage`,
 `access`, and the Agent-maintained plan. Runtime does not track completed plan steps or select the
 next action. Experiments identify their
 Direction through `direction_id`; Runtime derives the reverse association when needed instead of
@@ -37,10 +37,9 @@ when recorded, alongside its objective and expected benefit. Global aggregation 
 overwrites local priorities. Read root `frontier.json` for the complete eligible accepted-submission frontier.
 Peer Directions may appear as `in_progress(Tn)` in `PROGRESS.md`. Choose executable work from the
 Local work queue. Use the Shared pool to absorb compatible mechanisms, evidence, and applicability
-into one local Direction; cite every source ID in `derived_from_direction_ids`. Every archived
-Archived Direction and Experiment versions enter the central Campaign Research Library. Direction drafts
-update Agent-visible `v0`; the first Review writes immutable `v1`, and later reviewed states write
-successive immutable versions. Experiments are reviewed from `v1`. `research-library/` is the
+into one local Direction; cite every source ID in `derived_from_direction_ids`. Archived Direction
+and Experiment versions enter the central Campaign Research Library. Both are reviewed on first
+submission and start at immutable `v1`. `research-library/` is the
 read-only, visibility-filtered workspace copy. Synchronous search exposes peer revisions only through the
 watermark sealed at the last Epoch boundary; later revisions wait for the next Epoch. Asynchronous
 search exposes the current catalog head immediately. Quality fields distinguish context from
@@ -58,7 +57,7 @@ search uses its live visible revision set. Every immutable Record remains stored
 Claim-bearing mutations return `review` once. Its workflow fields are deliberately distinct:
 
 - `archive_status`: whether Runtime stored the submitted claim;
-- `claim_review_quality`: `review_not_requested`, `supported`, `partially_supported`, `unsupported`, or `review_unavailable`;
+- `claim_review_quality`: `supported`, `partially_supported`, `unsupported`, or `review_unavailable`;
 - `evidence_eligible`: whether the claim may support Direction lifecycle conclusions; it does not control visibility;
 - `runtime_action`: how to repair or continue the Runtime workflow;
 - `scientific_next_check`: the smallest evidence-producing test suggested by the reviewer.
@@ -139,9 +138,9 @@ Correct an existing open local Direction without inventing a replacement identit
 
 `revise` keeps `direction_id`, lifecycle status and genealogy and increments `revision`. Optional `analysis`
 updates the current assessment or interim findings; omitting it preserves the previous value.
-Supply non-empty text when updating it. The assessment is included in the revision, active-state
-Review, shared projection and `PROGRESS.md`; no close/restart is needed. Revising a
-proposed draft remains `review_not_requested`; revising an active Direction reruns Review. It replaces the objective,
+Supply non-empty text when updating it. The assessment is included in the revision,
+Review, shared projection and `PROGRESS.md`; no close/restart is needed. Every revision is reviewed,
+including revisions while still proposed. It replaces the objective,
 scope and plan in the latest projection. Only `proposed` or
 `in_progress` local Directions can be revised; restart a deferred or blocked Direction first.
 Completed and abandoned Directions are terminal, so continued work uses a new derived Direction.
@@ -160,9 +159,11 @@ Start selected work:
 }
 ```
 
-`start` runs the first independent Review of the effective proposal before changing its lifecycle.
-Supported and partially supported starts may proceed locally; unsupported starts are rejected, while
-partial or reviewer-unavailable state is shared as context but remains ineligible as supporting evidence.
+`propose` runs admission Review of the optimization objective, applicability, and strategy space;
+it requires no Experiment or prior measurement. Supported and partially supported proposals are
+archived; unsupported proposals are rejected before mutation. `start` changes lifecycle without
+another Review and retains the prior review quality. Partial or reviewer-unavailable state remains
+shared context rather than established supporting evidence.
 The lifecycle is `proposed --start--> in_progress`. Only `in_progress` may `complete`, `abandon`,
 `defer`, or `block`; restart `deferred` or `blocked` work with `start`. `completed` and `abandoned`
 are terminal and continued work requires a derived Direction.
@@ -170,9 +171,9 @@ are terminal and continued work requires a derived Direction.
 A trajectory may own multiple local active Directions. The most recently started Direction is the
 focus; queue reordering does not change it. Runtime infers an omitted Experiment `direction_id` only
 when exactly one local Direction is active; with zero or multiple active Directions, include it.
-An explicitly named local proposed Direction may also own an Experiment when existing evidence
-informs its admission Review. Record that Experiment first, then start the Direction; the admission
-Review receives all visible Experiments bound to the Direction.
+An explicitly named local proposed Direction may also own an Experiment. It is optional:
+proposing and starting work do not require one. A later `revise` Review receives the visible
+Experiments already bound to that Direction when assessing its interim findings.
 Keep concurrent work intentional, address updates by Direction ID, and leave new ideas proposed until work actually starts. Continue each
 selected redesign through bounded edit/measurement cycles instead of reporting its first promotable checkpoint.
 

@@ -175,6 +175,41 @@ def route(endpoint="", profile="", environment=None):
 
 
 def request(endpoint, method, path, payload, timeout, *, environment=None, allow_list=False):
+    """Job recovery belongs to the job owner; retry Env/upload infra here."""
+    if urllib.parse.urlsplit(path).path.startswith('/v1/jobs/'):
+        return _request_once(endpoint, method, path, payload, timeout,
+                             environment=environment, allow_list=allow_list)
+    import time
+    from .admission_retry import infrastructure_failure, policy_from_environment, retry_delay
+    from .errors import GatewayHTTPError
+    policy = policy_from_environment(environment)
+    deadline = time.monotonic() + timeout
+    recovery_deadline = None
+    for index in range(len(policy.delays) + 1):
+        failure = None
+        try:
+            result = _request_once(endpoint, method, path, payload, max(0, deadline - time.monotonic()),
+                                   environment=environment, allow_list=allow_list)
+        except GatewayHTTPError as error:
+            failure = error
+            delay = retry_delay(error, index, policy)
+        else:
+            if not infrastructure_failure(result):
+                return result
+            delay = policy.delays[index] if index < len(policy.delays) else None
+        if recovery_deadline is None:
+            recovery_deadline = time.monotonic() + policy.max_elapsed_s
+        limit = min(deadline, recovery_deadline)
+        if delay is not None and time.monotonic() + delay < limit:
+            time.sleep(delay)
+            if time.monotonic() < limit:
+                continue
+        if failure is not None:
+            raise failure
+        return result
+
+
+def _request_once(endpoint, method, path, payload, timeout, *, environment=None, allow_list=False):
     """Adapt the retained owner request protocol to public SDK methods only."""
     from atrex_gateway_client.errors import GatewayError
     from .errors import GatewayHTTPError
@@ -221,7 +256,8 @@ def request(endpoint, method, path, payload, timeout, *, environment=None, allow
         raise ValueError(f"No supported Agate SDK operation for {method} {parsed.path}")
     except GatewayError as error:
         response = _sdk_error_process(error, stage="request")
-        raise GatewayHTTPError(getattr(error,'status',None), response.stdout) from error
+        raise GatewayHTTPError(getattr(error,'status',None), response.stdout,
+            retry_after_s=getattr(error, 'retry_after_s', None)) from error
 
 
 def upload_bytes(url, data, *, timeout):

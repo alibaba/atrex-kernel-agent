@@ -32,6 +32,11 @@ Remote jobs are stateless; only returned artifacts persist.
 - Gateway Records are immutable measurement evidence. Reuse exact matches by reading their
   `records/<gateway_record_id>.json` projections directly. A Git commit without a passing Record is
   not performance or correctness evidence.
+- Runtime deduplicates only Evaluate, including ABBA: an identical call waits for the active
+  evaluation or reuses its normal terminal response, including candidate failures or missing
+  metrics. `reused_gateway_record_id` identifies the reused Record; reuse does not mean correctness
+  passed. Infrastructure/Gateway failures do not prevent a later retry. Other GPU tools execute
+  afresh on every call.
 - Follow `error.next_action` and preserved upstream diagnostics. Candidate compile, import,
   correctness, or source-policy errors require repair; they are not infrastructure failures.
 - Runtime owns infrastructure retries. Do not build another retry loop. Retry an unchanged request

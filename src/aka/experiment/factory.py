@@ -71,6 +71,7 @@ class ExperimentFactory:
         records = (self.measurement_store.execution_records() if self.measurement_store is not None else
                    FileExperimentRecords(self.records_root or workspace.parent / ".aka-experiments", str(workspace)))
         yield Experiment(executor, evaluator, records=records, purpose=purpose,
+            submission_retry_policy=self.retry_policy,
             command_evaluator=selected_command if selected_command is not None else
                 GatewayCommandEvaluator(measurement_reader=self.measurement_reader,
                     execution_capabilities=executor.capabilities, evaluation_input=evaluation_input),

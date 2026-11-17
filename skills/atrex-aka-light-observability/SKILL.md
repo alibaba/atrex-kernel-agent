@@ -27,7 +27,7 @@ installing the Python wheels alone does not update `observability/` or this Skil
 | Export one Agent commit and all bound evidence | `observability/USAGE.md` section 8 | `export_light_kernel.py` |
 | Expand one Gateway Record into physical Agate Jobs | `observability/USAGE.md` section 9 | `light_gateway_jobs.py` |
 | Export one logical Runtime request, raw Agate attempts, and Agent receipt | `observability/USAGE.md` section 10 | `export_light_gateway_record.py` |
-| Open one local read-only Campaign dashboard using the same snapshots | `observability/README.md` | `light_dashboard.py` |
+| Generate/open a local Dashboard or save a snapshot | `atrex-aka-light-dashboard` Skill; fallback: `docs/optimization-dashboard.md` in the checkout | `light_dashboard.py` |
 
 For a Dashboard over a remote Campaign, run `light_dashboard.py CAMPAIGN --capture FILE` in the
 remote execution environment, download `FILE`, and serve that JSON locally. Do not download the

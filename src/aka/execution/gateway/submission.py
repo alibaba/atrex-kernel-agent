@@ -73,7 +73,6 @@ def submit_prepared(args, workspace, grace, prepared):
     except SourceArchiveError as error:
         emit_diagnostic({"failure_class": "infrastructure", "reason": error.code,
                          **({"http_status": error.status} if error.status is not None else {})})
-        print(transport.INFRASTRUCTURE_MARKER, file=sys.stderr)
         return transport.ENVIRONMENT_TEMPFAIL
     except transport.GatewayHTTPError as error:
         from .diagnostics import report_typed_limitation
@@ -90,7 +89,6 @@ def submit_prepared(args, workspace, grace, prepared):
         payload = detail.get("error", detail) if isinstance(detail, dict) else {"message": str(detail)}
         print(json.dumps({"status": "failed", "http_status": error.status, "error": payload}))
         if error.status in {429,502,503,504}:
-            print(transport.INFRASTRUCTURE_MARKER, file=sys.stderr)
             return transport.ENVIRONMENT_TEMPFAIL
         print(f"HTTP {error.status}", file=sys.stderr)
         return 2

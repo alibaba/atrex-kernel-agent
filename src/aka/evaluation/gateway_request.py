@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 from .metadata import distributed_evaluation_world_size as _distributed_evaluation_world_size
-from aka.task.problem.inputs import validate_performance_baseline
 from .measurement_policy import DEFAULT_BENCH_ITERS, runner_overrides
 FP4_MAX_REL_L2 = 0.2
 DEFAULT_DEPENDENCY_POLICY = "freeze_installed"
@@ -235,10 +234,6 @@ def prepare_request(
             if multi_seed > 0 and version not in {"v0", "v1"}
             else "full"
         )
-        if request["mode"] != "correctness_only":
-            from .objectives import metadata_performance_objective, LATENCY_GEOMETRIC_MEAN
-            if metadata_performance_objective(reference.get("metadata")) != LATENCY_GEOMETRIC_MEAN:
-                validate_performance_baseline(shapes, reference.get("metadata"), hardware)
     else:
         if profiler:
             request["profiler"] = profiler

@@ -87,3 +87,74 @@ def test_command_passes_upstream_error_without_inventing_fields():
     response = with_execution_error({"exit_code": 1, "stdout": "stdout", "stderr": "stderr"}, receipt, operation="command")
     assert response["error"] == error
     assert not {"candidate_repairable", "next_action", "execution_status"} & response.keys()
+
+
+@pytest.mark.parametrize('failure', [None, 'candidate', 'infrastructure'])
+def test_dev_launcher_does_not_inject_logs_into_stderr(tmp_path, monkeypatch, capsys, failure):
+    from aka.execution.gateway import sandbox, sdk
+    (tmp_path / 'kernel.py').write_text('def kernel(): pass\n')
+    (tmp_path / 'scratch').mkdir()
+    (tmp_path / 'scratch/probe.py').write_text('print("probe output")\n')
+    remote_stderr = ('probe stderr without trailing newline' if failure == 'candidate'
+                     else '__ATREX_INFRASTRUCTURE_UNAVAILABLE__\n\n' if failure is None else '')
+    job = {'job_id': 'dv_probe', 'status': 'failed' if failure == 'infrastructure' else 'succeeded',
+           'result': None if failure == 'infrastructure' else {
+               'stdout': 'probe output\n', 'stderr': remote_stderr,
+               'exit_code': 1 if failure == 'candidate' else 0}}
+    if failure == 'infrastructure':
+        job['error'] = {'error_class': 'infra', 'reason': 'logs_unavailable',
+                        'message': 'backend terminal output was not available within the collection budget'}
+    facts = []
+    monkeypatch.setattr('aka.execution.outcomes.emit_fact', facts.append)
+    monkeypatch.setattr(sdk, 'route', lambda *args: 'test-endpoint')
+    def remote(**kwargs):
+        process = subprocess.CompletedProcess([], 1 if failure == 'infrastructure' else 0,
+                                              json.dumps(job), '')
+        observe_attempt(process, operation='dev')
+        return process
+    monkeypatch.setattr(sandbox, '_run_sdk_dev', remote)
+    code = sandbox._main(['--workspace', str(tmp_path), '--hardware', 'L20N',
+                          '--url', 'test-endpoint', '--kind', 'dev', '--no-sync',
+                          '--', 'python3', '-m', 'scratch.probe'])
+    output = capsys.readouterr()
+    # A real probe may print the former marker: retain it as ordinary output.
+    assert output.err == remote_stderr
+    assert output.out == ('' if failure == 'infrastructure' else 'probe output\n')
+    receipt = captured_result(subprocess.CompletedProcess([], code, output.out, output.err),
+                              resource=ResourceIdentity('gateway'), records=facts, decode_output=False)
+    public = canonical_result(with_execution_error({'exit_code': code, 'stdout': output.out,
+        'stderr': output.err}, receipt, operation='command'), {'operation': 'command'})
+    assert public['result']['stderr'] == remote_stderr
+    assert receipt.attempts[-1].backend_response == job
+    if failure == 'infrastructure':
+        assert code == 75
+        assert receipt.transport_status == 'infrastructure'
+        assert public['result']['error'] == job['error']
+    else:
+        assert code == (1 if failure == 'candidate' else 0)
+        assert receipt.transport_status != 'infrastructure'
+
+
+@pytest.mark.parametrize('failure', ['upload', 'http_503'])
+def test_prepared_submission_reports_infrastructure_through_facts_not_stderr(tmp_path, monkeypatch, capsys, failure):
+    from aka.execution.gateway import sandbox, sdk, submission, source_archives
+    from aka.execution.gateway.errors import GatewayHTTPError
+    monkeypatch.setattr(sdk, 'route', lambda *args: 'test-endpoint')
+    monkeypatch.setattr(source_archives, 'read_archives', lambda _: ())
+    monkeypatch.setattr(source_archives, 'validate_archives', lambda *args, **kwargs: None)
+    from aka.execution.gateway.source_archives import SourceArchiveError
+    error = (SourceArchiveError('oss_upload_failed') if failure == 'upload' else
+             GatewayHTTPError(503, json.dumps({'error': {'error_class': 'infra', 'reason': 'unavailable'}})))
+    def rejected(**kwargs):
+        raise error
+    monkeypatch.setattr(sandbox, '_run_sdk_job', rejected)
+    facts = []
+    monkeypatch.setattr('aka.execution.outcomes.emit_fact', facts.append)
+    args = sandbox.build_parser().parse_args(['--workspace', str(tmp_path), '--hardware', 'L20N', '--kind', 'run'])
+    code = submission.submit_prepared(args, tmp_path, 0, {'schema_version': 1, 'kind': 'run', 'request': {}})
+    output = capsys.readouterr()
+    assert output.err == ''
+    assert code == 75
+    receipt = captured_result(subprocess.CompletedProcess([], code, output.out, output.err),
+                              resource=ResourceIdentity('gateway'), records=facts, decode_output=False)
+    assert receipt.transport_status == 'infrastructure'

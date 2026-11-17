@@ -67,7 +67,7 @@ def validate_result(payload, expected_ids):
         if (passed != total or payload.get("failures") or not isinstance(latencies, dict)
                 or set(latencies) != set(expected_ids)
                 or any(type(value) not in (int, float) or not math.isfinite(value) or value <= 0
-                       for value in (*latencies.values(), payload.get("latency_us_geomean"), payload.get("performance_score")))):
+                       for value in (*latencies.values(), payload.get("latency_us_geomean")))):
             raise ValueError("SOL passing receipt has incomplete correctness or performance evidence")
     elif passed == total and not payload.get("failures"):
         raise ValueError("SOL failing receipt has no measured failure")

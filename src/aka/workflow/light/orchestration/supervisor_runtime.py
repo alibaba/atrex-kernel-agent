@@ -38,6 +38,7 @@ from aka.workflow.light.host.plugin_output import (
 from .constants import ATREX_BENCH_HARNESS, PROFILE_DRIVER, SOL_HARNESS
 from .episode_workspace import EpisodeWorkspace
 from aka.experiment.frontier import kernel_full_evaluation_evidence
+from aka.experiment.measurement_store import MeasurementWaitTimeout
 from aka.workflow.light.support.errors import (
     RequestValidationError, RequestDispatchTimeout, SessionRevokedError,
 )
@@ -378,6 +379,9 @@ class _OperationHandler:
             status, result = 429, failure(str(error), code="request_not_started",
                 next_action="No job was submitted. Retry the same request after bounded backoff.")
             result["retry_after_seconds"] = DISPATCH_RETRY_SECONDS
+        except MeasurementWaitTimeout as error:
+            status, result = 504, failure(str(error), code="measurement_wait_timeout",
+                next_action="The original request may still finish. Retrying the same request will join it or read its result.")
         except SessionRevokedError:
             status, result = 401, failure("Tool binding revoked", repairable=False, code="session_revoked")
         except Exception as error:
@@ -1021,13 +1025,13 @@ class SupervisorRuntime:
             identity = {"operation": operation, "options": options, "inputs": inputs,
                 "typed_request_digest": request_digest, "kernels": kernels,
                 "hardware": self.config.hardware}
-            from aka.experiment.measurement_store import TaskRunning
-            try:
-                response = self.experiments.execute(command, request_id=capability.request_id,
-                    identity=identity, kernels=kernels, deadline=capability.deadline,
-                    reuse_completed=reuse_completed, reuse_correctness=reuse_correctness)
-            except TaskRunning as error:
-                response = {"exit_code": 75, "stdout": "", "stderr": "", "agent_result": error.response()}
+            def check_wait():
+                if not self._live(capability):
+                    raise SessionRevokedError("Session revoked while waiting for a shared measurement")
+            response = self.experiments.execute(command, request_id=capability.request_id,
+                identity=identity, kernels=kernels, deadline=capability.deadline,
+                check_wait=check_wait,
+                reuse_completed=reuse_completed, reuse_correctness=reuse_correctness)
             agent_result = response.get("agent_result", {})
             record_id = agent_result.get("gateway_record_id")
             if capability.journal and record_id:
