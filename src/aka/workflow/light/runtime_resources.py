@@ -5,6 +5,26 @@ from aka.contracts.content import WorkspaceFile
 from aka.contracts.workspace import WorkspaceExclusion
 
 
+def runtime_resource_registry(campaign_root: Path, *, agate_tools, wiki: bool):
+    """Adapt shared contributions to Light's Agent-facing Runtime interface."""
+    from aka.resources.contributions import selected_resources
+    from aka.resources.plugins import PluginRegistry
+    from aka.resources.runtime_measurement import scoped_measurement_skill
+
+    resources, skills = selected_resources()
+    # These are host/operator manuals, not the Session's callable interface.
+    excluded = ("aka-execution", "atrex-gpu-gateway") + (() if wiki else ("kernel-wiki",))
+    selected = []
+    for skill in skills:
+        if skill.name in excluded:
+            continue
+        if skill.name == "gpu-measurement":
+            skill = scoped_measurement_skill(skill, campaign_root / "resources", agate_tools)
+        selected.append(skill)
+    return PluginRegistry(resources=resources, agent_skills=tuple(selected),
+        excluded_plugins=() if wiki else ("gpu-wiki",), excluded_skills=excluded)
+
+
 def install_runtime_resources(campaign, workspace: Path) -> None:
     """Refresh non-source inputs without changing the Agent's index or ignore file."""
     owner = campaign.candidate_workspace

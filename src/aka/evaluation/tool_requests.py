@@ -21,16 +21,20 @@ class _Parser(argparse.ArgumentParser):
         raise ValueError(message)
 
 
-def tool_argument_parser():
+def tool_argument_parser(*, enabled_kinds=None):
     parser = _Parser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--kind", choices=("auto", "evaluate", "profile", "dev", "command", "check", "disassemble", "env"), default="auto")
+    kinds = (("auto", "evaluate", "profile", "dev", "command", "check", "disassemble", "env")
+             if enabled_kinds is None else tuple(enabled_kinds))
+    parser.add_argument("--kind", choices=kinds, default="auto")
     for flag in ("--version", "--baseline-commit", "--input-path", "--shapes-path",
                  "--kernel-name", "--kernel-regex", "--profile-shape-id", "--arch", "--sanitize", "--deps-mode"):
         parser.add_argument(flag)
     parser.add_argument("--env-gpu", help="GPU product token; omitted uses the Campaign hardware (for example L20N).")
     parser.add_argument("--mode", dest="evaluation_mode", choices=("full", "correctness_only"))
     parser.add_argument("--correctness-max-rel-l2", type=float)
-    for flag in ("--multi-seed", "--timed-runs", "--warmup", "--shape-batch-size", "--comparison-repeats", "--comparison-run-timeout",
+    parser.add_argument("--comparison-repeats", type=int,
+        help="ABBA comparison sample count: an even integer from 2 through 16 (2 samples per ABBA block).")
+    for flag in ("--multi-seed", "--timed-runs", "--warmup", "--shape-batch-size", "--comparison-run-timeout",
                  "--launch-skip", "--launch-count", "--top-kernels"):
         parser.add_argument(flag, type=int)
     for flag in ("--candidate-timeout-s", "--perf-timeout-s"):
@@ -55,8 +59,8 @@ def tool_argument_parser():
     return parser
 
 
-def parse_tool_arguments(argv):
-    parser = tool_argument_parser()
+def parse_tool_arguments(argv, *, enabled_kinds=None):
+    parser = tool_argument_parser(enabled_kinds=enabled_kinds)
     args = parser.parse_args(list(argv))
     if args.command[:1] == ["--"]:
         args.command = args.command[1:]

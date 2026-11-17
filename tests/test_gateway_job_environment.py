@@ -142,6 +142,38 @@ def test_shared_executor_preserves_typed_archives_and_owned_launch(tmp_path, ope
     assert result.budgets[-1].scope == "local-wait"
 
 
+@pytest.mark.parametrize("discovered", [False, True])
+def test_native_abba_uses_eval_capability_without_internal_operation_declaration(tmp_path, discovered):
+    from aka.execution.environment_query import match_environment
+    snapshot = EnvironmentSnapshot("gateway", None, "L20N", None,
+        declarations={"operations": ["run", "dev"]},
+        observed={"gpu": "L20N"} if discovered else {})
+    executor = executor_for(tmp_path, support())
+    executor._environment_backend().check.side_effect = lambda query, **kw: match_environment(query, snapshot)
+    payload = {"schema_version": 1, "kind": "run", "request": {
+        "candidate": "candidate source", "abba": {"baseline": "baseline source", "repeats": 1},
+        "lock_clocks": True, "options": {"shape_shards": 1}}}
+    raw = JobResult(0, stdout=json.dumps(job()), transport_status="succeeded")
+    with launcher_for(executor, lambda **kw: raw):
+        result = executor.run(CommandSpec(tmp_path, (), hardware="L20N", operation="same_allocation_abba",
+                                         submission=json.dumps(payload).encode()))
+    assert executor._environment_backend().check.call_args.args[0].operation == "run"
+    assert result.returncode == 0
+
+
+def test_native_abba_does_not_ignore_explicit_eval_rejection(tmp_path):
+    from aka.execution.environment_query import match_environment
+    from aka.contracts.execution import UnsupportedExecution
+    snapshot = EnvironmentSnapshot("gateway", None, "L20N", None, declarations={"operations": ["dev"]})
+    executor = executor_for(tmp_path, support())
+    executor._environment_backend().check.side_effect = lambda query, **kw: match_environment(query, snapshot)
+    payload = {"schema_version": 1, "kind": "run", "request": {
+        "candidate": "candidate", "abba": {"baseline": "baseline", "repeats": 1}}}
+    with launcher_for(executor, lambda **kw: None) as launch, pytest.raises(UnsupportedExecution):
+        executor.run(CommandSpec(tmp_path, (), operation="same_allocation_abba", submission=json.dumps(payload).encode()))
+    launch.assert_not_called()
+
+
 def test_volatile_fields_do_not_split_identical_execution_environments():
     first = with_job_environment(JobResult(0, stdout=json.dumps(job())))
     changed = deepcopy(ENVIRONMENT)

@@ -134,7 +134,7 @@ class RecordedMeasurements:
             receipt = experiment.command_result(record.ref)
             operation_name = "evaluate" if operation == "run" else operation
             public = canonical_result(with_execution_error({"exit_code": receipt.returncode,
-                "stdout": receipt.stdout, "stderr": receipt.stderr}, receipt), {"operation": operation_name})["result"]
+                "stdout": receipt.stdout, "stderr": receipt.stderr}, receipt, operation=operation_name), {"operation": operation_name})["result"]
             feedback = {key: public[key] for key in ("failures", "actionable_diagnostics", "diagnostics",
                 "feedback_truncation", "diagnostic_truncation", "error", "next_action", "outcome") if key in public}
         result = {**feedback, "all_pass": passed, "correct": passed, "mode": mode,
@@ -317,16 +317,17 @@ class SharedMeasurements(RecordedMeasurements):
         else:
             latest = next((attempt.result for attempt in reversed(record.attempts) if attempt.result is not None), None)
             stdout, stderr = (latest.stdout, latest.stderr) if latest is not None else ("", "")
-        if stdout and not stdout.endswith("\n"):
-            stdout += "\n"
-        stdout += "[sandbox] RECORD_JSON=" + json.dumps({"gateway_record_id": evidence["gateway_record_id"],
-            **({"kernel_id": evidence["kernel_id"]} if evidence.get("kernel_id") else {})}) + "\n"
+        operation = "evaluate" if evidence["gateway_kind"] == "run" else evidence["gateway_kind"]
+        if operation not in {"dev", "command"}:
+            if stdout and not stdout.endswith("\n"):
+                stdout += "\n"
+            stdout += "[sandbox] RECORD_JSON=" + json.dumps({"gateway_record_id": evidence["gateway_record_id"],
+                **({"kernel_id": evidence["kernel_id"]} if evidence.get("kernel_id") else {})}) + "\n"
         response = {"exit_code": returned.returncode if returned is not None else evidence["exit_code"] if evidence["exit_code"] is not None else 2,
                     "stdout": stdout, "stderr": stderr, "reused": reused}
         from aka.evaluation.tool_results import canonical_result, with_execution_error
         if returned is not None:
-            response = with_execution_error(response, returned)
-        operation = "evaluate" if evidence["gateway_kind"] == "run" else evidence["gateway_kind"]
+            response = with_execution_error(response, returned, operation=operation)
         agent = canonical_result(response, {"operation": operation, "options": {"evaluation_mode": payload.get("mode")}},
             record_id=evidence["gateway_record_id"])
         if operation in {"evaluate", "same_allocation_abba"} or evidence["execution_status"] == "unknown":
@@ -424,7 +425,7 @@ class SharedMeasurements(RecordedMeasurements):
                         # receipt instead of replacing it with a generic outage.
                         from aka.evaluation.tool_results import with_execution_error, canonical_result
                         response = with_execution_error({"exit_code": outcome.returncode,
-                            "stdout": outcome.stdout, "stderr": outcome.stderr}, outcome)
+                            "stdout": outcome.stdout, "stderr": outcome.stderr}, outcome, operation=identity.get("operation"))
                         response["agent_result"] = canonical_result(response, identity)
                 agent = response.get("agent_result", {})
                 agent.pop("identity", None)

@@ -114,6 +114,7 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
         "diagnostics": native_diagnostics + ([record] if record else []),
         "causes": [encode(item) for item in causes],
         "remote_terminated": remote_termination(job),
+        "backend_response": job or None,
     })
     return process
 
@@ -249,6 +250,7 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
             tuple(_cause(item) for item in record.get("causes", ())),
             record.get("idempotency_key") or submission.get("idempotency_key") or intent.get("idempotency_key"),
             record.get("request_identity") or submission.get("request_identity") or intent.get("request_identity"),
+            record.get("backend_response"),
         ))
         records_diagnostics.extend(details)
     starts = {record["attempt_id"]: record for record in records if record.get("event") == "attempt_started"}

@@ -42,9 +42,8 @@ change or remove a custom tool. Use `scratch/` for temporary inputs and outputs.
 
 `sandbox.py` and `plugin.py` are Supervisor-installed Runtime clients: do not modify,
 replace or duplicate them. Your other scripts are writable. To execute a custom
-GPU probe, use the GPU measurement Skill, for example:
-`python3 tools/sandbox.py --kind command --no-sync -- python3 -m tools.probe`.
-Use dev only for self-contained probes; local helpers may run directly.
+GPU probe, use an enabled tool from the GPU measurement Skill and
+`python3 tools/sandbox.py --help`. Local helpers may run directly.
 The files remain in this trajectory's persistent workspace across Episodes.
 
 ## Custom tool index

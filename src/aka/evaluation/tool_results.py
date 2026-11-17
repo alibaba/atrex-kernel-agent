@@ -39,8 +39,22 @@ def compact_receipt(agent_result: dict) -> dict:
     return receipt
 
 
-def with_execution_error(response: dict, receipt) -> dict:
+def with_execution_error(response: dict, receipt, *, operation=None) -> dict:
     """Project an explicit failed receipt before a consumer looks for numeric output."""
+    operation = operation or (receipt.attempts[-1].operation if receipt.attempts else None)
+    if operation in {"dev", "command"}:
+        # Command output is the result, even on a nonzero exit. Do not invent
+        # classifications, repairability or recovery advice from that output.
+        response = {**response, "outcome": "timeout" if receipt.transport_status == "timed_out"
+                    else receipt.facts.disposition}
+        raw = next((item.backend_response for item in reversed(receipt.attempts)
+                    if item.backend_response is not None), None)
+        if raw is not None and raw.get("error") is not None:
+            from aka.evaluation.response_policy import _json_value
+            response["error"] = _json_value(raw["error"])
+            if "http_status" in raw:
+                response["http_status"] = raw["http_status"]
+        return response
     information = [{"category": item.category, "code": item.code, "details": dict(item.details)}
                    for item in receipt.diagnostics if item.category in INFORMATION_CATEGORIES
                    and item.code not in {"replay-forbidden", "retained-instruction"}]
@@ -131,6 +145,17 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             result["candidate_kernel_commit_id"] = result.pop("kernel_commit_id")
         return result
     operation = request["operation"]
+    if operation in {"dev", "command"}:
+        result = {"stdout": response.get("stdout", ""), "stderr": response.get("stderr", ""),
+                  "exit_code": response.get("exit_code")}
+        for key in ("outcome", "error", "http_status"):
+            if key in response:
+                result[key] = deepcopy(response[key])
+        identity = {"gateway_record_id": record_id} if record_id else {}
+        if kernels and "candidate" in kernels:
+            identity["kernel_commit_id"] = kernels["candidate"]["kernel_id"]
+        return {"operation": operation, "status": "completed" if response.get("exit_code") == 0 else "failed",
+                "result": result, **identity}
     options = request.get("options", {})
     prefix = PREFIXES.get(operation)
     sample, errors, notes = None, [], []

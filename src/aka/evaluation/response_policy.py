@@ -28,6 +28,13 @@ def _cause_value(cause):
             **({"causes": [_cause_value(item) for item in cause.causes]} if cause.causes else {})}
 
 
+def _failure_message(result):
+    streams = ["\n".join(line for line in stream.splitlines()
+                        if not line.startswith("[sandbox]")).strip()
+               for stream in (result.stderr, result.stdout)]
+    return "\n".join(stream for stream in streams if stream)
+
+
 def execution_error(result: JobResult) -> dict[str, Any] | None:
     """Interpret captured execution failure facts without inferring dispatch from text."""
     diagnostics = tuple(item for item in result.diagnostics if item.category not in INFORMATION_CATEGORIES)
@@ -72,7 +79,7 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
                 "is available; do not change the kernel based on this timeout or blindly resubmit."}
     if result.causes:
         error = _cause_value(result.causes[0])
-        error.update(candidate_repairable=False, execution_status=result.transport_status)
+        error.update(execution_status=result.transport_status)
         if len(result.causes) > 1:
             error["causes"] = [_cause_value(item) for item in result.causes]
         http_status = next((item.details["http_status"] for item in diagnostics
@@ -88,7 +95,7 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
                     "configuration; report Runtime-generated invalid fields to the operator."
                     if rejected else "Inspect the returned upstream error and its structured details. "
                     "Do not infer a correctness or performance result from this execution failure.")}
-    message = result.stderr.strip() or result.stdout.strip()
+    message = _failure_message(result)
     if not message:
         message = "; ".join(f"{item.category}/{item.code}: {dict(item.details)}"
             for item in diagnostics)
@@ -101,8 +108,10 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
         "execution_status": result.transport_status,
         "diagnostics": [{"category": item.category, "code": item.code,
             "details": dict(item.details)} for item in diagnostics]},
-        "next_action": "Inspect the returned error and original execution receipt. "
-            "An unknown execution outcome requires original-job reconciliation; do not resubmit blindly."}
+        "next_action": "Inspect the returned error and original execution receipt. " + (
+            "An unknown execution outcome requires original-job reconciliation; do not resubmit blindly."
+            if result.facts.disposition == "unknown" else
+            "Correct the reported failure before retrying; the execution disposition is already known.")}
 
 
 

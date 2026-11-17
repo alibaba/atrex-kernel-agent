@@ -4,7 +4,7 @@ Runtime projects every visible result as `records/<gateway_record_id>.json`. Rea
 flat files normally. Exact Kernel source is ordinary reachable Git history.
 
 Runtime measurement calls print the complete canonical public result and save the same result as a
-Record. Env prints its complete redacted response directly and creates no Record. Query a saved
+Record. Environment discovery is also archived, without becoming correctness evidence. Query a saved
 measurement Record locally without another GPU request when later work needs persisted evidence:
 
 ```bash
@@ -29,10 +29,9 @@ Each projected file contains the same public result returned by a new measuremen
 `operation`, `status`, `result`, `gateway_record_id`, and `kernel_commit_id` when Kernel-bound.
 ABBA uses `operation: evaluate` with `result.comparison`, `candidate_kernel_commit_id`, and
 `baseline_kernel_commit_id`.
-Other operation names are `profile`, `dev`, `check`, and `disassemble`.
-Parse a measurement command's whole stdout as one canonical Runtime result. Env stdout is the direct
-redacted Agate capability response and creates no Record.
-Dev preserves probe text in `result.stdout`/`result.stderr` and its process `exit_code`.
+Operation names follow the enabled Runtime tools listed by `tools/sandbox.py --help`.
+Parse a measurement command's whole stdout as one canonical Runtime result.
+Custom commands preserve probe text in `result.stdout`/`result.stderr` and their process `exit_code`.
 Its Kernel is the workspace snapshot, not proof the probe measured it.
 
 Inspect `status` (`completed`, `failed`, `cancelled`) and, for Evaluate, `result.correct`.

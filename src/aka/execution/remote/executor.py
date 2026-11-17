@@ -94,8 +94,13 @@ class RemoteExecutor(GatewayRecoveryMixin):
         from aka.execution.gateway.source_archives import prepared_payload
         submission = prepared_payload(command, ssh=bool(self.request.ssh))
         from aka.execution.environment_query import command_query, require_supported
-        support = self._environment_backend().check(command_query(command), discover=False)
-        require_supported(support, require_known=command.operation == NATIVE_ABBA)
+        query = command_query(command)
+        if not self.request.ssh and command.operation == NATIVE_ABBA:
+            # Agate implements ABBA as a typed Eval extension. Its Env API need
+            # not advertise AKA's internal same_allocation_abba operation.
+            query = replace(query, operation="run")
+        support = self._environment_backend().check(query, discover=False)
+        require_supported(support, require_known=bool(self.request.ssh) and command.operation == NATIVE_ABBA)
         from aka.execution.gateway.requests import bound_limits
         def decorate(result):
             if self.request.ssh:

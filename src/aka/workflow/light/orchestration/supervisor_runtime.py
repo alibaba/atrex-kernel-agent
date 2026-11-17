@@ -389,6 +389,7 @@ class _OperationHandler:
                 research_records=owner.journal_factory.research_records,
                 directions_enabled=owner.journal_factory.directions_enabled,
                 experiments_enabled=owner.journal_factory.experiments_enabled,
+                enabled_kinds=owner.config.agate_tools,
                 parser=None,
                 catalog=owner.plugins.catalog() if self.route == "/v1/plugins/execute" and status == 400 else ())
             from aka.workflow.light.host.projection import credential_values, redact_diagnostics
@@ -850,6 +851,14 @@ class SupervisorRuntime:
             argv = validated_argv(request["argv"])
         if route == "/v1/gateway/execute" and not trusted:
             words = argv[:argv.index("--")] if "--" in argv else argv
+            from aka.contracts.agate_tools import AGATE_TOOLS
+            explicit_kinds = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "--kind"]
+            explicit_kinds += [word.split("=", 1)[1] for word in words if word.startswith("--kind=")]
+            for kind in explicit_kinds:
+                if kind in AGATE_TOOLS and kind not in self.config.agate_tools:
+                    raise AgentRequestError(f"Runtime tool {kind!r} is disabled for this Campaign.",
+                        code="runtime_tool_disabled", next_action="Use python3 tools/sandbox.py --help for enabled tools.",
+                        available_kinds=list(self.config.agate_tools), job_submitted=False)
             if words in (["--help"], ["-h"]):
                 return {"operation": "help", "status": "completed", "result": {
                     "available_kinds": list(self.config.agate_tools),
@@ -859,7 +868,7 @@ class SupervisorRuntime:
                 from aka.execution.command_syntax import requested_operation
                 access_argv = [word for word in words if word not in {"--help", "-h"}]
                 access_argv.extend(argv[len(words):])  # Preserve remote argv, including its --help.
-                parsed_access = parse_tool_arguments(access_argv)
+                parsed_access = parse_tool_arguments(access_argv, enabled_kinds=self.config.agate_tools)
                 kind = parsed_access.kind
                 if kind == "auto":
                     kind = requested_operation("auto", parsed_access.command) if parsed_access.command else "run"
@@ -873,7 +882,7 @@ class SupervisorRuntime:
         if route == "/v1/gateway/execute" and any(arg in {"--help", "-h"} for arg in argv[:argv.index("--") if "--" in argv else len(argv)]):
             from aka.evaluation.tool_requests import tool_argument_parser
             from aka.workflow.light.host.request_feedback import gateway_schema
-            parser = tool_argument_parser()
+            parser = tool_argument_parser(enabled_kinds=self.config.agate_tools)
             words = argv[:argv.index("--")] if "--" in argv else argv
             kinds = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "--kind"]
             kinds += [word.split("=", 1)[1] for word in words if word.startswith("--kind=")]

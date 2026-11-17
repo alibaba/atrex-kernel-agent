@@ -23,11 +23,9 @@ the Supervisor performs independent submission review.
    saved at `records/<gateway_record_id>.json`; open it only when later work needs the persisted
    evidence. A completed job can still contain a correctness failure.
 
-Use an enabled Command for custom remote probes, compilation and profiling. Python scripts below
-scratch/ should use module form, for example `--kind command -- python3 -m scratch.probe`.
-Jobs are stateless; returned scratch artifacts persist. Typed operations select their managed inputs.
+Use the enabled tools listed by Help and their examples in [Runtime requests](references/requests.md).
 Read `--kind OPERATION --help` for exact options; do not transfer flags between operations.
-Env returns the complete redacted capability observation, archived without becoming correctness evidence.
+Remote jobs are stateless; only returned artifacts persist.
 
 ## Results and failures
 

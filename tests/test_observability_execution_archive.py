@@ -14,6 +14,26 @@ from observability import light_agate_calls, light_gateway_jobs, export_light_ga
 from observability._internal.common import job_attempt_rows
 
 
+def test_command_raw_job_survives_output_extraction_and_export(archive, tmp_path):
+    from test_session_and_command_receipts import command_receipt
+    campaign, _, _, _, _ = archive
+    store = MeasurementStore(campaign / "measurements")
+    executions = store.execution_records()
+    job = {"job_id": "dv_full_raw", "status": "succeeded", "result": {
+        "exit_code": 1, "stdout": "Traceback\nAssertionError: cuda err 201", "stderr": ""}}
+    receipt = command_receipt(job, job["result"]["stdout"], "[sandbox] using Agate SDK")
+    with store.reserve({"operation": "dev"}, {}, request_id="command-raw") as task:
+        with executions.operation(task.record_id) as ref:
+            executions.register(ref, task.record_id, {"operation": "dev"}, kind="command", purpose="development")
+            executions.prepared(ref, [CommandSpec(tmp_path, (), operation="dev")])
+            attempt = executions.intent(ref, 0)
+            executions.observed(ref, attempt, result=receipt)
+        task.finish({"status": "failed", "result": {"exit_code": 1}}, cacheable=False)
+        record_id = task.record_id
+    exported = export_light_gateway_record.snapshot(campaign, record_id)
+    assert exported["agate_attempts"][0]["agate_response"] == job
+
+
 def _files(root):
     return {str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
             for p in root.rglob("*") if p.is_file() and not p.is_symlink()}

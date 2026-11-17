@@ -78,10 +78,11 @@ def execution_attempt_rows(record_directory: Path, *, latest=False) -> list[dict
                 result.diagnostics, causes=result.causes)]
         for index, item in enumerate(physical):
             captured = JobResult(0, attempts=(item,)).as_dict()["attempts"][0]
+            backend_response = captured.pop("backend_response", None)
             identifier = item.resource.identifier if item.resource else None
             if not identifier and len(physical) == 1 and raw:
                 identifier = raw.get("job_id")
-            raw_job = receipts.get(identifier) if identifier else raw if len(physical) == 1 else None
+            raw_job = backend_response or (receipts.get(identifier) if identifier else raw if len(physical) == 1 else None)
             # Inner attempts retain failed/retried Job IDs even when their raw
             # response is absent from the final stdout.
             job = dict(raw_job or {})

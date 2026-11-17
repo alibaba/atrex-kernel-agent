@@ -81,3 +81,65 @@ def test_composed_custom_tools_with_research_and_submit():
         case.run_campaign('fast',('directions','experiments'),evaluate=True,agate_tools=('all',))
     finally:
         case.doCleanups()
+
+
+@pytest.mark.parametrize('kind', ['run', 'preflight', 'same_allocation_abba', 'auto', 'typo'])
+def test_invalid_kind_only_advertises_enabled_public_names(kind):
+    from aka.workflow.light.orchestration.supervisor_runtime import RequestValidationError
+    with pytest.raises(RequestValidationError) as caught:
+        runtime().execute(None, '/v1/gateway/execute', {'argv': ['--kind', kind, '--help']})
+    choices = str(caught.value).split('choose from', 1)[1]
+    assert {part.strip(" '()") for part in choices.split(',')} == set(DEFAULT_AGATE_TOOLS)
+
+
+def test_error_schema_does_not_restore_disabled_tools():
+    from aka.evaluation.tool_requests import tool_argument_parser
+    from aka.workflow.light.host.errors import error_response
+    from aka.workflow.light.host.request_feedback import augment_error
+    for kind in ('profile', 'run', 'auto'):
+        result = augment_error(error_response('invalid request'), route='/v1/gateway/execute',
+            request={'argv': ['--kind', kind]}, parser=tool_argument_parser(),
+            enabled_kinds=DEFAULT_AGATE_TOOLS)
+        assert set(result['request_schema']['supported_kinds']) == set(DEFAULT_AGATE_TOOLS)
+        assert 'cli_options' not in result['request_schema']
+
+
+@pytest.mark.parametrize('selected', [DEFAULT_AGATE_TOOLS, ('env',), ('evaluate', 'profile'), (), AGATE_TOOLS])
+def test_installed_skill_and_discovery_match_runtime_help(tmp_path, monkeypatch, selected):
+    import json
+    import re
+    from pathlib import Path
+    from aka.contracts.agent_resources import AgentSkill
+    from aka.resources.bundles import bundle_contributions
+    from aka.workflow.light.runtime_resources import runtime_resource_registry
+
+    resources, skills = bundle_contributions(('measurement-session', 'research-records', 'kernel-wiki'))
+    execution_skills = Path(__file__).resolve().parents[1] / 'src/aka/execution/skills'
+    skills += tuple(AgentSkill(name, execution_skills / name, 'Host operation manual')
+                    for name in ('aka-execution', 'atrex-gpu-gateway'))
+    monkeypatch.setattr('aka.resources.contributions.selected_resources', lambda: (resources, skills))
+    monkeypatch.delenv('ATREX_PLUGIN_DIR', raising=False)
+    monkeypatch.setenv('ATREX_PLUGIN_PATHS', '[]')
+    registry = runtime_resource_registry(tmp_path / 'campaign', agate_tools=selected, wiki=True)
+    workspace = tmp_path / 'workspace'
+    installation = registry.install(workspace)
+    names = {skill.name for skill in installation.module_skills}
+    assert names == {'gpu-measurement', 'runtime-records', 'kernel-wiki'}
+    assert not (workspace / '.claude/skills/aka-execution').exists()
+    assert not (workspace / '.claude/skills/atrex-gpu-gateway').exists()
+    skill_root = workspace / '.claude/skills/gpu-measurement'
+    text = '\n'.join(path.read_text() for path in skill_root.rglob('*.md'))
+    documented = set(re.findall(r'--kind ([a-z][a-z-]*)', text))
+    help_kinds = runtime(selected).execute(None, '/v1/gateway/execute', {'argv': ['--help']})['result']['available_kinds']
+    assert documented == set(help_kinds) == set(selected)
+    assert all(word not in text for word in ('same_allocation_abba', 'preflight', 'aka execution', 'agate eval'))
+    for kind in selected:
+        schema = runtime(selected).execute(None, '/v1/gateway/execute', {'argv': ['--kind', kind, '--help']})
+        assert schema['result']['request_schema']['cli_options']['--kind'] == {'const': kind}
+    # The child-process resource selection must contain the same scoped Skill,
+    # not rediscover the provider's unfiltered manuals.
+    from aka.resources.contributions import SELECTION_ENV
+    inherited = json.loads(registry.environment(workspace)[SELECTION_ENV])
+    assert {row['name'] for row in inherited['skills']} == names
+    assert next(row['source'] for row in inherited['skills'] if row['name'] == 'gpu-measurement') == str(skill_root.resolve())
+    assert registry.install(workspace).module_skills == installation.module_skills

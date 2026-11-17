@@ -244,10 +244,14 @@ class ExecutionAttempt:
     causes: tuple[ExecutionCause, ...] = ()
     idempotency_key: str | None = None
     request_identity: str | None = None
+    backend_response: Mapping | None = field(default=None, repr=False)
 
     def __post_init__(self):
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
         object.__setattr__(self, "causes", tuple(self.causes))
+        if self.backend_response is not None:
+            from .execution_recovery import _freeze
+            object.__setattr__(self, "backend_response", _freeze(self.backend_response))
 
 
 @dataclass(frozen=True)

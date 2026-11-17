@@ -358,7 +358,7 @@ def field_issues(body, schema):
 
 
 def augment_error(response, *, route, request, research_records=False, directions_enabled=None,
-                  experiments_enabled=None, parser=None, catalog=()):
+                  experiments_enabled=None, parser=None, catalog=(), enabled_kinds=None):
     """Add only public format guidance; preserve authoritative recovery/classification."""
     directions_enabled = research_records if directions_enabled is None else directions_enabled
     experiments_enabled = research_records if experiments_enabled is None else experiments_enabled
@@ -409,7 +409,8 @@ def augment_error(response, *, route, request, research_records=False, direction
                 kind = argv[index + 1]
             elif word.startswith("--kind="):
                 kind = word.split("=", 1)[1]
-        result["request_schema"] = gateway_schema(kind if isinstance(kind, str) else None, parser)
+        result["request_schema"] = gateway_schema(kind if isinstance(kind, str) else None, parser,
+                                                  enabled_kinds=enabled_kinds)
     elif route == "/v1/plugins/execute":
         name = request.get("tool")
         tool = next((item for item in catalog if item["name"] == name), None)

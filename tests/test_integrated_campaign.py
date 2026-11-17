@@ -94,6 +94,12 @@ class ComposedCampaignTest(unittest.TestCase):
             self.assertEqual(discovery.returncode,0,discovery.stdout+discovery.stderr)
             self.assertNotIn('gpu-wiki',discovery.stdout)
             self.assertNotIn('kernel-wiki',discovery.stdout)
+            self.assertNotIn('aka-execution',discovery.stdout)
+            self.assertNotIn('atrex-gpu-gateway',discovery.stdout)
+            import re
+            measurement_skill=cwd/'.claude/skills/gpu-measurement'
+            guidance='\n'.join(p.read_text() for p in measurement_skill.rglob('*.md'))
+            self.assertEqual(set(re.findall(r'--kind ([a-z][a-z-]*)',guidance)),set(available))
             self.assertEqual(available,list(launch.request.runtime.agate_tools))
             if 'profile' in available:
                 self.assertEqual(help_result.returncode,0,help_result.stderr)

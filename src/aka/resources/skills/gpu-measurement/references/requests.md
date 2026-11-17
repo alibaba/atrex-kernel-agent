@@ -1,76 +1,109 @@
 # Runtime measurement requests
 
-## Discover enabled operations
-
-Run `python3 tools/sandbox.py --help` for this Campaign's available Agate tools. The default is
-`env`, `evaluate`, and `command`; the launch configuration can select a different set. Only use
-listed operations. Wiki, Direction/Experiment and submit-kernel have separate configuration.
+Run `python3 tools/sandbox.py --help` for this Campaign's enabled tools.
 Read `python3 tools/sandbox.py --kind OPERATION --help` before using unfamiliar options.
-The Supervisor discovers safe native options from its installed Agate SDK. The returned schema
-is authoritative for that operation; never transfer flags between kinds. Credentials, hardware,
-evaluator inputs, retry policy and execution authority belong to the Supervisor.
+The returned schema is authoritative for that Runtime tool, including its supported native Agate
+options. Hardware, credentials, evaluator inputs and infrastructure retries belong to the Supervisor.
+Wiki, research records and submission use their separately installed Skills.
 
-## Evaluate and compare
-
-When Evaluate is enabled:
+## evaluate
 
 ```bash
 python3 tools/sandbox.py --kind evaluate --no-sync
 # Atrex-Bench only; diagnostic rather than full submission evidence:
 python3 tools/sandbox.py --kind evaluate --mode correctness_only --no-sync
-# ABBA is part of Evaluate; baseline must be reachable in Agent Git:
+# ABBA comparison; baseline must be reachable in Agent Git:
 python3 tools/sandbox.py --kind evaluate --baseline-commit FULL_GIT_COMMIT --comparison-repeats 2 --no-sync
 ```
 
-Commit the complete candidate and keep Git clean for Kernel-bound requests. Full passing standard
-Evaluate with complete per-Shape performance supports submit-kernel. Custom inputs, subsets and
-comparisons do not replace it. SOL uses its official workload through a private compatibility path;
-Atrex-Bench-specific typed input/mode options do not apply to SOL. Omitted timing options inherit
-Campaign defaults; explicit options are validated without silent clipping. Query the operation's help
-for effective warmup, benchmark and timeout settings.
+`--comparison-repeats` is the comparison sample count: use an even integer from 2 to 16.
+Each native ABBA block supplies two samples per candidate.
 
-## Custom remote work and environment discovery
+Commit the complete candidate and keep Git clean. Standard full Evaluate with passing correctness
+and complete per-Shape performance supports submit-kernel. Subsets, custom inputs and ABBA are
+diagnostic and do not replace it. ABBA compares the current candidate with the specified baseline
+commit; Runtime exports both source trees. There is no separate comparison tool.
+SOL uses its official workload; Atrex-Bench-specific input/mode options do not apply to SOL.
+Omitted timing options inherit Campaign policy; explicit options are validated without silent
+clipping. Query this tool's help for effective warmup, benchmark and timeout settings.
 
-When the corresponding kind is enabled:
+## command
 
 ```bash
-python3 tools/sandbox.py --kind env
 python3 tools/sandbox.py --kind command -- python3 -m scratch.probe
 ```
 
-Command uploads the engineering workspace, including candidate, scratch and safe tools, and
-synchronizes scratch artifacts back. Git internals, control files, Skills and bulk records are
-excluded. Use module form for Python scripts so the project root stays importable. Jobs are fresh
-and stateless; packages, processes and other remote state are not retained between calls.
-Custom code may compile, profile or test hypotheses, but cannot replace official full evaluation.
-Env observes the remote target, not the local Agent host. Its task_worker_requirements identifies
-the Task's dependency pins; match these when selecting imports and APIs.
+Uploads the engineering workspace, including candidate, scratch and safe tools, and synchronizes
+scratch artifacts back. Git internals, control files, Skills and bulk records are excluded.
+Use module form for Python scripts so the workspace root stays importable. Custom code may compile,
+profile or test hypotheses, but does not replace official evaluation. Packages, processes and other
+remote state are not retained between calls.
+The receipt includes complete stdout, stderr and the exit code, including failed commands.
+
+## env
+
+```bash
+python3 tools/sandbox.py --kind env
+```
+
+Observes the remote target, not the local Agent host. Hardware defaults to the Campaign selection.
+The complete redacted capability result is returned and archived, without becoming correctness
+evidence. Its task_worker_requirements identifies Task dependency pins; match these when selecting
+imports and APIs. Read this tool's help for optional capability queries.
+
+## profile
+
+```bash
+python3 tools/sandbox.py --kind profile --help
+python3 tools/sandbox.py --kind profile
+```
+
+Profiles the current Kernel with managed inputs. Use this tool's help for supported profilers,
+levels, counters and Shape selection. Counters and profiler classifications are diagnostic clues,
+not correctness evidence or proof of a causal mechanism.
+
+## dev
+
+```bash
+python3 tools/sandbox.py --kind dev -- python3 -c 'print("probe")'
+```
+
+Runs self-contained probes without uploading the candidate workspace automatically. Declare every
+extra workspace input with --input and returned files with --sync. This is diagnostic evidence;
+remote state is not retained between calls.
+The receipt includes complete stdout, stderr and the exit code, including failed probes.
+
+## check
+
+```bash
+python3 tools/sandbox.py --kind check --help
+python3 tools/sandbox.py --kind check
+```
+
+Requests compilation diagnostics for the current Kernel. A successful check does not establish
+full workload correctness or performance, and may not exercise kernels compiled on first launch.
+
+## disassemble
+
+```bash
+python3 tools/sandbox.py --kind disassemble --help
+python3 tools/sandbox.py --kind disassemble
+```
+
+Requests assembly diagnostics for the current Kernel. Query this tool's help for supported output
+formats. Assembly is diagnostic evidence, not a correctness or performance measurement.
 
 ## Waiting and results
 
 Run calls in the foreground without shell timeouts or parallel duplicates. Wait for the same call;
 use the Agent backend's wait/output facility if it backgrounds a long command. Do not edit the
-candidate while measurement is pending. `--no-sync` disables artifact synchronization, not waiting.
+candidate while measurement is pending. --no-sync disables artifact synchronization, not waiting.
 
-Runtime returns the complete canonical operation/status/result receipt and record_path. The same
-result is saved at records/<gateway_record_id>.json; inspect it with ordinary file/JSON tools when
-needed later. Inspect correctness and inner errors even when the transport completed successfully.
-Kernel identity is an Agent Git commit. Read historical source with Git and saved results directly.
+Runtime returns the canonical operation/status/result receipt and record_path. The same result is
+saved at records/<gateway_record_id>.json; inspect it with ordinary file/JSON tools when needed.
+Inspect correctness and inner errors even when transport completed successfully. Kernel identity
+is an Agent Git commit. Read historical source with Git and saved results directly.
 
 Follow error.next_action and upstream diagnostics. Runtime owns infrastructure retries. A lost
 connection does not prove that no remote job ran; do not add a blind retry loop. Compile, import,
-correctness and candidate policy errors require code repair. Preserve uncertainty in interpretations;
-profiler classifications and custom timings are diagnostic clues, not proofs of causal mechanisms.
-
-## Optional Wiki
-
-Wiki availability is campaign-configured. Only use these commands when the session mounts
-`skills/KernelWiki/SKILL.md`; read that Skill for query scope and hardware identity.
-Do not depend on a `gpu-wiki/` source directory in the Agent workspace. When Wiki is explicitly disabled,
-use supplied public knowledge and measured evidence instead.
-
-```bash
-python3 tools/sandbox.py --kind wiki-query "Triton reduction on sm_120: measured bandwidth bottleneck"
-python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverage
-python3 tools/sandbox.py --kind wiki-hardware --product B200
-```
+correctness and candidate policy errors require code repair.
