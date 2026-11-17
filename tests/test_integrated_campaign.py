@@ -37,8 +37,8 @@ class ComposedCampaignTest(unittest.TestCase):
         self.problem=bench/'data/vector-add'
         shutil.copytree(ROOT/'skills/atrex-aka-light/examples/native-atrex-bench-vector-add',self.problem)
 
-    def run_campaign(self,mode,modules,search=None, evaluate=False, abba=False, agate_tools=("env", "evaluate", "command")):
-        launch=create_launch(self.problem,workspace_base=self.root/('runs-'+mode+'-'+'-'.join(modules)+'-'+str(search)),
+    def run_campaign(self,mode,modules,search=None, evaluate=False, abba=False, agate_tools=("env", "evaluate", "command"), wiki=None):
+        launch=create_launch(self.problem,workspace_base=self.root/('runs-'+mode+'-'+'-'.join(modules)+'-'+str(search)+'-wiki-'+str(wiki)),
             runtime=CampaignRuntimeSettings(agate_tools=agate_tools),
             settings=WorkflowSettings(platform='L20N', framework='cuda' if mode=='ultra' else '',optimization_mode=mode,max_iters=2))
         calls=[];tool_replies=[];gpu_calls=[]
@@ -90,8 +90,10 @@ class ComposedCampaignTest(unittest.TestCase):
             discovery=subprocess.run([sys.executable,'-m','aka.resources.cli','list'],cwd=cwd,
                 env={**os.environ,**env,'PYTHONPATH':str(ROOT/'src')},capture_output=True,text=True)
             self.assertEqual(discovery.returncode,0,discovery.stdout+discovery.stderr)
-            self.assertNotIn('gpu-wiki',discovery.stdout)
-            self.assertNotIn('kernel-wiki',discovery.stdout)
+            assert_wiki = self.assertNotIn if wiki is False else self.assertIn
+            assert_wiki('gpu-wiki',discovery.stdout)
+            if wiki is False:
+                self.assertNotIn('kernel-wiki',discovery.stdout)
             self.assertNotIn('aka-execution',discovery.stdout)
             self.assertNotIn('atrex-gpu-gateway',discovery.stdout)
             import re
@@ -175,7 +177,8 @@ class ComposedCampaignTest(unittest.TestCase):
             self.assertIn('counters',json.dumps(environment['result']))
             self.assertTrue((cwd/environment['record_path']).exists())
             return json.dumps({'type':'result','subtype':'success','usage':{'input_tokens':12,'output_tokens':3}})+'\n','',0,False
-        config={'tool_modules':list(modules),**({'search':search} if search else {})}
+        config={'tool_modules':list(modules),**({'search':search} if search else {}),
+                **({'wiki':wiki} if wiki is not None else {})}
         with patch.dict(os.environ, {'AKA_HOST_CANARY':'must-stay-on-host','ANTHROPIC_API_KEY':'host-only-test-key'}), \
              patch('aka.workflow.light.runtime_preparation.prepare_runtime',return_value=('sm_89','fake')), \
              patch('aka.agent.provider.Agent._execute',fake_agent), \
@@ -211,8 +214,10 @@ class ComposedCampaignTest(unittest.TestCase):
         self.run_campaign("fast",(),evaluate=True,abba=True)
 
     def test_modes_and_research_modules(self):
-        for mode,modules in [('fast',()),('performance',('directions',)),('ultra',('experiments',)),('fast',('directions','experiments'))]:
-            with self.subTest(mode=mode,modules=modules):self.run_campaign(mode,modules)
+        for mode,modules,wiki in [('fast',(),None),('performance',('directions',),None),
+                                 ('ultra',('experiments',),None),('fast',('directions','experiments'),None),
+                                 ('fast',(),False)]:
+            with self.subTest(mode=mode,modules=modules,wiki=wiki):self.run_campaign(mode,modules,wiki=wiki)
 
     def test_synchronous_and_asynchronous_persistent_lineages(self):
         for synchronization in ('synchronous','asynchronous'):

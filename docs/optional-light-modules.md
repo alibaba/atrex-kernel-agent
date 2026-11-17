@@ -12,6 +12,21 @@ Bubblewrap requires Linux. On macOS use a Lima VM or native execution. Proc mode
 `private` or `host`; Aone Sandbox requires `host`. Final-source policy is independent of
 this boundary: Fast, Performance and Ultra work with either profile.
 
+## Independent Wiki execution
+
+GPU Wiki is enabled by default in both profiles. To disable Wiki queries and their
+Agent-facing tools and Skills, set `wiki: false` in the Workflow composition patch:
+
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "workflow", "config": {"wiki": false}}]
+}
+```
+
+Include any other intended Workflow options in the same patch. Mounted reference
+directories remain available regardless of this setting.
+
 ## Research and parallel search
 
 Direction and Experiment are disabled by default. Select them in a composition patch:

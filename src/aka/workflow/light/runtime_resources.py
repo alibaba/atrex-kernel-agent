@@ -32,7 +32,7 @@ def install_runtime_resources(campaign, workspace: Path) -> None:
     campaign._module_resources.install(workspace)
 
 
-def agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = False) -> str:
+def agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = True) -> str:
     root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
     wiki_policy = "" if wiki else "GPU Wiki queries are disabled for this Campaign; use the supplied reference directories instead. "
     return (f"- `{root}/skills/` contains the selected module Skills. "

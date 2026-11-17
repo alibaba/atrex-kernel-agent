@@ -18,7 +18,7 @@ class WorkflowOptions:
     output_limit_recovery_retries: int = 2
     dependency_policy_recovery_retries: int = 2
     search: SearchOptions | dict | None = None
-    wiki: bool = False
+    wiki: bool = True
     wiki_options: dict | None = None
     tool_modules: tuple[str, ...] | list[str] = ()
     inherit_state: bool = True

@@ -33,7 +33,7 @@ Config = {"type": "object", "properties": {
     }, "additionalProperties": False},
 }, "additionalProperties": False}
 Defaults = {"startup": True, "numerical_validation": False,
-            "wiki": False, "tool_modules": [], "inherit_state": True, "queue_timeout": 60,
+            "wiki": True, "tool_modules": [], "inherit_state": True, "queue_timeout": 60,
             "output_limit_recovery_retries": 2, "search": {}}
 
 
