@@ -25,6 +25,9 @@ def initialize_agent(workspace: Path, content) -> str:
         if _git(workspace, "ls-files"):
             raise ValueError("Uninitialized Agent repository already has staged files")
     selected = selected_file_bytes(workspace, content.files, reserved=(".gitignore",))
+    # Validate the leaf and selected descendants first, then accept aliases in
+    # the parent path (such as macOS /tmp) for subsequent filesystem operations.
+    workspace = workspace.resolve()
     if not selected:
         raise ValueError("Initial Agent source must contain files")
     for name, data in selected.items():

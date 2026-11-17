@@ -9,6 +9,12 @@ import stat
 import uuid
 
 
+def file_signature(value):
+    """Identity, permissions, aliases and content metadata for stable file IO."""
+    return (value.st_dev, value.st_ino, value.st_mode, value.st_nlink,
+            value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+
+
 def fsync_directory(directory: Path) -> None:
     """Persist prior directory-entry changes on supported POSIX filesystems."""
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
@@ -122,7 +128,8 @@ def open_private_directory(path):
         os.close(descriptor)
 
 
-def _open_regular(path):
+def open_regular_file(path):
+    """Open a regular binary input without following any path-component links."""
     path = Path(path).absolute()
     directory = os.open(path.anchor, os.O_RDONLY | os.O_DIRECTORY)
     try:
@@ -149,5 +156,5 @@ def read_regular_bytes(path, limit=-1):
     A limit of -1 reads the whole file. This performs no size-policy decision
     and never follows links in the file or its parent components.
     """
-    with _open_regular(path) as stream:
+    with open_regular_file(path) as stream:
         return stream.read(limit)

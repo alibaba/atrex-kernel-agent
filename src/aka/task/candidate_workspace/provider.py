@@ -91,4 +91,6 @@ class GitCandidateWorkspace(GitSnapshots):
 
     def install_files(self, workspace, files, *, immutable=False):
         from .content import install_files
-        return install_files(workspace, files, immutable=immutable)
+        from aka.resources.workspace import independent_resources
+        with independent_resources(files) as (selected,):
+            return install_files(workspace, selected, immutable=immutable)
