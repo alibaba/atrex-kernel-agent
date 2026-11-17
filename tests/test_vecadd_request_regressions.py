@@ -61,6 +61,71 @@ def test_upstream_validation_details_reach_agent_receipt(status, reason):
     assert 'no GPU Job' in receipt['result']['next_action']
 
 
+@pytest.mark.parametrize('operation', ['evaluate', 'same_allocation_abba'])
+@pytest.mark.parametrize('failed', [False, True])
+def test_gateway_policy_stays_in_execution_audit_not_agent_receipt(operation, failed):
+    from copy import deepcopy
+    from aka.contracts.execution import ExecutionAttempt
+    from aka.contracts.execution_recovery import ExecutionCause
+    from aka.execution.gateway.diagnostics import recovery_diagnostics
+    from aka.evaluation.tool_results import compact_receipt, PREFIXES
+
+    jobs = [{'replay_policy': None, 'execution_state': state}
+            for state in ('unknown', 'submitted')]
+    policies = tuple(item for job in jobs for item in recovery_diagnostics(job))
+    budget = ExecutionDiagnostic('budget', 'job-runtime-budget-unconfirmed', {'requested_s': 300})
+    metrics = {'correct': True, 'latency_us_geomean': 4., 'latency_us_by_shape': {'0': 4.}}
+    sample = metrics if operation == 'evaluate' else {'correct': True, 'candidate': metrics, 'baseline': metrics}
+    stdout = '' if failed else PREFIXES[operation] + json.dumps(sample) + '\n'
+    details = {'validation_errors': [{'loc': ['options'], 'msg': 'invalid option'}]}
+    error = ExecutionCause('validation', 'request_validation_failed', 'invalid request', details)
+    execution = JobResult(2 if failed else 0, stdout=stdout,
+        transport_status='failed' if failed else 'succeeded',
+        facts=ExecutionFacts(disposition='not_submitted' if failed else 'terminal'),
+        attempts=tuple(ExecutionAttempt(operation, 'unknown', diagnostics=recovery_diagnostics(job),
+                                        backend_response=job) for job in jobs),
+        diagnostics=(*policies, budget), causes=(error,) if failed else ())
+    audit = deepcopy(execution.as_dict())
+    response = with_execution_error({'exit_code': execution.returncode, 'stdout': stdout, 'stderr': ''},
+                                    execution, operation=operation)
+    agent = compact_receipt(canonical_result(response, {'operation': operation}))
+    assert agent['result']['diagnostics'] == [
+        {'category': budget.category, 'code': budget.code, 'details': dict(budget.details)}]
+    if failed:
+        assert agent['result']['error']['code'] == 'request_validation_failed'
+        assert agent['result']['error']['details'] == details
+    else:
+        assert agent['result']['correct'] is True
+        side = agent['result'] if operation == 'evaluate' else agent['result']['candidate']
+        assert side['latency_us_geomean'] == 4.
+    assert execution.as_dict() == audit
+    assert [dict(attempt.backend_response) for attempt in execution.attempts] == jobs
+    assert len([d for d in execution.diagnostics if d.code == 'gateway-policy']) == 2
+
+
+@pytest.mark.parametrize('operation', ['evaluate', 'same_allocation_abba'])
+@pytest.mark.parametrize('other_diagnostics', [False, True])
+def test_reused_gateway_policy_diagnostics_are_removed_without_rewriting_record(operation, other_diagnostics):
+    from copy import deepcopy
+    from aka.evaluation.tool_results import compact_receipt
+
+    policies = [{'category': 'recovery', 'code': 'gateway-policy',
+                 'details': {'replay_policy': None, 'execution_state': state}}
+                for state in ('unknown', 'submitted')]
+    actionable = {'category': 'qualification', 'code': 'performance-incomplete', 'details': {'shape_id': '1'}}
+    error = {'error_class': 'infra', 'details': {'execution_state': 'unknown', 'replay_policy': 'never'}}
+    archived = {'operation': operation, 'status': 'failed', 'gateway_record_id': 'gateway-' + 'a' * 32,
+                'result': {'diagnostics': policies + ([actionable] if other_diagnostics else []),
+                           'error': error, 'stdout': json.dumps(policies), 'stderr': 'original stderr'}}
+    original = deepcopy(archived)
+    for public in (canonical_result({'agent_result': archived}, {'operation': operation}), compact_receipt(archived)):
+        assert public['result'].get('diagnostics') == ([actionable] if other_diagnostics else None)
+        assert public['result']['error'] == error
+        assert public['result']['stdout'] == json.dumps(policies)
+        assert public['result']['stderr'] == 'original stderr'
+    assert archived == original
+
+
 def test_wiki_exclusion_survives_child_registry_reconstruction(tmp_path, monkeypatch):
     from aka.resources.plugins import PluginRegistry
     from aka.contracts.agent_resources import AgentSkill

@@ -199,6 +199,10 @@ class AgentToolSession(Protocol):
     environment: Mapping[str, str]
     filesystem_access: AgentAccess
 
+    def cancel(self) -> None:
+        """Revoke this grant, cancel its operations and stop its bound Agent invocation."""
+        ...
+
 
 @dataclass(frozen=True)
 class AgentObservation:

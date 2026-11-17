@@ -8,6 +8,7 @@ the next checkout: every trajectory keeps its own HEAD and provider Session.
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack
 from dataclasses import replace
 import hashlib
 import json
@@ -1209,11 +1210,12 @@ class EpisodeSearchDriver:
         return sum(self._state(child)["tokens"] for child in self.children.values())
 
     def interrupt(self):
-        # Stop further HTTP work. Running Sessions retain their normal bounded
-        # process lifecycle and unfinished Episodes retain their recovery points.
+        # Runtime cancellation also stops its bound Agent invocation through
+        # the public owner grant. Keep unfinished workspaces for recovery.
         self.cancel_event.set()
-        for child in self.children.values():
-            child.close_runtime()
+        with ExitStack() as cleanup:
+            for child in self.children.values():
+                cleanup.callback(child.close_runtime)
 
     def close(self):
         self.interrupt()

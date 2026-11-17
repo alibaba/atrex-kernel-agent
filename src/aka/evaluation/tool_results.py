@@ -31,6 +31,23 @@ PUBLIC_IDENTITIES = (
     "baseline_kernel_commit_id",
 )
 IDENTITIES = (*PRIVATE_IDENTITIES, *PUBLIC_IDENTITIES)
+
+
+def _omit_gateway_policy(receipt: dict) -> dict:
+    """Remove internal recovery observations from an owned Agent projection."""
+    for value in (receipt, receipt.get("result")):
+        if not isinstance(value, dict) or not isinstance(value.get("diagnostics"), list):
+            continue
+        diagnostics = [item for item in value["diagnostics"]
+                       if not (isinstance(item, dict) and item.get("category") == "recovery"
+                               and item.get("code") == "gateway-policy")]
+        if diagnostics:
+            value["diagnostics"] = diagnostics
+        else:
+            value.pop("diagnostics", None)
+    return receipt
+
+
 def compact_receipt(agent_result: dict) -> dict:
     """Return the complete canonical Agent result stored in the Gateway Record."""
     receipt = deepcopy(agent_result)
@@ -39,7 +56,7 @@ def compact_receipt(agent_result: dict) -> dict:
     record_id = receipt.get("gateway_record_id")
     if isinstance(record_id, str):
         receipt["record_path"] = f"records/{record_id}.json"
-    return receipt
+    return _omit_gateway_policy(receipt)
 
 
 def with_execution_error(response: dict, receipt, *, operation=None) -> dict:
@@ -60,13 +77,7 @@ def with_execution_error(response: dict, receipt, *, operation=None) -> dict:
         return response
     information = [{"category": item.category, "code": item.code, "details": dict(item.details)}
                    for item in receipt.diagnostics if item.category in INFORMATION_CATEGORIES
-                   and item.code not in {"replay-forbidden", "retained-instruction"}]
-    for item in information:
-        if item["category"] == "recovery" and item["code"] == "gateway-policy":
-            try:
-                item["details"] = json.loads(item["details"]["payload"])
-            except (KeyError, TypeError, ValueError):
-                pass  # Preserve unrecognized retained information without interpreting it.
+                   and item.code not in {"replay-forbidden", "retained-instruction", "gateway-policy"}]
     response = {**response, **({"diagnostics": information} if information else {})}
     stdout = response.get("stdout", "")
     for line in stdout.splitlines():
@@ -146,8 +157,9 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             result["baseline_kernel_commit_id"] = result.pop("baseline_kernel_id")
         if "baseline_kernel_commit_id" in result and "kernel_commit_id" in result:
             result["candidate_kernel_commit_id"] = result.pop("kernel_commit_id")
-        return (latency_only_result(result) if result.get("operation", request.get("operation"))
-                in {"evaluate", "same_allocation_abba"} else result)
+        return _omit_gateway_policy(latency_only_result(result)
+            if result.get("operation", request.get("operation")) in {"evaluate", "same_allocation_abba"}
+            else result)
     operation = request["operation"]
     if operation in {"dev", "command"}:
         result = {"stdout": response.get("stdout", ""), "stderr": response.get("stderr", ""),
@@ -288,8 +300,8 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
         # streams and exit code without obscuring them with a synthetic
         # result_unavailable/outcome_unknown wrapper.
         result["exit_code"] = response.get("exit_code")
-    return {"operation": "evaluate" if operation == "same_allocation_abba" else operation,
-            "status": status, "result": result, **identity}
+    return _omit_gateway_policy({"operation": "evaluate" if operation == "same_allocation_abba" else operation,
+            "status": status, "result": result, **identity})
 
 
 def seal_response(response: dict, request: dict, *, record_id=None, kernels=None) -> dict:

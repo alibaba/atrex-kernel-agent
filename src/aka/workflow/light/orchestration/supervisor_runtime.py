@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from aka.contracts.evaluation import derived_evaluation_timeout
+from aka.contracts.agent import AgentToolSession
 
 import json
 import argparse
@@ -20,7 +21,7 @@ import time
 import traceback
 import uuid
 from datetime import datetime, timezone
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from collections.abc import Mapping
 from aka.contracts.evaluation import DEFAULT_CANDIDATE_TIMEOUT as DEFAULT_EVALUATION_STEP_TIMEOUT, DEFAULT_SHAPE_BATCH_SIZE as SHAPE_BATCH_SIZE
 from dataclasses import dataclass, field
@@ -225,8 +226,8 @@ class Capability:
     request_id: str = ""
     journal: JournalBinding | None = None
     parent: Capability | None = field(default=None, repr=False)
-    # In-memory controller object, never a token or PID supplied by Agent.
-    session_control: object | None = field(default=None, repr=False)
+    # Public owner grant; process ownership stays in the shared Agent layer.
+    agent_session: AgentToolSession | None = field(default=None, repr=False)
     cancel_event: object | None = field(default=None, repr=False)
     filesystem_access: object | None = field(default=None, repr=False)
 
@@ -528,22 +529,25 @@ class SupervisorRuntime:
 
     def close(self):
         with self.lock:
+            if self.closed:
+                return
             self.closed = True
             capabilities = list(self.capabilities.values())
             self.capabilities.clear()
-        for capability in capabilities:
-            if capability.session_control:
-                capability.session_control.kill()
-        try:
-            self.temporary.cleanup()
-        finally:
-            self._wiki_execution.dispose()
+        # Attempt every cancellation even if one process or filesystem cleanup
+        # fails, and revoke Agent work before removing its Runtime staging area.
+        with ExitStack() as cleanup:
+            cleanup.callback(self._wiki_execution.dispose)
+            cleanup.callback(self.temporary.cleanup)
+            for capability in capabilities:
+                if capability.agent_session is not None:
+                    cleanup.callback(capability.agent_session.cancel)
 
     def revoke(self, token: str):
         with self.lock:
             capability = self.capabilities.pop(token, None)
-        if capability and capability.session_control:
-            capability.session_control.kill()
+        if capability and capability.agent_session is not None:
+            capability.agent_session.cancel()
 
 
 
@@ -633,6 +637,14 @@ class SupervisorRuntime:
                 ("workflow.plugins", "/v1/plugins/execute")))
         try:
             with self.agent.tool_session(workspace, access=access, bindings=bindings, deadline=deadline) as grant:
+                with self.lock:
+                    live = self._live(capability)
+                    if live:
+                        capability.agent_session = grant
+                if not live:
+                    # close()/revoke() may race with owner grant creation.
+                    grant.cancel()
+                    raise SessionRevokedError("Runtime closed while binding the Agent Session")
                 incremental = grant.filesystem_access
                 combined = normalize_access(FilesystemAccess((*access.mounts, *incremental.mounts),
                     tuple(dict.fromkeys((*access.hidden_paths, *incremental.hidden_paths))),
