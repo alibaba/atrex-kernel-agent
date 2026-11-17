@@ -18,6 +18,10 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from aka.resources.bundles import resource_path as resource
+from aka.workflow.light.long_horizon.review_archive import (
+    review_root, review_revision_root, reviewer_environment, reviewer_workspace,
+)
+from aka.workflow.light.support.paths import supervisor_measurement_root
 
 from aka.workflow.light.orchestration.constants import (
     AGENT_PROBLEM_GENERATION_PROMPT,
@@ -485,6 +489,23 @@ class Campaign:
         resume_session_id: str | None = None,
         archive_root: Path | None = None,
     ) -> dict[str, object]:
+        source = Path(evidence_root).resolve(strict=True)
+        from aka.core.filesystem import read_regular_bytes
+        target = json.loads(read_regular_bytes(source / "submissions" / "target.json"))
+        identity = target.get("direction_id") or target.get("experiment_id")
+        if not identity:
+            raise ValueError("Reviewed claim requires a stable Direction/Experiment ID")
+        root = review_root(supervisor_measurement_root(self.workspace), identity)
+        with reviewer_workspace(root) as workspace:
+            shutil.copytree(source, workspace, dirs_exist_ok=True)
+            return self._review_research_claim_in_workspace(
+                workspace, resume_session_id=resume_session_id, archive_root=archive_root,
+            )
+
+    def _review_research_claim_in_workspace(
+        self, evidence_root: Path, *, resume_session_id: str | None = None,
+        archive_root: Path | None = None,
+    ) -> dict[str, object]:
         """Run the strict three-tier reviewer with the Qwen-only provider policy."""
         from aka.workflow.light.orchestration.session_tail import read_regular_bytes
         from aka.workflow.light.orchestration.infrastructure_retry import check_review_service
@@ -526,24 +547,10 @@ class Campaign:
             "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
             "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
         }
-        from aka.agent.execution.home import SESSION_HOME_ROOT_ENV
-        from aka.workflow.light.support.paths import supervisor_campaign_root
-
-        campaign_workspace = Path(getattr(self, "workspace", evidence_root.parent))
-        base_environment[SESSION_HOME_ROOT_ENV] = str(
-            supervisor_campaign_root(campaign_workspace)
-            / "research-review-session-homes"
-        )
+        base_environment.update(reviewer_environment(evidence_root.parent))
         runtime = getattr(self, "_supervisor_runtime", None)
-        runtime_root = getattr(runtime, "root", None)
-        capture_base = (
-            Path(runtime_root) / "review-capture" / "claims" / evidence_root.name
-            if runtime_root is not None
-            else Path(tempfile.gettempdir())
-            / "atrex-light-review-capture"
-            / "claims"
-            / f"{evidence_root.name}-{uuid.uuid4().hex}"
-        )
+        capture_base = (Path(archive_root) if archive_root is not None
+                        else evidence_root.parent / "attempts" / uuid.uuid4().hex) / "captures"
         archive_root = Path(archive_root).resolve() if archive_root is not None else None
         session_attempts: list[dict[str, object]] = []
 
@@ -1096,15 +1103,13 @@ class Campaign:
         conversation: Path | None = None,
         token_usage: Path | None = None,
     ) -> list[str]:
-        from aka.workflow.light.support.paths import supervisor_submission_root
-        from aka.workflow.light.long_horizon.submissions import submission_revision_root
         from aka.workflow.light.long_horizon.review_archive import archive_review
 
-        record_path = submission_revision_root(
-            supervisor_submission_root(workspace),
+        record_path = review_revision_root(
+            supervisor_measurement_root(workspace),
             submission_id,
             submission_revision,
-        ) / "review"
+        )
         try:
             archive_review(
                 record_path,
@@ -1134,7 +1139,6 @@ class Campaign:
     ) -> list[str]:
         """Delegate complete candidate policy review to a fresh, isolated agent."""
         from aka.workflow.light.orchestration.infrastructure_retry import check_review_service
-        from aka.workflow.light.support.paths import supervisor_submission_root
 
         cache_key = candidate_digest + ":" + self.agent_cli
         cached = self._production_review_cache.get(cache_key)
@@ -1155,13 +1159,11 @@ class Campaign:
                 return list(cached_errors)
             previous_submission_id = review_record.get("submission_id")
             previous_revision = review_record.get("submission_revision", 1)
-            from aka.workflow.light.long_horizon.submissions import submission_revision_root
-
-            previous_root = submission_revision_root(
-                supervisor_submission_root(self.workspace),
+            previous_root = review_revision_root(
+                supervisor_measurement_root(self.workspace),
                 str(previous_submission_id),
                 int(previous_revision),
-            ) / "review"
+            )
             reused_record = {
                 **review_record,
                 "submission_id": submission_id,
@@ -1170,6 +1172,10 @@ class Campaign:
                 "reused_from_submission_id": previous_submission_id,
                 "reused_from_submission_revision": previous_revision,
             }
+            if previous_submission_id != submission_id:
+                # Verdict reuse does not transfer another Review family's
+                # native Home or resumable session ownership.
+                reused_record.pop("session_id", None)
             persistence_errors = self._persist_production_review_record(
                 self.workspace,
                 submission_id,
@@ -1189,30 +1195,13 @@ class Campaign:
             specify_dsl=self.specify_dsl,
         )
         pinned_dsl = effective_dsl_policy == "pinned"
-        from aka.agent.execution.home import SESSION_HOME_ROOT_ENV
-        from aka.workflow.light.support.paths import supervisor_campaign_root
-
-        supervisor_root = supervisor_campaign_root(self.workspace)
         runtime = getattr(self, "_supervisor_runtime", None)
-        runtime_root = getattr(runtime, "root", None)
-        capture_root = (
-            (
-                Path(runtime_root)
-                if runtime_root is not None
-                else supervisor_root
-            )
-            / "review-capture"
-            / "final-source"
-            / (
-                f"{submission_id}-v{submission_revision}"
-                if submission_id is not None
-                else uuid.uuid4().hex
-            )
-        )
-        with tempfile.TemporaryDirectory(
-            prefix="atrex-production-review-"
-        ) as directory:
-            review_workspace = Path(directory)
+        identity = submission_id or "review-" + uuid.uuid4().hex
+        family_root = review_root(supervisor_measurement_root(self.workspace), identity)
+        revision_root = review_revision_root(supervisor_measurement_root(self.workspace), identity, submission_revision)
+        # Each retry has its own capture; failed attempts remain auditable.
+        capture_root = revision_root / "captures" / uuid.uuid4().hex
+        with reviewer_workspace(family_root) as review_workspace:
             candidate_root = review_workspace / "candidate"
             source_hashes: dict[str, str] = {}
             for source in _production_review_candidate_paths(workspace):
@@ -1273,11 +1262,7 @@ class Campaign:
                 review_environment = {
                     **self.agent_boundary_environment("production-review"),
                     "ATREX_SESSION_CAPTURE_DIR": str(capture_root),
-                    SESSION_HOME_ROOT_ENV: str(
-                        supervisor_root
-                        / "review-session-homes"
-                        / "final_source_policy_review"
-                    ),
+                    **reviewer_environment(family_root),
                 }
                 result = self._run_session(
                     review_workspace,
@@ -1303,10 +1288,37 @@ class Campaign:
                 from aka.workflow.light.orchestration.infrastructure_retry import ReviewerOutputUnavailable
 
                 session_archive = latest_complete_session_archive(capture_root)
+                # Archive execution (including failure) before validating the
+                # verdict. A rejected/unavailable reviewer is still auditable.
+                invocation_record = {
+                    "review_execution": "executed", "accepted": False,
+                    "availability": "unavailable", "agent_runtime": self.agent_cli,
+                    "session_id": result.session_id,
+                    "resumed_from_session_id": resume_session_id,
+                    "submission_id": submission_id, "submission_revision": submission_revision,
+                    "reviewed_at": datetime.now(timezone.utc).isoformat(),
+                    "exit_status": result.exit_status, "timed_out": result.timed_out,
+                    "stdout_tail": result.stdout_tail, "stderr_tail": result.stderr_tail,
+                }
+                from aka.workflow.light.long_horizon.review_archive import archive_review
+                archive_review(
+                    revision_root, result=invocation_record,
+                    conversation=session_archive.conversation if session_archive else None,
+                    token_usage=session_archive.token_usage if session_archive else None,
+                )
+                raw_verdict = review_workspace / "dependency_review.json"
+                if raw_verdict.is_file() and not raw_verdict.is_symlink():
+                    from aka.workflow.light.long_horizon.review_archive import _copy_regular
+                    _copy_regular(raw_verdict, capture_root / "dependency_review.json")
                 if session_archive is None:
                     raise ReviewerOutputUnavailable(
                         "independent final-source policy reviewer did not persist "
                         "a complete conversation.jsonl and token-usage.json archive"
+                    )
+                if (resume_session_id and result.exit_status != 0 and self.agent_cli == "codex"
+                        and "no rollout found for thread id" in result.stderr_tail):
+                    raise ReviewerOutputUnavailable(
+                        "Codex reviewer resume storage is unavailable: " + result.stderr_tail
                     )
                 check_review_service(result)
             except ValueError as exc:
@@ -1473,19 +1485,21 @@ class Campaign:
             ),
         )
         stage = f"dependency-review:{digest}:{self.agent_cli}:unbounded"
+        next_resume_id = resume_session_id
+
+        def run_review():
+            nonlocal next_resume_id
+            resume_id, next_resume_id = next_resume_id, None
+            return self._review_production_candidate_once(
+                workspace, framework, require_gluon, candidate_digest=digest,
+                submission_id=submission_id, submission_revision=submission_revision,
+                resume_session_id=resume_id, review_record_sink=review_record_sink,
+            )
+
         try:
             return retry_review(
                 self.workspace, stage,
-                lambda: self._review_production_candidate_once(
-                    workspace,
-                    framework,
-                    require_gluon,
-                    candidate_digest=digest,
-                    submission_id=submission_id,
-                    submission_revision=submission_revision,
-                    resume_session_id=resume_session_id,
-                    review_record_sink=review_record_sink,
-                ),
+                run_review,
                 cancel=getattr(self, "search_cancel", None),
             )
         except ValueError as exc:

@@ -148,6 +148,11 @@ Every managed main-Agent or Review invocation also archives a complete `conversa
 `token-usage.json` under Supervisor-private Campaign state. These raw Review transcripts are not
 projected into the optimizer workspace; only bounded verdicts and explicitly selected historical
 main-Agent evidence may be Agent-visible.
+Review archives live at `measurements/reviews/<submission-id|direction-id|experiment-id>/vN/`.
+The same Review directory owns persistent `home/` and `workspace/` siblings for native CLI resume;
+versioned audit files are never used as a substitute for native resume state. `captures/` retains
+failed and successful invocations. 审查结论、对话、token 及原生恢复状态统一存储在 Measurement
+Store 的对应 Review 目录，失败和重试同样归档，且不向优化 Agent 暴露原生 Session 文件。
 Input, output, cache, total, and reasoning tokens are shown separately. When all Provider counters
 are absent, finalized conversation text supplies a best-effort `estimated` input/output/reasoning
 total while cache fields remain null. A missing reasoning counter is not inferred when other native

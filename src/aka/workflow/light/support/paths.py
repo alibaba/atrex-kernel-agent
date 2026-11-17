@@ -520,13 +520,8 @@ def supervisor_submission_root(workspace: Path) -> Path:
 
 
 def supervisor_review_root(workspace: Path) -> Path:
-    """Return the Campaign staging root for reviews before object attachment.
-
-    Completed reviews live beside the Direction/Experiment revision or Kernel
-    submission they reviewed.  This root contains only short-lived staging
-    directories and legacy migration inputs, never an independent review index.
-    """
-    return supervisor_campaign_base_root(workspace) / ".review-staging"
+    """Private staging for Review revisions in the central Measurement Store."""
+    return supervisor_measurement_root(workspace) / "reviews" / ".staging"
 
 
 def supervisor_runtime_audit_root(workspace: Path) -> Path:

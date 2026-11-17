@@ -15,7 +15,8 @@ for entry in (REPOSITORY_ROOT, SOURCE_ROOT):
 
 from aka.evaluation.response import result_from_response  # noqa: E402
 from aka.experiment.measurement_store import KERNEL_ID, RECORD_ID  # noqa: E402
-from aka.workflow.light.support.paths import supervisor_submission_root  # noqa: E402
+from aka.workflow.light.support.paths import supervisor_submission_root, supervisor_measurement_root  # noqa: E402
+from aka.workflow.light.long_horizon.review_archive import review_revision_root
 from aka.workflow.light.long_horizon.submissions import submissions as stored_submissions  # noqa: E402
 from observability._internal.common import (  # noqa: E402
     Scope, discover_scopes, existing_store, finite_positive, iter_records,
@@ -135,9 +136,8 @@ def submission_rows(scope: Scope) -> list[dict[str, Any]]:
                 / f"v{submission.get('revision', 1)}" / "submission.json"
             ),
             "review_path": str(
-                root / str(submission["submission_id"])
-                / f"v{submission.get('revision', 1)}"
-                / "review"
+                review_revision_root(supervisor_measurement_root(scope.workspace),
+                                     str(submission["submission_id"]), submission.get("revision", 1))
                 / "result.json"
             ),
         })

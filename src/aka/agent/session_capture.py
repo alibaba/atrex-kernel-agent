@@ -273,7 +273,8 @@ class SessionCapture:
         (self.root / "provider").mkdir()
         self.backend = backend
         self.session_id = self.root.name
-        for flag in ("--session-id", "--resume"):
+        session_options = ("--session-id", "--session") if backend == "pi" else ("--session-id", "--resume")
+        for flag in session_options:
             if flag in command and command.index(flag) + 1 < len(command):
                 self.session_id = command[command.index(flag) + 1]
                 break

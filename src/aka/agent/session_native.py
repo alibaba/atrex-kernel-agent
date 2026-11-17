@@ -51,7 +51,8 @@ class HostSessionTranscripts:
         self.label = "provider/native/" + label
         self.patterns = patterns
         self.session_id = ""
-        for option in ("--session-id", "--resume"):
+        session_options = ("--session-id", "--session") if backend == "pi" else ("--session-id", "--resume")
+        for option in session_options:
             if option in command and command.index(option) + 1 < len(command):
                 self.session_id = command[command.index(option) + 1]
                 break

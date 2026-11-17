@@ -173,7 +173,9 @@ class CliAgentRuntime:
             if not request.session_id:
                 raise ValueError("resume_session requires an existing session_id")
             command = self._adapter.resume_command(command, session_id)
-        if self._prepare_environment is not None and (self.id != "codex" or self._prepared_home):
+        from .execution.home import SESSION_HOME_ID_ENV
+        prepare_early = self.id != "codex" or self._prepared_home or bool(environment.get(SESSION_HOME_ID_ENV))
+        if self._prepare_environment is not None and prepare_early:
             environment = self._prepare_environment(
                 request.workspace,
                 session_id,
@@ -214,7 +216,7 @@ class CliAgentRuntime:
                     pass
         # Native one-shot Codex owns its temporary observation home. Prepare only
         # after that choice so the Agent freezes the actual launch identity.
-        if self.id == "codex" and self._prepare_environment is not None and not self._prepared_home:
+        if self.id == "codex" and self._prepare_environment is not None and not prepare_early:
             try:
                 environment = self._prepare_environment(
                     request.workspace,

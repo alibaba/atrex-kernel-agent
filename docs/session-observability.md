@@ -121,21 +121,24 @@ Standalone invocations without a managed Campaign still default to
 
 Set `ATREX_SESSION_CAPTURE_DIR` to override that root for standalone invocations. Relative paths resolve against the invocation workspace. Light selects its Episode-specific archive directory. Every invocation, including same-session repair/resume, gets a new `run-<uuid>`; the provider session ID can remain the same.
 
-Review evidence is stored with the exact object that was reviewed, rather than in a
-separate Review index:
+Review evidence and native resume state share one private directory in the Campaign
+Measurement Store, keyed by the exact Submission, Direction or Experiment identity:
 
 ```text
-research-library/directions/<direction-id>/vN/review/
-research-library/experiments/<experiment-id>/vN/review/
-submissions/<submission-id>/vN/review/
-  result.json
-  conversation.jsonl
-  token-usage.json
-  attempts/aN/             # claim-review retries, when present
+measurements/reviews/<submission-id|direction-id|experiment-id>/
+  home/                   # persistent native CLI state; required for resume
+  workspace/              # stable reviewer cwd, refreshed evidence per invocation
+  session.lock
+  vN/
+    result.json
+    conversation.jsonl
+    token-usage.json
+    captures/             # complete captures and raw output of every attempt
+    attempts/aN/          # claim-review attempt receipts, when present
 ```
 
 Unsupported claim attempts are retained privately under the matching claim identity at
-`attempts/<attempt-id>/review/`; they are not canonical `vN` revisions and are not projected
+`attempts/<attempt-id>/`; they are not canonical `vN` revisions and are not projected
 to the Agent. The Runtime request audit preserves malformed requests that never acquired a
 valid claim identity. Legacy `claim-reviews`, `claim-audit`, `claim-review-index`,
 `review-records` and `review-sessions` directories are read-only migration inputs; current
@@ -146,7 +149,27 @@ stable claim ID and resumes its accepted reviewer Session. The resumed invocatio
 campaign-stable, reviewer-only provider Home while writing a new invocation-scoped capture, so
 later continuation never overwrites the earlier audit. Missing or incompatible native Session
 state causes one fresh-Session retry; lifecycle-only Direction updates do not replace the claim's
-revision-review Session.
+revision-review Session. Native-mode Codex, Claude and Pi Reviews use the same durable Home
+contract as sandboxed Reviews. The Home identity does not depend on the temporary input
+directory or on a provider-assigned thread ID. Execution failures retain their conversation
+and usage even when no valid verdict is produced. Transcript/usage exports alone are audit
+records, not a replacement for the native files needed by `resume`.
+
+Review 归档统一位于 `measurements/reviews/<条目 ID>/`。`home/` 保存 Codex/Claude/Pi
+原生恢复状态，`workspace/` 是独立 Reviewer 的稳定工作目录；每个 `vN/` 分别保留
+结论、完整对话和 token 用量。失败及重试也保留采集记录，不计入主 Agent token。
+
+Pi main Sessions and final-source Reviews resume with `--session <session-id>`, opening
+the native JSONL in the same `PI_CODING_AGENT_DIR` and workspace. Initial invocations use
+`--session-id`; continuation never uses its create-if-missing behavior or the interactive
+`--resume` picker. Agent checkpoints retain and restore the exact Pi native ledger. Each
+invocation keeps its own conversation and token archive; earlier messages are not billed
+again by the capture layer. Direction/Experiment Claim Reviews retain their configured
+Claude/Qwen backend.
+
+Pi 主 Session 和源码 Review 已支持原生恢复；恢复依赖持久 Home 中的原生会话文件，
+不是把导出的 `conversation.jsonl` 复制回去。每次调用独立归档、独立计费统计。
+这些内容均为 Supervisor 私有，不投影到优化 Agent 工作区。
 
 ## Standalone capture control
 

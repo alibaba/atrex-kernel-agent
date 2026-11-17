@@ -12,7 +12,7 @@ import uuid
 
 from aka.contracts.agent import AgentAccess, AgentMount, AgentCapabilities
 from .backends import DEFAULT_BACKEND_REGISTRY
-from .execution.home import PREPARED_ENV, SESSION_HOME_ROOT_ENV, prepare_home
+from .execution.home import PREPARED_ENV, SESSION_HOME_ROOT_ENV, SESSION_HOME_ID_ENV, prepare_home
 from .execution.native import NativeExecution
 from .execution.process import (
     descendant_process_groups,
@@ -184,6 +184,9 @@ class Agent:
         workspace = Path(workspace).absolute()
         values = dict(environment)
         session_state_root = values.pop(SESSION_HOME_ROOT_ENV, None) or self.options.state_directory
+        home_id = values.pop(SESSION_HOME_ID_ENV, None)
+        if home_id is not None and not session_state_root:
+            raise ValueError("Persistent Agent Home identity requires a private state directory")
         _validate_environment(values)
         values = filter_environment(values, backend, explicit=explicit_environment)
         # Internal markers are created here, never accepted from caller environments.
@@ -275,12 +278,14 @@ class Agent:
                     for m in mounts
                 ):
                     mounts.append(AgentMount(guard, guard))
+        if self.options.sandbox == "bwrap" or home_id is not None:
             values, host, home = prepare_home(
                 workspace,
                 session_id,
                 backend,
                 values,
                 state_root=session_state_root,
+                home_id=home_id,
             )
             names = (
                 "HOME",

@@ -20,6 +20,7 @@ from ..model import (
 
 class PiAdapter(AgentBackendAdapter):
     id = "pi"
+    supports_resume = True
     settings_variable = "ATREX_PI_SESSION_SETTINGS"
     environment_variables = (
         "ANTHROPIC_API_KEY",
@@ -68,6 +69,14 @@ class PiAdapter(AgentBackendAdapter):
         ]
         command += pi_settings_args(settings)
         command.append(prompt)
+        return command
+
+    def resume_command(self, command, session_id):
+        # --session-id creates a new session when its history is missing.
+        # --session opens existing native history; --resume is an interactive picker.
+        command = list(command)
+        index = command.index("--session-id")
+        command[index:index + 2] = ["--session", session_id]
         return command
 
     def normalize_stream(

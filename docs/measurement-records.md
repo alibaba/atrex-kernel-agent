@@ -22,6 +22,14 @@ The Agent ToolHost owns scoped transport; Workflow handlers supply request polic
 ## Records and identity
 
 Campaign records live under `<campaign-workspace>/measurements/`.
+
+`reviews/<submission-id|direction-id|experiment-id>/` stores independent Review
+state in this same private store. `home/` retains native CLI resume files and
+`workspace/` is the stable reviewer project path. Each `vN/` contains `result.json`,
+`conversation.jsonl`, `token-usage.json`, and all attempt captures. These files are
+not Gateway Records and are never projected to the optimization Agent. Revisions
+resume the same reviewer but retain separate audit files; failed calls remain
+auditable and their tokens count as Review usage, separately from the main Agent.
 The store includes a private identity key, Kernel snapshots, Gateway records with frozen
 inputs and repetition/job checkpoints, and task reservation indexes.
 

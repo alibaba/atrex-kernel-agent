@@ -109,12 +109,12 @@ def _claim_review_summary(scope) -> dict:
     total = 0
     from aka.workflow.light.support.paths import supervisor_campaign_base_root
 
-    library = supervisor_campaign_base_root(scope.workspace) / "research-library"
+    library = supervisor_campaign_base_root(scope.workspace) / "measurements" / "reviews"
     paths = [
-        *library.glob("directions/*/v*/review/result.json"),
-        *library.glob("directions/*/attempts/*/review/result.json"),
-        *library.glob("experiments/*/v*/review/result.json"),
-        *library.glob("experiments/*/attempts/*/review/result.json"),
+        *library.glob("direction_*/v*/result.json"),
+        *library.glob("direction_*/attempts/*/result.json"),
+        *library.glob("experiment_*/v*/result.json"),
+        *library.glob("experiment_*/attempts/*/result.json"),
     ]
     for path in sorted(paths):
         value = read_json(path, default={})

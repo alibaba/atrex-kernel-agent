@@ -4147,10 +4147,11 @@ class SupervisorJournalService:
         if identity is None:
             return None
         claim_id, _revision = identity
-        root = self._claim_root(claim_type, claim_id)
+        from aka.workflow.light.long_horizon.review_archive import review_root
+        root = review_root(self.measurement_root, claim_id)
         candidates = [
-            *root.glob("v*/review/result.json"),
-            *root.glob("attempts/*/review/result.json"),
+            *root.glob("v*/result.json"),
+            *root.glob("attempts/*/result.json"),
         ]
         candidates.sort(
             key=lambda path: path.stat().st_mtime_ns if path.exists() else 0,
@@ -4300,7 +4301,8 @@ class SupervisorJournalService:
                         / "attempts"
                         / audit_id
                     )
-                    review_root = attempt_root / "review"
+                    from aka.workflow.light.long_horizon.review_archive import review_root as stored_review_root
+                    review_root = stored_review_root(self.measurement_root, claim_id) / "attempts" / audit_id
                     staging = (
                         Path(staging_value)
                         if isinstance(staging_value, str) and staging_value
@@ -5193,7 +5195,8 @@ class SupervisorJournalService:
             raise RuntimeStateError(
                 "Canonical research claim is unavailable while attaching its Review"
             )
-        review_root = claim_file.parent / "review"
+        from aka.workflow.light.long_horizon.review_archive import review_revision_root
+        review_root = review_revision_root(self.measurement_root, claim_file.parent.parent.name, int(claim_revision))
         staging_value = review_receipt.get(_REVIEW_STAGING_PATH_KEY)
         staging = (
             Path(staging_value)
@@ -5505,15 +5508,10 @@ class SupervisorJournalService:
             resume_session_id = None
             if previous is not None:
                 previous_revision = int(previous.get("revision", 1))
-                previous_review = (
-                    submission_revision_root(
-                        self.submissions_root,
-                        submission_id,
-                        previous_revision,
-                    )
-                    / "review"
-                    / "result.json"
-                )
+                from aka.workflow.light.long_horizon.review_archive import review_revision_root
+                previous_review = review_revision_root(
+                    self.measurement_root, submission_id, previous_revision,
+                ) / "result.json"
                 try:
                     previous_review_value = json.loads(
                         previous_review.read_text(encoding="utf-8")

@@ -1,10 +1,13 @@
-"""Co-located immutable review evidence for research claims and submissions."""
+"""Versioned Review evidence and native resume state in the Measurement Store."""
 
 from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
+import fcntl
+from contextlib import contextmanager
 from collections.abc import Iterator, Mapping
 from pathlib import Path
 
@@ -13,6 +16,48 @@ from aka.agent.session_tail import read_regular_bytes
 from aka.experiment.measurement_store import private_write, private_write_bytes
 
 MAX_REVIEW_FILE_BYTES = 64 * 1024 * 1024
+
+
+def review_root(measurement_root: Path, identity: str) -> Path:
+    """One private Review family in the Campaign's Measurement Store."""
+    if not isinstance(identity, str) or re.fullmatch(r"[A-Za-z0-9_-]+", identity) is None:
+        raise ValueError("Invalid Review identity")
+    return Path(measurement_root) / "reviews" / identity
+
+
+def review_revision_root(measurement_root: Path, identity: str, revision: int) -> Path:
+    if type(revision) is not int or revision < 1:
+        raise ValueError("Invalid Review revision")
+    return review_root(measurement_root, identity) / f"v{revision}"
+
+
+@contextmanager
+def reviewer_workspace(root: Path):
+    """Keep the native project path stable; replace only the supplied evidence.
+
+    Home, captures and versioned verdicts are siblings, outside the Agent's
+    evidence workspace. Serialize revisions of this Review family.
+    """
+    with open_private_directory(root) as directory:
+        descriptor = os.open("session.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW,
+                             0o600, dir_fd=directory)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        workspace = root / "workspace"
+        if workspace.is_symlink():
+            raise ValueError("Reviewer workspace must not be a symlink")
+        if workspace.exists():
+            shutil.rmtree(workspace)
+        with open_private_directory(workspace):
+            pass
+        yield workspace
+    finally:
+        os.close(descriptor)
+
+
+def reviewer_environment(root: Path) -> dict[str, str]:
+    from aka.agent.execution.home import SESSION_HOME_ROOT_ENV, SESSION_HOME_ID_ENV
+    return {SESSION_HOME_ROOT_ENV: str(root / "home"), SESSION_HOME_ID_ENV: root.name}
 
 
 def _copy_regular(source: Path, destination: Path) -> None:
@@ -34,7 +79,7 @@ def archive_review(
     conversation: Path | None,
     token_usage: Path | None,
 ) -> Path:
-    """Write one self-contained Review beside the object it reviewed."""
+    """Write one self-contained revision under its stable Review identity."""
     if (conversation is None) != (token_usage is None):
         raise ValueError(
             "Review conversation and token usage must be archived together"
@@ -145,40 +190,42 @@ def bound_review_usage_rows(
             return None
         return value if isinstance(value, dict) else None
 
-    for result_path in sorted(
-        (campaign_root / "submissions").glob("submission-*/v*/review/result.json")
-    ):
+    library = campaign_root / "measurements" / "reviews"
+    for result_path in sorted(library.glob("submission-*/v*/result.json")):
         result = read_review_result(result_path)
         if result is None or result.get("review_execution") == "reused":
             continue
-        submission = read_review_result(result_path.parents[1] / "submission.json")
+        submission = read_review_result(campaign_root / "submissions" /
+                                       result_path.parent.parent.name / result_path.parent.name / "submission.json")
         if submission is None:
             continue
         row_lineage = submission.get("lineage")
         if lineage is not None and row_lineage != lineage:
             continue
-        token_path = result_path.parent / "token-usage.json"
-        token = token_value(token_path)
-        if token is None:
-            continue
-        yield {
-            "review_kind": "final_source_policy_review",
-            "label": "independent final-source policy review",
-            "lineage": row_lineage,
-            "recorded_at": result.get("reviewed_at"),
-            "session_id": result.get("session_id", token.get("session_id")),
-            "exit_status": token.get("exit_status"),
-            "timed_out": token.get("timed_out") is True,
-            "usage": token.get("total"),
-            "source": str(token_path),
-        }
+        # Include every executed attempt, including failed resumes and invalid
+        # verdicts. The top-level receipt is only a convenient final projection.
+        token_paths = sorted(result_path.parent.glob("captures/*/run-*/token-usage.json"))
+        for token_path in token_paths or [result_path.parent / "token-usage.json"]:
+            token = token_value(token_path)
+            if token is None:
+                continue
+            yield {
+                "review_kind": "final_source_policy_review",
+                "label": "independent final-source policy review",
+                "lineage": row_lineage,
+                "recorded_at": token.get("finished_at", result.get("reviewed_at")),
+                "session_id": token.get("session_id", result.get("session_id")),
+                "exit_status": token.get("exit_status"),
+                "timed_out": token.get("timed_out") is True,
+                "usage": token.get("total"),
+                "source": str(token_path),
+            }
 
-    library = campaign_root / "research-library"
     claim_results = [
-        *library.glob("directions/*/v*/review/result.json"),
-        *library.glob("directions/*/attempts/*/review/result.json"),
-        *library.glob("experiments/*/v*/review/result.json"),
-        *library.glob("experiments/*/attempts/*/review/result.json"),
+        *library.glob("direction_*/v*/result.json"),
+        *library.glob("direction_*/attempts/*/result.json"),
+        *library.glob("experiment_*/v*/result.json"),
+        *library.glob("experiment_*/attempts/*/result.json"),
     ]
     for result_path in sorted(claim_results):
         result = read_review_result(result_path)
@@ -226,7 +273,7 @@ def bound_review_usage_rows(
                 "review_kind": f"{claim_type}_claim_review",
                 "label": f"independent {claim_type} claim review",
                 "lineage": row_lineage,
-                "recorded_at": result.get("archived_at", result.get("finished_at")),
+                "recorded_at": token.get("finished_at", result.get("archived_at", result.get("finished_at"))),
                 "session_id": audit_row.get(
                     "session_id", token.get("session_id")
                 ),
