@@ -50,6 +50,17 @@ def _state(manifest):
                                     tuple(row['revision'] for row in rows))
 
 
+def _publication_lock(path, git_dir):
+    # These persistent writer-lock inodes are data, not transient Git locks.
+    # Preserve them in checkpoints; unlinking a live lock would split writers.
+    if path.relative_to(git_dir).as_posix() not in {
+            '.aka-publication.lock', 'aka-context/.aka-publication.lock'}:
+        return False
+    value = path.lstat()
+    return (stat.S_ISREG(value.st_mode) and stat.S_IMODE(value.st_mode) == 0o600
+            and value.st_size == 0 and value.st_nlink == 1)
+
+
 def _inspect(snapshot):
     root = _absolute(snapshot.directory)
     if (root / 'manifest.json').is_symlink():
@@ -82,7 +93,8 @@ def _inspect(snapshot):
         raise ValueError('checkpoint requires a standalone canonical workspace Git directory')
     if (git_dir / 'objects/info/alternates').exists():
         raise ValueError('checkpoint cannot depend on an external Git object store')
-    if any(p.is_symlink() or p.name.endswith('.lock') for p in git_dir.rglob('*')):
+    if any(p.is_symlink() or (p.name.endswith('.lock') and not _publication_lock(p, git_dir))
+           for p in git_dir.rglob('*')):
         raise ValueError('Git checkpoint contains a symlink or active Git lock')
     # Resolve objects/refs solely in retained Git, never in the original workspace.
     retained_head = subprocess.check_output(['git', '--git-dir', str(git_dir), 'rev-parse', 'HEAD'], text=True).strip()
