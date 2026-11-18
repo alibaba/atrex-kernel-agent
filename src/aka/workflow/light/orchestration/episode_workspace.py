@@ -52,6 +52,18 @@ class EpisodeWorkspace:
         instructions = resource_path("reference/CLAUDE.md").read_text()
         publish(self.root, "CLAUDE.md", (instructions + "\n" + self.workspace_policy).encode())
         self.reserved_paths += ("CLAUDE.md", "PROGRESS.md", "records", "research-library")
+        timing_reference = ""
+        if (self.root / "atrex-bench").is_dir():
+            self.reserved_paths += ("atrex-bench",)
+            timing_reference = (
+                "\n## Evaluator source reference\n\n"
+                "Read `atrex-bench/scripts/run_eval.py` and `atrex-bench/src/atrex_bench/` "
+                "when you need to understand Atrex-Bench timing, warmup, sampling, or correctness "
+                "checks. This directory contains the same Atrex-Bench source used by remote evaluation; "
+                "it includes evaluator code, not the operator dataset. "
+                "Treat it as read-only; Bubblewrap enforces that boundary, while native mode does not. "
+                "Run measurements through Runtime and use Gateway Records as measurement evidence.\n"
+            )
         persistent = True
         policy = "This trajectory keeps one persistent Agent workspace and Git history across Episodes.\n"
         locations = ["root PROGRESS.md", "records/<gateway_record_id>.json"]
@@ -102,7 +114,7 @@ class EpisodeWorkspace:
             "## Runtime projections\n\n" + research_projection +
             "\nSupervisor-private Session archives are retained for audit and token accounting but are "
             "not projected into the Agent workspace. Use Git, PROGRESS.md, research records and Gateway "
-            "Records for durable optimization state.\n"
+            "Records for durable optimization state.\n" + timing_reference
         ).encode())
         from aka.task.source.formats import pinned_paths
         fixed = pinned_paths(self.source_workspace)

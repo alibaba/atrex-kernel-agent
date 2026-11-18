@@ -237,14 +237,18 @@ class ManagedCampaign(Campaign):
             return FilesystemAccess((FilesystemMount(workspace, workspace, True),), hidden_paths=(workspace / ".git",),
                 read_only_paths=tuple(workspace / name for name in inputs if (workspace / name).exists()))
         resources = self._module_resources.filesystem_access(workspace)
+        from .runtime_resources import reference_knowledge_access
+        knowledge = reference_knowledge_access(workspace, self.agent_reference_paths)
         hidden = list(resources.hidden_paths)
         private = self.private_reference_dir
         if private is not None and private.is_relative_to(workspace):
             hidden.append(private)
         protected = [workspace / name for name in
-            ("PROGRESS.md", "records", "research-library", "input", "reference", "frontier.json")
+            ("PROGRESS.md", "records", "research-library", "input", "reference", "frontier.json", "atrex-bench")
             if (workspace / name).exists()]
         protected.extend(resources.read_only_paths)
+        protected.extend(knowledge.read_only_paths)
+        protected.extend(workspace / item.path for item in self.problem.agent.files)
         for path in self.agent_read_only_paths:
             candidate = Path(path).expanduser()
             if not candidate.is_absolute():
@@ -254,7 +258,10 @@ class ManagedCampaign(Campaign):
         # A hidden subtree is already inaccessible. Do not also ask Agent to
         # expose its private context store through a read-only overlay.
         protected = [path for path in protected if not any(path.is_relative_to(root) for root in hidden)]
-        return FilesystemAccess((FilesystemMount(workspace, workspace, True), *resources.mounts), tuple(dict.fromkeys(hidden)), tuple(dict.fromkeys(protected)))
+        from aka.contracts.filesystem_access import normalize_access
+        return normalize_access(FilesystemAccess(
+            (FilesystemMount(workspace, workspace, True), *resources.mounts, *knowledge.mounts),
+            tuple(dict.fromkeys(hidden)), tuple(dict.fromkeys(protected))))
 
     def _run_session(self, workspace, prompt, timeout, agent_cli="claude",
                      reasoning_effort="max", extra_environment=None, observation_directory=None, **legacy):
@@ -288,6 +295,5 @@ class ManagedCampaign(Campaign):
         from .initial_source import initialize_source
 
         initialize_source(self)
-        self.candidate_workspace.install_files(self.workspace, self.problem.agent.files)
         self._ensure_agent_problem()
         self._link_runtime()

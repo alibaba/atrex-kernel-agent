@@ -325,7 +325,8 @@ def run_archived(args, workspace, grace, request, archives, *, transport, url=No
             emit_fact({"event": "attempt", "operation": "source-upload", "backend": "gateway",
                 "disposition": "not_submitted", "idempotency_key": key,
                 "request_identity": state.logical_identity,
-                "diagnostics": [{"failure_class": "infrastructure", "reason": error.code}],
+                "diagnostics": [{"failure_class": "request" if error.code in {"upload-invalid-url", "upload-rejected"}
+                                 else "infrastructure", "reason": error.code}],
                 "causes": [_cause_record(cause) for cause in causes_from_error(error)]})
             raise
         identity = hashlib.sha256(json.dumps(wire, sort_keys=True, separators=(",", ":")).encode()).hexdigest()

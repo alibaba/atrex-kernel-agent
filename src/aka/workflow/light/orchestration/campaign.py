@@ -677,6 +677,20 @@ class Campaign:
                 "resumed": resumed,
             }
             session_attempts.append(attempt_audit)
+            # Preserve the artifact even if the process timed out or failed.
+            # Execution completion still gates acceptance; this is audit only.
+            if response.is_file() and not response.is_symlink():
+                try:
+                    raw_review = read_regular_bytes(response, limit=128 * 1024 + 1)
+                    if len(raw_review) <= 128 * 1024:
+                        from aka.experiment.measurement_store import private_write_bytes
+                        private_write_bytes(attempt_capture / "review.json", raw_review)
+                        validate_review(json.loads(raw_review))
+                        attempt_audit["schema_valid_artifact"] = True
+                    else:
+                        attempt_audit["schema_valid_artifact"] = False
+                except (OSError, ValueError, TypeError, KeyError):
+                    attempt_audit["schema_valid_artifact"] = False
             if archive is None:
                 from aka.workflow.light.orchestration.infrastructure_retry import ReviewerOutputUnavailable
 
@@ -813,7 +827,6 @@ class Campaign:
             "review": policy_review,
             "implementation_review": implementation_review,
         }
-
 
     @property
     def plugin_registry(self):
@@ -1570,7 +1583,10 @@ class Campaign:
         )
         tools = getattr(getattr(getattr(self, "request", None), "runtime", None),
                         "agate_tools", ("env", "evaluate", "command"))
-        return directive + "\nAvailable Agate Runtime tools: " + ", ".join(tools) + ". Wiki, research and submit-kernel are configured separately.\n"
+        from aka.contracts.runtime_tools import runtime_tools
+        available = runtime_tools(tools, research_modules=self.research_modules,
+                                  submissions=True, wiki=self.tool_runtime.wiki)
+        return directive + "\nEnabled Runtime tools: " + ", ".join(available) + ". Use python3 tools/sandbox.py --help for discovery.\n"
 
 
     def _mode_directive(self) -> str:

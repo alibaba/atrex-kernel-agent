@@ -193,7 +193,7 @@ class ProblemProvider:
         if problem.evaluation is None or problem.agent is None:
             raise TypeError("Problem content requires explicit public and evaluation roles")
         return LegacyEvaluationAdapter(problem.evaluation.directory, workspace,
-                                       "production" if problem.evaluation.private_reference_dir else self.optimization_mode,
+                                       self.optimization_mode,
                                        str(problem.evaluation.runtime_root or ""), generated_digest, problem)
 
     def runtime_files(self, problem):

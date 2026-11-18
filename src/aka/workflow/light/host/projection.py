@@ -25,16 +25,23 @@ GATEWAY_ERROR_PREFIX = "[sandbox] GATEWAY_ERROR_JSON="
 _SECRET_KEY = re.compile(
     r"(?:authorization|password|ak|sk|atrex_aka_identity_key|agate[_-]?(?:ak|sk|token)|"
     r"(?:.*[_-])?(?:api|access|secret)[_-]?key(?:[_-]?id)?|"
-    r".*(?:token|password|secret|credential).*)", re.I
+    r"(?:.*[_-])?(?:token|password|secret|credentials?)|"
+    r"(?:access|refresh|session|security|auth|id)[_-]?token|.*(?:password|secret).*)", re.I
 )
 _SECRET_TEXT = re.compile(
     r"(?i)(\b(?:AGATE_AK|AGATE_SK|AGATE_TOKEN|API_KEY|ACCESS_KEY|SECRET_KEY|PASSWORD)"
     r"\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;\"'\]}]+)"
     r"|(\b(?:Authorization\s*:\s*)?Bearer\s+)[A-Za-z0-9._~+/-]+=*"
 )
+_URL_SECRET = re.compile(
+    r"(?i)([?&](?:access[_-]?token|api[_-]?key|token|signature|sig|"
+    r"x-amz-(?:credential|signature|security-token)|x-oss-(?:credential|signature|security-token)|"
+    r"ossaccesskeyid|securitytoken)=)[^&\s\"'<>]+"
+)
+_URL_USERINFO = re.compile(r"(?i)(https?://)[^/\s@]+:[^/\s@]+@")
 
 
-def runtime_environment_result(facts: dict[str, Any], enabled_kinds) -> dict[str, Any]:
+def runtime_environment_result(facts: dict[str, Any], enabled_kinds, *, runtime_kinds=None) -> dict[str, Any]:
     """Expose the Campaign's Runtime tools, not the Executor's operation catalog.
 
     Keep full hardware/provider facts and opaque errors. Raw operation catalogs
@@ -55,31 +62,14 @@ def runtime_environment_result(facts: dict[str, Any], enabled_kinds) -> dict[str
         return value
 
     result = project(facts)
-    result.setdefault("declarations", {})["operations"] = list(normalize_agate_tools(enabled_kinds))
+    result.setdefault("declarations", {})["operations"] = list(
+        normalize_agate_tools(enabled_kinds) if runtime_kinds is None else runtime_kinds)
     return result
 
 
 def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
     """Read older source-error markers without reclassifying their contents."""
     return gateway_error_result(value)
-
-
-def candidate_source_rejection(process: subprocess.CompletedProcess) -> dict[str, Any] | None:
-    """Retain a source HTTP rejection's original body instead of parsing its text."""
-    rejection = submission_rejection(process)
-    if rejection is None or rejection.status != 400:
-        return None
-    return gateway_error_from_process(process, "evaluate")
-
-
-def source_error_from_stdout(stdout: str) -> dict[str, Any] | None:
-    for line in stdout.splitlines():
-        if line.startswith(SOURCE_ERROR_PREFIX):
-            try:
-                return source_error_result(json.loads(line[len(SOURCE_ERROR_PREFIX):]))
-            except (ValueError, TypeError, AttributeError):
-                continue
-    return None
 
 
 def bounded_error(value: Any) -> Any:
@@ -170,6 +160,8 @@ def redact_diagnostics(value: Any, *, private_paths=(), private_values=()) -> An
         value = value.replace(secret, "<redacted>")
     for path in sorted(set(item for item in private_paths if item), key=len, reverse=True):
         value = value.replace(path, "<supervisor>")
+    value = _URL_SECRET.sub(lambda match: match[1] + "<redacted>", value)
+    value = _URL_USERINFO.sub(lambda match: match[1] + "<redacted>@", value)
     return _SECRET_TEXT.sub(lambda match: (match[1] or match[2]) + "<redacted>", value)
 
 

@@ -33,12 +33,38 @@ auditable and their tokens count as Review usage, separately from the main Agent
 The store includes a private identity key, Kernel snapshots, Gateway records with frozen
 inputs and repetition/job checkpoints, and task reservation indexes.
 
-The initial V0 full Evaluate is recorded here immediately, using the same
-request/source/result integrity envelope as later Evaluates. Its visibility is
-Supervisor-private and it is used only as reference evidence; it is not an
-accepted submission and does not enter the Pareto frontier or winner selection.
-New Campaigns have no separate V0/baseline store. Pre-MeasurementStore V0 files
-are read only for legacy migration.
+There is no mandatory V0 Evaluate. The Agent chooses when to measure its initial source;
+that call has the same Record visibility and evidence rules as every other Evaluate.
+Only accepted submissions enter winner selection and the submitted Pareto frontier.
+
+### Evaluator identity and retention
+
+The retained Task snapshots `atrex-bench/scripts/run_eval.py` and
+`atrex-bench/src/atrex_bench/`. Input content digests participate in the measurement
+identity, and the Agent sees this frozen closure as read-only reference code in Bubblewrap.
+Agate's deployed evaluator is managed by the operator: Light neither requests a package
+version pin nor attests that the remote package equals this closure. Deploy the same source
+remotely; preserve any provider-reported evaluator version in the raw execution archive.
+A local content digest alone is not proof of the remote installed version.
+
+All Gateway attempts, including Env, rejected requests and non-reusable probes, are retained
+for Campaign audit until the operator deletes or archives the Campaign. No automatic GC is
+performed. Evaluate reservation indexes are retained for restart/coalescing; one-shot calls
+do not create task locks. An interrupted one-shot request receives a non-cacheable interruption
+record when storage is writable, rather than leaving only an unlisted request file.
+Storage therefore grows with calls and artifacts. Back up the complete Campaign before cleanup.
+Projection caches are bounded by decoded bytes and entry count; this is not evidence retention.
+
+Correctness defaults to five deterministic cases by explicit policy. Full and untimed checks
+use the same configured case count and seed rules, but Light does not substitute a correctness-only
+result for a full Evaluate. Five cases are sampling coverage, not a proof of equivalence or of
+correctness on all inputs. Exact completed-request reuse includes case/seed/input identity;
+requests with different identities must execute independently.
+
+A Reviewer must exit successfully before its verdict can qualify a claim or submission.
+An external timeout invalidates the verdict even when a schema-valid JSON artifact exists;
+its artifact, conversation and token usage remain private audit evidence. This does not impose
+a new Episode or Review active-time cap.
 
 - `kernel_commit_id` is the full Git commit ID and binds the exact committed candidate artifact. For multi-file layouts this includes
   the complete serialized source snapshot, headers, and build settings, not only `kernel.py`.
@@ -145,7 +171,7 @@ Do not change labels or delete indexes to force a new random sample.
 | --- | --- |
 | Proven not submitted, transient infrastructure failure | Experiment retries at most twice, after 5 and 10 seconds, within a 120-second recovery admission window |
 | Accepted job ID, collection interrupted | Query the original job; a read timeout does not authorize another submission |
-| Explicit `error.error_class=infra` | Automatically retry within the configured budget, overriding backend `never`; a confirmed failed Job gets a new key, and duplicate execution is possible |
+| Explicit `error.error_class=infra` | Retry terminal failures within the configured budget, overriding backend `never`; an accepted nonterminal Job is only queried, and collection expiry does not create a replacement |
 | Unknown submission without a job ID | Retain pending state; replay only with an explicitly verified stable-key capability |
 | Confirmed failed or terminated job without an infrastructure error | Preserve the result; candidate errors do not trigger infrastructure retries |
 | Candidate correctness/compilation failure | Preserve the rejection; source repair creates a different task |
@@ -170,7 +196,9 @@ can recover; candidate/unknown errors do not become infrastructure merely becaus
 a timeout. OOM, illegal memory access, or numerical mismatch does not prove device unavailability.
 
 Agate HTTP rejections and terminal errors are returned with their original error fields
-and HTTP status. Runtime adds no recovery instructions and does not reclassify the error
+and HTTP status, after credential and configured private-path redaction. Error bodies are
+not assumed to be secret-free: private archives retain the original, while Agent projections
+remove known secrets, credential fields and signed URL credentials. Runtime adds no recovery instructions and does not reclassify the error
 for the Agent. Retry classification remains private; after retries are exhausted the
 current attempt's original error is returned. A later success does not replay an earlier
 attempt's failure. Invalid local endpoint/client configuration remains a Light error

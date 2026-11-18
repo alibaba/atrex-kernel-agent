@@ -45,7 +45,7 @@ class _ClientParser(argparse.ArgumentParser):
 
 def journal_request(kind: str, argv: list[str]) -> dict:
     parser = _ClientParser(allow_abbrev=False, description="Runtime research and submission mutations; request schemas: .agents/skills/runtime-records/references/journal.md")
-    parser.add_argument("--kind", choices=[*REQUEST_KINDS], required=True)
+    parser.add_argument("--kind", choices=[kind], required=True)
     parser.add_argument(
         "--request-file",
         required=True,
@@ -144,11 +144,12 @@ def proxy_wiki(tool: str, argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    kinds = json.loads(os.environ.get("AKA_RUNTIME_TOOLS",
+        os.environ.get("AKA_AGATE_TOOLS", '["env", "evaluate", "command"]')))
     if args in (["--help"], ["-h"]):
-        kinds = json.loads(os.environ.get("AKA_AGATE_TOOLS", '["env", "evaluate", "command"]'))
-        print("Agate Runtime tools: " + ", ".join(kinds))
+        print("Enabled Runtime tools: " + ", ".join(kinds))
         print("Use --kind OPERATION --help for enabled tool options. "
-              "Wiki and research tools use their separately installed Skills; submit-kernel uses --request-file.")
+              "Research and submit-kernel use --request-file; read the runtime-records Skill for JSON fields.")
         return 0
     # Only recognize the full client-side dispatcher; the Supervisor validates
     # every argument using parsers with allow_abbrev=False.
@@ -158,6 +159,10 @@ def main(argv: list[str] | None = None) -> int:
         kind = args[index + 1] if value == "--kind" and index + 1 < len(args) else (
             value.split("=", 1)[1] if value.startswith("--kind=") else None
         )
+        if kind and "AKA_RUNTIME_TOOLS" in os.environ and kind not in kinds:
+            client_error("runtime_tool_disabled", f"Runtime tool {kind!r} is not enabled.",
+                         "Use python3 tools/sandbox.py --help for enabled tools.", available_kinds=kinds)
+            return 2
         if kind in REQUEST_KINDS:
             return proxy_command("/v1/journal/execute", journal_request(kind, args))
         if kind in WIKI_KINDS:

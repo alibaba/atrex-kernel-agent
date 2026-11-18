@@ -250,7 +250,7 @@ def finish_session_capture(capture, **status) -> None:
             with capture._lock:
                 capture._sync_stdout_usage()
                 report = capture._usage.report(finished=False)
-                report.update(capture_complete=False, capture_errors=list(capture.errors))
+                report.update(capture_errors=list(capture.errors))
                 stdout = "".join(capture._chunks["stdout"])
                 _LAST_CAPTURE.set((hashlib.sha256(stdout.encode()).hexdigest(), report))
         except Exception:
@@ -300,6 +300,7 @@ class SessionCapture:
         self._chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         self._retained_chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
         self._pipe_bytes = {"stdout": 0, "stderr": 0}
+        self._raw_pipe_bytes = {"stdout": 0, "stderr": 0}
         self._stdout_cursor = 0
         self.errors: list[str] = []
         self._budget = CaptureBudget(limits or CaptureLimits(), self._capture_error)
@@ -358,7 +359,7 @@ class SessionCapture:
             if len(self._tails) >= self._budget.limits.files:
                 self._budget.warning("native_files_exceeded")
                 return None
-            tail = self._tails[name] = TranscriptTail()
+            tail = TranscriptTail()
             key = (self.backend, str(path.absolute()))
             status = path.stat()
             identity = (status.st_dev, status.st_ino)
@@ -373,7 +374,6 @@ class SessionCapture:
                 if self.backend == "dsh":
                     seed.dsh_sessions.update(cached[4])
                     seed.dsh_seeded.update(cached[5])
-            self._history_seeds[name] = (key, seed)
             try:
                 for line in tail.resume_history(path, self._history_budget, previous_size,
                                                 start=start, identity=identity):
@@ -388,6 +388,10 @@ class SessionCapture:
                     tail.history_incomplete = True
                 if tail.history_incomplete:
                     self._usage.mark_history_incomplete(name)
+            # Publish only after stat and history initialization succeed. A
+            # transient IO error must leave the next capture pass free to retry.
+            self._history_seeds[name] = (key, seed)
+            self._tails[name] = tail
         return self._tails[name]
 
     def _checkpoint_history(self, name, tail):
@@ -489,7 +493,6 @@ class SessionCapture:
             state="finished" if finished else "running",
             context=self.context,
             capture_errors=list(self.errors),
-            capture_complete=bool(finished and not self.errors),
         )
         persisted = report if finished else dict(report)
         if not finished and len(report.get("responses", [])) > 100:
@@ -506,9 +509,9 @@ class SessionCapture:
                 self.errors.append(warning)
 
     def output_sizes(self) -> tuple[int, int]:
-        """Live pipe bytes, including output already moved into capture files."""
+        """Raw pipe bytes, including data beyond the capture retention budget."""
         with self._lock:
-            return self._pipe_bytes["stdout"], self._pipe_bytes["stderr"]
+            return self._raw_pipe_bytes["stdout"], self._raw_pipe_bytes["stderr"]
 
     def _read_pipe(self, name: str, pipe) -> None:
         path = "provider/" + ("stdout.stream-json" if name == "stdout" else "stderr.log")
@@ -540,6 +543,7 @@ class SessionCapture:
                 # after a capture failure; joining reconstructs the original stream.
                 with self._lock:
                     self._chunks[name].append(line)
+                    self._raw_pipe_bytes[name] += len(line.encode("utf-8", errors="replace"))
                 if drain_only:
                     continue
                 try:

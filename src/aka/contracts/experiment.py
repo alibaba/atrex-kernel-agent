@@ -315,10 +315,6 @@ class RecordedExperiment(ExperimentRecords, Protocol):
                      environment_identity: str) -> tuple[ShapeMinimum, ...]:
         """Summarize complete, valid, comparable ordinary Task Evals without dispatch."""
         ...
-    def correctness_reuse(self, identities: tuple[MeasurementIdentity, ...], *,
-                          environment_identity: str) -> ExperimentRecord | None:
-        """Qualify retained candidate correctness against frozen inputs and confirmed environment."""
-        ...
     def run_recorded(
         self, request: EvaluationRequest | CommandSpec, *, request_id: str
     ) -> ExperimentRecord:

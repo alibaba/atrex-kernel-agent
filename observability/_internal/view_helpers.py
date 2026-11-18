@@ -8,14 +8,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-TOKEN_KEYS = (
-    "input_tokens",
-    "output_tokens",
-    "reasoning_tokens",
-    "cache_read_tokens",
-    "cache_write_tokens",
-    "total_tokens",
-)
+from aka.agent.usage_summary import TOKEN_KEYS, summarize_usage
 
 SUCCESS_STATUSES = frozenset({"completed", "passed", "reused", "succeeded", "success"})
 FAILURE_STATUSES = frozenset(
@@ -45,23 +38,7 @@ def normalized_outcome(*, success: object = None, status: object = None, error: 
 
 
 def usage_sum(rows: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    materialized = list(rows)
-    usage: dict[str, Any] = {}
-    for key in TOKEN_KEYS:
-        values = [row.get(key) for row in materialized if type(row.get(key)) is int]
-        usage[key] = sum(values) if values else None
-    measurements = [row.get("measurement") for row in materialized]
-    available = sum(type(row.get("total_tokens")) is int for row in materialized)
-    usage["measurement"] = (
-        "unavailable"
-        if not materialized or not available
-        else "exact"
-        if available == len(materialized) and all(value == "exact" for value in measurements)
-        else "estimated"
-        if available == len(materialized) and all(value in {"exact", "estimated"} for value in measurements)
-        else "partial"
-    )
-    return usage
+    return summarize_usage([{ "usage": row } for row in rows])["usage"]
 
 
 def milestone_usage(row: dict[str, Any] | None) -> dict[str, Any] | None:

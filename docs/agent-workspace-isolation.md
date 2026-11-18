@@ -161,9 +161,9 @@ host mode as process isolation.
 
 ## Verification and rollback
 
-[Light verification](optional-light-modules.md#research-and-parallel-search) records local process,
-allowlist, auxiliary-publication, and Linux Bubblewrap evidence. These checks do not establish
-all-provider authentication or live GPU qualification.
+Validate the selected boundary on the deployment host: configured read-only paths must reject
+writes, Runtime calls must remain reachable, and cancellation must stop the owned process tree.
+Offline tests alone do not establish Linux Bubblewrap, provider authentication or live GPU qualification.
 
 Stop the campaign before deployment/configuration changes. Preserve the original Home,
 private store, and frozen selection for recovery. Use a new workspace when changing workflows
@@ -181,3 +181,13 @@ but only Bubblewrap enforces the evidence mounts as read-only. Review outputs ar
 after successful process completion, using bounded no-follow regular-file reads and schema checks.
 GPU-library imports in development are not treated as final-submission violations; the submission
 policy evaluates the implementation that is actually submitted.
+
+The host process-policy poller detects prohibited host GPU execution and shared Gateway
+mutation on a best-effort basis; short-lived commands can finish between polls. GPU probes
+belong in Runtime, where they execute on the selected worker. Agent-owned source and Git
+remain editable. The poller provides recovery feedback, not a security boundary.
+
+The Wiki worker receives the selected Wiki resources and configuration, the read-only AKA
+package, and the interpreter/CLI installations and DNS/TLS files needed to run them. Those
+installation mounts can include shared Python dependencies; this is not per-import isolation.
+Native execution does not enforce these filesystem grants in the OS.

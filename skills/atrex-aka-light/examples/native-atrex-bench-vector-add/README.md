@@ -29,7 +29,7 @@ Before preparing or launching this example, explicitly obtain from the user:
    `/path/to/atrex-bench`;
 3. the exact target GPU/platform token accepted by Agate, such as `L20N` or `L20D`; examples are
    not defaults;
-4. the Agent CLI: `claude` (Claude Code), `codex`, `qodercli`, or `pi`;
+4. the Agent CLI: `claude` (Claude Code), `codex`, `qodercli`, `pi`, or `dsh`;
 5. the optimization mode after explaining that Fast permits declared external core implementations,
    Performance requires self-authored core computation with an Agent-selected DSL, and Ultra also
    requires a user-pinned DSL.
@@ -50,7 +50,7 @@ Present the choices explicitly; the example has no preselected row:
 | Agate credentials | Existing `AGATE_AK`/`AGATE_SK` in the Supervisor environment, or another already configured secure injection source; never paste values into chat |
 | Atrex-Bench | Existing canonical checkout path, or clone `https://github.com/alibaba/atrex-bench` into a user-selected destination |
 | GPU | Exact Agate platform/worker token selected by the user; `L20N` and `L20D` are examples, not an exhaustive list or default |
-| Agent CLI | `claude` (Claude Code), `codex`, `qodercli`, or `pi` |
+| Agent CLI | `claude` (Claude Code), `codex`, `qodercli`, `pi`, or `dsh` |
 | Optimization mode | `fast`, `performance`, or `ultra` |
 | Ultra DSL | Required only for Ultra; user selects a supported DSL such as `Cuda`, `Triton`, or `CuteDSL` |
 | Agent boundary | `light` (native process) or `light-sandbox` (Bubblewrap on Linux/Lima) |
@@ -72,7 +72,7 @@ AGENT_PATCH=/path/to/agent-boundary.json
 SEARCH_PATCH=/path/to/search-schedule.json
 
 : "${TARGET_PLATFORM:?set the user-selected GPU token}"
-: "${AGENT_CLI:?set claude, codex, qodercli, or pi from the user selection}"
+: "${AGENT_CLI:?set claude, codex, qodercli, pi, or dsh from the user selection}"
 : "${OPTIMIZATION_MODE:?set fast, performance, or ultra from the user selection}"
 : "${AGENT_PROFILE:?set light or light-sandbox from the user selection}"
 : "${MAX_ITERS:?set the user-selected Episode count}"
@@ -98,6 +98,7 @@ AGENT_CLI=claude   # Claude Code
 # or: AGENT_CLI=codex
 # or: AGENT_CLI=qodercli
 # or: AGENT_CLI=pi
+# or: AGENT_CLI=dsh
 ```
 
 This directory is stored in the Skill, not under a canonical Atrex-Bench runtime. Copy

@@ -18,12 +18,12 @@ Do not import `pathlib` or `os`, which Agate source validation rejects.
 `kernel.py` must continue to supply the evaluator's Python `Model` entry point; an
 Agate native-CUDA manifest is not used in this mode.
 ABBA accepts a reachable `--baseline-commit`; Runtime exports that entire source directory privately.
-Use the managed Evaluate/Profile tools and submit the usual episode report.
+Use the enabled Runtime tools for measurement. Use `submit-kernel` when the exact evaluated commit is ready for final-source review.
 
 ## Explicit CUDA manifest
 
 With `file_system=cuda_manifest` and `framework=cuda`, native Atrex-Bench campaigns
-on Agate use `.cu` files and `solution.json`. Keep V0's PyTorch reference as the baseline only. Do not embed
+on Agate use `.cu` files and `solution.json`. Keep evaluator reference code unchanged. Do not embed
 CUDA in kernel.py, generate Python bindings, run nvcc on the host, or change the
 reference/input/evaluator. Gateway and SSH support this manifest route; SOL does not.
 

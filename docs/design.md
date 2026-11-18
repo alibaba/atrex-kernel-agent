@@ -79,6 +79,11 @@ budget is checked at invocation boundaries. Operators can cancel or revoke a Ses
 also terminates its owned Agent process tree. GPU request/queue/per-step limits are separate.
 The optional Agent provider `timeout_seconds` is unset by default.
 
+`pause_agent_during_requests` defaults to **false**. A Runtime call does not suspend
+the Agent process; the Agent can continue or issue another request. Waiting therefore
+counts toward an explicitly configured provider active-time limit. Each measurement
+uses its frozen request/source snapshot, even if the Agent edits its workspace meanwhile.
+
 Independent Runtime requests can overlap within one Session. Each has its own authenticated
 identity, cancellation and deadline. Only updates to the same research/submission identity are
 serialized; slow Reviews do not hold a global Session lock. Read-modify-publish sections use
@@ -95,6 +100,12 @@ long optimization Sessions and pooled searches: Agent-owned Git remains authorit
 measurements enter one Campaign Store, and only accepted submissions participate in winners.
 Research records help choose the next trial; they do not gate experimentation.
 
+Observed failures in the earlier handoff workflow included
+`Promoted Episode has no sealed Agent Kernel commit identity` after a passing Evaluate,
+and `ABBA baseline commits require a registered Episode Git workspace` during terminal
+validation. These are concrete identity/coordination failures this design removes;
+they are not measurements of speedup or token savings.
+
 Observable acceptance criteria are: exact-commit evidence can be traced to its source and raw
 Agate response; duplicate in-flight Evaluate requests share one physical execution and each
 receive a normal receipt; rejected submissions retain their reviews and do not move winners;
@@ -105,6 +116,10 @@ The tradeoffs are larger private evidence archives and potentially long Sessions
 There is no automatic wall-clock watchdog at the Episode layer. Native mode trusts the local
 OS user; Bubblewrap host-proc mode preserves filesystem mounts but shares the host PID namespace
 and cannot protect same-UID processes from signals. See [isolation](agent-workspace-isolation.md).
+The process-policy poller detects prohibited host GPU work and shared Gateway mutation
+on a best-effort basis. It is not a substitute for OS isolation and does not freeze
+Agent-owned Git/source. Reference knowledge is installed separately and excluded from
+candidate uploads, including implicit file arguments and manifest source entries.
 
 ## Migration and rollback
 
@@ -119,3 +134,9 @@ To roll back, stop the current controller, retain its evidence, and use the pinn
 with its own compatible Campaign directory. Do not delete private records, rewrite the Agent Git,
 or downgrade an in-flight Campaign. The obsolete terminal numerical-planner option is removed;
 standard Evaluate still uses **five correctness cases per Shape**.
+
+For a reproducible historical handoff implementation, commit
+[`64322a9775af04c5cb3b7b144e1c239b17883c6d`](https://github.com/alibaba/atrex-kernel-agent/commit/64322a9775af04c5cb3b7b144e1c239b17883c6d)
+contains the old `episode-report` contract. Resume an existing old Campaign with its
+**own recorded launch commit and dependencies**, not an arbitrary historical pin.
+That historical commit is a code reference, not a migration target for current Campaign data.

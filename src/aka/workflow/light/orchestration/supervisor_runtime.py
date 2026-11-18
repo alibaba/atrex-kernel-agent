@@ -250,7 +250,7 @@ def agent_gateway_response(result: dict) -> tuple[dict, int | None]:
     """Return the full canonical result and its executor exit classification.
 
     Gateway observations, including Env, are archived by the Runtime and carry
-    a Record path. Normalization/redaction happens before this boundary.
+    a Record path. The operation handler redacts the final public response.
     """
     from aka.evaluation.tool_results import compact_receipt
     agent_result = result.get("agent_result")
@@ -382,7 +382,6 @@ class _OperationHandler:
             status, result = 503, failure(f"{type(error).__name__}: {error}", repairable=False, code="runtime_execution_error")
             logging.getLogger(__name__).exception("Workflow tool operation failed")
         if status >= 400:
-            binding = capability.journal
             result = augment_error(result, route=self.route, request=request,
                 research_records=owner.journal_factory.research_records,
                 directions_enabled=owner.journal_factory.directions_enabled,
@@ -390,16 +389,19 @@ class _OperationHandler:
                 enabled_kinds=owner.config.agate_tools,
                 parser=None,
                 catalog=owner.plugins.catalog() if self.route == "/v1/plugins/execute" and status == 400 else ())
-            from aka.workflow.light.host.projection import credential_values, redact_diagnostics
-            result = redact_diagnostics(result,
-                private_paths=(str(owner.root), str(owner.audit_root or ""), str(ROOT),
-                    str(owner.config.private_reference_dir or ""), owner.config.url,
-                    str(owner.config.atrex_bench_root or "")),
-                private_values=credential_values(owner.environment))
             result = {"operation": _runtime_operation(self.route, request or {}),
                       "status": "failed", "result": {"error": result}}
         if self.route == "/v1/gateway/execute" and isinstance(request, dict) and not result.get("gateway_record_id"):
             result = owner.archive_gateway_response(capability, request, result, status=status, exit_code=exit_code)
+        # An upstream Agate error can be carried by a successful Runtime HTTP
+        # exchange. Apply the same public boundary regardless of HTTP status;
+        # private execution/measurement archives retain the original body.
+        from aka.workflow.light.host.projection import credential_values, redact_diagnostics
+        result = redact_diagnostics(result,
+            private_paths=(str(owner.root), str(owner.audit_root or ""), str(ROOT),
+                str(owner.config.private_reference_dir or ""), owner.config.url,
+                str(owner.config.atrex_bench_root or "")),
+            private_values=credential_values(owner.environment))
         owner.audit_request_finished(request_id, http_status=status, result=result,
             execution_exit_code=exit_code, duration_seconds=time.monotonic() - started)
         return json.dumps({"status": status, "result": result,
@@ -587,6 +589,13 @@ class SupervisorRuntime:
             self._write_binding_lineage_state(binding, segment_status="idle")
         return workspace
 
+    def available_tools(self, capability):
+        from aka.contracts.runtime_tools import runtime_tools
+        binding = getattr(capability, "journal", None)
+        return runtime_tools(self.config.agate_tools,
+            research_modules=binding.service.tool_modules if binding else (),
+            submissions=binding is not None, wiki=getattr(self.config, "wiki_enabled", False))
+
     @contextmanager
     def session(self, workspace: Path, environment: dict[str, str], *, access, deadline=None):
         from aka.contracts.agent import AgentToolBinding
@@ -599,6 +608,7 @@ class SupervisorRuntime:
         capability.journal = self.journals.get(workspace)
         values = scrub_environment(environment)
         values["AKA_AGATE_TOOLS"] = json.dumps(self.config.agate_tools)
+        values["AKA_RUNTIME_TOOLS"] = json.dumps(self.available_tools(capability))
         if capability.journal and capability.journal.view:
             with capability.journal.lock:
                 protected = capability.journal.view.prepare_session()
@@ -756,7 +766,7 @@ class SupervisorRuntime:
         mounts.extend(FilesystemMount(source, target, False) for source, target in installations)
         # Installed wheels are under the selected Python library. Also support
         # the explicitly selected checkout and Wiki resource tree in development.
-        resources = [ROOT.parents[2],
+        resources = [ROOT.parents[1],
                      self.plugins.resource_file("gpu-wiki", "tools/query_nl.py").parent.parent]
         if self.config.wiki_options.settings_file:
             resources.append(Path(self.config.wiki_options.settings_file))
@@ -869,38 +879,9 @@ class SupervisorRuntime:
                 identity = support.environment.identity
         self.experiments.environment_identity = identity
 
-    def is_wiki_request(self, route, request):
-        if route == "/v1/wiki/query":
-            return True
-        if route == "/v1/plugins/execute" and self.wiki.provider is not None and request.get("action") == "call":
-            plugin_id, _, operation = str(request.get("tool", "")).partition(".")
-            return any(p.id == plugin_id and p.tools.get(operation, {}).get("runtime_tool") == "wiki"
-                       for p in self.plugins.plugins)
-        return False
 
-    def execute_trusted(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
-                        parent=None, reference_snapshot: Path | None = None) -> dict:
-        """Controller-only execution/reuse; no Session, draft publication or HTTP switch."""
-        capability = Capability(workspace.resolve(strict=True), {}, parent=parent)
-        token = secrets.token_urlsafe(32)
-        with self.lock:
-            if self.closed:
-                raise RuntimeError("Supervisor Runtime is closed")
-            self.capabilities[token] = capability
-        try:
-            deadline = time.monotonic() + self.request_timeout_seconds
-            if parent is not None and parent.deadline is not None:
-                deadline = min(deadline, parent.deadline)
-            with self.request_context(capability, deadline, "acceptance"):
-                return self.execute(capability, "/v1/gateway/execute", {"argv": argv}, reuse_completed=True,
-                                    execution_timeout=execution_timeout, reference_snapshot=reference_snapshot, trusted=True)
-        finally:
-            self.revoke(token)
 
-    def execute(self, capability: Capability, route: str, request: dict, *,
-                reuse_completed=False, reuse_correctness=False, candidate_source=None,
-                execution_timeout: int | None = None, reference_snapshot: Path | None = None,
-                trusted: bool = False) -> dict:
+    def execute(self, capability: Capability, route: str, request: dict) -> dict:
         if route == "/v1/plugins/execute":
             return self.execute_plugin(capability, request)
         if route == "/v1/journal/execute":
@@ -910,7 +891,7 @@ class SupervisorRuntime:
             if set(request) != allowed:
                 raise ValueError(f"Request fields must be {sorted(allowed)}")
             argv = validated_argv(request["argv"])
-        if route == "/v1/gateway/execute" and not trusted:
+        if route == "/v1/gateway/execute":
             words = argv[:argv.index("--")] if "--" in argv else argv
             from aka.contracts.agate_tools import AGATE_TOOLS
             explicit_kinds = [words[i + 1] for i, word in enumerate(words[:-1]) if word == "--kind"]
@@ -922,8 +903,8 @@ class SupervisorRuntime:
                         available_kinds=list(self.config.agate_tools), job_submitted=False)
             if words in (["--help"], ["-h"]):
                 return {"operation": "help", "status": "completed", "result": {
-                    "available_kinds": list(self.config.agate_tools),
-                    "instruction": "Use --kind OPERATION --help. Wiki, research and submit-kernel have separate enablement."}}
+                    "available_kinds": list(self.available_tools(capability)),
+                    "instruction": "Use --kind OPERATION --help; research and submission requests use --request-file."}}
             with _validating_request():
                 from aka.evaluation.tool_requests import parse_tool_arguments
                 from aka.execution.command_syntax import requested_operation
@@ -981,31 +962,12 @@ class SupervisorRuntime:
                 snapshot(capability.workspace, staged,
                          custom_tools=bool(capability.journal and capability.journal.view),
                          filesystem_access=capability.filesystem_access)
-                if candidate_source is not None:
-                    self.workspace_provider.install_source(staged, candidate_source)
                 # Input authority belongs to the retained Task, never a mutable
                 # Agent copy. Evaluation prepares its selected references.
                 from aka.evaluation.command_inputs import host_evaluation_environment
                 configuration = replace(self.evaluation_configuration,
                     environment=host_evaluation_environment(environment))
                 evaluation_input = self.evaluation_input
-                if reference_snapshot is not None:
-                    # Only execute_trusted supplies this host-owned probe bundle.
-                    # HTTP Agent requests cannot select reference authority.
-                    from aka.contracts.content import WorkspaceFile
-                    from aka.evaluation.private_inputs import selected_content
-                    reference_files = selected_content(evaluation_input)
-                    for name in ("input.py", "reference.py", "shapes.json"):
-                        reference_files[name] = None
-                    files = []
-                    for name, item in reference_files.items():
-                        data = read_input(reference_snapshot, name) if item is None else item.content
-                        files.append(WorkspaceFile(name, text=data.decode("utf-8")))
-                    evaluation_input = replace(evaluation_input, files=tuple(files))
-                if execution_timeout is not None:
-                    if type(execution_timeout) is not int or execution_timeout < 1:
-                        raise ValueError("Trusted execution timeout must be positive")
-                    configuration = replace(configuration, timeout=execution_timeout)
                 from aka.evaluation.tool_requests import parse_tool_arguments
                 parsed = parse_tool_arguments(argv)
                 baseline_source = None
@@ -1043,7 +1005,8 @@ class SupervisorRuntime:
                     from aka.core.service_audit import audit_service_exchange
                     from aka.workflow.light.host.projection import runtime_environment_result
                     audit_service_exchange(service="execution.environment", response=environment_facts)
-                    environment_facts = runtime_environment_result(environment_facts, self.config.agate_tools)
+                    environment_facts = runtime_environment_result(environment_facts, self.config.agate_tools,
+                        runtime_kinds=self.available_tools(capability))
                     upstream_errors = [{key: value[key] for key in ("error", "http_status") if key in value}
                         for value in environment_facts.get("raw", {}).values()
                         if isinstance(value, dict) and value.get("error") is not None]
@@ -1100,8 +1063,7 @@ class SupervisorRuntime:
                     raise SessionRevokedError("Session revoked while waiting for a shared measurement")
             response = self.experiments.execute(command, request_id=capability.request_id,
                 identity=identity, kernels=kernels, deadline=capability.deadline,
-                check_wait=check_wait,
-                reuse_completed=reuse_completed, reuse_correctness=reuse_correctness)
+                check_wait=check_wait)
             agent_result = response.get("agent_result", {})
             record_id = agent_result.get("gateway_record_id")
             if capability.journal and record_id:
@@ -1161,7 +1123,7 @@ class SupervisorRuntime:
         except ValueError as error:
             evidence_hint = "Read PROGRESS.md, research-library/ and records/ for current evidence."
             raise AgentRequestError(str(error), next_action=(
-                "Correct the indicated field or lifecycle state, then retry. Read skills/runtime-records/references/journal.md. "
+                "Correct the indicated field or lifecycle state, then retry. Read .agents/skills/runtime-records/references/journal.md. "
                 + evidence_hint)) from error
         response = {"exit_code": 0, "stdout": json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n", "stderr": ""}
         self.audit_process(capability, "journal", [str(request.get("operation"))],

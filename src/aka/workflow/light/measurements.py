@@ -304,7 +304,7 @@ class SharedMeasurements(RecordedMeasurements):
                 agent["result"]["correctness"] = None
         return {**response, "agent_result": agent}
 
-    def _execute(self, request, *, request_id=None, reuse_completed=False, reuse_correctness=False):
+    def _execute(self, request, *, request_id=None, reuse_completed=False):
         if not isinstance(request, (CommandSpec, EvaluationRequest)):
             raise TypeError("Measurement requires public CommandSpec or EvaluationRequest")
         identities = ()
@@ -327,7 +327,7 @@ class SharedMeasurements(RecordedMeasurements):
                 else:
                     from .host.errors import AgentRequestError
                     record_id = "gateway-" + existing.ref.experiment_id
-                    if not (reuse_completed or reuse_correctness):
+                    if not reuse_completed:
                         raise AgentRequestError("This request_id already has a completed record.",
                             code="duplicate_request_id", gateway_record_id=record_id,
                             next_action="Read the existing record, or use a new request_id for a new measurement.")
@@ -339,13 +339,9 @@ class SharedMeasurements(RecordedMeasurements):
                             code="record_not_reusable", gateway_record_id=record_id,
                             next_action="Read the existing record; use a new request_id for a fresh measurement if needed.")
                     return self._response(experiment, record, reused=True)
-            if (reuse_correctness or reuse_completed) and self.environment_identity:
+            if reuse_completed and self.environment_identity:
                 prepared = (self.command_evaluator if isinstance(request, CommandSpec) else self.evaluator).prepare(request)
                 identities = prepared.measurement_identities
-            if reuse_correctness and self.environment_identity:
-                reused = experiment.correctness_reuse(identities, environment_identity=self.environment_identity)
-                if reused is not None:
-                    return self._response(experiment, reused, reused=True)
             if reuse_completed and self.environment_identity and identities:
                 for record in reversed(tuple(experiment.iter_records())):
                     if (experiment.reusable(record.ref, identities) and all(
@@ -354,7 +350,7 @@ class SharedMeasurements(RecordedMeasurements):
             record = experiment.run_recorded(request, request_id=identity)
             return self._response(experiment, record)
 
-    def execute(self, request, *, request_id=None, reuse_completed=False, reuse_correctness=False,
+    def execute(self, request, *, request_id=None, reuse_completed=False,
                 identity, kernels, deadline=None, check_wait=None):
         """Archive every typed execution once in the Campaign Measurement Store.
 
@@ -375,8 +371,7 @@ class SharedMeasurements(RecordedMeasurements):
                                     check_wait=check_wait, reusable=deduplicate) as task:
                 try:
                     response = self._execute(request, request_id=task.record_id,
-                        reuse_completed=deduplicate,
-                        reuse_correctness=deduplicate and reuse_correctness)
+                        reuse_completed=deduplicate)
                 except Exception as error:
                     # Preparation/transport exceptions are auditable even without a Job.
                     # Keep the exception class and message, never invent a GPU outcome.

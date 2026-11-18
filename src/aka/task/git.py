@@ -1,8 +1,8 @@
 """Git operations used by task-owned candidate workspaces."""
 from __future__ import annotations
 import subprocess
-from pathlib import Path, PurePosixPath
-from .candidate_workspace.policy import PROTECTED_PATHS, PROTECTED_PREFIXES, EPISODE_EVIDENCE_PREFIXES
+from pathlib import Path
+from .candidate_workspace.policy import EPISODE_EVIDENCE_PREFIXES
 
 def _git(workspace: Path, *args: str, check: bool = True, binary: bool = False):
     result = subprocess.run(
@@ -88,12 +88,6 @@ def ignored_evidence_files(workspace: Path) -> list[str]:
     return sorted(path for path in output.splitlines() if path)
 
 
-def protected_violation(paths: list[str]) -> str:
-    for value in paths:
-        normalized = PurePosixPath(value).as_posix()
-        if normalized in PROTECTED_PATHS or normalized.startswith(PROTECTED_PREFIXES):
-            return f"candidate modified protected path: {normalized}"
-    return ""
 
 
 def _manifest_deleted(workspace: Path, base_commit: str, candidate_commit: str) -> bool:

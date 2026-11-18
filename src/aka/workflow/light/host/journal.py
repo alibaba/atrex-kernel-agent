@@ -28,9 +28,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-_FANOUT_LOCK = threading.Lock()
-_FANOUT_RUNNING: set[Path] = set()
-_FANOUT_PENDING: set[Path] = set()
 from typing import Any
 
 from aka.agent.execution.home import open_private_directory
@@ -85,8 +82,8 @@ DIRECTION_PROPOSAL_OPTIONAL_FIELDS = {"stop_conditions"}
 DIRECTION_REVISION_FIELDS = DIRECTION_PROPOSAL_FIELDS | {"direction_id"}
 DIRECTION_REVISION_OPTIONAL_FIELDS = DIRECTION_PROPOSAL_OPTIONAL_FIELDS | {"analysis"}
 DIRECTION_CHANGE_SCOPES = {"incremental", "major_redesign"}
-DIRECTION_UPDATE_FIELDS = {"action", "direction_id", "analysis"}
-DIRECTION_CLOSURE_FIELDS = DIRECTION_UPDATE_FIELDS
+DIRECTION_UPDATE_FIELDS = {"action", "direction_id"}
+DIRECTION_CLOSURE_FIELDS = DIRECTION_UPDATE_FIELDS | {"analysis"}
 DIRECTION_CLOSURE_OPTIONAL_FIELDS = {"reopen_condition", "supporting_experiment_ids"}
 _SHARED_GATEWAY_RECORD_REASONS = frozenset({
     "visible_direction_reference",
@@ -139,6 +136,11 @@ _ACTIVE_DIRECTION_EXPERIMENT_RUNTIME_ACTION = (
     "remaining branches; a supported Experiment requires neither a mechanism proof nor "
     "an immediate Direction revision."
 )
+
+
+_FANOUT_LOCK = threading.Lock()
+_FANOUT_RUNNING: set[Path] = set()
+_FANOUT_PENDING: set[Path] = set()
 
 
 def _tool_modules(journal: Mapping[str, object]) -> tuple[str, ...]:
@@ -1703,14 +1705,17 @@ def publish_catalog_shared_research(
 def _public_gateway_record(store: MeasurementStore, record_id: str) -> dict[str, Any]:
     """Return one standardized Agent-visible measurement projection."""
     from aka.evaluation.tool_results import seal_response
+    from aka.workflow.light.host.projection import credential_values, redact_diagnostics
 
     record = store.read(record_id)
-    return seal_response(
+    public = seal_response(
         record["response"],
         record["request"],
         record_id=record_id,
         kernels=record["kernels"],
     )["agent_result"]
+    return redact_diagnostics(public, private_paths=(str(store.root),),
+                              private_values=credential_values(os.environ))
 
 
 def _git_visible_record_ids(
@@ -1732,7 +1737,11 @@ def _git_visible_record_ids(
         sorted(set(record_ids)) if record_ids is not None else store.record_ids()
     ):
         try:
-            record = store.read(record_id)
+            # Listing is header-only; consumers validate the immutable body
+            # before using or publishing evidence. Do not parse every prior
+            # stdout/correctness payload on each new measurement.
+            from aka.experiment.measurement_store import read_record_header
+            record = read_record_header(store.root / "records" / record_id / "record.json")
             kernels = record.get("kernels")
             if not isinstance(kernels, Mapping):
                 continue
@@ -2289,8 +2298,6 @@ def _progress_markdown(
 
     latest = board.get("latest_result")
     latest = latest if isinstance(latest, Mapping) else {}
-    baseline = board.get("v0_baseline")
-    baseline = baseline if isinstance(baseline, Mapping) else {}
     current_lineage = board.get("current_lineage")
     current_lineage = current_lineage if isinstance(current_lineage, str) else "T1"
     lineages = board.get("lineages")
@@ -2383,21 +2390,6 @@ def _progress_markdown(
         item.get("local_rank") if type(item.get("local_rank")) is int else 1 << 30,
         str(item.get("direction_id", "")),
     ))
-    baseline_latency = baseline.get("latency_us_geomean")
-    baseline_latency_text = (
-        f"{baseline_latency:g} us"
-        if type(baseline_latency) in {int, float}
-        and math.isfinite(float(baseline_latency))
-        else "not measured"
-    )
-    baseline_line = (
-        f"- **V0 baseline source commit ID:** {commit(baseline.get('kernel_commit_id'))}; "
-        f"GeoMean: **{baseline_latency_text}**; correctness: "
-        f"`{text(baseline.get('correctness_status'), empty='unknown')}`; measured Shapes: "
-        f"{text(baseline.get('measured_shape_count'), empty='unknown')}; Gateway Record: "
-        f"{commit(baseline.get('gateway_record_id'))}."
-        if baseline else "- **V0 baseline:** evidence is unavailable."
-    )
     def finite(value: object) -> float | None:
         return (
             float(value)
@@ -2517,7 +2509,6 @@ def _progress_markdown(
         "",
         *([submitted_best_line] if submitted_best_line is not None else []),
         lineage_winner_line,
-        baseline_line,
         f"- **Current lineage:** `{current_lineage}`.",
         f"- **Last measured working Kernel commit ID:** {commit(current.get('working_kernel_commit_id'))}.",
         f"- **Latest visible Gateway result and scope:** {latest_result_text}",
@@ -2711,11 +2702,11 @@ def _save_journal(
     campaign_root: Path,
     journal: dict[str, Any],
 ) -> None:
-    if isinstance(target, dict):
-        if target is not journal:
-            target.clear()
-            target.update(journal)
-        return
+    if not isinstance(target, dict):
+        raise TypeError("Research transaction target must be a dict")
+    if target is not journal:
+        target.clear()
+        target.update(journal)
 
 
 def _mutable_journal(
@@ -2934,7 +2925,7 @@ def update_direction(
         require_fields(
             value,
             fields if action in _CLOSURES else DIRECTION_UPDATE_FIELDS,
-            optional=closure_optional if action in _CLOSURES else None,
+            optional=closure_optional if action in _CLOSURES else {"analysis"},
             label=f"Direction {action}",
         )
         direction_id = _text(value["direction_id"], "Direction ID")
@@ -2987,7 +2978,6 @@ def update_direction(
             "direction_id": direction_id,
             "action": action,
             "revision": previous_revision + 1,
-            "analysis": _text(value["analysis"], "Direction analysis"),
             "recorded_at": _now(),
             "supporting_experiment_ids": supporting,
             "reopen_condition": (
@@ -2995,6 +2985,10 @@ def update_direction(
                 if reopen_condition is not None else None
             ),
         }
+        if "analysis" in value:
+            event["analysis"] = _text(value["analysis"], "Direction analysis")
+        elif views[direction_id].get("analysis") is not None:
+            event["analysis"] = views[direction_id]["analysis"]
         if not experiments_enabled and action in _CLOSURES:
             records = _validate_record_ids(
                 campaign_root,
@@ -3645,7 +3639,7 @@ class SupervisorJournalService:
         # of the same identity serialize; unrelated tools/claims keep running.
         self._projection_lock = threading.RLock()
         self._claim_locks_guard = threading.Lock()
-        self._claim_locks: dict[tuple[str, str], threading.Lock] = {}
+        self._claim_locks: dict[tuple[str, str], tuple[threading.Lock, int]] = {}
         self.research_catalog = ResearchStore(self.research_catalog_root / "events")
         trajectory = self.origin.get("trajectory", 1)
         if type(trajectory) is not int or trajectory <= 0:
@@ -3731,11 +3725,14 @@ class SupervisorJournalService:
         except BaseException:
             with _FANOUT_LOCK:
                 _FANOUT_RUNNING.discard(key)
-                _FANOUT_PENDING.discard(key)
+                # A peer may already have returned after coalescing its update.
+                # Retain the dirty watermark for the next publication attempt.
+                _FANOUT_PENDING.add(key)
             raise
 
     def _project_asynchronous_catalog(self) -> None:
         registrations = self.research_catalog_root / "lineages"
+        failed = False
         for path in sorted(registrations.glob("T*.json")):
             try:
                 registration = read_json(path, limit=MAX_FILE_BYTES)
@@ -3768,10 +3765,13 @@ class SupervisorJournalService:
                     synchronization="asynchronous",
                 )
             except (FileNotFoundError, OSError, ValueError, RuntimeStateError):
+                failed = True
                 logging.getLogger(__name__).exception(
                     "Could not refresh asynchronous central Research projection %s",
                     path,
                 )
+        if failed:
+            raise RuntimeStateError("Asynchronous Research projection is incomplete; pending publication is retained")
 
     def record_token_checkpoint(
         self,
@@ -4283,10 +4283,12 @@ class SupervisorJournalService:
             "operation": "record-experiment",
             "gateway_record_ids": [record_id],
             "instruction": (
-                "Related candidate trials may continue before recording one Experiment. "
-                "Record the observations, measured scope, and next action at a decision "
-                "checkpoint, when switching paths, or when sharing findings. Cite the relevant "
-                "Records; the mechanism may remain unknown."
+                "When these results determine whether to keep or discard a candidate, select a "
+                "parameter or workload strategy, rule out a branch, or switch paths, record that "
+                "decision as an Experiment with observations, measured scope, and the next action. "
+                "Related candidate trials may continue and be recorded together. Cite the relevant "
+                "Records; do not wait for a mechanism proof or Direction closure. Not every "
+                "Evaluate or disposable probe needs an Experiment."
             ),
         }
         if "directions" in self.tool_modules:
@@ -4914,40 +4916,56 @@ class SupervisorJournalService:
 
     def execute(
         self, request: Mapping[str, object], *,
-        review_kernel: Callable[[str, str], dict[str, Any]] | None = None,
+        review_kernel: Callable[[str, str, int, str | None], dict[str, Any]] | None = None,
         check_wait: Callable[[], None] | None = None,
     ) -> dict[str, object]:
         body = request.get("request")
         operation = request.get("operation")
-        field = {"direction_update": "direction_id", "experiment_record": "experiment_id",
-                 "kernel_submit": "submission_id"}.get(operation if isinstance(operation, str) else "")
-        identity = body.get(field) if field and isinstance(body, Mapping) else None
-        lock = None
-        if isinstance(identity, str) and identity:
-            with self._claim_locks_guard:
-                lock = self._claim_locks.setdefault((field, identity), threading.Lock())
-        elif operation == "direction_prioritize":
-            lock = self._projection_lock
-        acquired = False
+        fields = {"direction_update": ("direction_id",),
+                  "experiment_record": ("experiment_id",),
+                  "kernel_submit": ("kernel_commit_id", "submission_id")}.get(
+                      operation if isinstance(operation, str) else "", ())
+        keys = sorted((field, body[field]) for field in fields
+                      if isinstance(body, Mapping) and isinstance(body.get(field), str)
+                      and body[field])
+        locks = []
+        # Count waiters as well as owners, so releasing an owner cannot replace
+        # a lock while another caller is still waiting on that same identity.
+        with self._claim_locks_guard:
+            for key in keys:
+                lock, users = self._claim_locks.get(key, (threading.Lock(), 0))
+                self._claim_locks[key] = (lock, users + 1)
+                locks.append(lock)
+        if operation == "direction_prioritize":
+            locks.append(self._projection_lock)
+        acquired = []
         try:
-            while lock is not None:
-                if check_wait is not None:
-                    check_wait()
-                if lock.acquire(timeout=0.1):
-                    acquired = True
-                    break
+            for lock in locks:
+                while True:
+                    if check_wait is not None:
+                        check_wait()
+                    if lock.acquire(timeout=0.1):
+                        acquired.append(lock)
+                        break
             if check_wait is not None:
                 check_wait()
             worker = copy(self)
             worker._claim_audits = {}
             return worker._execute(request, review_kernel=review_kernel)
         finally:
-            if acquired:
+            for lock in reversed(acquired):
                 lock.release()
+            with self._claim_locks_guard:
+                for key in keys:
+                    lock, users = self._claim_locks[key]
+                    if users == 1:
+                        del self._claim_locks[key]
+                    else:
+                        self._claim_locks[key] = (lock, users - 1)
 
     def _execute(
         self, request: Mapping[str, object], *,
-        review_kernel: Callable[[str, str], dict[str, Any]] | None = None,
+        review_kernel: Callable[[str, str, int, str | None], dict[str, Any]] | None = None,
     ) -> dict[str, object]:
         operation = request.get("operation")
         if not isinstance(operation, str):
@@ -4996,6 +5014,14 @@ class SupervisorJournalService:
                 result["archive_path"] = (
                     f"research-library/directions/{direction_id}/v{library_version}/direction.json"
                 )
+                if body.get("action") == "propose" and result.get("review", {}).get(
+                    "claim_review_quality"
+                ) in {"supported", "partially_supported"}:
+                    result["runtime_action"] = (
+                        "To begin this Direction, call update-direction with action=start, "
+                        f"direction_id={direction_id}. analysis is optional; omit it to preserve "
+                        "the current assessment. start requires no Experiment and does not run another Review."
+                    )
                 if body.get("action") == "start":
                     self.research.focus_direction(direction_id, origin=self.origin)
                 published = self._publish_after_mutation(

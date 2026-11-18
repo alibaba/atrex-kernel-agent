@@ -27,14 +27,13 @@ answers the question.
 
 1. State one falsifiable timing question and begin with the fewest useful sites.
 2. Save the current clean `kernel.py` content, then create an instrumented working snapshot in the
-   same episode worktree. This snapshot is not a handoff candidate and must not enter promotion or
-   stall accounting.
+   same persistent workspace. Keep instrumentation out of final `submit-kernel` candidates.
 3. Run representative correctness through the immutable evaluator and capture through the campaign
    sandbox. For final evidence, pass the sandbox-owned `.atrex_long_horizon/evaluations.jsonl` as
    `--correctness-evidence`; a model-supplied `--correctness passed` is only an exploration note and
    cannot produce `decision_grade`. Use `scripts/timeline.py` to validate and export the returned
    evidence. If the remote command reads backend files, pass
-   `--input .claude/skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `python -m aka.bootstrap.measurement_cli`; sync only
+   `--input .agents/skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `tools/sandbox.py`; sync only
    the attempt-specific directory.
 4. Read the summary and Perfetto trace. Remove, move, or refine probes and repeat when the evidence
    is insufficient, semantically misplaced, or too intrusive. Name every reported interval as
@@ -64,8 +63,8 @@ record required for final evidence.
 ## Hard boundaries
 
 - Never modify `profile_driver.py`, evaluators, ground truth, or other protected paths.
-- Never hand off or promote an instrumented snapshot. Only a probe-free kernel may become the
-  episode `candidate_commit == HEAD`.
+- Never submit an instrumented snapshot. Only a probe-free Kernel may be accepted through
+  `submit-kernel`; Runtime reviews the exact Agent Git commit.
 - Do not combine events from different launches into one apparent execution.
 - Construct exactly one recorder per selected owner per launch and reuse it for that owner's events;
   duplicate ownership is a capture failure, not a sampling policy.

@@ -51,39 +51,11 @@ def validate_config(config):
         executable(value.bwrap_executable)
 
 
-def selected_guard(ctx):
-    # Resolve lazily after the other module contributions have been mounted.
-    cached = {}
-
-    def get():
-        from aka.contracts.agent_resources import WorkspaceResourceContribution
-        from .resources import selected_runtime_file
-
-        entries = [
-            entry.value
-            for entry in ctx.resolve("workspace_resources")
-            if entry.name == "execution-shell-guard"
-        ]
-        if len(entries) != 1 or not isinstance(
-            entries[0], WorkspaceResourceContribution
-        ):
-            raise ValueError(
-                "Agent requires exactly one selected execution-shell-guard"
-            )
-        contribution = entries[0]
-        if contribution not in cached:
-            cached[contribution] = selected_runtime_file(contribution)
-        return cached[contribution]
-
-    return get
-
-
 def apply(ctx, config):
     from .provider import Agent
 
     agent = Agent(
         options(config),
-        shell_guard=selected_guard(ctx),
         session_name=config.get("session_name", ""),
         unavailable=lambda environment: selected_process_policy(ctx, "unavailable", environment),
         violation=lambda argv, environment: selected_process_policy(ctx, "violation", argv, environment),

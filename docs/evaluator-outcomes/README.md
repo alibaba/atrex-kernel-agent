@@ -70,76 +70,22 @@ Additional consumer-owned local regressions: 54 passed, one skipped because the 
 
 An explicit inline check also verified that a completed native ABBA timeout after its one allowed retry remains a cache hit. The first local invocation of that check used macOS's symlinked temporary path and was refused by the existing private-directory guard; rerunning with the resolved directory passed. No production code change was needed.
 
-## Reproduce the recovery curve
+## Inspect current execution evidence
 
-In an editable checkout with the AKA packages installed, run the following command. It loads only the baseline Gateway module from Git and executes both variants against the same synthetic transport; no GPU jobs or external requests are submitted.
+The curve above belongs to the historical revision linked at the start of this page.
+Its removed private imports are not an executable recipe for current Light. For current
+measurements, use the supported observability entry points from the repository root:
 
 ```bash
-python - <<'PY'
-import contextlib, io, json, os, subprocess, tempfile, types
-from pathlib import Path
-from unittest.mock import patch
-from aka.evaluation import gateway
-from aka.experiment.store import JOB_ROOT_ENV, MeasurementStore
-from aka.evaluation.public_result import PREFIXES, canonical_result
-from aka.evaluation.native_abba import _terminal_abba_timeout_error
-
-source = subprocess.check_output(["git", "show", "0df128c:src/aka/light/evaluation/gateway.py"], text=True)
-before = types.ModuleType("baseline_gateway")
-before.__file__, before.__package__ = gateway.__file__, gateway.__package__
-exec(compile(source, gateway.__file__, "exec"), before.__dict__)
-
-def adapt(job):
-    if job["status"] == "succeeded" and job["result"]["exit_code"] != 0:
-        return dict(job, outcome="unavailable", error={"error_class": "infra", "reason": "worker_unavailable"})
-    return job
-
-def retry(job):
-    return "infra" if (job.get("error") or {}).get("reason") == "worker_unavailable" else None
-
-rows = []
-for failures in [0, 1, 2, 3]:
-    for label, module in [("before", before), ("after", gateway)]:
-        successes, counts = [], []
-        for repetition in range(5):
-            submitted = []
-            def api(url, method, path, body, seconds):
-                assert method == "POST"
-                submitted.append(body["idempotency_key"])
-                bad = len(submitted) <= failures
-                return {"job_id": f"dv-replay-{repetition}-{len(submitted)}", "status": "succeeded",
-                        "result": {"exit_code": int(bad), "stdout": "unavailable" if bad else "receipt"}}
-            with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {JOB_ROOT_ENV: str(Path(tmp).resolve())}), patch.object(module, "_gateway_json", side_effect=api), patch("time.sleep"), contextlib.redirect_stderr(io.StringIO()):
-                args = dict(url="https://gateway.test", kind="dev", payload={"command": "worker"},
-                            timeout=60, queue_wait_grace=0, max_infra_retries=2)
-                if label == "after":
-                    args.update(result_adapter=adapt, retry_classifier=retry)
-                first = module.run_direct_job(**args)
-                second = module.run_direct_job(**args)
-                assert first.stdout == second.stdout
-                expected = min(failures + 1, 3) if label == "after" else 1
-                assert len(submitted) == expected
-                job = json.loads(first.stdout)
-                ok = job["result"]["exit_code"] == 0
-                if label == "after" and not ok:
-                    assert job["outcome"] == "unavailable"
-                successes.append(ok)
-                counts.append(len(submitted))
-        rows.append(dict(failures=failures, variant=label, successes=sum(successes),
-                         repetitions=5, percent=sum(successes)*20, submissions=counts))
-
-error = _terminal_abba_timeout_error([[{"message": "timeout"}], [{"message": "timeout"}]])
-request = {"operation": "same_allocation_abba", "options": {}}
-response = {"exit_code": 1, "stdout": PREFIXES["same_allocation_abba"] + json.dumps({"correct": False, "error": error}), "stderr": ""}
-record = dict(operation="same_allocation_abba", cacheable=True, task_digest="fixture", request=request, response=response)
-with tempfile.TemporaryDirectory() as tmp:
-    store = MeasurementStore(Path(tmp).resolve())
-    with patch.object(store, "read", return_value=record):
-        assert store._cached("fixture", "fixture") == record
-assert canonical_result(response, request)["status"] == "completed"
-print(json.dumps({"rows": rows, "terminal_abba_timeout_cache": "PASS"}, indent=2))
-PY
+python observability/light_runtime_calls.py --help
+python observability/light_agate_calls.py --help
+python observability/export_light_gateway_record.py --help
 ```
+
+Select a Campaign and Gateway Record to export the raw Agate requests/responses and the
+Agent receipt. See the [observability guide](../session-observability.md) for exact options and
+[measurement recovery](../measurement-records.md) for current retry/cache semantics.
+Historical test counts and curves do not qualify a new checkout.
 
 ## Complete evaluator failure feedback
 

@@ -26,8 +26,12 @@ inherits the same conversation, workspace, and Agent Git history.
 
 Keep reasoning concise and act once the next step is testable. An unknown mechanism need not delay a high-value candidate trial justified by the available observations.
 
+For Atrex-Bench tasks, the read-only `atrex-bench/` directory contains the same source used by
+remote evaluation. Read `scripts/run_eval.py` and `src/atrex_bench/` within it as needed to
+understand timing, warmup, sampling, and correctness checks. Run measurements through Runtime.
+
 {{RESEARCH_MODULE_RULES}}
 
 {{SUBMISSION_CONTRACT}}
 
-Write `scratch/kernel-submit.json` with `{"kernel_commit_id":"<full Agent Git commit>"}` and run `python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-submit.json`. The first call returns a stable `submission_id`. To revise that production candidate after Review feedback, fully evaluate the repaired commit and submit `{"submission_id":"<returned ID>","kernel_commit_id":"<new commit>"}`; omit the ID only for an unrelated Submission.
+Write `scratch/kernel-submit.json` with `{"kernel_commit_id":"<full Agent Git commit>"}` and run `python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-submit.json`. The first call returns a stable `submission_id`. To revise that candidate after Review feedback, fully evaluate the repaired commit and submit `{"submission_id":"<returned ID>","kernel_commit_id":"<new commit>"}`; omit the ID only for an unrelated Submission.

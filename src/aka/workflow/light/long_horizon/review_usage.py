@@ -15,7 +15,6 @@ REVIEW_KINDS = frozenset({
     "final_source_policy_review",
     "direction_claim_review",
     "experiment_claim_review",
-    "supplemental_numerical_review",
 })
 LEGACY_REVIEW_KINDS = frozenset({"research_claim_review"})
 

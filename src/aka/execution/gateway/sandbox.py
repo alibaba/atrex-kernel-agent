@@ -379,7 +379,7 @@ def _declared_candidate_sources(workspace: Path) -> set[str]:
                 raise RuntimeError(
                     "workspace solution.json source entries must be paths or path objects"
                 )
-            selected.add(_safe_relative(source_path))
+            selected.add(_workspace_input_path(workspace, source_path))
 
     return selected
 
@@ -412,11 +412,23 @@ def _candidate_runtime_input_paths(workspace: Path) -> set[str]:
     return selected
 
 
+def _workspace_input_path(workspace: Path, value: str) -> str:
+    """Reject knowledge selections, including symlink aliases into the mount."""
+    normalized = _safe_relative(value)
+    source = workspace / normalized
+    references = workspace / "references"
+    reference_roots = [references.resolve()]
+    if references.is_dir():
+        reference_roots.extend(path.resolve() for path in references.iterdir())
+    if ("references" in Path(normalized).parts
+            or any(source.resolve().is_relative_to(root) for root in reference_roots)):
+        raise ValueError("Reference knowledge cannot be selected as a GPU request input")
+    return normalized
+
+
 def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
     """Expand one explicitly named workspace file or directory."""
-    normalized = _safe_relative(value)
-    if "references" in Path(normalized).parts:
-        raise ValueError("Reference knowledge cannot be selected as a GPU request input")
+    normalized = _workspace_input_path(workspace, value)
     source = workspace / normalized
     if source.is_file():
         return {normalized}
@@ -451,7 +463,7 @@ def _referenced_workspace_inputs(workspace: Path, parts: list[str]) -> set[str]:
             continue
         source = workspace / normalized
         if source.is_file():
-            selected.add(normalized)
+            selected.add(_workspace_input_path(workspace, normalized))
         elif source.is_dir():
             selected.update(_expand_workspace_input(workspace, normalized))
     return selected
@@ -1739,7 +1751,7 @@ def _job_query_error(args, job, error):
         body = error.detail
     original = body.get("error", body) if isinstance(body, dict) else body
     return subprocess.CompletedProcess(args, 1, json.dumps({
-        "job_id": job["job_id"], "status": job["status"],
+        "job_id": job["job_id"], "status": job.get("status", "unknown"),
         "http_status": error.status, "error": original}), "")
 
 
@@ -1768,6 +1780,8 @@ def _wait_sdk_job(*, url, kind, job_id, deadline, started, attempt_id=None,
                     f"/v1/jobs/{job_id}?wait=false&timeout={wait_for:.3f}", None, min(wait_for + 10, remaining))
                 if job.get("job_id") != job_id:
                     raise ValueError("original-job-identity-mismatch")
+                if not isinstance(job.get("status"), str) or not job["status"]:
+                    raise ValueError("original-job-status-missing-or-invalid")
             except (OSError, RuntimeError, ValueError) as error:
                 last_query_error = error
                 _observe_job_wait(job_id, None, started)

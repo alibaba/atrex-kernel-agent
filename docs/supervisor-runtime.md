@@ -189,7 +189,7 @@ The default queue timeout is 60 seconds per queue stage. An omitted request time
 uses the controller's derived queue/execution policy; an explicit positive value is the
 whole-request limit. GPU allocation deadlines and Wiki execution budgets remain separate.
 See [module options](optional-light-modules.md#research-and-parallel-search) and
-[active-time accounting](optional-light-modules.md#agent-active-time-limit-and-blocking-runtime-calls).
+[active-time accounting](quickstart.md#budgets-and-recovery).
 
 All Agate control-plane calls use the public SDK. Accepted jobs are short-polled by ID within
 the request budget. An uncertain submission without an accepted ID is not replayed unless

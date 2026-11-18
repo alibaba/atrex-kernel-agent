@@ -42,6 +42,10 @@ def infrastructure_failure(body):
 def retryable_job_failure(body, *, kind):
     if not isinstance(body, dict) or body.get("status") in {"cancelled", "canceled"}:
         return False
+    # A GET failure says nothing about the accepted job's outcome. Do not
+    # replay it under a new key when collection ends before a terminal state.
+    if body.get("job_id") and body.get("status") not in {"failed", "succeeded"}:
+        return False
     return infrastructure_failure(body) or ambiguous_dev_submission(body, kind=kind)
 
 

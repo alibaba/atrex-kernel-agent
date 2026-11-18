@@ -364,6 +364,6 @@ def render_conversation(
         raw_provider_capture_complete=raw_provider_capture_complete,
         error_type=error_type,
     )
-    terminal.update(capture_complete=not capture_errors, capture_errors=list(capture_errors or []))
+    terminal.update(capture_errors=list(capture_errors or []))
     records.append(terminal)
     return encode_records(records)

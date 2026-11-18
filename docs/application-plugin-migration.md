@@ -4,13 +4,11 @@ AKA uses the installed `aka optimize` command. It converts the public request fi
 then uses a launch profile to select Workflow through Bootstrap and Core. Evaluation, Execution,
 Resources and recovery run from their installed owning modules.
 
-For fresh `aka optimize` and `aka workflow` launches, the default profile is now `light`.
-It requires the matching `atrex-aka-light` distribution and selects native (not Bubblewrap)
-Agent execution and managed Light Workflow services. Use `--profile light-sandbox`
-for isolation, or `--profile workflow` for the previous Legacy behavior. Missing Light is
-an actionable startup error, not an implicit Legacy fallback. `aka run` remains explicit.
-Continuations use their saved selection regardless of this new-launch default; do not
-switch a live Legacy workspace to Light by omitting the profile on a manual restart.
+New `aka optimize` launches use the `light` profile (native Agent processes); choose
+`light-sandbox` for Bubblewrap. The `workflow` composition also selects Light;
+Legacy is not a fallback or a supported profile. Use a new Campaign directory.
+Existing handoff/promotion campaigns need their original checkout and environment;
+see [migration and rollback](design.md#migration-and-rollback).
 
 ## Checkout-backed installed interface
 
@@ -31,10 +29,9 @@ preparation](quickstart.md) for the complete requirements. The AKA checkout path
 problem path are separate inputs.
 
 The installed parser accepts launch and request options together, without a `--`
-separator. Their workflow applicability is profile-specific: Light uses unified Episodes,
-not Legacy Fast/Full stages. Light's source-tree and ABBA path requires native
-Atrex-Bench through Agate or [SSH](ssh-backend.md); select the [Legacy workflow](legacy-workflow.md)
-for SOL campaigns. Profile-selected environment values and absence are captured for children and recovery.
+separator. Light accepts Native Atrex-Bench and SOL inputs. See
+[problem preparation](quickstart.md#prepare-the-problem) and the [SSH backend](ssh-backend.md).
+Profile-selected environment values and absence are captured for children and recovery.
 The removed `orchestrator/optimize.py` shim is not a compatibility interface; automation must invoke
 the installed command.
 

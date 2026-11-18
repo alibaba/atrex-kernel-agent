@@ -160,8 +160,11 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
         elif action == "start":
             properties["action"]["description"] = (
                 "Start proposed, deferred or blocked work without another Review; "
-                "partially_supported is sufficient. Supply analysis explaining the choice."
+                "partially_supported is sufficient. analysis is optional; omitting it preserves the current assessment."
             )
+            properties["analysis"] = {
+                **_text(), "description": "Optional analysis; omit to preserve the existing assessment."
+            }
         elif action in {"defer", "block"}:
             properties["action"]["description"] = (
                 "Pause in_progress work with analysis and reopen_condition; "

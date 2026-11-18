@@ -332,9 +332,6 @@ def kernel_pareto_frontier(
             if parsed is None or not parsed["passed"] or not parsed["latencies"]:
                 continue
             latencies = parsed["latencies"]
-            kernel_id = record["kernels"]["candidate"]["kernel_id"]
-            if kernel_ids is not None and kernel_id not in kernel_ids:
-                continue
             geomean = parsed["latency_us_geomean"]
             if geomean is None:
                 continue

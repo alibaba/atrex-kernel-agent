@@ -18,9 +18,10 @@ def scoped_measurement_skill(skill: AgentSkill, directory: Path, enabled_kinds) 
     requests = "".join(section for section in sections
                        if section.splitlines()[0].removeprefix("## ") not in AGATE_TOOLS
                        or section.splitlines()[0].removeprefix("## ") in enabled)
-    selection = ("\n## Enabled Runtime tools\n\n" + "\n".join(
+    selection = ("\n## Enabled GPU measurement tools\n\n" + "\n".join(
         f"- `{kind}`: [request example](references/requests.md#{kind})." for kind in enabled)
-        if enabled else "\nNo Agate Runtime tools are enabled in this Campaign.")
+        if enabled else "\nNo GPU measurement tools are enabled in this Campaign.")
+    selection += "\nUse `python3 tools/sandbox.py --help` for the complete enabled Runtime tool list."
     content = {"SKILL.md": (skill.source / "SKILL.md").read_text() + selection + "\n",
                "references/requests.md": requests}
     # Immutable guidance supports resumed Sessions and discovery in separate

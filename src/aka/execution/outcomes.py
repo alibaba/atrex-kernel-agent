@@ -19,7 +19,7 @@ from aka.contracts.execution import (
 )
 from aka.contracts.execution_recovery import ExecutionCause, JobReference
 from .gateway.protocol import classify_gateway_outcome, protocol_failure
-from .transport import INFRASTRUCTURE_EXIT_CODE, INFRASTRUCTURE_MARKER
+from .transport import INFRASTRUCTURE_EXIT_CODE
 
 FACTS_FD = "AKA_EXECUTION_FACTS_FD"
 _attempt = ContextVar("execution_backend_attempt", default=None)
@@ -307,9 +307,8 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
         diagnostics += (ExecutionDiagnostic("protocol", "invalid-fact-channel"),)
     if status is None:
         status = "succeeded" if process.returncode == 0 else "failed"
-        if (process.returncode == INFRASTRUCTURE_EXIT_CODE and (
-                any(item.category == "infrastructure" for item in diagnostics)
-                or decode_output and INFRASTRUCTURE_MARKER in (process.stderr or "").splitlines())):
+        if process.returncode == INFRASTRUCTURE_EXIT_CODE and any(
+                item.category == "infrastructure" for item in diagnostics):
             status = "infrastructure"
         elif process.returncode and not has_result and diagnostics and diagnostics[0].category in {"request", "authentication"}:
             status = "rejected"

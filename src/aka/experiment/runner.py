@@ -84,9 +84,6 @@ class Experiment:
         from .queries import shape_minima
         return shape_minima(self._records(), identities, environment_identity)
 
-    def correctness_reuse(self, identities, *, environment_identity):
-        from .queries import correctness_reuse
-        return correctness_reuse(self._records(), identities, environment_identity)
 
     def _records(self):
         if self.records is None:

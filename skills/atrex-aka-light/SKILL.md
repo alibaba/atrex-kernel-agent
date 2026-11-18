@@ -156,7 +156,7 @@ Evaluator Shapes are exposed by default. A hidden request is valid only for the 
 ## Search and budgets
 
 Current Light defaults to one independent serial trajectory. Pooled search is an explicit advanced
-configuration with these available fields and former three-line values shown only as an example:
+configuration with these available fields; the values below are a three-trajectory example:
 
 ```json
 {
@@ -175,6 +175,8 @@ the user-selected number of Episode audit segments. Pooled mode uses
 count. Direction and Experiment annotations default to disabled.
 
 Episode active time is intentionally unbounded. There is no `workflow.config.episode_timeout_seconds` option. The Agent stops naturally or through operator cancellation/session revocation. A positive Campaign token budget is checked at invocation boundaries; it is not a wall-clock watchdog. `--token-budget 0` disables that cap. An optional `agent.config.timeout_seconds` bounds individual provider invocations; it is unset by default. Agate request, queue and per-Shape execution budgets are separate.
+Runtime requests leave the Agent runnable by default (`agent.config.pause_agent_during_requests=false`). Background calls can overlap independent work; each uses frozen source/input bytes. Waiting counts toward an explicitly configured provider invocation limit. Set the option to `true` only when process suspension is desired.
+
 
 Pooled search keeps Campaign-wide scheduling facts in root `coordinator.json`, serialized by
 `coordinator.lock`. Each immutable synchronization event is self-contained under

@@ -28,6 +28,12 @@ Use the enabled tools listed by Help and their examples in [Runtime requests](re
 Read `--kind OPERATION --help` for exact options; do not transfer flags between operations.
 Remote jobs are stateless; only returned artifacts persist.
 
+For Atrex-Bench timing questions, read the workspace's `atrex-bench/scripts/run_eval.py`
+and follow its imports into `atrex-bench/src/atrex_bench/` (including `eval/performance.py`
+when present). This read-only directory contains the same Atrex-Bench source used by remote
+evaluation. Run measurements through Runtime; use its help for effective timing options and
+Gateway Records for measurement evidence.
+
 ## Results and failures
 
 - Gateway Records are immutable measurement evidence. Reuse exact matches by reading their

@@ -41,13 +41,17 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
   supported/refuted hypothesis; concrete falsifiable work and outcomes belong in Experiments.
 - `propose` runs admission Review without requiring an Experiment or prior measurement. Every
   `revise` and closure is reviewed; `start` only changes lifecycle and retains the prior review.
+  `start` requires only `action` and `direction_id`; optional `analysis` replaces the current
+  assessment, and omitting it preserves that assessment.
   `start`, `defer`, and `block` allow `partially_supported`. Only `complete` and `abandon`
   require `supported` Review of the submitted terminal decision; otherwise the state stays
   `in_progress` and the Review is returned for correction.
   Every archived state is published to peers with its actual review quality; only eligible evidence
   may support research conclusions.
-- Related candidate trials may continue before recording one Experiment at a decision checkpoint,
-  when switching paths, or when sharing findings. Record observations, their measured scope, and the
+- Record an Experiment when measured results determine whether to keep or discard a candidate,
+  select a parameter or workload strategy, rule out a branch, or switch paths. Related trials can be
+  recorded together; do not wait for a mechanism proof or Direction closure. Not every Evaluate needs
+  an Experiment. Record observations, their measured scope, and the
   next action; the mechanism may remain unknown. Cite relevant Records or archived references,
   including regressions that limit the conclusion. Runtime retains each measurement and its source
   identity. Disposable probes that change no decision need not be recorded. Use `name`, concrete

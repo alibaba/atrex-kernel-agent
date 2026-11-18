@@ -33,7 +33,7 @@ _CLAUDE_TRANSIENT_API_ERRORS = {"api error: terminated"}
 _CLAUDE_COMPACTION_FAILURE = "automatic compaction failed"
 _CLAUDE_COMPACTION_CONNECTION_LOSS = "connection lost mid-response"
 _DEPENDENCY_POLICY_MARKER = (
-    "[orchestrator] dependency policy violation; terminated coding session:"
+    "Agent host policy violation:"
 )
 
 

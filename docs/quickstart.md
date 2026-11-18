@@ -267,7 +267,9 @@ Native Atrex-Bench `source_tree`, CUDA manifest, Evaluate, ABBA and typed diagno
   Reviews also have no active-time limit. An explicitly configured Agent provider
   `timeout_seconds` limits a provider invocation, independently of Episode segmentation.
 - Runtime requests do not pause the Agent by default. Independent work can continue;
-  `pause_agent_during_requests=true` opts into process suspension.
+  `pause_agent_during_requests=true` opts into process suspension. With the default `false`,
+  Runtime waits count toward an explicitly configured provider invocation time limit. Each
+  request uses frozen source/input bytes; subsequent edits do not change that in-flight request.
 - GPU queue, request and per-Shape execution budgets remain finite and separately configurable.
 - Resume with the original workspace, composition, source layout, and frozen resources.
   Accepted job IDs and saved Gateway Records are reconciled before further GPU execution.

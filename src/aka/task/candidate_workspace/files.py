@@ -84,7 +84,10 @@ def read_regular_bytes(path, *, limit):
 
 
 def _restrictions(workspace):
-    protected = {".git", "kernel.py", "impl", "solution.json", "input", "reference",
+    from .policy import PROTECTED_PATHS, CANDIDATE_PATHS, PROTECTED_PREFIXES
+    protected = {*PROTECTED_PATHS, *CANDIDATE_PATHS,
+                 *(path.rstrip("/") for path in PROTECTED_PREFIXES),
+                 ".git", "kernel.py", "impl", "solution.json", "input", "reference",
                  "references", "records", "research-library", "PROGRESS.md", "frontier.json",
                  ".claude", ".codex", ".qoder", ".agents", ".pi"}
     from aka.task.source.formats import policy_at

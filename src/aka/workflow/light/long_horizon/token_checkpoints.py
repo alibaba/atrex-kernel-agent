@@ -12,7 +12,7 @@ from aka.agent.execution.home import open_private_directory
 from aka.agent.session_tail import read_regular_bytes
 
 
-from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage as _summary
+from aka.agent.usage_summary import usage as _usage, summarize_usage as _summary
 
 MAX_USAGE_BYTES = 64 * 1024 * 1024
 

@@ -39,23 +39,23 @@ Point the default optimizer at the local endpoint:
 ATREX_SANDBOX_URL=http://127.0.0.1:8000 ATREX_SANDBOX_QUEUE_WAIT_GRACE=120 \
 aka optimize --repo-root "$PWD" \
   --problem /path/to/operator \
-  --platform H20 --framework Triton \
+  --platform H20 --framework Triton --optimization-mode ultra \
   --hardware local
 ```
 
 Clear inherited `ATREX_SANDBOX_PROFILE` and `ATREX_SANDBOX_SSH` first.
-Use `--profile workflow` for the explicit Legacy workflow. The native path
-uploads source archives and retains complete Atrex-Bench correctness and ABBA receipts;
-Legacy retains its evaluator/command compatibility path.
+The Light path uploads source archives and retains complete Atrex-Bench correctness
+and ABBA receipts. There is no separate Legacy workflow profile.
 
-`--framework` can be omitted to start all frameworks supported by the runtime GPU architecture in
-parallel. Their sandbox requests still enter this scheduler's FIFO queue, and their local optimizer state
-uses flat framework/hardware-suffixed names such as `kernel_opt_<name>_triton_h20`. Production
-campaigns use a separate path ending in `_production`.
+Fast and Performance leave the DSL to the Agent; Ultra requires `--framework`.
+Campaign paths include the selected mode (`_fast`, `_performance`, or `_ultra`).
+Parallel trajectories are an explicit search configuration, independent of this
+scheduler's worker count; their requests enter the same FIFO queue.
 
 `--hardware local` selects the local executor independently of the logical `--platform` value.
 The optimizer does not compare platform and inventory names because inventory may expose an alias or a
-desensitized GPU description. It uses the runtime architecture probe for automatic framework dispatch.
+desensitized GPU description. The runtime architecture probe supplies device facts.
+See [Quickstart](quickstart.md) for the current launch and search options.
 
 ## Compatibility Surface
 

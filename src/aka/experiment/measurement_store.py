@@ -10,9 +10,11 @@ import math
 import os
 import re
 import secrets
+import sys
 import time
 import uuid
 from contextlib import contextmanager
+from collections import OrderedDict
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -402,8 +404,22 @@ class MeasurementStore:
             record_id = "gateway-" + uuid.uuid4().hex
             directory = self.root / "records" / record_id
             private_write(directory / "request.json", request)
-            yield MeasurementTask(self, key, record_id, directory, request, kernels,
-                                  None, request_id=request_id)
+            task = MeasurementTask(self, key, record_id, directory, request, kernels,
+                                   None, request_id=request_id)
+            try:
+                yield task
+            finally:
+                if not (directory / "record.json").exists():
+                    # Preserve interrupted calls as discoverable audit facts.
+                    # Do not invent a remote Job outcome or hide the caller's
+                    # original exception if the audit disk also failed.
+                    try:
+                        task.finish({"operation": request["operation"], "status": "interrupted",
+                                     "error": {"code": "runtime_request_interrupted",
+                                               "message": "Runtime request ended before a result was archived."}},
+                                    cacheable=False)
+                    except Exception:
+                        logging.getLogger(__name__).exception("Could not archive interrupted Runtime request %s", record_id)
             return
         wait_deadline = deadline if type(deadline) in (int, float) and math.isfinite(deadline) else None
         with open_private_directory(self.root / "tasks") as directory:
@@ -575,18 +591,44 @@ class MeasurementTask:
 
 
 class MeasurementReadView(MeasurementStore):
-    """Request-local validation cache for immutable records and source artifacts."""
-    def __init__(self, root):
+    """Bounded request-local LRU for immutable records and source artifacts."""
+    def __init__(self, root, *, max_entries=128, max_bytes=64 * 1024 * 1024):
         super().__init__(root)
-        self._records = {}
-        self._kernels = {}
+        self._cache = OrderedDict()
+        self._cache_bytes = 0
+        self._max_entries = max_entries
+        self._max_bytes = max_bytes
+
+    def _read_cached(self, key, read):
+        if key in self._cache:
+            self._cache.move_to_end(key)
+            return self._cache[key][0]
+        value = read()
+        # Account for decoded Python objects, not only serialized JSON bytes.
+        # Oversized values remain readable but never occupy the cache.
+        pending, seen, size = [value], set(), 0
+        while pending and size <= self._max_bytes:
+            item = pending.pop()
+            if id(item) in seen:
+                continue
+            seen.add(id(item))
+            size += sys.getsizeof(item)
+            if isinstance(item, dict):
+                pending.extend(item.keys())
+                pending.extend(item.values())
+            elif isinstance(item, (list, tuple)):
+                pending.extend(item)
+        if size <= self._max_bytes and self._max_entries > 0:
+            while self._cache and (len(self._cache) >= self._max_entries
+                                  or self._cache_bytes + size > self._max_bytes):
+                _, (_, discarded_size) = self._cache.popitem(last=False)
+                self._cache_bytes -= discarded_size
+            self._cache[key] = value, size
+            self._cache_bytes += size
+        return value
 
     def read(self, record_id):
-        if record_id not in self._records:
-            self._records[record_id] = super().read(record_id)
-        return self._records[record_id]
+        return self._read_cached(("record", record_id), lambda: MeasurementStore.read(self, record_id))
 
     def read_kernel(self, kernel_id):
-        if kernel_id not in self._kernels:
-            self._kernels[kernel_id] = super().read_kernel(kernel_id)
-        return self._kernels[kernel_id]
+        return self._read_cached(("kernel", kernel_id), lambda: MeasurementStore.read_kernel(self, kernel_id))

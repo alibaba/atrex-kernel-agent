@@ -405,7 +405,8 @@ class UsageAccumulator:
             session = self.dsh_sessions.get(path, path.split('/')[-2])
             sequence = event.get("seq")
             if type(sequence) is not int or sequence < 0:
-                self.missing.add(path + ":dsh_missing_sequence")
+                if not previous:
+                    self.missing.add(path + ":dsh_missing_sequence")
                 sequence = index
             # A new JSONL generation preserves logical Session/sequence IDs.
             # Keep those IDs stable across migrations and invocation history.

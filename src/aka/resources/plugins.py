@@ -44,7 +44,7 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
         self.bind_workspace_resources(resources)
 
     def instructions(self, phase: str, **values: str) -> str:
-        return ("Use `python -m aka.resources.cli list` to discover enabled tools and Skills. "
+        return ("For additional plugin tools and their Skills, use `python -m aka.resources.cli list`. "
                 "Invoke `python -m aka.resources.cli call <plugin.tool> --input <request.json>`.\n\n"
                 + super().instructions(phase, **values))
 

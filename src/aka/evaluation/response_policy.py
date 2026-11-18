@@ -67,7 +67,8 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
     """Interpret captured execution failure facts without inferring dispatch from text."""
     original = upstream_error(result)
     if original is not None:
-        return {"status": "failed", **original}
+        collecting = any(item.code == "original-job-wait-incomplete" for item in result.diagnostics)
+        return {"status": "unknown" if collecting else "failed", **original}
     if result.returncode == 0 and result.transport_status == "succeeded":
         return None
     diagnostics = tuple(item for item in result.diagnostics if item.category not in INFORMATION_CATEGORIES)

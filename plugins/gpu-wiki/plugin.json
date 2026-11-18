@@ -5,7 +5,10 @@
   "tools": {
     "query": {
       "description": "Query scoped GPU optimization experience and exact hardware facts from natural language.",
-      "command": ["{python}", "{plugin_root}/adapter.py"],
+      "command": [
+        "{python}",
+        "{plugin_root}/adapter.py"
+      ],
       "input_schema": "schemas/query.input.json",
       "output_schema": "schemas/query.output.json",
       "timeout_seconds": 360
@@ -14,13 +17,15 @@
   "resources": {
     "gpu-wiki": "../../gpu-wiki"
   },
-  "skills": {"KernelWiki": {"path": "../../gpu-wiki/3rdparty/KernelWiki", "optional": true}},
+  "skills": {
+    "KernelWiki": {
+      "path": "../../gpu-wiki/3rdparty/KernelWiki",
+      "optional": true
+    }
+  },
   "instructions": {
     "common": "instructions.md",
-    "setup": "setup.md",
-    "episode": "episode.md",
-    "fast_episode": "episode.md",
-    "framework_baseline": "framework_baseline.md"
+    "episode": "episode.md"
   },
   "environment": {
     "ATREX_WIKI_PROFILE_ROOT": "{workspace}/.gpu_wiki_profile",

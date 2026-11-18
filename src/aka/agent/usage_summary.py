@@ -9,6 +9,7 @@ TOKEN_KEYS = (
     "cache_write_tokens",
     "total_tokens",
 )
+
 def usage(value: object) -> dict:
     value = value if isinstance(value, Mapping) else {}
     return {
@@ -58,5 +59,3 @@ def summarize_usage(rows: list[dict], *, missing_expected: bool = False) -> dict
         "usage_available_invocations": available,
         "usage": usage,
     }
-
-

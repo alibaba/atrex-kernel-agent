@@ -13,7 +13,7 @@ operations. It creates no Episode Journal: central ResearchStore, SubmissionStor
 MeasurementStore are the durable authorities. Direction and Experiment requests are validated
 against an in-memory snapshot of the central store; Light neither writes nor migrates a
 `research-transaction.json` compatibility file.
-`recorded_verifier.py` requests or reuses evidence through the selected Tool Runtime.
+`../measurements.py` requests or reuses evidence through the public `aka.experiment.runner` and the Campaign Measurement Store.
 
 The Agent receives one trajectory-persistent local Git repository. Ending a Session closes an
 audit segment; it does not submit, seal or promote source. `submit-kernel` is the only formal

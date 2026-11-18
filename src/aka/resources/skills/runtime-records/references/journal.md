@@ -161,15 +161,15 @@ Start selected work:
 ```json
 {
   "action": "start",
-  "direction_id": "direction_11111111111111111111111111111111",
-  "analysis": "Highest expected impact; the first probe is bounded and reversible"
+  "direction_id": "direction_11111111111111111111111111111111"
 }
 ```
 
 `propose` runs admission Review of the optimization objective, applicability, and strategy space;
 it requires no Experiment or prior measurement. Supported and partially supported proposals are
 archived; unsupported proposals are rejected before mutation. `start` changes lifecycle without
-another Review and retains the prior review quality. Partial or reviewer-unavailable state remains
+another Review and retains the prior review quality. Optional `analysis` replaces the current
+assessment; omitting it preserves that assessment. Partial or reviewer-unavailable state remains
 shared context rather than established supporting evidence.
 The lifecycle is `proposed --start--> in_progress`. Only `in_progress` may `complete`, `abandon`,
 `defer`, or `block`; restart `deferred` or `blocked` work with `start`. `completed` and `abandoned`
@@ -211,8 +211,10 @@ changes the claim or remaining plan, submit a complete `action=revise` Direction
 
 ## Record an Experiment
 
-Related candidate trials may continue before recording one Experiment at a decision checkpoint,
-when switching paths, or when sharing findings. Record observations, their measured scope, and the
+Record an Experiment when measured results determine whether to keep or discard a candidate,
+select a parameter or workload strategy, rule out a branch, or switch paths. Related trials can be
+recorded together; do not wait for a mechanism proof or Direction closure. Not every Evaluate needs
+an Experiment. Record observations, their measured scope, and the
 next action; the mechanism may remain unknown. Cite all relevant Records or archived references,
 including regressions that limit the conclusion. Runtime retains each measurement and its source
 identity. A disposable probe that changes no decision need not be recorded:
