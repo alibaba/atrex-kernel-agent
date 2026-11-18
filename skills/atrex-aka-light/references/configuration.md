@@ -62,10 +62,8 @@ reason rather than being silently clipped. All Agate calls use the SDK. Runtime
 polls a known Job with short reads within the budget; it does not blindly resubmit
 an ambiguous request without a Job ID or idempotency guarantee.
 
-Evaluate and ABBA use Ray Data with `shape_shards=1`. Ordinary Evaluate retains the
-full reference and passes selected `shape_ids`. The removable
-`aka.evaluation.abba_shape_compat` adapter builds a full batch-local reference for
-ABBA and omits selectors. Requests set `lock_clocks=true` without specific MHz.
+Evaluate and ABBA use Ray Data with `shape_shards=1`. Both retain the
+full reference and pass selected `options.shape_ids`, without rebuilding batch-local references. Requests set `lock_clocks=true` without specific MHz.
 Aggregation follows `metadata.performance_objective` after all batches complete.
 
 ## Composition patches

@@ -70,8 +70,7 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
     from .gateway_request import prepare_request, _candidate_languages
     from .command_inputs import workload_environment
     from .private_inputs import selected_content
-    from .shapes import batch_shape_ids
-    from .abba_shape_compat import full_reference_abba_batch_request
+    from .shapes import batch_shape_ids, shape_batch_request
     from .transport_results import _shape_batch_reference
     from .measurement import gateway_identity
     capabilities = configuration.execution_capabilities
@@ -177,7 +176,7 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
     steps, identities = [], []
     for outer in range(configuration.measurement_repetitions):
         for ids in batches:
-            batch = full_reference_abba_batch_request(payload, ids)
+            batch = shape_batch_request(payload, ids)
             files = {name: value.decode("utf-8") for name, value in _shape_batch_reference(batch["reference"]).items()}
             step = replace(command, requirements=requirements, source_archives=archives, num_gpus=payload["spec"].get("num_gpus", 1),
                 submission=json.dumps({"schema_version": 1, "kind": "run", "request": batch,

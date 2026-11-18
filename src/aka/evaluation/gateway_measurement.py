@@ -34,11 +34,6 @@ class GatewayMeasurement:
     def request_for(self, index):
         if self.profiling:
             return self.request
-        # Even a single outer batch must freeze the one-worker policy. ABBA
-        # requires the batch to be a complete reference, without a selector.
-        if self.request.get("abba"):
-            from .abba_shape_compat import full_reference_abba_batch_request
-            return full_reference_abba_batch_request(self.request, self.batches[index])
         return shape_batch_request(self.request, self.batches[index])
 
     def reference_content(self, index):

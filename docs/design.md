@@ -65,8 +65,8 @@ are preserved or rejected with a concrete explanation, not silently clipped. Age
 and Reviews have no active-time deadline.
 
 Outer batches contain at most 10 Shapes. Ray Data uses `shape_shards=1`. Ordinary Evaluate
-retains the full reference and selects batch IDs. The removable ABBA compatibility adapter
-constructs a complete batch-local reference and omits Shape selectors. Requests ask for
+and native ABBA retain the full reference and select batch IDs through `options.shape_ids`.
+Requests ask for
 best-effort clock locking without prescribing MHz. Structured SDK rejection and candidate
 failure diagnostics remain in both audit evidence and actionable Agent receipts.
 
