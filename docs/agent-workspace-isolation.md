@@ -182,10 +182,11 @@ after successful process completion, using bounded no-follow regular-file reads 
 GPU-library imports in development are not treated as final-submission violations; the submission
 policy evaluates the implementation that is actually submitted.
 
-The host process-policy poller detects prohibited host GPU execution and shared Gateway
-mutation on a best-effort basis; short-lived commands can finish between polls. GPU probes
-belong in Runtime, where they execute on the selected worker. Agent-owned source and Git
-remain editable. The poller provides recovery feedback, not a security boundary.
+Light does not install a host-command or GPU-library import blocker. Reading package
+metadata or importing a library does not terminate the Session. Use Runtime for measurements
+on the selected worker and their recorded evidence. Agent-owned source and Git remain editable.
+Revoking Runtime access still stops its bound Agent invocation; it does not leave an Agent
+running with unusable tools.
 
 The Wiki worker receives the selected Wiki resources and configuration, the read-only AKA
 package, and the interpreter/CLI installations and DNS/TLS files needed to run them. Those

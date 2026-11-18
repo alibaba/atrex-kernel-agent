@@ -43,14 +43,13 @@ def validate_config(config):
 
 def apply(ctx, config):
     from aka.contracts.agent import AgentProcessPolicy
-    from aka.agent.execution.dependency_policy import host_command_violation
     from aka.execution.recovery import environment_is_blocked
     def unavailable(environment):
         if environment_is_blocked():
             return 75, "Remote execution environment unavailable; stopped for durable recovery"
         return None
     ctx.contribute("agent_process_policies", "workflow", AgentProcessPolicy(
-        unavailable=unavailable, violation=host_command_violation))
+        unavailable=unavailable))
     from .provider import LightWorkflow, WorkflowOptions
     workflow = LightWorkflow(ctx.agent, ctx.problem, ctx.source, ctx.candidate,
                              executor=ctx.executor, execution_context=ctx.execution_context,

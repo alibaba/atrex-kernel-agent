@@ -1,4 +1,4 @@
-"""Command policy used by the live process guard; not an isolation boundary."""
+"""Optional command policy helpers; not enabled by Light."""
 
 from __future__ import annotations
 
@@ -44,18 +44,6 @@ def protected_gateway_identity(environment=None):
 def canonical_sandbox_entrypoint():
     from importlib.resources import files
     return Path(str(files("aka.resources"))) / "tools/sandbox.py"
-
-
-def host_command_violation(argv, environment):
-    """Best-effort live-process policy; not an OS/process isolation boundary."""
-    canonical = canonical_sandbox_entrypoint()
-    cwd = environment.get("AKA_INSPECTED_PROCESS_CWD")
-    return dependency_command_violation(
-        argv, cwd=Path(cwd) if cwd else None,
-        canonical_sandbox_entrypoint=canonical,
-        protected_gateway=protected_gateway_identity(environment),
-        enforce_dependencies=dependency_guard_enabled(environment),
-    )
 
 
 def _read_regular_bytes(path, *, limit):
@@ -108,6 +96,10 @@ def _python_entrypoint(tokens: list[str]) -> tuple[str, str]:
         else:
             return "script", token
     return "", ""
+
+
+
+
 
 
 def python_import_roots(code: str, *, _depth: int = 0) -> set[str]:
@@ -371,45 +363,33 @@ def dependency_command_violation(
     if any(shared_gateway_mutation(segment) for segment in segments):
         return "shared localhost gateway lifecycle/state mutation"
 
+    # Leaderboard keeps the transport and shared-service boundary but permits
+    # dependency experimentation. Production additionally enforces the local
+    # installation/build/JIT policy below.
+    if not enforce_dependencies:
+        return None
+
+    if any(is_installer(segment) for segment in segments):
+        return "third-party package installation/build command"
+
     def direct_host_jit_package_import(segment: list[str]) -> str | None:
         tokens = unwrap(segment)
         if not tokens:
             return None
         lowered = [token.lower() for token in tokens]
         executable = Path(lowered[0]).name
-        if executable in {"nvidia-smi", "nvcc", "ptxas", "ncu", "rocprofv3", "compute-sanitizer"}:
-            return "GPU execution/toolchain command invoked directly on the host"
         if re.fullmatch(r"python[0-9.]*", executable):
             mode, entry = _python_entrypoint(tokens)
-            if mode == "module":
-                imports = {entry.split(".", 1)[0]}
-            elif mode == "script" and cwd is not None:
-                try:
-                    path = Path(entry)
-                    if not path.is_absolute():
-                        path = Path(cwd) / path
-                    imports = python_import_roots(_read_regular_bytes(path, limit=128 * 1024).decode("utf-8"))
-                except (OSError, ValueError, UnicodeError):
-                    imports = set()
-            else:
-                imports = set()
             if mode == "code":
                 imports = python_import_roots(entry)
-            if imports & {"kernel", "torch", "cuda", "triton", "cutlass", "flashinfer", "flash_attn", "xformers", "vllm"}:
-                return "Kernel/GPU package imported directly on the host; use Runtime"
+                if imports & {"flashinfer", "flash_attn", "xformers", "vllm"}:
+                    return "JIT-capable third-party GPU package imported directly on the host"
         return None
 
     for segment in segments:
         reason = direct_host_jit_package_import(segment)
         if reason is not None:
             return reason
-
-    # Development dependency installation is independent of the CPU-only host
-    # execution boundary. Managed Campaigns permit it in writable scratch space.
-    if not enforce_dependencies:
-        return None
-    if any(is_installer(segment) for segment in segments):
-        return "third-party package installation/build command"
 
     command = " ".join(argv).lower()
     package_build_tree = re.search(

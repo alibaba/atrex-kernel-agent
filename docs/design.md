@@ -116,9 +116,9 @@ The tradeoffs are larger private evidence archives and potentially long Sessions
 There is no automatic wall-clock watchdog at the Episode layer. Native mode trusts the local
 OS user; Bubblewrap host-proc mode preserves filesystem mounts but shares the host PID namespace
 and cannot protect same-UID processes from signals. See [isolation](agent-workspace-isolation.md).
-The process-policy poller detects prohibited host GPU work and shared Gateway mutation
-on a best-effort basis. It is not a substitute for OS isolation and does not freeze
-Agent-owned Git/source. Reference knowledge is installed separately and excluded from
+Light does not install a host-command or GPU-library import blocker. Development
+commands remain under Agent control; submission review checks the submitted implementation.
+Runtime revocation stops its bound Agent invocation. Reference knowledge is installed separately and excluded from
 candidate uploads, including implicit file arguments and manifest source entries.
 
 ## Migration and rollback
