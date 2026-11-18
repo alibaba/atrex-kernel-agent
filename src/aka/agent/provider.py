@@ -364,10 +364,11 @@ class Agent:
             if context.control is not None:
                 context.control.kill()
             processes = tuple(context.processes)
-            from .tools.protocol import TOKEN_ENV
-            token = context.authority.get(TOKEN_ENV)
-        if token and self._tool_host is not None:
-            self._tool_host.revoke(token)
+        # A native Session owns its invocation, not the enclosing tool grant.
+        # bind_control drains/cancels this invocation's requests on exit. The
+        # grant remains owned by tool_session(), so a fresh recovery Session can
+        # bind it after this invocation has stopped. Explicit grant revocation
+        # still kills the bound process and permanently rejects further use.
         for process in processes:
             signal_process_groups(
                 {process.pid} | descendant_process_groups(process.pid), signal.SIGKILL
