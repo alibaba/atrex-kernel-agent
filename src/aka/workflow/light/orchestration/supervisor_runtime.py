@@ -12,6 +12,7 @@ import math
 import os
 import re
 import secrets
+import shlex
 import shutil
 import subprocess
 import sys
@@ -66,6 +67,27 @@ AUTHORITY = frozenset({
 })
 FORBIDDEN = frozenset({"--preflight", "--check-health"})
 WIKI_STORES = {"query_nl": "--store-root", "query_wiki": "--json-store", "query_hardware": "--store"}
+
+
+def normalize_wiki_argv(tool: str, argv: list[str]) -> list[str]:
+    """Accept wrapper syntax before validating Supervisor-owned options."""
+    argv = list(argv)
+    if argv[:1] == ["--"]:
+        argv = argv[1:]
+    # A quoted option string is a common wrapper mistake. Never split prose or
+    # individually supplied option values (product names and query text may contain spaces).
+    if tool in {"query_hardware", "query_wiki"} and len(argv) == 1 and argv[0].startswith("-"):
+        argv = shlex.split(argv[0])
+    if argv[:1] == ["--"]:
+        argv = argv[1:]
+    if "--" in argv:
+        raise ValueError("Use '--' only before the Wiki arguments, not between them")
+    if tool == "query_hardware":
+        if not argv:
+            return ["--list", "products"]
+        if not argv[0].startswith("-"):
+            argv = ["--product", *argv]
+    return argv or ["--help"]
 
 
 @contextmanager
@@ -1231,8 +1253,7 @@ class SupervisorRuntime:
                                     next_action="Continue with the enabled tools. Only the operator can enable Wiki; do not retry or access its private store directly.")
         if not isinstance(tool, str) or tool not in WIKI_STORES:
             raise ValueError("Unsupported Wiki tool")
-        if "--" in argv:
-            raise ValueError("Wiki requests do not accept a '--' option terminator")
+        argv = normalize_wiki_argv(tool, argv)
         # No prefix spelling or '--' escape may reinterpret private host files.
         forbidden = frozenset({"--store", "--store-root", "--json-store", "--keep-workspace"})
         argv = filter_options(argv, frozenset(), forbidden)

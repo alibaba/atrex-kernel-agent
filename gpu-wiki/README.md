@@ -122,7 +122,10 @@ python3 gpu-wiki/tools/query_nl.py \
 
 Do not substitute a scheduler label for the product name. Product normalization
 only repairs formatting differences such as case, separators, or vendor wrappers;
-it does not translate one hardware identity into another.
+it does not translate one hardware identity into another. Deployment names such as
+`L20N`, `L20D`, and `L20Z` return a structured `not-recorded` result (exit 4), with no
+substitute product specification. Use the observed runtime architecture for ISA/feature
+lookups and runtime device queries for device-specific counts, clocks, and capacities.
 
 ## 4. The bridge stays small; scripts perform retrieval
 

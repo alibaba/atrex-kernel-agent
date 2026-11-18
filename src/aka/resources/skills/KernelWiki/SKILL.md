@@ -19,6 +19,18 @@ python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverag
 python3 tools/sandbox.py --kind wiki-hardware --product B200
 ```
 
+Hardware names such as `L20N` and `L20D` are deployment aliases, not public products.
+`wiki-hardware --product L20N` returns `not-recorded` (exit 4) with instructions for
+obtaining the device facts; it does not substitute another GPU's specifications.
+Use the observed architecture for architecture facts, for example
+`--kind wiki-hardware --capability sm_120 --list features` when Env reports `sm_120`.
+The `sm120` spec sheet describes an architecture; its product-specific numbers must not
+be assumed to describe the assigned device.
+
+`wiki-hardware` with no arguments lists products. A bare product name is accepted,
+as are a leading `--` separator and a single quoted option string; prefer the explicit
+arguments shown above. `--help` returns each tool's supported options.
+
 Use the `tools/sandbox.py --kind wiki-*` commands above from an Agent workspace.
 The Supervisor owns stores, the Wiki-only model, timeouts, concurrency and query
 telemetry; never override their host paths or provider configuration. Repeating an

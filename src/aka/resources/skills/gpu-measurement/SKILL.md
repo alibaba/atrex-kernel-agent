@@ -6,8 +6,8 @@ description: Discover and use the Campaign-enabled measurement tools through the
 # GPU measurement
 
 Use `python3 tools/sandbox.py`; the Supervisor owns hardware, credentials, evaluator inputs,
-timeouts, retries, and result persistence. The local workspace is CPU-only: do not run or import the
-Kernel locally or invoke Agate directly. Initial bring-up uses these same Runtime operations before
+timeouts, retries, and result persistence. Local development and import/API inspection are allowed;
+use Runtime for target-GPU work and official measurements. Do not invoke Agate directly. Initial bring-up uses these same Runtime operations before
 the Supervisor performs independent submission review.
 
 ## Measurement loop

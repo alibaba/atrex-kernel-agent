@@ -37,10 +37,10 @@ operations and request schemas. Do not infer a different workflow from unrelated
 
 ## Runtime and evidence
 
-- The local Agent workspace is CPU-only. Do not run or import the candidate locally or probe for a
-  local GPU/toolchain with `torch`, `cuda`, `nvidia-smi`, `nvcc`, `ptxas`, `ncu`, or equivalents.
-  Use `python3 tools/sandbox.py` and `.agents/skills/gpu-measurement/SKILL.md` for compilation, execution,
-  evaluation, profiling, and diagnostics. Do not invoke Agate directly or obtain its credentials.
+- Local development and import/API inspection are allowed within workspace permissions. The local
+  environment may lack the target GPU or toolchain. Use `python3 tools/sandbox.py` and
+  `.agents/skills/gpu-measurement/SKILL.md` for target-GPU compilation, execution, evaluation,
+  profiling, and diagnostics. Do not invoke Agate directly or obtain its credentials.
 - `python3 tools/sandbox.py --help` lists the enabled operations. Typed Evaluate selects managed
   inputs automatically. Use an enabled Command for custom remote probes; it uploads the engineering
   workspace and returns scratch artifacts. Remote jobs are fresh and stateless, and custom probes

@@ -1,9 +1,9 @@
 ## Wiki attribution contract
 
-Query Wiki only when a missing hardware or implementation fact can change the next engineering decision. Use the exact operator, true product, authoritative runtime architecture, and current DSL:
+Query Wiki only when a missing hardware or implementation fact can change the next engineering decision. Use the exact operator, target hardware and, if known, public product, authoritative runtime architecture, and current DSL:
 
 ```bash
-python3 tools/sandbox.py --kind wiki-query "Target product {{PLATFORM}}, runtime architecture {{ARCH}}, DSL {{FRAMEWORK}}. Optimize operator {{OPERATOR}} and retrieve applicable techniques, hardware facts, and pitfalls."
+python3 tools/sandbox.py --kind wiki-query "Target hardware {{PLATFORM}}, runtime architecture {{ARCH}}, DSL {{FRAMEWORK}}. Optimize operator {{OPERATOR}} and retrieve applicable techniques, hardware facts, and pitfalls."
 ```
 
-Follow `.agents/skills/kernel-wiki/SKILL.md` for result interpretation and optional Experiment attribution. When conversion is mandatory, ask only for the exact product specification and matching conversion guidance; do not issue an additional generic query without a separate measured uncertainty.
+Follow `.agents/skills/kernel-wiki/SKILL.md` for result interpretation and optional Experiment attribution. Deployment names such as L20N/L20D are not public product identities; use the runtime architecture for architecture facts and device measurements for product-specific numbers.

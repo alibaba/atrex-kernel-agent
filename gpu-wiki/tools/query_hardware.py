@@ -103,6 +103,25 @@ OBTAIN = {
 }
 
 NOT_RECORDED_EXIT = 4
+# Deployment names are valid query inputs, but are not public product identities.
+# In particular, neither the name L20N nor L20D establishes NVIDIA L20/Ada specs.
+SCHEDULER_ALIASES = frozenset({"l20n", "l20d", "l20z"})
+
+
+def scheduler_alias_answer(alias: str, entries: list[dict]) -> dict:
+    return {
+        "hardware_alias": alias,
+        "product": None,
+        "status": "not-recorded",
+        "reason": "scheduler_alias_is_not_product_identity",
+        "recorded_products": known([e for e in entries if e["type"] == "spec-sheet"], "products"),
+        "obtain_instead": OBTAIN,
+        "architecture_lookup": "Use the runtime-reported architecture with --capability SM_ARCH "
+                               "--list features, or wiki-search --arch SM_ARCH. "
+                               "For example, use sm_120 only when the runtime reports sm_120.",
+        "do_not": "Do not substitute L20, B200, or the sm120 architecture sheet for this "
+                  "deployment's product specifications. Query the actual device for product-specific numbers.",
+    }
 
 
 def not_recorded(product: str, entries: list[dict]) -> int:
@@ -285,6 +304,7 @@ def main(argv=None) -> int:
                 product for product, identity in HARDWARE_IDENTITIES.items()
                 if not identity["recorded"] and identity["arch"] in visible_arches
             )
+            answer["scheduler_aliases_without_product_identity"] = sorted(SCHEDULER_ALIASES)
             # A spec sheet with no product name is unreachable by --product, so an
             # empty list next to a non-zero scope count reads as "nothing here"
             # when the truth is "something here that cannot be addressed".
@@ -301,6 +321,9 @@ def main(argv=None) -> int:
 
     if args.product:
         product = normalize_product_name(args.product)
+        if product in SCHEDULER_ALIASES:
+            emit(scheduler_alias_answer(product, entries), args.human)
+            return NOT_RECORDED_EXIT
         sheets = [e for e in entries if e["type"] == "spec-sheet"]
         if product not in {e.get("product") for e in sheets} and product in PRODUCT_ARCH:
             return not_recorded(product, entries)
