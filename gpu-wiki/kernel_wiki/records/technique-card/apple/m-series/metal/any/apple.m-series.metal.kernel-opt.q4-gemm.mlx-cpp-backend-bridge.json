@@ -1,0 +1,120 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal.kernel-opt.q4-gemm.mlx-cpp-backend-bridge",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal|kernel-opt|q4-gemm#mlx-cpp-backend-bridge|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "metal",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "mlx",
+   "quantized-gemm",
+   "backend-integration"
+  ],
+  "triggers": [
+   "a native Metal engine needs a fast quantized GEMM without hand-writing MMA kernels",
+   "integrating MLX operators into a non-MLX C++ pipeline"
+  ]
+ },
+ "payload": {
+  "goal": "Use mlx::core quantized_matmul as a drop-in backend for a native Metal engine.",
+  "problem": {
+   "target": "Apple Silicon (M-series) unified-memory GPU, mlx 0.32 C++ API",
+   "statement": "Hand-written public-API Metal kernels plateau near ~9 TFLOPS effective on q4 GEMM while MLX reaches ~43 TFLOPS."
+  },
+  "technique": "MLX C++ backend bridge",
+  "what": "The mlx wheel ships full C++ headers, libmlx.dylib, and the precompiled mlx.metallib. Link libmlx, register the metallib via mlx::core::metal::set_metallib_path, and call quantized_matmul. Formats bridge exactly without repacking: onyx w=(q-8)*scale equals mlx q*scale+bias with biases=-8*scale. Repack the 2-nibbles-per-byte stream into uint32 words (8 nibbles/word, little-endian) once per layer and cache.",
+  "when": "Any Apple-Silicon engine that currently dequantizes weights or hand-rolls quantized GEMM.",
+  "how": "1. Link libmlx.dylib; set_metallib_path before the first kernel. 2. Repack weights uint8->uint32 and build biases=-8*scales; eval and cache per layer. 3. Activations: convert via the copying float->float16 constructor (foreign-pointer zero-copy segfaults). 4. Output: read back through astype(float32)+eval; a direct fp16 data() read without sync returns garbage. 5. Gate by env for fallback (native|mlx|auto).",
+  "caveats": [
+   "group sizes limited to 32/64/128",
+   "per-call costs remain: fp16->float activation conversion and fp32 read-back (~1 ms at m=1024)",
+   "mlx dynamic library and metallib versions must move together"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": 49.9,
+  "_gain": {
+   "pct": 49.9,
+   "metric": "gpu_median_latency",
+   "entry": {
+    "metric": "gpu_median_latency",
+    "delta_pct": 49.9,
+    "note": "engine m1024 4.10 ms vs 8.4 ms own best public-API kernel (6.6x vs tile16 baseline); m16 decode 0.374 ms beats tile16 0.473 and python-mlx 0.726"
+   }
+  }
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent episode E12: MLX C++ backend wired into a native Metal engine, 2026-11-18"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.65,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.65,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-18T07:35:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "measured",
+   "kind": "measured",
+   "pct": 49.9,
+   "primary": "gpu_median_latency",
+   "metrics": [
+    {
+     "metric": "gpu_median_latency",
+     "delta_pct": 49.9,
+     "note": "engine m1024 4.10ms vs own best public-API kernel 8.4ms; 6.6x vs tile16 baseline; m16 0.374ms beats tile16 and python-mlx",
+     "source": "engine-level ABBA medians, M5 Max, ctest-verified"
+    }
+   ]
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}
