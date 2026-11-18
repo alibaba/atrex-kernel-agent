@@ -4,6 +4,8 @@ Direction recording is enabled; Experiment recording is disabled. Read `PROGRESS
 
 Lifecycle is explicit: `propose` creates `proposed`; call `start` to enter `in_progress`; only an `in_progress` Direction may `complete`, `abandon`, `defer`, or `block`. Restart `deferred` or `blocked` work with `start`. `completed` and `abandoned` are terminal, so continued work needs a derived Direction.
 
+`start`, `defer`, and `block` allow `partially_supported`. Only `complete` and `abandon` require `supported` Review of that terminal decision; otherwise the Direction remains `in_progress` and the Review is returned for correction.
+
 Multiple local Directions may be `in_progress`; keep that set intentional and update each Direction by ID. The most recently started active Direction is the focus; queue reordering does not change it. Choose executable work from the Local work queue; paused Directions are not next work until explicitly restarted. The Shared direction pool is discovery-only: absorb compatible peer ideas into one local derivative citing every source ID. Experiment recording is disabled, so omit `supporting_experiment_ids`; closure evidence uses `gateway_record_ids`. Follow the installed Skill for exact mutation fields.
 
 Continue related candidate trials without a revision after each measurement. Revise when the assessment or remaining plan changes materially, recording observations, their measured scope, and the next action. A mechanism may remain unknown when the evidence still justifies the next trial. Stronger support is needed to exclude a high-upside path, generalize beyond measured workloads, or declare the program exhausted.

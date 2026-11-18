@@ -13,6 +13,12 @@ Directly cited evidence may appear in:
 
 First classify the submission from `target.json`, then apply the matching standard below. Review the decision the record is meant to support, not every incidental sentence with equal weight.
 
+Gateway Records need not bind a Kernel. Env can support environment facts, and self-contained
+probes or failed requests can support the observations they actually contain. Do not reject a
+record solely for lacking a Kernel binding. Require candidate/source identity only when the
+claim depends on a particular implementation; environment facts alone do not prove its
+correctness or performance.
+
 Distinguish evidence for trying a candidate from evidence for declaring a mechanism established. Ask: if the mechanism explanation were wrong, would the cited observations still justify the proposed next experiment? If yes, keep the uncertainty explicit without making it decision-critical. Require stronger support when a mechanism claim is used to exclude a high-upside direction, generalize beyond measured workloads, or declare an optimization program exhausted. Correctness, measurement validity, and source/comparator identity still require evidence.
 
 ## Direction standard
@@ -27,12 +33,16 @@ Distinguish evidence for trying a candidate from evidence for declaring a mechan
 
 ## Experiment standard
 
-- An Experiment asks whether the recorded observation and the resulting keep, repair, restore, or follow-up decision are trustworthy. Mark it `supported` when the candidate/source identity, relevant measurement or diagnostic, comparator when one is needed, and resulting action are sufficiently traceable and mutually consistent.
+- An Experiment asks whether the recorded observation and the resulting keep, repair, restore, or follow-up decision are trustworthy. Mark it `supported` when the relevant measurement or diagnostic, any candidate/source identity or comparator needed for the claim, and resulting action are sufficiently traceable and mutually consistent.
 - An Experiment may summarize several related candidates that inform one decision. Review the observations, their measured scope, and the proposed next action; do not require one record per candidate or a complete mechanism explanation. For example, a traceable observation that V-split=4 helps measured long sequences but regresses short ones can support testing workload dispatch while the cause remains unknown. It does not establish benefits outside that scope.
 - Mechanistic interpretation is useful but not required for `supported`. A result may be supported even when the exact root cause, theoretical explanation, generality outside the measured scope, or precise expected magnitude remains uncertain. Preserve those limitations in `scope_safe_interpretation` without downgrading the whole Experiment or requiring mechanism-isolating probes that would not change the next decision.
 - Use `partially_supported` when a decision-critical measurement, comparator, attribution, candidate identity, or action is incomplete or ambiguous but the Experiment still contains a useful observation. Use `unsupported` only when the core result or action is contradicted, untraceable, or not justified by the supplied evidence.
 
 `propose` runs admission Review; every `revise` reviews the effective Direction supplied beside the revision event. `start` only changes lifecycle and is not sent for review.
+
+Runtime accepts partial support for starting or pausing work (`defer`/`block`). Only `complete`
+and `abandon` require `supported` Review of the terminal decision. Preserve a partial verdict
+when that decision remains uncertain; do not upgrade it merely to permit the transition.
 
 Use `next_check` only for a check that could change the next implementation choice or resolve a premise needed for the submitted lifecycle decision. Otherwise write `No additional check needed for the next decision.` A narrower interpretation may resolve an overclaim without new measurement. Do not manufacture follow-up work merely to improve a review label; a partial review can preserve useful observations while the Agent continues a justified high-value trial.
 

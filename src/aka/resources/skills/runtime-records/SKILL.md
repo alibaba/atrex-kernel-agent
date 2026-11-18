@@ -15,6 +15,8 @@ before using its result or revising the same Direction, Experiment, or Submissio
 Start with `PROGRESS.md`. Open `frontier.json` only for the complete accepted-submission frontier, then only relevant
 Direction, Experiment, and `records/<gateway_record_id>.json` files. Projections are read-only.
 Gateway Records are measurement authority; all analysis is fallible.
+Direction and Experiment citations need not bind a Kernel. Cite Env for environment facts and
+unbound probes for their observations; Review judges whether each Record supports the claim.
 `research-library/` is a read-only, visibility-filtered copy of the versioned Campaign Library. Local identities remain writable
 only through Runtime; peer identities are always read-only. Synchronous pooled search freezes peer
 revisions at an Epoch watermark, while asynchronous pooled search projects the latest peer revision
@@ -39,6 +41,9 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
   supported/refuted hypothesis; concrete falsifiable work and outcomes belong in Experiments.
 - `propose` runs admission Review without requiring an Experiment or prior measurement. Every
   `revise` and closure is reviewed; `start` only changes lifecycle and retains the prior review.
+  `start`, `defer`, and `block` allow `partially_supported`. Only `complete` and `abandon`
+  require `supported` Review of the submitted terminal decision; otherwise the state stays
+  `in_progress` and the Review is returned for correction.
   Every archived state is published to peers with its actual review quality; only eligible evidence
   may support research conclusions.
 - Related candidate trials may continue before recording one Experiment at a decision checkpoint,

@@ -148,8 +148,10 @@ class WikiService:
         live = lambda: owner._live(capability)
         tool = Path(command[1]).stem
         normalized = list(command[2:])
+        option_args = normalized[:normalized.index("--")] if "--" in normalized else normalized
+        help_requested = any(arg in {"--help", "-h"} for arg in option_args)
         # Request-file identity binds frozen content, never the random staging path.
-        for i, word in enumerate(normalized):
+        for i, word in enumerate(normalized if not help_requested else []):
             if word == "--file" and i + 1 < len(normalized):
                 normalized[i + 1] = read_regular_bytes(Path(normalized[i + 1]), limit=128 * 1024).decode()
             elif word.startswith("--file="):
@@ -175,7 +177,8 @@ class WikiService:
             with self._reservation(key, min(deadline, started + policy.queue_timeout), live):
                 record["queue_latency_ms"] = round((time.monotonic() - started) * 1000, 3)
                 try:
-                    cached = json.loads(read_regular_bytes(self.root / "results" / (key + ".json"), limit=2 * 1024 * 1024))
+                    cached = None if help_requested else json.loads(read_regular_bytes(
+                        self.root / "results" / (key + ".json"), limit=2 * 1024 * 1024))
                 except FileNotFoundError:
                     cached = None
                 except (ValueError, OSError):
@@ -274,6 +277,9 @@ class WikiService:
                 response = project_response(process, generalized=owner.config.private_reference_dir is not None,
                     private_values=private_values, wiki=True, private_paths=private_paths)
                 record["status"] = "failed" if process.returncode else "completed"
+                # argparse Help is text, not a query result or reusable research evidence.
+                if help_requested:
+                    return response
                 # Only successful, validated native JSON may become reusable evidence.
                 if process.returncode == 0:
                     try:

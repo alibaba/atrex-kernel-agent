@@ -152,6 +152,21 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                   DIRECTION_CLOSURE_FIELDS if action in CLOSURES else DIRECTION_UPDATE_FIELDS)
         properties = {key: _text() for key in fields}
         properties["action"] = {"const": action}
+        if action in {"complete", "abandon"}:
+            properties["action"]["description"] = (
+                "Requires in_progress and a supported Review of this terminal decision. "
+                "A partial or unavailable Review leaves the Direction in_progress."
+            )
+        elif action == "start":
+            properties["action"]["description"] = (
+                "Start proposed, deferred or blocked work without another Review; "
+                "partially_supported is sufficient. Supply analysis explaining the choice."
+            )
+        elif action in {"defer", "block"}:
+            properties["action"]["description"] = (
+                "Pause in_progress work with analysis and reopen_condition; "
+                "partially_supported Review is sufficient."
+            )
         if action in {"propose", DIRECTION_REVISION_ACTION}:
             properties["name"]["description"] = (
                 "Short name for the optimization bottleneck or architecture path."

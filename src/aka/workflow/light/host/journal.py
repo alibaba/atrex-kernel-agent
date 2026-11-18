@@ -88,7 +88,6 @@ DIRECTION_CHANGE_SCOPES = {"incremental", "major_redesign"}
 DIRECTION_UPDATE_FIELDS = {"action", "direction_id", "analysis"}
 DIRECTION_CLOSURE_FIELDS = DIRECTION_UPDATE_FIELDS
 DIRECTION_CLOSURE_OPTIONAL_FIELDS = {"reopen_condition", "supporting_experiment_ids"}
-_EVIDENCE_KINDS = {"run", "same_allocation_abba", "profile", "dev", "check", "disassemble"}
 _SHARED_GATEWAY_RECORD_REASONS = frozenset({
     "visible_direction_reference",
     "visible_experiment_reference",
@@ -3036,6 +3035,34 @@ def update_direction(
         error.private_review = _private_claim_review(review)
         raise error
     review_projection = _review_projection(review)
+    if action in {"complete", "abandon"} and review_projection.get("claim_review_quality") != "supported":
+        # Check this terminal decision's review, not an older supported revision.
+        rejected_review = dict(review or {})
+        quality = review_projection.get("claim_review_quality", "review_unavailable")
+        recovery = (
+            f"Direction {action} requires supported Review; the Direction remains in_progress. "
+            "Address the decision-critical findings and resubmit when the terminal decision "
+            "is justified. Continue work or use defer with a reopen_condition when appropriate. "
+            "Reuse existing evidence unless a decision-critical gap needs a new measurement."
+        )
+        rejected_review.update(
+            archive_status="not_archived",
+            claim_review_quality=quality,
+            evidence_eligible=False,
+            runtime_action=recovery,
+        )
+        error = AgentRequestError(
+            f"Direction {action} requires supported Review; nothing was archived.",
+            code="direction_review_insufficient",
+            direction_id=direction_id,
+            action=action,
+            direction_status="in_progress",
+            required_claim_review_quality="supported",
+            review=_agent_claim_review(rejected_review),
+            next_action=recovery,
+        )
+        error.private_review = _private_claim_review(rejected_review)
+        raise error
     event.update(review_projection)
     _append_event(path, campaign_root, event)
     result: dict[str, object] = {
@@ -3155,47 +3182,29 @@ def _validate_record_ids(
     label: str = "Experiment",
     allow_empty: bool = False,
 ) -> list[str]:
+    """Validate real Record citations; Kernel binding is not required for research."""
     records = _text_list(raw, f"{label} gateway_record_ids")
     if not records:
         if allow_empty:
             return []
         raise AgentRequestError(
-            "This use of the Experiment as measured evidence requires at least one real "
-            "Kernel-bound Gateway Record in gateway_record_ids. An unmeasured Experiment is "
-            "allowed as a research note, but it cannot support a measured Direction closure.",
+            "This operation requires at least one real Gateway Record in gateway_record_ids.",
             code="experiment_evidence_required",
             next_action=(
-                "Cite an actual Evaluate, ABBA, Profile, Dev, Check, or Disassemble result in "
-                "this Experiment, or select/create a measured Experiment for this operation. "
-                "A failed diagnostic can document an unresolved blocker. Env/Wiki responses "
-                "and transport errors without a Gateway Record do not qualify; never invent "
-                "evidence."
+                "Cite an existing records/<gateway_record_id>.json relevant to the claim. "
+                "Records need not bind a Kernel; Review assesses what their contents support."
             ),
         )
     if len(set(records)) != len(records):
         raise field_error("gateway_record_ids", f"{label} gateway_record_ids must not contain duplicates")
     for index, record_id in enumerate(records):
         try:
-            record = _read_private_gateway_evidence(
+            _read_private_gateway_evidence(
                 campaign_root, record_id, measurement_root=measurement_root
             )
         except ValueError as error:
             raise field_error(f"gateway_record_ids.{index}", str(error),
                               next_action="Check records/<gateway_record_id>.json, correct the citation, then resubmit.") from error
-        digest = record.get("kernel_artifact_digest")
-        kernel_id = record.get("kernel_id")
-        if (
-            not isinstance(record.get("gateway_kind"), str)
-            or record["gateway_kind"] not in _EVIDENCE_KINDS
-            or not isinstance(digest, str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
-            or not isinstance(kernel_id, str)
-            or KERNEL_RECORD_ID_RE.fullmatch(kernel_id) is None
-        ):
-            raise ValueError(
-                f"Gateway Record {record_id} must bind a real Kernel and a GPU operation; "
-                "Env, Health, Wiki and unbound Dev records do not qualify"
-            )
     return records
 
 
@@ -4268,9 +4277,7 @@ class SupervisorJournalService:
             KeyError,
             TypeError,
         ):
-            # Transport-only/unbound Records are still useful diagnostics but
-            # cannot be cited as Experiment evidence, so do not recommend an
-            # operation that Runtime would immediately reject.
+            # Do not recommend a citation whose Record is missing or invalid.
             return None
         hint: dict[str, object] = {
             "operation": "record-experiment",

@@ -175,6 +175,13 @@ The lifecycle is `proposed --start--> in_progress`. Only `in_progress` may `comp
 `defer`, or `block`; restart `deferred` or `blocked` work with `start`. `completed` and `abandoned`
 are terminal and continued work requires a derived Direction.
 
+`start` accepts a partially supported Direction without another Review. `defer` and `block`
+also accept partially supported Review and require `reopen_condition`. Only `complete` and
+`abandon` require a `supported` Review of that submission. A partial or unavailable terminal
+Review leaves the Direction `in_progress`, returns `archive_status=not_archived`, and preserves
+the attempted update and Review in the private audit. Prior supported Reviews do not satisfy
+this terminal gate; proposing and starting work still require no Experiment.
+
 A trajectory may own multiple local active Directions. The most recently started Direction is the
 focus; queue reordering does not change it. Runtime infers an omitted Experiment `direction_id` only
 when exactly one local Direction is active; with zero or multiple active Directions, include it.
@@ -230,6 +237,9 @@ local proposed Direction is valid, but is never selected implicitly. When Direct
 omit `direction_id`.
 
 Runtime validates every cited ID; its standardized public result is available under root `records/`.
+Direction and Experiment citations may include Records without a Kernel binding, including Env
+and self-contained probes. Review assesses the evidence within its actual scope: an Env Record
+can establish environment facts, but does not establish a candidate's correctness or latency.
 Correctness, latency, failure, operation and Kernel commit identity remain authoritative in those
 records. Use Git to inspect source changes between cited commits. Summarize only the observations
 needed for the decision in `interpretation`, rather than duplicating complete result tables.

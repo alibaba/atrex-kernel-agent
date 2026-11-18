@@ -1040,6 +1040,10 @@ class SupervisorRuntime:
                     environment_facts = redact_diagnostics(environment_facts,
                         private_paths=(str(staged), str(self.root), str(self.audit_root or "")),
                         private_values=credential_values(environment))
+                    from aka.core.service_audit import audit_service_exchange
+                    from aka.workflow.light.host.projection import runtime_environment_result
+                    audit_service_exchange(service="execution.environment", response=environment_facts)
+                    environment_facts = runtime_environment_result(environment_facts, self.config.agate_tools)
                     upstream_errors = [{key: value[key] for key in ("error", "http_status") if key in value}
                         for value in environment_facts.get("raw", {}).values()
                         if isinstance(value, dict) and value.get("error") is not None]

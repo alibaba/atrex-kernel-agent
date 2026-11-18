@@ -52,6 +52,7 @@ python3 tools/sandbox.py --kind env
 ```
 
 Observes the remote target, not the local Agent host. Hardware defaults to the Campaign selection.
+`declarations.operations` lists this Campaign's enabled Runtime `--kind` names, matching Help.
 The complete redacted capability result is returned and archived, without becoming correctness
 evidence. Its task_worker_requirements identifies Task dependency pins; match these when selecting
 imports and APIs. Read this tool's help for optional capability queries.

@@ -1,5 +1,6 @@
 """Compact Agent projections adapted from simplified; no Record/Journal changes."""
 from __future__ import annotations
+from copy import deepcopy
 import json
 import math
 import re
@@ -31,6 +32,31 @@ _SECRET_TEXT = re.compile(
     r"\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;\"'\]}]+)"
     r"|(\b(?:Authorization\s*:\s*)?Bearer\s+)[A-Za-z0-9._~+/-]+=*"
 )
+
+
+def runtime_environment_result(facts: dict[str, Any], enabled_kinds) -> dict[str, Any]:
+    """Expose the Campaign's Runtime tools, not the Executor's operation catalog.
+
+    Keep full hardware/provider facts and opaque errors. Raw operation catalogs
+    also occur in nested capability documents; they belong in private audit.
+    Never mutate the cached EnvironmentSnapshot used for execution matching.
+    """
+    from aka.contracts.agate_tools import normalize_agate_tools
+
+    def project(value):
+        if isinstance(value, dict):
+            return {
+                key: deepcopy(item) if key in {"error", "errors"} else project(item)
+                for key, item in value.items()
+                if key not in {"operations", "backend_operations"}
+            }
+        if isinstance(value, list):
+            return [project(item) for item in value]
+        return value
+
+    result = project(facts)
+    result.setdefault("declarations", {})["operations"] = list(normalize_agate_tools(enabled_kinds))
+    return result
 
 
 def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
