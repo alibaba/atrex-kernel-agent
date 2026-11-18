@@ -147,21 +147,19 @@ def _load_sdk_client(
 
 def _sdk_error_process(error, *, stage):
     payload = getattr(error, "payload", None)
-    if not isinstance(payload, dict):
+    if payload is None:
         payload = {
-            "reason": "transport_failed",
+            "code": "agate_sdk_transport_failed",
             "error_class": "infra",
-            "message": "Agate SDK transport failed",
+            "message": str(error),
+            "exception_type": type(error).__name__,
         }
     status = getattr(error, "status", None)
     envelope = {"status": "failed", "error": payload}
     if isinstance(status, int):
         envelope["http_status"] = status
-    stderr = f"agate-sdk: {stage} failed"
-    if isinstance(status, int):
-        stderr += f" (HTTP {status})"
     return subprocess.CompletedProcess(
-        ["agate-sdk", stage], 1, json.dumps(envelope), stderr
+        ["agate-sdk", stage], 1, json.dumps(envelope), ""
     )
 
 def client(*, endpoint="", profile="", timeout=30, environment=None):

@@ -78,12 +78,15 @@ class AgentOptions:
     timeout_seconds: float | None = DEFAULT_AGENT_TIMEOUT_SECONDS
     state_directory: Path | None = None
     proc_mode: str = "private"
+    pause_agent_during_requests: bool = False
 
     def __post_init__(self):
         if self.sandbox not in {"none", "bwrap"}:
             raise ValueError("Agent sandbox must be none or bwrap")
         if self.proc_mode not in {"private", "host"}:
             raise ValueError("Agent proc_mode must be private or host")
+        if type(self.pause_agent_during_requests) is not bool:
+            raise TypeError("Agent pause_agent_during_requests must be boolean")
         validate_timeout(self.timeout_seconds)
 
 
@@ -148,7 +151,12 @@ class Agent:
 
     @property
     def capabilities(self):
-        return AgentCapabilities(filesystem_isolation=self.options.sandbox == "bwrap", tool_runtime=True)
+        return AgentCapabilities(
+            filesystem_isolation=self.options.sandbox == "bwrap", tool_runtime=True,
+            pause_agent_during_requests=(
+                self.options.pause_agent_during_requests and self._process_runner is None
+            ),
+        )
 
     @property
     def configuration_identity(self):
@@ -427,7 +435,7 @@ class Agent:
             )
             from .execution.control import SessionControl
             from .tools.protocol import TOKEN_ENV
-            control = SessionControl(suspend=self._process_runner is None)
+            control = SessionControl(suspend=self.capabilities.pause_agent_during_requests)
             with self._lock:
                 if context.cancelled or self._closed:
                     raise RuntimeError("Agent session has been cancelled")

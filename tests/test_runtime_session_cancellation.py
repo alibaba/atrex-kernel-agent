@@ -14,7 +14,7 @@ from unittest.mock import Mock
 import pytest
 
 from aka.agent.execution.process import spawn_session
-from aka.agent.provider import Agent
+from aka.agent.provider import Agent, AgentOptions
 from aka.agent.tools.client import call_tool, ToolSessionError
 from aka.agent.tools.host import ToolHost
 from aka.contracts.agent import AgentToolBinding
@@ -48,6 +48,111 @@ def wait_until(predicate):
             return
         time.sleep(0.01)
     raise AssertionError("Agent did not reach the expected process state")
+
+
+@pytest.mark.parametrize("pause", [False, True])
+@pytest.mark.parametrize("handler_fails", [False, True])
+def test_runtime_request_pause_is_optional_for_agent_and_child(tmp_path, pause, handler_fails):
+    workspace = tmp_path.resolve()
+    entered, release = Event(), Event()
+
+    class Handler:
+        def handle(self, payload, context):
+            entered.set()
+            if not release.wait(10):
+                raise TimeoutError("test did not release the request")
+            if handler_fails:
+                raise RuntimeError("test operation failed")
+            return payload
+
+    child_code = (
+        "import pathlib, time\n"
+        "with open('child-heartbeat', 'ab', buffering=0) as f:\n"
+        " while not pathlib.Path('finish').exists():\n"
+        "  f.write(b'.'); time.sleep(.01)\n"
+    )
+    agent_code = (
+        "import pathlib, subprocess, sys, time\n"
+        f"child = subprocess.Popen([sys.executable, '-c', {child_code!r}])\n"
+        "with open('agent-heartbeat', 'ab', buffering=0) as f:\n"
+        " while not pathlib.Path('finish').exists():\n"
+        "  f.write(b'.'); time.sleep(.01)\n"
+        "child.wait()\n"
+    )
+
+    def spawn(_command, **kwargs):
+        return spawn_session([sys.executable, "-c", agent_code], **kwargs)
+
+    # The false case exercises the default; true explicitly restores suspension.
+    options = AgentOptions(pause_agent_during_requests=True) if pause else AgentOptions()
+    agent = Agent(options, spawn=spawn, environment={"HOME": str(workspace), "PATH": os.defpath})
+    with ExitStack() as cleanup:
+        pool = cleanup.enter_context(ThreadPoolExecutor(max_workers=2))
+        cleanup.callback(agent.close)
+        grant = cleanup.enter_context(agent.tool_session(
+            workspace, access=access_to(workspace), bindings=(AgentToolBinding("test.probe", Handler()),)))
+        cleanup.callback(release.set)
+        session = agent.open_session("claude", workspace,
+            environment={**grant.environment, "ATREX_SESSION_CAPTURE": "0", "HOME": str(workspace)},
+            access=grant.filesystem_access)
+        running = pool.submit(session.invoke, "keep working")
+        heartbeats = [workspace / name for name in ("agent-heartbeat", "child-heartbeat")]
+        wait_until(lambda: all(path.exists() and path.stat().st_size > 0 for path in heartbeats))
+        control = next(iter(agent._invocations.values())).control
+        assert control.suspend is pause
+        assert agent.capabilities.pause_agent_during_requests is pause
+        request = pool.submit(call_tool, "test.probe", b"receipt", workspace=workspace,
+                              environment=grant.environment)
+        assert entered.wait(5)
+        before = [path.stat().st_size for path in heartbeats]
+        active_before = control.clock.active_seconds()
+        if pause:
+            time.sleep(.15)
+            assert [path.stat().st_size for path in heartbeats] == before
+            assert control.clock.active_seconds() == active_before
+        else:
+            wait_until(lambda: all(path.stat().st_size > size for path, size in zip(heartbeats, before)))
+            assert control.clock.active_seconds() > active_before
+        assert not request.done()
+        release.set()
+        if handler_fails:
+            with pytest.raises(ToolSessionError):
+                request.result(timeout=5)
+        else:
+            assert request.result(timeout=5) == b"receipt"
+        wait_until(lambda: all(path.stat().st_size > size for path, size in zip(heartbeats, before)))
+        assert control.pending == 0
+        (workspace / "finish").touch()
+        assert running.result(timeout=5).exit_status == 0
+
+
+def test_pause_configuration_reaches_light_through_public_agent_capabilities():
+    from aka.agent.plugin import options
+    from aka.agent.execution.control import SessionControl
+    from aka.workflow.light.runtime import ManagedRuntimeFactory
+
+    assert not SessionControl().suspend
+    assert not options({}).pause_agent_during_requests
+    for pause in (False, True):
+        agent = Agent(options({"pause_agent_during_requests": pause}))
+        try:
+            workflow = SimpleNamespace(agent=agent,
+                options=SimpleNamespace(wiki=False, research_records=False, tool_modules=()),
+                evaluation_defaults=SimpleNamespace(measurement_repetitions=1))
+            assert ManagedRuntimeFactory(workflow, object()).pause_agent_during_requests is pause
+        finally:
+            agent.close()
+    for invalid in ("false", 0, None):
+        with pytest.raises(TypeError, match="must be boolean"):
+            options({"pause_agent_during_requests": invalid})
+
+
+def test_custom_runner_never_claims_process_suspension():
+    agent = Agent(AgentOptions(pause_agent_during_requests=True), process_runner=lambda *_: None)
+    try:
+        assert not agent.capabilities.pause_agent_during_requests
+    finally:
+        agent.close()
 
 
 @pytest.mark.parametrize("action", ["close", "revoke", "interrupt"])

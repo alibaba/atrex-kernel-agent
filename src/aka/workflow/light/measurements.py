@@ -329,7 +329,8 @@ class SharedMeasurements(RecordedMeasurements):
             response = with_execution_error(response, returned, operation=operation)
         agent = canonical_result(response, {"operation": operation, "options": {"evaluation_mode": payload.get("mode")}},
             record_id=evidence["gateway_record_id"])
-        if operation in {"evaluate", "same_allocation_abba"} or evidence["execution_status"] == "unknown":
+        upstream_failed = response.get("error") is not None
+        if not upstream_failed and (operation in {"evaluate", "same_allocation_abba"} or evidence["execution_status"] == "unknown"):
             agent["status"] = evidence["execution_status"]
         agent["identity"] = {key: evidence[key] for key in ("gateway_record_id", "kernel_id") if key in evidence}
         for key in ("gateway_record_id", "kernel_id", "baseline_kernel_id"):
@@ -343,13 +344,14 @@ class SharedMeasurements(RecordedMeasurements):
                 record.lifecycle == "terminal" and record.phase == "complete" and bool(latest)
                 and all(attempt.result is not None and normal_evaluation_execution(attempt.result)
                         for attempt in latest.values()))
-            agent["result"]["correct"] = evidence["result"]["correct"]
-            if "qualification" in evidence["result"]:
+            if not upstream_failed:
+                agent["result"]["correct"] = evidence["result"]["correct"]
+            if not upstream_failed and "qualification" in evidence["result"]:
                 agent["result"]["qualification"] = evidence["result"]["qualification"]
                 agent["result"]["diagnostics"] = [*agent["result"].get("diagnostics", ()),
                     *(item for item in evidence["result"].get("diagnostics", ())
                       if item.get("category") == "qualification" and item not in agent["result"].get("diagnostics", ()))]
-            if evidence["result"]["correct"] is None:
+            if not upstream_failed and evidence["result"]["correct"] is None:
                 agent["result"]["correctness"] = None
         return {**response, "agent_result": agent}
 

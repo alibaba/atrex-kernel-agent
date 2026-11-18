@@ -163,7 +163,7 @@ class RuntimeConfig:
     request_timeout: float | None = None
     queue_timeout: float = 60
     measurement_repetitions: int = 1
-    pause_agent_during_requests: bool = True
+    pause_agent_during_requests: bool = False
     research_synchronization: str = "independent"
     agate_tools: tuple[str, ...] = ("env", "evaluate", "command")
     wiki_enabled: bool = True
@@ -487,6 +487,7 @@ class SupervisorRuntime:
                 "request_timeout_seconds": self.request_timeout_seconds,
                 "queue_timeout_seconds": config.queue_timeout,
                 "measurement_repetitions": config.measurement_repetitions,
+                "pause_agent_during_requests": config.pause_agent_during_requests,
                 "research_synchronization": config.research_synchronization,
             })
 
@@ -995,6 +996,15 @@ class SupervisorRuntime:
                     environment_facts = redact_diagnostics(environment_facts,
                         private_paths=(str(staged), str(self.root), str(self.audit_root or "")),
                         private_values=credential_values(environment))
+                    upstream_errors = [{key: value[key] for key in ("error", "http_status") if key in value}
+                        for value in environment_facts.get("raw", {}).values()
+                        if isinstance(value, dict) and value.get("error") is not None]
+                    if upstream_errors:
+                        detail = dict(upstream_errors[0])
+                        if len(upstream_errors) > 1:
+                            detail["errors"] = upstream_errors
+                        return {"exit_code": 1, "stdout": json.dumps(environment_facts, allow_nan=False)+"\n", "stderr": "",
+                                "agent_result": {"operation": "env", "status": "failed", "result": detail}}
                     return {"exit_code": 0, "stdout": json.dumps(environment_facts, allow_nan=False)+"\n", "stderr": ""}
                 if args.dry_run:
                     return {"exit_code": 0, "stdout": json.dumps({"operation": converted.kind, "prepared": True})+"\n", "stderr": ""}

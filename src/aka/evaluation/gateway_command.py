@@ -459,6 +459,12 @@ class GatewayCommandEvaluator:
         context = prepared.context
         command = context["command"]
         measurement = context["measurement"]
+        from .response_policy import upstream_error
+        # HTTP/job errors are not missing measurement evidence. Select the
+        # failed batch itself so a later successful batch cannot hide it.
+        failed = next((result for result in results if upstream_error(result) is not None), None)
+        if failed is not None:
+            return CommandEvaluation(failed)
         if context["kind"] == "profile" and measurement is None:
             from .gateway_measurement import prepare_profile_output
             result = results[0]
@@ -525,10 +531,24 @@ class GatewayCommandEvaluator:
                 and result.facts.disposition == "terminal" and result.transport_status in {"succeeded", "failed"})
             if settled and context["kind"] == "run":
                 from .native_abba import complete_evaluation
-                from .device_failures import embedded_device_failure
+                from .shapes import request_shape_ids
                 request = measurement.request_for(len(jobs) % context["batch_count"])
-                settled = (not embedded_device_failure(job) and complete_evaluation(job["result"], list(request["reference"]["shapes"]),
-                    correctness_only=request.get("mode") == "correctness_only"))
+                # Native batches keep the full reference and select their own
+                # Shapes. Full-request coverage is checked when batches merge.
+                shapes = request_shape_ids(request)
+                correctness_only = request.get("mode") == "correctness_only"
+                settled = complete_evaluation(job["result"], shapes, correctness_only=correctness_only)
+                if not settled and not job["result"].get("error"):
+                    incomplete = [sid for sid in shapes if not complete_evaluation(
+                        job["result"], [sid], correctness_only=correctness_only)]
+                    payload = {"all_pass": None, "incomplete_shape_ids": incomplete,
+                        "evaluation_failure": {
+                            "category": "incomplete", "code": "evaluation-evidence-incomplete",
+                            "message": "Agate Evaluate returned missing or incomplete evidence for requested Shape IDs: "
+                                + ", ".join(incomplete) + ". No complete candidate verdict is available."}}
+                    return self._command_evaluation(replace(result,
+                        transport_returncode=2, exit_code=None,
+                        stdout=TEST_RESULT_PREFIX + json.dumps(payload) + "\n"), context, results)
             if not settled:
                 result = replace(result, transport_returncode=result.returncode or 2)
                 if context["private"]:
@@ -542,6 +562,9 @@ class GatewayCommandEvaluator:
             from .aggregation import aggregate
             failed = next((sample for sample in samples if sample.get("all_pass") is not True), None)
             payload = failed if failed is not None else aggregate(samples, "evaluate")
+            if failed is not None:
+                from .feedback import merge_feedback
+                payload = {**payload, "correctness_by_shape": merge_feedback(samples)["correctness_by_shape"]}
             stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
             stdout = with_measurement_conditions(stdout, gateway_warmup_iters=measurement.request.get("runner_overrides", {}).get("warmup_iters", "default"))
             code = 0 if payload["all_pass"] else 1

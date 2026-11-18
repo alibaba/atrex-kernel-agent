@@ -165,7 +165,7 @@ def run_bounded(
     unavailable=None,
     violation=None,
 ) -> tuple[str, str, int, bool]:
-    """Bound active Agent time; admitted host waits suspend the owned tree."""
+    """Bound active Agent time; host waits suspend the tree only when configured."""
     from ..provider import validate_timeout
     from .control import SessionControl
 

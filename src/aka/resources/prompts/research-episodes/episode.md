@@ -19,12 +19,12 @@ inherits the same conversation, workspace, and Agent Git history.
 ## Workflow
 
 1. Read `CLAUDE.md`, `WORKSPACE.md`, `PROGRESS.md`, `skills/runtime-records/SKILL.md`, and the current Kernel. Open only relevant research files and bounded fields from needed Gateway Records. Gateway Records are measurement authority.
-2. Choose the unresolved path with the greatest plausible full-workload impact. A Direction is a durable program around a bottleneck, regime, or architecture objective; one candidate, sweep, probe, or mechanism test is an Experiment. Bound risk with probes instead of avoiding high-upside work.
+2. Choose the unresolved path with the greatest plausible full-workload impact. A Direction is a durable program around a bottleneck, regime, or architecture objective; Experiments summarize concrete trials and may combine related candidates that inform one decision. Bound risk with probes instead of avoiding high-upside work.
 3. Manage development with Agent Git. Commit the complete candidate and leave the worktree clean before Kernel-bound Runtime requests. Run the smallest decisive measurement, inspect its Record, then keep, repair, or restore from evidence.
 4. Repeat `probe → candidate → measurement → revert/keep` cycles while valuable work remains. A checkpoint or failed candidate is not a reason to stop.
 5. Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the current mode. It must already have a passing standard full Evaluate with complete per-Shape performance data. Submit when ready, not mechanically after every Evaluate and not only at the end of an Episode. Fast permits declared reproducible compute libraries; Performance requires self-authored core compute while leaving DSL selection to you; Ultra additionally requires the configured DSL.
 
-Keep reasoning concise and act once the next step is testable.
+Keep reasoning concise and act once the next step is testable. An unknown mechanism need not delay a high-value candidate trial justified by the available observations.
 
 {{RESEARCH_MODULE_RULES}}
 

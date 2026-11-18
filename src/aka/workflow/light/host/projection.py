@@ -6,17 +6,12 @@ import re
 import subprocess
 from typing import Any
 
-from aka.workflow.light.host.errors import error_response
 from aka.execution.gateway.sdk import submission_rejection
 from aka.evaluation.feedback import project_feedback, merge_feedback, bound_feedback
 from aka.evaluation.tool_results import correctness_summary
 from aka.evaluation.result_json import (
     LEGACY_TEST_RESULT_PREFIX,
     parse_evaluation_result_line,
-)
-from aka.evaluation.response_policy import (
-    KNOWN_GATEWAY_ERROR_CLASSES,
-    known_gateway_error,
 )
 
 MAX_AGENT_PROFILE_KERNELS = 32
@@ -36,71 +31,19 @@ _SECRET_TEXT = re.compile(
     r"\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;\"'\]}]+)"
     r"|(\b(?:Authorization\s*:\s*)?Bearer\s+)[A-Za-z0-9._~+/-]+=*"
 )
-_SOURCE_VIOLATION = re.compile(
-    r"(?:Blocked import|Forbidden attribute access): [A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
-    r"|Forbidden string literal matching: [A-Za-z_]\w*"
-)
+
 
 def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
-    """Only public candidate-source rules, never raw validation/evaluator text."""
-    error = value.get("error")
-    if (not isinstance(error, dict) or error.get("code") != "candidate_source_rejected"
-            or error.get("job_submitted") is not False):
-        raise ValueError("not a candidate source rejection")
-    raw_violations = error.get("violations", [])
-    if not isinstance(raw_violations, list):
-        raise ValueError("source violations must be a list")
-    violations = []
-    for item in raw_violations[:MAX_AGENT_DIAGNOSTICS]:
-        if (isinstance(item, str) and len(item) <= 256
-                and _SOURCE_VIOLATION.fullmatch(item) and item not in violations):
-            violations.append(item)
-    return error_response(
-        "Agate rejected candidate source before GPU submission.",
-        code="candidate_source_rejected", error_class="code", reason="source_validation_failed",
-        job_submitted=False, violations=violations,
-        next_action=(
-            "Remove or replace the listed forbidden imports, attribute accesses or string literals "
-            "in the Kernel source tree, then retry the same operation with the repaired source. "
-            "Do not bypass source validation through Dev."
-        ),
-    )
+    """Read older source-error markers without reclassifying their contents."""
+    return gateway_error_result(value)
 
 
 def candidate_source_rejection(process: subprocess.CompletedProcess) -> dict[str, Any] | None:
-    """Recognize a confirmed HTTP 400 candidate-source rejection, not an unknown outcome."""
+    """Retain a source HTTP rejection's original body instead of parsing its text."""
     rejection = submission_rejection(process)
     if rejection is None or rejection.status != 400:
         return None
-    text = (process.stderr or "") + "\n" + (process.stdout or "")
-    # Direct HTTP errors preserve a JSON envelope, unlike the CLI's plain text.
-    try:
-        payload = json.loads(process.stdout or "")
-        error = payload.get("error", payload.get("detail")) if isinstance(payload, dict) else None
-        message = error.get("message") if isinstance(error, dict) else error
-        if isinstance(message, str):
-            text += "\n" + message
-    except (ValueError, TypeError):
-        pass
-    if "source validation failed" not in text.lower():
-        return None
-    candidate_lines = re.findall(r"(?m)^\s*-\s*candidate:\s*([^\n]+)", text)
-    if not candidate_lines:
-        return None  # Reference/input validation can contain private information.
-    violations = []
-    for line in candidate_lines:
-        match = re.match(r"(Blocked import|Forbidden attribute access):\s*([A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*)", line)
-        if match:
-            violations.append(f"{match[1]}: {match[2]}")
-            continue
-        match = re.match(r"Forbidden string literal matching ['\"]([A-Za-z_]\w*)['\"]:", line)
-        if match:
-            # Do not expose the matched literal, which may contain paths/data.
-            violations.append(f"Forbidden string literal matching: {match[1]}")
-    result = source_error_result({"error": {
-        "code": "candidate_source_rejected", "job_submitted": False, "violations": violations,
-    }})
-    return result
+    return gateway_error_from_process(process, "evaluate")
 
 
 def source_error_from_stdout(stdout: str) -> dict[str, Any] | None:
@@ -119,121 +62,10 @@ def bounded_error(value: Any) -> Any:
 
 
 def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
-    """Apply known recovery policies; preserve unknown Agate errors verbatim."""
+    """Preserve every Agate error field; recovery policy is private state."""
     if "error" not in value:
         raise ValueError("Gateway error response omitted error")
-    if not known_gateway_error(value):
-        # Agate evolves independently of Runtime. Preserve an unfamiliar
-        # redacted envelope instead of replacing it with a generic Runtime
-        # classification that hides the only actionable evidence.
-        return dict(value)
-    result = {key: value[key] for key in (
-        "operation", "status", "job_id", "trace_id", "http_status", "batch", "outcome",
-    ) if key in value and (value[key] is None or type(value[key]) in {str, int})}
-    result["error"] = bounded_error(value["error"])
-    error = value["error"]
-    if (
-        isinstance(error, dict)
-        and error.get("reason") == "gateway_collection_timeout"
-    ):
-        timeout_s = error.get("timeout_s")
-        duration = (
-            f" after waiting {timeout_s:g} seconds"
-            if isinstance(timeout_s, (int, float))
-            and not isinstance(timeout_s, bool)
-            and math.isfinite(timeout_s)
-            and timeout_s > 0
-            else ""
-        )
-        result["next_action"] = (
-            f"Runtime timed out while collecting the Agate response{duration}; this is not a "
-            "Kernel correctness or performance verdict. The current Runtime call has ended. "
-            "If the result is still needed, retry the same Runtime operation later; Runtime "
-            "retains the private accepted-job checkpoint and will not blindly submit a duplicate."
-        )
-    elif (
-        isinstance(error, dict)
-        and error.get("reason") == "gateway_submission_timeout"
-    ):
-        timeout_s = error.get("timeout_s")
-        duration = (
-            f" after waiting {timeout_s:g} seconds"
-            if isinstance(timeout_s, (int, float))
-            and not isinstance(timeout_s, bool)
-            and math.isfinite(timeout_s)
-            and timeout_s > 0
-            else ""
-        )
-        result["next_action"] = (
-            f"Runtime could not confirm whether Agate accepted this submission{duration}; "
-            "this is not a Kernel verdict. Runtime did not create a non-idempotent "
-            "replacement Job. Retry only if the operation is still needed; SDK-backed "
-            "requests reuse their persisted idempotency key."
-        )
-    elif (
-        isinstance(error, dict)
-        and error.get("reason") == "ssh_gpu_busy"
-    ):
-        result["next_action"] = (
-            "The assigned SSH GPU is busy. Retry after the current allocation releases it; "
-            "this is not a Kernel correctness verdict or an environment failure."
-        )
-    elif value.get("outcome") == "unknown":
-        from aka.workflow.light.host.errors import UNKNOWN_OUTCOME
-        result["next_action"] = UNKNOWN_OUTCOME
-    elif (
-        isinstance(error, dict)
-        and isinstance(error.get("message"), str)
-        and "job deadline exceeded" in error["message"].casefold()
-    ):
-        timeout_s = error.get("timeout_s")
-        duration = (
-            f" the configured {timeout_s:g}-second deadline"
-            if isinstance(timeout_s, (int, float))
-            and not isinstance(timeout_s, bool)
-            and math.isfinite(timeout_s)
-            and timeout_s > 0
-            else " its configured job deadline"
-        )
-        result["next_action"] = (
-            f"This {result.get('operation', 'Gateway')} request exceeded{duration}; the command "
-            "is too slow for one request. Reduce its work, remove long loops, or split it into "
-            "smaller bounded requests, then measure the changed request. Do not resubmit the "
-            "unchanged slow command. Use Evaluate or ABBA for complete Kernel measurements "
-            "instead of reproducing a full benchmark inside Dev."
-        )
-    elif (
-        isinstance(error, dict)
-        and error.get("reason") == "agate_clock_configuration_invalid"
-    ):
-        result["next_action"] = (
-            "Agate worker clock management is misconfigured; this is not a Kernel verdict. "
-            "Ask the operator to provide a positive graphics clock for manage mode or change "
-            "the worker to external/off clock management. Do not change the Kernel, invent a "
-            "clock frequency, or repeatedly resubmit the unchanged request."
-        )
-    elif isinstance(error, dict) and error.get("error_class") == "infra":
-        result["next_action"] = (
-            "Infrastructure failure, not a Kernel correctness verdict. Supervisor recovery owns retries. "
-            "Read the saved Record; if recovery cannot complete, ask the operator to restore the service."
-        )
-    elif value.get("status") in {"cancelled", "canceled"}:
-        result["next_action"] = "The job was cancelled; no Kernel verdict is available. Inspect the Record before starting new work."
-    elif isinstance(error, dict) and error.get("error_class") in (
-        KNOWN_GATEWAY_ERROR_CLASSES - {"infra"}
-    ):
-        result["next_action"] = (
-            "Inspect the returned error and saved Record. Repair the candidate source, probe or "
-            "request identified by the diagnostic, then measure the changed task. "
-            "Do not treat this as a service outage or repeatedly submit the unchanged failing task."
-        )
-    else:
-        result["next_action"] = (
-            "Inspect the error and saved Record to determine the cause. This error alone is not "
-            "a Kernel correctness verdict. If the submission outcome is uncertain, ask the "
-            "operator to reconcile it; do not resubmit blindly."
-        )
-    return result
+    return dict(value)
 
 
 def gateway_error_from_process(process: subprocess.CompletedProcess, operation: str) -> dict[str, Any] | None:
@@ -295,12 +127,6 @@ def gateway_http_error_result(status: int, detail: str, operation: str) -> dict[
     error = body.get("error", body.get("detail", body)) if isinstance(body, dict) else body
     envelope = dict(body) if isinstance(body, dict) else {}
     envelope.update(operation=operation, http_status=status, error=error)
-    envelope.setdefault(
-        "outcome",
-        "failed" if operation == "env" else (
-            "unknown" if status >= 500 and status != 503 else "rejected"
-        ),
-    )
     return gateway_error_result(envelope)
 
 
@@ -926,7 +752,7 @@ def evaluation(result: dict) -> dict:
     value["actionable_diagnostics"] = actionable_diagnostics
     if result.get("error") is not None:
         value["error"] = bounded_error(result["error"])
-    if any(key in result for key in ("diagnostics", "performance_by_shape")):
+    if any(key in result for key in ("diagnostics", "correctness_by_shape", "performance_by_shape")):
         feedback = project_feedback(result)
         # The conversion and native Eval feedback can expose the same compiler
         # text under two schemas.  Keep one complete copy rather than shortening

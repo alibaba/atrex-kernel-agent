@@ -28,11 +28,18 @@ from .diagnostics import causes_from_job, recovery_diagnostics, remote_terminati
 
 
 def causes_from_error(error):
+    if getattr(error, "upstream_error", None) is not None:
+        return causes_from_error(error.upstream_error)
     try:
         value = json.loads(getattr(error, "detail", ""))
     except (TypeError, ValueError):
-        return (ExecutionCause("infrastructure", type(error).__name__, str(error)),)
-    return causes_from_job({"error": value.get("error", value) if isinstance(value, dict) else value})
+        value = getattr(error, "payload", None)
+        if value is None and hasattr(error, "detail"):
+            value = error.detail
+        if value is None:
+            return (ExecutionCause("infrastructure", getattr(error, "code", type(error).__name__), str(error)),)
+    return causes_from_job({"error": value.get("error", value) if isinstance(value, dict) else value,
+                            "http_status": getattr(error, "status", None)})
 
 
 def client_wait_budget(scope, requested, effective):

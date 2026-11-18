@@ -85,8 +85,8 @@ def submit_prepared(args, workspace, grace, prepared):
         try:
             detail = json.loads(error.detail)
         except (TypeError, ValueError):
-            detail = {"message": str(error.detail)}
-        payload = detail.get("error", detail) if isinstance(detail, dict) else {"message": str(detail)}
+            detail = error.detail
+        payload = detail.get("error", detail) if isinstance(detail, dict) else detail
         print(json.dumps({"status": "failed", "http_status": error.status, "error": payload}))
         if error.status in {429,502,503,504}:
             return transport.ENVIRONMENT_TEMPFAIL

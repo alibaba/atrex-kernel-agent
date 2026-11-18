@@ -229,7 +229,7 @@ settings are advanced options shown only when the user explicitly requests multi
 
 Set `workflow.config.search` to `{}` for serial mode. Then `--max-iters N` counts Episode audit segments. In pooled mode, the schedule is `epochs × trajectories × episodes_per_trajectory`; `--max-iters` is not the pooled segment count.
 
-Episode active time is unlimited by default. Set `workflow.config.episode_timeout_seconds` only when needed. `--token-budget 0` means no token admission cap. Runtime waits pause Agent active time, but Agate queue/request/per-Shape timeouts remain independent.
+Agent and Review time limits are unset by default. `--token-budget 0` means no token admission cap. Runtime requests do not pause the Agent by default; independent work may continue and request time counts toward any configured Agent time limit. `agent.config.pause_agent_during_requests=true` opts into suspension and excludes request waits from active time. Agate queue/request/per-Shape timeouts remain independent.
 
 Every archived Direction and Experiment revision is written immediately to the central Campaign
 Research Library. Each workspace receives an ordinary `research-library/` copy following the configured visibility mode; Bubblewrap overlays that copy read-only:

@@ -23,8 +23,9 @@ ARCHIVES = "__aka_source_archives"
 
 class SourceArchiveError(RuntimeError):
     """Safe pre-admission transport error, with retained reservation facts."""
-    def __init__(self, code, *, status=None):
+    def __init__(self, code, *, status=None, upstream_error=None):
         self.code, self.status = code, status if type(status) is int else None
+        self.upstream_error = upstream_error
         super().__init__("Source archive transport failed: " + code)
 
 
@@ -123,7 +124,7 @@ def upload_bytes(url, data, *, timeout):
     try:
         return upload(url, data, timeout=timeout)
     except Exception as error:
-        raise SourceArchiveError("upload-unavailable", status=getattr(error, "status", None)) from error
+        raise SourceArchiveError("upload-unavailable", status=getattr(error, "status", None), upstream_error=error) from error
 
 
 class SourceArchiveState:
@@ -194,7 +195,7 @@ class SourceArchiveState:
                     **({"placement": self.request["placement"]} if "placement" in self.request else {}),
                 }, remaining)
             except (OSError, RuntimeError, subprocess.SubprocessError) as error:
-                raise SourceArchiveError("reservation-unavailable", status=getattr(error, "status", None)) from None
+                raise SourceArchiveError("reservation-unavailable", status=getattr(error, "status", None), upstream_error=error) from error
             self.state["reservation"] = reservation
             self.state["phase"] = "reserved"
             self.state["uploaded"] = []
@@ -302,11 +303,13 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
         try:
             wire = state.prepare(json_call=json_call, deadline=deadline)
         except SourceArchiveError as error:
+            from .jobs import causes_from_error
+            from aka.execution.outcomes import _cause_record
             emit_fact({"event": "attempt", "operation": "source-upload", "backend": "gateway",
                 "disposition": "not_submitted", "idempotency_key": key,
                 "request_identity": state.logical_identity,
                 "diagnostics": [{"failure_class": "infrastructure", "reason": error.code}],
-                "causes": [{"category": "infrastructure", "code": error.code, "message": str(error)}]})
+                "causes": [_cause_record(cause) for cause in causes_from_error(error)]})
             raise
         identity = hashlib.sha256(json.dumps(wire, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
         reserved = state.state["reservation"]["job_id"]
@@ -323,8 +326,14 @@ def run_archived(args, workspace, grace, request, archives, *, transport):
                 # A failed lookup is never permission to create another Job.
                 try:
                     observed = jobs._read(reference, remaining)
-                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
-                    raise SourceArchiveError("admission-unconfirmed") from None
+                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
+                    from .jobs import causes_from_error
+                    from aka.execution.outcomes import _cause_record
+                    emit_fact({"event": "attempt", "operation": "query", "backend": "gateway",
+                        "identifier": identifier, "disposition": "unknown",
+                        "idempotency_key": key, "request_identity": identity,
+                        "causes": [_cause_record(cause) for cause in causes_from_error(error)]})
+                    raise SourceArchiveError("admission-unconfirmed", upstream_error=error) from error
                 try:
                     state.submitted(observed)
                 except ValueError:
@@ -379,7 +388,8 @@ def replay_archived(jobs, command, *, idempotency_key, retry):
             category = "cancelled" if cancelled else "request" if error.status in {400, 401, 403, 404, 405, 409, 413, 422} else "infrastructure"
             diagnostic = ExecutionDiagnostic(category, error.code,
                 {"http_status": error.status} if type(error.status) is int else {})
-            causes = (ExecutionCause(category, error.code, str(error)),)
+            from .jobs import causes_from_error
+            causes = causes_from_error(error)
             attempt = ExecutionAttempt("source-upload", "not_submitted", ResourceIdentity("gateway"),
                 diagnostics=(diagnostic,), causes=causes, idempotency_key=idempotency_key,
                 request_identity=state.logical_identity)
@@ -393,15 +403,16 @@ def replay_archived(jobs, command, *, idempotency_key, retry):
         except SourceArchiveError as error:
             return preparation_failure(error)
         identity = hashlib.sha256(json.dumps(wire, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
-        def unconfirmed_admission(code):
+        def unconfirmed_admission(code, error=None):
             diagnostic = ExecutionDiagnostic("infrastructure", code)
-            cause = ExecutionCause("infrastructure", diagnostic.code)
+            from .jobs import causes_from_error
+            causes = causes_from_error(error) if error is not None else (ExecutionCause("infrastructure", diagnostic.code),)
             attempt = ExecutionAttempt("replay", "unknown", ResourceIdentity("gateway"),
-                diagnostics=(diagnostic,), causes=(cause,), idempotency_key=idempotency_key,
+                diagnostics=(diagnostic,), causes=causes, idempotency_key=idempotency_key,
                 request_identity=identity)
             return publish(JobResult(75, resource=attempt.resource, transport_status="infrastructure",
                 facts=ExecutionFacts("unknown", local_stopped=True, cleanup="not_required"),
-                attempts=(attempt,), diagnostics=(diagnostic,), causes=(cause,)))
+                attempts=(attempt,), diagnostics=(diagnostic,), causes=causes))
         if state.state["phase"] in {"submission_intent", "submitted"}:
             identifier = state.state.get("job_id", state.state["reservation"]["job_id"])
             reference = JobReference("gateway", identifier, state.kind, jobs.endpoint, jobs.profile, identity, idempotency_key)
@@ -413,11 +424,11 @@ def replay_archived(jobs, command, *, idempotency_key, retry):
             if state.state["phase"] == "submission_intent":
                 try:
                     state.submitted(jobs._read(reference, remaining))
-                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError):
+                except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
                     if state.state.get("phase") == "submitted":
                         confirmed = replace(reference, identifier=state.state["job_id"])
                         return publish(unknown_result(confirmed, "source-upload-reservation-identity-mismatch"))
-                    return unconfirmed_admission("source-upload-admission-unconfirmed")
+                    return unconfirmed_admission("source-upload-admission-unconfirmed", error)
             remaining = deadline - jobs.clock()
             if remaining <= 0:
                 return publish(unknown_result(reference, "query-budget-exhausted"))

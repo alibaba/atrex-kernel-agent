@@ -54,11 +54,9 @@ def test_upstream_validation_details_reach_agent_receipt(status, reason):
     response = with_execution_error({'exit_code': 2, 'stdout': '', 'stderr': result.stderr}, result)
     receipt = canonical_result(response, {'operation': 'evaluate', 'options': {}})
     value = receipt['result']['error']
-    assert value['http_status'] == status
-    assert value['code'] == reason
-    assert value['details'] == details
-    assert value['job_submitted'] is False
-    assert 'no GPU Job' in receipt['result']['next_action']
+    assert value == {'error_class': 'validation', 'reason': reason, 'details': details}
+    assert receipt['result']['http_status'] == status
+    assert 'next_action' not in receipt['result']
 
 
 @pytest.mark.parametrize('operation', ['evaluate', 'same_allocation_abba'])

@@ -134,7 +134,9 @@ _PRIVATE_REVIEW_KEYS = {
 }
 _ACTIVE_DIRECTION_EXPERIMENT_RUNTIME_ACTION = (
     "Keep the Direction active unless its objective, planned variants, and stop "
-    "conditions are genuinely exhausted."
+    "conditions are genuinely exhausted. Choose the next high-value candidate from its "
+    "remaining branches; a supported Experiment requires neither a mechanism proof nor "
+    "an immediate Direction revision."
 )
 
 
@@ -3302,9 +3304,10 @@ def update_direction(
             code="research_claim_unsupported",
             review=_agent_claim_review(review),
             next_action=(
-                "Use review.scope_safe_interpretation and review.scientific_next_check to repair the claim, "
-                "then submit a corrected Direction. Do not cite this rejected submission as a "
-                "recorded Direction."
+                "Narrow the claim using review.scope_safe_interpretation before resubmitting. "
+                "Run review.scientific_next_check only if its uncertainty affects the next "
+                "implementation choice or the submitted lifecycle decision. Do not cite this "
+                "rejected submission as a recorded Direction."
             ),
         )
         error.private_review = _private_claim_review(review)
@@ -3770,9 +3773,10 @@ def record_experiment(
                 code="research_claim_unsupported",
                 review=_agent_claim_review(review),
                 next_action=(
-                    "Use review.scope_safe_interpretation and review.scientific_next_check to repair the "
-                    "claim, then submit a corrected Experiment. Reuse existing Gateway Record "
-                    "IDs; do not rerun measurements solely because the interpretation was rejected."
+                    "Narrow the claim using review.scope_safe_interpretation before resubmitting. "
+                    "Run review.scientific_next_check only if its uncertainty affects the next "
+                    "implementation choice. Reuse existing Gateway Record IDs; do not rerun "
+                    "measurements solely because the interpretation was rejected."
                 ),
             )
             error.private_review = _private_claim_review(review)
@@ -4475,9 +4479,9 @@ class SupervisorJournalService:
         """Return one compact post-measurement reminder for enabled Experiments.
 
         Measurements remain useful without an Experiment, so Runtime never
-        auto-generates scientific interpretation. The immediate receipt is the
-        reliable point to remind the Agent to preserve a decision-changing
-        result before another candidate displaces it from working context.
+        auto-generates scientific interpretation. Remind the Agent to preserve
+        observations at a decision checkpoint without requiring a reviewed
+        Experiment between related candidate trials.
         """
         if "experiments" not in self.tool_modules:
             return None
@@ -4509,9 +4513,10 @@ class SupervisorJournalService:
             "operation": "record-experiment",
             "gateway_record_ids": [record_id],
             "instruction": (
-                "If this result changes the keep, repair, restore, or next-branch decision, "
-                "record the Experiment now before launching another candidate. A disposable "
-                "probe that changes no decision need not be recorded."
+                "Related candidate trials may continue before recording one Experiment. "
+                "Record the observations, measured scope, and next action at a decision "
+                "checkpoint, when switching paths, or when sharing findings. Cite the relevant "
+                "Records; the mechanism may remain unknown."
             ),
         }
         if "directions" in self.tool_modules:
@@ -5096,8 +5101,8 @@ class SupervisorJournalService:
                 "runtime_action": (
                     "The reviewer remained unavailable after one automatic retry. Runtime will "
                     "preserve this record as review_unavailable; do not treat it as established "
-                    "research. Continue with bounded evidence or ask the operator to restore the "
-                    "claim reviewer."
+                    "research. Continue high-value trials using the saved measurements; do not "
+                    "rerun measurements solely to obtain a review label."
                 ),
             }
             if session_audit is not None:
@@ -5117,17 +5122,22 @@ class SupervisorJournalService:
                 "scientific_next_check": review["next_check"],
                 "confidence": review["confidence"],
                 "runtime_action": (
-                    "Use the archived record as reviewed research evidence."
+                    "Use the archived observations within scope_safe_interpretation to choose "
+                    "the next high-value implementation. Investigate mechanism details only "
+                    "when they affect that choice."
                     if evidence_eligible else
                     (
                         "This submission is unsupported and will not be archived. Follow "
-                        "scope_safe_interpretation, run scientific_next_check when useful, and submit a "
-                        "corrected claim."
+                        "scope_safe_interpretation to narrow the claim before resubmitting. Run "
+                        "scientific_next_check only if the uncertainty affects the next implementation "
+                        "choice or the submitted lifecycle decision; reuse existing measurements."
                         if quality == "unsupported" else
-                        "This partially supported record will be archived, but is not established "
-                        "research. Follow scope_safe_interpretation, run scientific_next_check when useful, "
-                        "and resubmit a corrected claim through the same Runtime operation. For "
-                        "an Experiment, include its stable experiment_id to create a new revision."
+                        "This partially supported record will be archived. Use observations within "
+                        "scope_safe_interpretation to continue high-value candidate trials; unresolved "
+                        "claims are not established evidence. Run scientific_next_check or revise "
+                        "only when the uncertainty affects the next implementation choice or the "
+                        "submitted lifecycle decision. Do not repeat measurements or resubmit "
+                        "solely to obtain supported."
                     )
                 ),
             }

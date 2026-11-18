@@ -28,7 +28,7 @@ class ManagedRuntimeFactory:
         self.workflow, self.campaign = workflow, campaign
         self.wiki = workflow.options.wiki
         self.research_records = workflow.options.research_records
-        self.pause_agent_during_requests = True
+        self.pause_agent_during_requests = workflow.agent.capabilities.pause_agent_during_requests
         self.tool_modules = workflow.options.tool_modules
         self.measurement_repetitions = workflow.evaluation_defaults.measurement_repetitions
 
@@ -63,6 +63,7 @@ class ManagedRuntimeFactory:
             evaluation_input, selected, c._module_resources, workspace_provider,
             JournalFactory(tool_modules=w.options.tool_modules), w.problem.snapshot(c.problem).identity)
         configured = replace(configuration, agate_tools=c.request.runtime.agate_tools,
+            pause_agent_during_requests=self.pause_agent_during_requests,
             measurement_repetitions=self.measurement_repetitions,
             wiki_enabled=self.wiki, wiki_options=WikiConfig(**(w.options.wiki_options or {})),
             request_timeout=w.options.request_timeout if w.options.request_timeout is not None

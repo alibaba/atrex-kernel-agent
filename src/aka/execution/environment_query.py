@@ -164,6 +164,13 @@ class BackendEnvironment:
                     else:
                         destination.update(value)
                 except Exception as error:
+                    if isinstance(error, sandbox.GatewayHTTPError):
+                        try:
+                            body = json.loads(error.detail)
+                        except (TypeError, ValueError):
+                            body = error.detail
+                        destination.update(error=body.get("error", body) if isinstance(body, dict) else body,
+                                           http_status=error.status)
                     errors.append("environment-http-" + str(error.status) if isinstance(error, sandbox.GatewayHTTPError)
                                   else "environment-discovery-" + type(error).__name__)
         snapshot = _snapshot(self.backend, self.endpoint, query, detail, capabilities, errors, self.operations)

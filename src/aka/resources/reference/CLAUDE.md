@@ -45,9 +45,10 @@ operations and request schemas. Do not infer a different workflow from unrelated
   inputs automatically. Use an enabled Command for custom remote probes; it uploads the engineering
   workspace and returns scratch artifacts. Remote jobs are fresh and stateless, and custom probes
   do not replace official evaluation evidence.
-- Keep Runtime calls in the foreground and wait for the same invocation. Do not add shell timeouts,
-  background a call, or edit the candidate while it is pending. The Session Prompt states whether
-  waiting pauses Agent active time. A lost client does not prove that no job ran.
+- Follow the Session Prompt's Runtime execution policy. When Agent suspension is disabled, independent
+  work may continue while a request is pending. Keep its input files unchanged and collect the same
+  invocation's receipt before using its results; use the backend's task/output facility for background
+  calls. Do not add shell timeouts or duplicate requests. A lost client does not prove that no job ran.
 - Runtime measurement calls return the complete canonical public result and persist the same result as
   `records/<gateway_record_id>.json`. The file is durable evidence, not a second source that must be
   opened to recover fields omitted from the Runtime response.

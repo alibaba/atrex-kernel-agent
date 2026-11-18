@@ -101,9 +101,6 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
         native_diagnostics.append({"failure_class": category, "reason": causes[0].code})
     native_diagnostics.extend({"failure_class": item.category, "reason": item.code,
                               **item.details} for item in recovery_diagnostics(job))
-    def encode(cause):
-        return {"category": cause.category, "code": cause.code, "message": cause.message,
-                "details": _json(cause.details), "causes": [encode(item) for item in cause.causes]}
     emit_fact({
         **({"attempt_id": attempt_id} if attempt_id is not None else {}),
         "event": "attempt", "operation": operation, "backend": backend,
@@ -112,7 +109,7 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
         "termination": "cancelled" if status == "cancelled" else "exited" if terminal else None,
         "exit_code": code if type(code) is int else None,
         "diagnostics": native_diagnostics + ([record] if record else []),
-        "causes": [encode(item) for item in causes],
+        "causes": [_cause_record(item) for item in causes],
         "remote_terminated": remote_termination(job),
         "backend_response": job or None,
     })
@@ -132,6 +129,12 @@ def _cause(value):
     data = dict(value)
     data["causes"] = tuple(_cause(item) for item in data.get("causes", ()))
     return ExecutionCause(**data)
+
+
+def _cause_record(cause):
+    return {"category": cause.category, "code": cause.code, "message": cause.message,
+            "details": _json(cause.details), "causes": [_cause_record(item) for item in cause.causes],
+            "raw_error": _json(cause.raw_error), "http_status": cause.http_status}
 
 
 class FactChannel:

@@ -60,10 +60,17 @@ Claim-bearing mutations return `review` once. Its workflow fields are deliberate
 - `claim_review_quality`: `supported`, `partially_supported`, `unsupported`, or `review_unavailable`;
 - `evidence_eligible`: whether the claim may support Direction lifecycle conclusions; it does not control visibility;
 - `runtime_action`: how to repair or continue the Runtime workflow;
-- `scientific_next_check`: the smallest evidence-producing test suggested by the reviewer.
+- `scientific_next_check`: an advisory decision-relevant check, or `No additional check needed for the next decision.`
 
 The projected record retains only `claim_review_quality`, `scope_safe_interpretation`, and
 `scientific_next_check`; full Review receipts and reviewer conversations remain private.
+
+Partial reviews do not require immediate repair or resubmission. Use observations within
+`scope_safe_interpretation` for further candidate trials; unresolved claims remain uncertain.
+Perform the suggested check or revise only when the uncertainty affects the next implementation
+choice or lifecycle decision. Do not repeat measurements or submissions merely to obtain `supported`.
+An unknown mechanism can coexist with a supported observation and next trial; excluding high-upside
+paths, generalizing beyond measured workloads, or declaring a program exhausted needs stronger support.
 
 ## Propose and select a Direction
 
@@ -197,17 +204,18 @@ changes the claim or remaining plan, submit a complete `action=revise` Direction
 
 ## Record an Experiment
 
-Record a research conclusion immediately when a probe or measurement changes the keep, repair,
-restore, or next-branch decision, before another candidate or path switch. A disposable probe that
-changes no decision need not be recorded. Cite exact Gateway Record IDs and supporting workspace
-material when they exist:
+Related candidate trials may continue before recording one Experiment at a decision checkpoint,
+when switching paths, or when sharing findings. Record observations, their measured scope, and the
+next action; the mechanism may remain unknown. Cite all relevant Records or archived references,
+including regressions that limit the conclusion. Runtime retains each measurement and its source
+identity. A disposable probe that changes no decision need not be recorded:
 
 ```json
 {
   "name": "KSPLIT=2 complete-workload measurement",
   "intent": "Determine whether split KV pays for its reduction cost",
   "gateway_record_ids": ["gateway-0123456789abcdef0123456789abcdef"],
-  "interpretation": "Long-KV regimes improved, while short-KV remains unresolved",
+  "interpretation": "The measured long-KV regimes improved while short-KV regressed. The mechanism is unknown; next test workload dispatch and measure its full-workload effect.",
   "references": ["scratch/ksplit-analysis.md", "profiles/ksplit2"]
 }
 ```
@@ -222,13 +230,17 @@ local proposed Direction is valid, but is never selected implicitly. When Direct
 omit `direction_id`.
 
 Runtime validates every cited ID; its standardized public result is available under root `records/`.
-Correctness, latency, failure, operation and Kernel commit identity live only in those records. Use
-Git to inspect source changes between the cited commits. Do not copy these facts into
-`experiment.json` or `interpretation`.
+Correctness, latency, failure, operation and Kernel commit identity remain authoritative in those
+records. Use Git to inspect source changes between cited commits. Summarize only the observations
+needed for the decision in `interpretation`, rather than duplicating complete result tables.
 
 `gateway_record_ids` and `references` are independent optional arrays. Either may be omitted or
 empty. An Experiment without Gateway Records remains a useful research note, but cannot by itself
-support a measured Direction lifecycle decision or an accepted Kernel submission.
+establish a measured Direction lifecycle conclusion. `submit-kernel` independently checks the
+exact commit's full Evaluate and final-source policy; it does not require an Experiment.
+
+An Experiment does not require an immediate Direction revision. Continue the highest-value branch;
+revise the Direction when its assessment or remaining plan changes materially.
 
 Revise a `local_writable` Experiment by resubmitting its required fields plus the `experiment_id` shown in
 the greatest visible `research-library/experiments/<experiment_id>/vN/experiment.json`. Runtime

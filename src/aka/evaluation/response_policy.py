@@ -3,14 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 from collections.abc import Mapping
-import re
+import json
 
 from aka.contracts.execution import JobResult
 
-SOURCE_VIOLATION = re.compile(
-    r"(?:Blocked import|Forbidden attribute access|Forbidden name): [A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*"
-    r"|Forbidden string literal matching: [A-Za-z_]\w*"
-)
 INFORMATION_CATEGORIES = frozenset({"recovery", "observation", "budget"})
 
 
@@ -28,6 +24,38 @@ def _cause_value(cause):
             **({"causes": [_cause_value(item) for item in cause.causes]} if cause.causes else {})}
 
 
+def upstream_error(result: JobResult) -> dict[str, Any] | None:
+    """Read the current Agate error verbatim, never a previous retry's error."""
+    latest = result.attempts[-1] if result.attempts else None
+    raw = latest.backend_response if latest is not None else None
+    if raw is not None:
+        error = raw.get("error")
+        if error is None and isinstance(raw.get("result"), Mapping):
+            error = raw["result"].get("error")
+        if error is not None:
+            return {"error": _json_value(error),
+                    **({"http_status": raw["http_status"]} if "http_status" in raw else {})}
+        # A later successful/accepted observation supersedes old error causes.
+        return None
+    causes = latest.causes if latest is not None else result.causes
+    for cause in reversed(causes):
+        if cause.raw_error is not None:
+            return {"error": _json_value(cause.raw_error),
+                    **({"http_status": cause.http_status} if cause.http_status is not None else {})}
+    # Some transports return the original envelope without an attempt channel.
+    # Do not interpret a Dev/Command's arbitrary stdout as a gateway envelope.
+    if result.output_scope == "transport":
+        try:
+            raw = json.loads(result.stdout)
+        except (TypeError, ValueError):
+            raw = None
+        if isinstance(raw, dict) and raw.get("error") is not None and (
+                "http_status" in raw or "job_id" in raw):
+            return {"error": raw["error"],
+                    **({"http_status": raw["http_status"]} if "http_status" in raw else {})}
+    return None
+
+
 def _failure_message(result):
     streams = ["\n".join(line for line in stream.splitlines()
                         if not line.startswith("[sandbox]")).strip()
@@ -37,36 +65,14 @@ def _failure_message(result):
 
 def execution_error(result: JobResult) -> dict[str, Any] | None:
     """Interpret captured execution failure facts without inferring dispatch from text."""
+    original = upstream_error(result)
+    if original is not None:
+        return {"status": "failed", **original}
+    if result.returncode == 0 and result.transport_status == "succeeded":
+        return None
     diagnostics = tuple(item for item in result.diagnostics if item.category not in INFORMATION_CATEGORIES)
     if result.returncode == 0 and not diagnostics and not result.causes and result.transport_status in {"succeeded", "failed", "unknown"}:
         return None
-    candidate_rejected = (
-        result.facts.disposition == "not_submitted" and not result.job_references
-        and not any(item.category == "authentication" or item.details.get("reference_rejected")
-                    for item in result.diagnostics)
-        and any(item.details.get("http_status") == 400
-            and item.details.get("source_validation_failed") is True
-            and item.details.get("candidate_rejected") is True
-            and not item.details.get("reference_rejected")
-            for item in result.diagnostics)
-    )
-    if candidate_rejected:
-        violations = []
-        for line in result.stderr.splitlines():
-            match = re.match(r"\s*- candidate:\s*(.*)", line)
-            if match:
-                value = re.sub(r"\s*\(trace_id=[^)]+\)\s*$", "", match[1])
-                if SOURCE_VIOLATION.fullmatch(value) and value not in violations:
-                    violations.append(value)
-        return {"status": "failed", "outcome": "not_submitted", "error": {
-            "code": "candidate_source_rejected", "error_class": "code",
-            "message": "Agate rejected candidate source before GPU submission.",
-            "reason": "source_validation_failed", "job_submitted": False,
-            "candidate_repairable": True, "violations": violations, "http_status": 400,
-            **({"causes": [_cause_value(item) for item in result.causes]} if result.causes else {})},
-            "next_action": "Replace the reported forbidden names, imports or attribute accesses in the candidate. "
-                "Use the documented APIs for the pinned runtime version, then validate the repaired source. "
-                "Do not bypass source validation through Dev."}
     primary = result.primary_diagnostic if result.primary_diagnostic in diagnostics else None
     primary = primary or (diagnostics[0] if diagnostics else None)
     if any(item.code == "original-job-wait-incomplete" for item in diagnostics):
@@ -89,12 +95,7 @@ def execution_error(result: JobResult) -> dict[str, Any] | None:
         rejected = result.facts.disposition == "not_submitted" and not result.job_references
         if rejected:
             error["job_submitted"] = False
-        return {"status": "failed", "outcome": result.facts.disposition, "error": error,
-                "next_action": ("Agate rejected the request before submission; no GPU Job was created. "
-                    "Use the returned validation details to correct the indicated request, source or "
-                    "configuration; report Runtime-generated invalid fields to the operator."
-                    if rejected else "Inspect the returned upstream error and its structured details. "
-                    "Do not infer a correctness or performance result from this execution failure.")}
+        return {"status": "failed", "outcome": result.facts.disposition, "error": error}
     message = _failure_message(result)
     if not message:
         message = "; ".join(f"{item.category}/{item.code}: {dict(item.details)}"

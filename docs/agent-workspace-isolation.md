@@ -78,6 +78,7 @@ environment from these options.
 | `bwrap_executable` | Bubblewrap executable, default `bwrap` |
 | `proc_mode` | `private` procfs, or the existing complete `host` procfs and PID namespace |
 | `timeout_seconds` | Optional provider active-time ceiling; omitted by default |
+| `pause_agent_during_requests` | Default `false`: Agent stays runnable during Runtime calls; `true` pauses its process tree and excludes request waits from active time |
 
 ## Launch lifecycle
 

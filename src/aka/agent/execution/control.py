@@ -1,4 +1,4 @@
-"""Suspend owned Agent work only for fully admitted host tool operations."""
+"""Own Agent cancellation and optional suspension during admitted tool operations."""
 from contextlib import contextmanager
 import os
 import signal
@@ -63,7 +63,7 @@ class AgentProcessScope:
 
 
 class SessionControl:
-    def __init__(self, *, suspend=True):
+    def __init__(self, *, suspend=False):
         self.suspend = suspend
         self.condition = threading.Condition(threading.RLock())
         self.scope = None
@@ -90,8 +90,8 @@ class SessionControl:
     @contextmanager
     def request(self):
         if not self.suspend:
-            # A trusted custom runner owns execution; without a verifiable local
-            # process tree, none of its elapsed time may be excluded.
+            # The Agent remains runnable, so request time stays in its active
+            # clock. Custom runners also use this path without process signals.
             with self.condition:
                 if self.closed:
                     raise PermissionError("Agent invocation is no longer active")

@@ -331,6 +331,8 @@ def _optimizer_result_from_eval(
 
     latency_by_shape: dict[str, float] = {}
     if require_performance:
+        performance_status = passed.get("performance")
+        performance_status = performance_status if isinstance(performance_status, dict) else {}
         performance = payload.get("performance")
         performance = performance if isinstance(performance, dict) else {}
         performance_shapes = performance.get("shapes")
@@ -338,6 +340,8 @@ def _optimizer_result_from_eval(
             performance_shapes if isinstance(performance_shapes, dict) else {}
         )
         for shape_id in shape_ids:
+            status = performance_status.get(shape_id)
+            status = status if isinstance(status, dict) else {}
             shape_result = performance_shapes.get(shape_id)
             shape_result = shape_result if isinstance(shape_result, dict) else {}
             sample_ms: list[float] = []
@@ -348,10 +352,11 @@ def _optimizer_result_from_eval(
                 value = _finite_number(sample.get("end_to_end_time_ms"))
                 if value is not None and value > 0.0:
                     sample_ms.append(value)
-            if shape_result.get("error") is not None or not sample_ms:
+            if status.get("status") == "failed" or shape_result.get("error") is not None or not sample_ms:
                 failures.append(
                     f"sid={shape_id}: performance "
-                    + str(shape_result.get("error") or "has no valid samples")
+                    + str(shape_result.get("error") or status.get("reason")
+                          or ("failed" if status.get("status") == "failed" else "has no valid samples"))
                 )
                 continue
             latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0

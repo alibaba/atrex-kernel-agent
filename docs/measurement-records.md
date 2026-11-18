@@ -169,9 +169,12 @@ A terminal `command_timeout` follows its explicit error class. Infrastructure-cl
 can recover; candidate/unknown errors do not become infrastructure merely because they mention
 a timeout. OOM, illegal memory access, or numerical mismatch does not prove device unavailability.
 
-Known-not-submitted candidate source rejection produces `candidate_source_rejected` and
-repair guidance, without an Eval-to-Dev fallback. Invalid endpoint/client configuration is
-an operator failure before dispatch.
+Agate HTTP rejections and terminal errors are returned with their original error fields
+and HTTP status. Runtime adds no recovery instructions and does not reclassify the error
+for the Agent. Retry classification remains private; after retries are exhausted the
+current attempt's original error is returned. A later success does not replay an earlier
+attempt's failure. Invalid local endpoint/client configuration remains a Light error
+before dispatch. No Eval-to-Dev fallback is introduced.
 
 Cancellation, liveness, and enclosing deadlines bound every retry. Complete ABBA batches
 must have the exact schedule and coverage; unrelated standalone measurements cannot reconstruct
@@ -191,6 +194,11 @@ Three repetitions apply to full Evaluate and whole ABBA comparisons. Per-shape m
 aggregated into summaries; ABBA sides are aggregated separately. Correctness-only Evaluate,
 Profile, Dev, Check, and Disassemble remain single-operation requests. An incomplete or
 rejected repetition cannot become a successful median.
+
+Per-Shape numerical checks are preserved in `result.correctness_by_shape` in both
+the Agent receipt and the Record. A single measurement exposes the native status
+and cases directly; repeated measurements retain those entries in a `runs` list.
+Passing checks keep their numerical errors and tolerance thresholds too.
 
 This repetition count is separate from native five-case correctness and ABBA's even
 measurement count per side. Standard native Evaluate uses five correctness cases;

@@ -174,6 +174,7 @@ class AgentProcessPolicy:
 class AgentCapabilities:
     filesystem_isolation: bool = False
     tool_runtime: bool = False
+    pause_agent_during_requests: bool = False
 
 
 @dataclass(frozen=True)

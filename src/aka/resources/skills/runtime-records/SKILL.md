@@ -38,26 +38,34 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
   `revise` and closure is reviewed; `start` only changes lifecycle and retains the prior review.
   Every archived state is published to peers with its actual review quality; only eligible evidence
   may support research conclusions.
-- Record an Experiment immediately when a probe or measurement changes the keep, repair, restore,
-  or next-branch decision, before launching another candidate or switching paths. Disposable probes
-  that change no decision need not be recorded. Use `name`, concrete `intent`, and bounded
-  `interpretation`. Records and archived references are independent optional evidence. Keep measured
-  facts in Records. A note without a Record does not establish a measured result. A proposed local
+- Related candidate trials may continue before recording one Experiment at a decision checkpoint,
+  when switching paths, or when sharing findings. Record observations, their measured scope, and the
+  next action; the mechanism may remain unknown. Cite relevant Records or archived references,
+  including regressions that limit the conclusion. Runtime retains each measurement and its source
+  identity. Disposable probes that change no decision need not be recorded. Use `name`, concrete
+  `intent`, and bounded `interpretation`. A note alone does not establish a measured result. A proposed local
   Direction may own an Experiment, but proposing or starting it does not require one. Revise only
   `local_writable` Experiments; extend `peer_read_only` evidence with a new local Experiment.
 - Use local Git for candidate history. Imported peer history is available through remote-tracking refs such as `atrex/T2`; inspect it with `git log`/`git diff`, or continue it with `git switch -c <branch> atrex/T2`. Runtime moves the ref at its configured publication boundary without changing your HEAD. Commit or restore local work before switching.
 - Continue bounded probe/edit/measurement/revert-or-keep cycles while the selected path has a
   concrete high-value step. A supported Experiment does not complete its Direction; compare the
-  remaining strategy branches after every Experiment. Close a Direction only when the optimization
+  remaining strategy branches and continue the highest-value trial. A Direction revision is not
+  required after each Experiment; revise when its assessment or remaining plan changes materially.
+  Close a Direction only when the optimization
   program is genuinely completed or exhausted, strategically deferred, concretely blocked, or
   reasonably abandoned.
 - Runtime returns the full Review once with the mutation result. `archive_status` reports storage,
   `claim_review_quality` reports `review_unavailable` or scientific support, and
   `evidence_eligible` controls whether the record may support a research conclusion, not visibility.
-  `runtime_action` is workflow guidance; `scientific_next_check` is the evidence follow-up. Only projected
+  `runtime_action` is workflow guidance; `scientific_next_check` is advisory and may say no additional
+  check is needed. Perform it or revise only when the uncertainty affects the next implementation
+  choice or lifecycle decision. Do not repeat measurements or submissions merely to obtain `supported`.
+  Only projected
   `claim_review_quality`, `scope_safe_interpretation`, and `scientific_next_check` remain Agent-visible afterward; full receipts and reviewer
-  conversations are Supervisor-private. Partial or `review_unavailable` claims are shared for context and their
-  cited Records follow claim visibility, but they still cannot support research conclusions.
+  conversations are Supervisor-private. Partial records may guide trials within
+  `scope_safe_interpretation`; unresolved claims remain uncertain. Stronger support is needed to
+  exclude a high-upside path, generalize beyond measured workloads, or declare a program exhausted.
+  Partial and `review_unavailable` records remain visible along with their cited Records.
 
 Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the
 current mode. It must already have a passing standard full Evaluate with complete per-Shape

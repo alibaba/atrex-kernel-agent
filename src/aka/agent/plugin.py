@@ -20,11 +20,13 @@ Config = {
         "bwrap_executable": {"type": "string", "minLength": 1},
         "proc_mode": {"type": "string", "enum": ["private", "host"]},
         "timeout_seconds": {"type": "number", "minimum": 0.001},
+        "pause_agent_during_requests": {"type": "boolean"},
         "state_directory": {"type": "string", "minLength": 1},
     },
     "additionalProperties": False,
 }
-Defaults = {"sandbox": "none", "bwrap_executable": "bwrap", "proc_mode": "private", "session_name": ""}
+Defaults = {"sandbox": "none", "bwrap_executable": "bwrap", "proc_mode": "private",
+            "session_name": "", "pause_agent_during_requests": False}
 
 
 def options(config):
@@ -37,6 +39,7 @@ def options(config):
         config.get("timeout_seconds", DEFAULT_AGENT_TIMEOUT_SECONDS),
         Path(config["state_directory"]) if config.get("state_directory") else None,
         config.get("proc_mode", "private"),
+        pause_agent_during_requests=config.get("pause_agent_during_requests", False),
     )
 
 

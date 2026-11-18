@@ -42,7 +42,8 @@ def causes_from_job(job):
     """Keep native error codes/messages and their causal structure, including deadlines."""
     def decode(value, depth=0):
         if not isinstance(value, dict):
-            return ExecutionCause("backend", "unstructured-error", str(value))
+            return ExecutionCause("backend", "unstructured-error", str(value),
+                                  raw_error=value if depth == 0 else None)
         details = value.get("details")
         details = dict(details) if isinstance(details, dict) else {}
         children = []
@@ -60,9 +61,13 @@ def causes_from_job(job):
             str(value.get("code") or value.get("reason") or value.get("type") or "unknown"),
             str(value.get("message") or value.get("detail") or ""), details,
             tuple(decode(child, depth + 1) for child in children),
+            raw_error=value if depth == 0 else None,
         )
     error = job.get("error") if isinstance(job, dict) else None
-    return (decode(error),) if error else ()
+    if error is None:
+        return ()
+    from dataclasses import replace
+    return (replace(decode(error), http_status=job.get("http_status")),)
 
 
 def remote_termination(job):

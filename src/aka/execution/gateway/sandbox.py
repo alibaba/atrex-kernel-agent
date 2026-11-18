@@ -1686,9 +1686,11 @@ def _run_sdk_job(
             continue
         job_id = accepted.get("job_id")
         if not isinstance(job_id, str) or not job_id:
-            if retryable_job_failure(accepted, kind=kind):
+            if accepted.get("error") is not None:
                 process = subprocess.CompletedProcess(["agate-sdk", kind], 1, json.dumps(accepted), "")
                 observe_attempt(process, operation=kind, attempt_id=attempt_id)
+                if not retryable_job_failure(accepted, kind=kind):
+                    return process
                 delay = policy.delays[index] if index < len(policy.delays) else None
                 if not wait_to_retry(delay):
                     return process
@@ -1729,16 +1731,25 @@ def _observe_job_wait(job_id, job, started):
         "observed_at_ms": int(time.time() * 1000), "query_ok": job is not None})
 
 
-def _permanent_job_query_failure(args, job, status):
+def _job_query_error(args, job, error):
+    """Return the original HTTP error without changing the accepted job's state."""
+    try:
+        body = json.loads(error.detail)
+    except (TypeError, ValueError):
+        body = error.detail
+    original = body.get("error", body) if isinstance(body, dict) else body
+    return subprocess.CompletedProcess(args, 1, json.dumps({
+        "job_id": job["job_id"], "status": job["status"],
+        "http_status": error.status, "error": original}), "")
+
+
+def _permanent_job_query_failure(args, job, error):
     """Fail a query without claiming that the accepted job stopped or was rejected."""
-    from .protocol import FAILURE_PREFIX
+    status = error.status
     diagnostic = {"failure_class": "request" if status == 400 else "authentication",
         "reason": "original-job-query-failed", "http_status": status, "job_id": job["job_id"]}
     emit_diagnostic(diagnostic)
-    # Do not use an admission-error marker: this job already has an identity.
-    # Keep response contents private; the owned fact channel carries the status.
-    return subprocess.CompletedProcess(args, 1, json.dumps(job),
-        FAILURE_PREFIX + json.dumps(diagnostic, sort_keys=True))
+    return _job_query_error(args, job, error)
 
 
 def _wait_sdk_job(*, url, kind, job_id, deadline, started, attempt_id=None,
@@ -1747,6 +1758,7 @@ def _wait_sdk_job(*, url, kind, job_id, deadline, started, attempt_id=None,
     from .jobs import GatewayJobs
     from aka.contracts.execution_recovery import JobReference
     last = {"job_id": job_id, "status": "unknown"}
+    last_query_error = None
     try:
         while deadline is None or time.monotonic() < deadline:
             remaining = 40 if deadline is None else deadline - time.monotonic()
@@ -1757,6 +1769,7 @@ def _wait_sdk_job(*, url, kind, job_id, deadline, started, attempt_id=None,
                 if job.get("job_id") != job_id:
                     raise ValueError("original-job-identity-mismatch")
             except (OSError, RuntimeError, ValueError) as error:
+                last_query_error = error
                 _observe_job_wait(job_id, None, started)
                 if isinstance(error, GatewayHTTPError) and error.status in {400, 401, 403}:
                     from .admission_retry import infrastructure_failure
@@ -1765,10 +1778,13 @@ def _wait_sdk_job(*, url, kind, job_id, deadline, started, attempt_id=None,
                     except (TypeError, ValueError):
                         transient = False
                     if not transient:
-                        return _permanent_job_query_failure(["agate-sdk", kind, job_id], last, error.status)
+                        process = _permanent_job_query_failure(["agate-sdk", kind, job_id], last, error)
+                        observe_attempt(process, operation=kind, attempt_id=attempt_id)
+                        return process
                 time.sleep(2 if deadline is None else min(2, max(0, deadline - time.monotonic())))
                 continue
             last = job
+            last_query_error = None
             _observe_job_wait(job_id, job, started)
             if job.get("status") in ("succeeded", "failed", "cancelled"):
                 process = subprocess.CompletedProcess(["agate-sdk", kind, job_id],
@@ -1778,6 +1794,10 @@ def _wait_sdk_job(*, url, kind, job_id, deadline, started, attempt_id=None,
             time.sleep(2 if deadline is None else min(2, max(0, deadline - time.monotonic())))
         # Client waiting ends without cancelling or claiming the remote job failed.
         emit_diagnostic({"failure_class": "timeout", "reason": "original-job-wait-incomplete"})
+        if isinstance(last_query_error, GatewayHTTPError):
+            process = _job_query_error(["agate-sdk", kind, job_id], last, last_query_error)
+            observe_attempt(process, operation=kind, attempt_id=attempt_id)
+            return process
         return subprocess.CompletedProcess(["agate-sdk", kind, job_id],
             ENVIRONMENT_TEMPFAIL, json.dumps(last), "original-job-wait-incomplete")
     except KeyboardInterrupt:
@@ -2453,8 +2473,8 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
                 try:
                     detail = json.loads(exc.detail)
                 except (TypeError, ValueError):
-                    detail = {"message": str(exc.detail)}
-                error = detail.get("error", detail) if isinstance(detail, dict) else {"message": str(detail)}
+                    detail = exc.detail
+                error = detail.get("error", detail) if isinstance(detail, dict) else detail
                 print(json.dumps({"status": "failed", "http_status": exc.status, "error": error}))
                 return 2
             except (OSError, RuntimeError, TimeoutError) as exc:

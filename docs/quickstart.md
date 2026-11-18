@@ -264,10 +264,11 @@ Native Atrex-Bench `source_tree`, CUDA manifest, Evaluate, ABBA and typed diagno
 - `--token-budget` controls Episode admission from main-Agent usage receipts. Independent Review
   calls are measured separately by kind and do not consume this budget. In-flight work may
   overshoot, and no counter can include tokens a provider does not report.
-- Light defaults to four hours of agent active time per optimization Episode. Blocking
-  Tool Runtime requests pause the agent and do not consume this allowance. The active-time
-  budget is shared across Session repairs within the running controller; it is not a
-  persisted allowance across controller restarts.
+- Agent and Review time limits are unset by default. Runtime requests do not pause the Agent;
+  independent work can continue, and request time counts toward any configured Agent time limit.
+  The Agent provider's `pause_agent_during_requests=true` opts into process suspension and excludes
+  request waits from active time. An explicit active-time budget is shared across Session repairs
+  within the running controller; it is not persisted across controller restarts.
 - GPU queue/execution, independent commit review and Wiki deadlines are independent of Agent active time.
 - Resume with the original workspace, composition, source layout, and frozen resources.
   Accepted job IDs and saved Gateway Records are reconciled before further GPU execution.

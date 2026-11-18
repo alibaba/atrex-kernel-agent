@@ -11,7 +11,7 @@ from .result_json import (
     parse_evaluation_result_line,
 )
 from aka.evaluation.correctness_summary import correctness_summary, finite_number
-from .response_policy import INFORMATION_CATEGORIES, known_gateway_error, execution_error
+from .response_policy import INFORMATION_CATEGORIES, known_gateway_error, execution_error, upstream_error
 from .objectives import latency_only_result
 
 PREFIXES = {
@@ -62,18 +62,16 @@ def compact_receipt(agent_result: dict) -> dict:
 def with_execution_error(response: dict, receipt, *, operation=None) -> dict:
     """Project an explicit failed receipt before a consumer looks for numeric output."""
     operation = operation or (receipt.attempts[-1].operation if receipt.attempts else None)
+    original = upstream_error(receipt)
+    if original is not None:
+        # The original error wins over synthesized missing-evidence summaries
+        # and structured output prefixes, including ABBA's incomplete result.
+        return {**response, **original}
     if operation in {"dev", "command"}:
         # Command output is the result, even on a nonzero exit. Do not invent
         # classifications, repairability or recovery advice from that output.
         response = {**response, "outcome": "timeout" if receipt.transport_status == "timed_out"
                     else receipt.facts.disposition}
-        raw = next((item.backend_response for item in reversed(receipt.attempts)
-                    if item.backend_response is not None), None)
-        if raw is not None and raw.get("error") is not None:
-            from aka.evaluation.response_policy import _json_value
-            response["error"] = _json_value(raw["error"])
-            if "http_status" in raw:
-                response["http_status"] = raw["http_status"]
         return response
     information = [{"category": item.category, "code": item.code, "details": dict(item.details)}
                    for item in receipt.diagnostics if item.category in INFORMATION_CATEGORIES
@@ -92,7 +90,7 @@ def with_execution_error(response: dict, receipt, *, operation=None) -> dict:
     error = execution_error(receipt)
     if error is None:
         return response
-    prefix = ERROR_PREFIXES[0] if error["error"]["code"] == "candidate_source_rejected" else ERROR_PREFIXES[1]
+    prefix = ERROR_PREFIXES[1]
     return {**response, "stdout": stdout + ("\n" if stdout and not stdout.endswith("\n") else "")
         + prefix + json.dumps(error, ensure_ascii=False) + "\n"}
 
@@ -136,7 +134,9 @@ def _metrics(raw: dict, *, verdict, mode="full", known=True) -> dict:
     numbers = [number for item in shapes.values() if (number := finite_number(item)) is not None and number > 0]
     latency = finite_number(raw.get("latency_us_geomean"))
     value["latency_us_geomean"] = latency if latency is not None and latency > 0 and mode != "correctness_only" else None
-    value["latency_us_arith_mean"] = statistics.fmean(numbers) if numbers else None
+    arithmetic = (finite_number(raw["latency_us_arith_mean"]) if "latency_us_arith_mean" in raw
+                  else statistics.fmean(numbers) if numbers else None)
+    value["latency_us_arith_mean"] = arithmetic if arithmetic is not None and arithmetic > 0 and mode != "correctness_only" else None
     return value
 
 
@@ -170,7 +170,7 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
         identity = {"gateway_record_id": record_id} if record_id else {}
         if kernels and "candidate" in kernels:
             identity["kernel_commit_id"] = kernels["candidate"]["kernel_id"]
-        return {"operation": operation, "status": "completed" if response.get("exit_code") == 0 else "failed",
+        return {"operation": operation, "status": "completed" if response.get("exit_code") == 0 and response.get("error") is None else "failed",
                 "result": result, **identity}
     options = request.get("options", {})
     prefix = PREFIXES.get(operation)
@@ -229,6 +229,9 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
     ):
         if kernels and side in kernels:
             identity[key] = kernels[side]["kernel_id"]
+    if response.get("error") is not None:
+        return {"operation": operation, "status": "failed", **identity,
+                "result": {key: deepcopy(response[key]) for key in ("error", "http_status") if key in response}}
     verdict = sample.get("correct", sample.get("all_pass"))
     cancelled = any(item.get("status") in {"cancelled", "canceled"} for item in [*errors, sample])
     status = "completed" if response.get("exit_code") == 0 else "failed"

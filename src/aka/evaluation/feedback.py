@@ -8,13 +8,56 @@ sample seeds, input values or whole job/request documents in the Agent response.
 from __future__ import annotations
 
 import math
+from copy import deepcopy
 from collections.abc import Iterable
 from typing import Any, cast
 
 JsonValue = Any
 
-FEEDBACK_KEYS = ("diagnostics", "performance_by_shape", "feedback_truncation")
+FEEDBACK_KEYS = ("diagnostics", "correctness_by_shape", "performance_by_shape", "feedback_truncation")
 _MAX_KERNELS = 64
+_CHECK_FIELDS = (
+    "name", "passed", "error", "max_elementwise_abs_diff",
+    "max_elementwise_rel_diff", "relative_l2", "max_row_relative_l2",
+    "mismatched_elements", "allowed_mismatched_elements", "total_elements", "tolerance",
+)
+
+
+def _correctness_shape(value: dict) -> dict:
+    """Preserve check results, never seeds, input values or tensor contents."""
+    if isinstance(value.get("runs"), list):
+        return {"runs": [_correctness_shape(run) for run in value["runs"]
+                         if isinstance(run, dict)]}
+    result = {key: deepcopy(value[key]) for key in ("status", "reason", "passed", "error")
+              if key in value}
+    if isinstance(value.get("cases"), list):
+        cases = []
+        for case in value["cases"]:
+            if not isinstance(case, dict):
+                continue
+            item = {key: deepcopy(case[key]) for key in ("passed", "error") if key in case}
+            for kind in ("outputs", "mutated_inputs", "unexpected_mutations"):
+                if isinstance(case.get(kind), list):
+                    item[kind] = [{key: deepcopy(check[key]) for key in _CHECK_FIELDS if key in check}
+                                  for check in case[kind] if isinstance(check, dict)]
+            cases.append(item)
+        result["cases"] = cases
+    return result
+
+
+def _merge_correctness(target: dict, source: dict) -> None:
+    for sid, value in source.items():
+        if not isinstance(value, dict):
+            continue
+        value = _correctness_shape(value)
+        if sid not in target:
+            target[sid] = value
+        else:
+            previous = target[sid]
+            # Keep every measurement's native verdict and cases; a later PASS
+            # must not erase an earlier failing output or numerical margin.
+            target[sid] = {"runs": [*previous.get("runs", [previous]),
+                                    *value.get("runs", [value])]}
 
 
 def _count(value: JsonValue) -> int:
@@ -44,6 +87,7 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
     seen_diagnostics: set[tuple[object, ...]] = set()
     diagnostic_items: dict[tuple[object, ...], dict[str, JsonValue]] = {}
     performance: dict[str, JsonValue] = {}
+    correctness: dict[str, JsonValue] = {}
 
     def add(stage: str, shape_id: str, error: object, **context: JsonValue) -> None:
         if not error:
@@ -94,6 +138,8 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
             if sid not in allowed or not isinstance(value, dict):
                 continue
             add(stage, sid, value.get("error"))
+            if stage == "correctness":
+                correctness[sid] = _correctness_shape(value)
             cases = value.get("cases", [])
             if isinstance(cases, list):
                 for index, case in enumerate(cases):
@@ -163,6 +209,14 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
 
     passed = payload.get("passed")
     if isinstance(passed, dict):
+        verdicts = passed.get("correctness")
+        if isinstance(verdicts, dict):
+            for sid, verdict in verdicts.items():
+                if sid in allowed and isinstance(verdict, dict):
+                    correctness.setdefault(sid, {}).update({
+                        key: deepcopy(verdict[key]) for key in ("status", "reason", "error")
+                        if key in verdict
+                    })
         for stage in ("compile", "correctness", "performance"):
             verdicts = passed.get(stage, {})
             if isinstance(verdicts, dict):
@@ -173,14 +227,15 @@ def evaluation_feedback(raw: object, shape_ids: Iterable[str]) -> dict[str, Json
                         and str(verdict.get("status", "")).lower() in ("failed", "fail", "error")
                         and not any(
                             isinstance(d, dict)
-                            and d.get("shape_id") == sid
+                            and sid in d.get("shape_ids", [d.get("shape_id")])
                             and d.get("stage") == stage
                             for d in diagnostics
                         )
                     ):
                         add(stage, sid, verdict.get("reason") or "Agate reported stage failure")
     return bound_feedback(
-        {"diagnostics": diagnostics, "performance_by_shape": performance}
+        {"diagnostics": diagnostics, "correctness_by_shape": correctness,
+         "performance_by_shape": performance}
     )
 
 
@@ -193,11 +248,17 @@ def bound_feedback(value: dict[str, JsonValue]) -> dict[str, JsonValue]:
     """
     raw_diagnostics = value.get("diagnostics")
     raw_performance = value.get("performance_by_shape")
+    raw_correctness = value.get("correctness_by_shape")
     raw_truncation = value.get("feedback_truncation")
     diagnostics = list(raw_diagnostics) if isinstance(raw_diagnostics, list) else []
     performance = dict(raw_performance) if isinstance(raw_performance, dict) else {}
     truncation = dict(raw_truncation) if isinstance(raw_truncation, dict) else {}
     result: dict[str, JsonValue] = {"diagnostics": diagnostics, "performance_by_shape": performance}
+    if isinstance(raw_correctness, dict):
+        result["correctness_by_shape"] = {
+            sid: _correctness_shape(item) for sid, item in raw_correctness.items()
+            if isinstance(item, dict)
+        }
     # Preserve omission metadata from historical records, but do not create
     # new omissions based on serialized length.
     if truncation:
@@ -209,6 +270,7 @@ def merge_feedback(values: Iterable[object]) -> dict[str, JsonValue]:
     """Carry projected feedback through batch aggregation without re-paraphrasing errors."""
     diagnostics: list[JsonValue] = []
     performance: dict[str, JsonValue] = {}
+    correctness: dict[str, JsonValue] = {}
     omitted: dict[str, JsonValue] = {}
     for value in values:
         if not isinstance(value, dict):
@@ -219,6 +281,9 @@ def merge_feedback(values: Iterable[object]) -> dict[str, JsonValue]:
         ps = value.get("performance_by_shape")
         if isinstance(ps, dict):
             performance.update(ps)
+        cs = value.get("correctness_by_shape")
+        if isinstance(cs, dict):
+            _merge_correctness(correctness, cs)
         truncation = value.get("feedback_truncation")
         if isinstance(truncation, dict):
             for key, count in truncation.items():
@@ -228,6 +293,7 @@ def merge_feedback(values: Iterable[object]) -> dict[str, JsonValue]:
         {
             "diagnostics": diagnostics,
             "performance_by_shape": performance,
+            "correctness_by_shape": correctness,
             **({"feedback_truncation": omitted} if omitted else {}),
         }
     )
@@ -253,6 +319,12 @@ def project_feedback(value: dict) -> dict:
     performance = value.get("performance_by_shape", {})
     performance = performance if isinstance(performance, dict) else {}
     projected = evaluation_feedback({"performance": {"shapes": performance}}, performance)
+    correctness = value.get("correctness_by_shape")
+    if isinstance(correctness, dict):
+        projected["correctness_by_shape"] = {
+            sid: _correctness_shape(item) for sid, item in correctness.items()
+            if isinstance(item, dict)
+        }
     projected["diagnostics"] = diagnostics
     truncation = value.get("feedback_truncation", {})
     projected["feedback_truncation"] = {

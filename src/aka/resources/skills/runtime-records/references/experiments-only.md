@@ -7,15 +7,17 @@ these generated files directly; do not edit them.
 
 ## Record an Experiment
 
-Record a decision-useful interpretation immediately after a real probe or measurement changes the
-keep, repair, restore, or next-branch decision, before another candidate or path switch. A disposable
-probe that changes no decision need not be recorded:
+Related candidate trials may continue before recording one Experiment at a decision checkpoint,
+when switching paths, or when sharing findings. Record observations, their measured scope, and the
+next action; the mechanism may remain unknown. Cite relevant results, including regressions that
+limit the conclusion. Runtime retains each measurement and its source identity. A disposable probe
+that changes no decision need not be recorded:
 
 ```json
 {
   "name": "KSPLIT=2 complete-workload measurement",
   "intent": "Determine whether split KV pays for its reduction cost",
-  "interpretation": "Long-KV regimes improved while short-KV remains unresolved",
+  "interpretation": "The measured long-KV regimes improved while short-KV regressed. The mechanism is unknown; next test workload dispatch and measure its full-workload effect.",
   "gateway_record_ids": ["gateway-0123456789abcdef0123456789abcdef"],
   "references": ["scratch/ksplit-analysis.md", "profiles/ksplit2"]
 }
@@ -24,8 +26,13 @@ probe that changes no decision need not be recorded:
 Submit with `--kind record-experiment --request-file scratch/experiment.json`. The required fields
 are `name`, `intent`, and `interpretation`; omit `direction_id`. `gateway_record_ids` and
 `references` are independent optional arrays and may be empty. Runtime verifies every cited Record.
-Execution facts, correctness, latency, source identity, and failures remain in root `records/`; do
-not restate them as interpretation.
+Execution facts, correctness, latency, source identity, and failures remain authoritative in root
+`records/`. Summarize observations needed for the decision without copying complete result tables.
+
+Partial reviews do not require immediate repair or resubmission. Use observations within
+`scope_safe_interpretation`; unresolved claims remain uncertain. `scientific_next_check` is advisory
+and may say no additional check is needed. Perform it or revise only when the uncertainty affects
+the next implementation choice. Do not repeat measurements or submissions merely to obtain `supported`.
 
 To correct or extend an existing local Experiment, submit the same request with its projected
 `experiment_id`. Runtime keeps the stable ID, increments `revision`, reviews the revised claim, and

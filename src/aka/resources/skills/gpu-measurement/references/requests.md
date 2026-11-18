@@ -100,9 +100,10 @@ formats. Assembly is diagnostic evidence, not a correctness or performance measu
 
 ## Waiting and results
 
-Run calls in the foreground without shell timeouts or parallel duplicates. Wait for the same call;
-use the Agent backend's wait/output facility if it backgrounds a long command. Do not edit the
-candidate while measurement is pending. --no-sync disables artifact synchronization, not waiting.
+With Agent suspension disabled, independent work may continue while a call is pending. Collect the
+same call's receipt before using its results; use the Agent backend's task/output facility for
+background calls. Keep in-flight request inputs unchanged, and do not add shell timeouts or parallel
+duplicates. --no-sync disables artifact synchronization; it does not make the Runtime client return early.
 
 Runtime returns the canonical operation/status/result receipt and record_path. The same result is
 saved at records/<gateway_record_id>.json; inspect it with ordinary file/JSON tools when needed.

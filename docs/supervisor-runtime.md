@@ -28,6 +28,21 @@ The Runtime does not materialize a compatibility Episode Journal or
 `research-transaction.json`; central Research, Submission, and Measurement stores are the only
 durable authorities.
 
+Research records support the next implementation decision. Related candidate trials may be grouped
+into one Experiment at a decision checkpoint, path switch, or sharing point; each Runtime measurement
+and its source identity is still archived independently. An Experiment summarizes observations,
+their measured scope, and the next action, with an unknown mechanism allowed. A supported Experiment
+does not require closing or immediately revising its Direction.
+
+Claim Review distinguishes evidence for trying a candidate from evidence for establishing a mechanism.
+An uncertain explanation does not lower the verdict if the observations still justify the proposed
+trial. Excluding high-upside paths, generalizing outside measured workloads, or declaring a Direction
+exhausted requires stronger evidence. Partial receipts retain `evidence_eligible=false` for the full
+claim but permit trials using `scope_safe_interpretation`; they do not demand resubmission. The advisory
+`scientific_next_check` may state that no additional check is needed. Perform a check or revise only
+when the uncertainty affects the next implementation choice or a lifecycle decision. Correctness,
+measurement validity, source identity, and final-source submission checks remain unchanged.
+
 The Runtime stages the complete candidate selected by CandidateWorkspace, restores trusted
 evaluator inputs, and delegates through these services. It does not trust a candidate-provided
 evaluator or allow the agent to choose Supervisor storage paths. Known jobs and exact measurements
@@ -114,8 +129,23 @@ The terminal receives the complete canonical `operation/status/result` receipt w
 The same redacted result is saved in the Record, without serialized-length clipping or stream previews.
 Env uses this contract and archives its complete observation; no GPU Job is created.
 
-Malformed agent requests return field-level repair guidance. A confirmed candidate-source
-rejection returns `candidate_source_rejected` with known-not-submitted evidence.
+Evaluate includes `result.correctness_by_shape` alongside `performance_by_shape`.
+For each requested Shape it retains Agate's correctness status and all `cases`,
+including passing and failing `outputs`, `mutated_inputs`, and `unexpected_mutations`.
+Each output keeps its original name, pass flag, error, numerical error metrics,
+mismatch/element counts and `tolerance` (including null thresholds). Input values,
+generators and case seeds are not copied into this field. Batched Shape IDs remain
+unchanged. With repeated measurements, a Shape contains `runs: [...]`, retaining
+each measurement's status and cases instead of overwriting earlier checks. These
+details are also returned by correctness-only Evaluate; no performance is required.
+
+Malformed Light requests return field-level repair guidance. Agate HTTP rejections and
+job errors retain the original `error` value and HTTP status, including unfamiliar fields.
+Runtime does not rename `reason` to `code`, rewrite classifications, or add `next_action`.
+Only Light-origin failures (such as local request validation or its wait-budget expiry)
+receive a Light-generated error. Compile, correctness and performance failures retain
+Agate's diagnostics for the affected Shapes; they are not replaced by an infrastructure
+error or a generic missing-evidence summary.
 Missing private records, failed credentials/configuration, and uncertain remote outcomes
 require operator repair; they are not reasons to alter the kernel or bypass validation.
 
@@ -141,9 +171,13 @@ See [Wiki providers](optional-light-modules.md#wiki-providers).
 ## Deadlines, isolation and recovery
 
 The selected Workflow, Evaluation and Execution configuration controls measurement repetitions,
-queue/request timeouts and Wiki options. Blocking authenticated Runtime requests pause the
-requesting agent tree; that time is excluded from its active-time budget.
-The handler continues running and resumes the agent before sending its response.
+queue/request timeouts and Wiki options. Runtime requests do not pause the Agent by default.
+`agent.config.pause_agent_during_requests=false` keeps its process tree runnable during GPU,
+Wiki and Review calls. The client still waits for its response, but the Agent can use its backend's
+background-task facility to continue independent work. Request time counts toward any configured
+Agent time limit; Agent and Review limits remain unset by default. Setting the option to `true`
+restores process suspension and excludes admitted request waits from Agent active time.
+The Session Prompt and Campaign configuration audit reflect the effective Agent setting.
 Cancellation and capability revocation terminate owned work rather than granting more authority.
 
 The default queue timeout is 60 seconds per queue stage. An omitted request timeout

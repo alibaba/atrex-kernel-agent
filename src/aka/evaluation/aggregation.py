@@ -6,6 +6,7 @@ import statistics
 from .objectives import latency_only_result
 
 from .correctness_summary import correctness_summary
+from .feedback import merge_feedback
 
 
 def _median_side(sides: list[dict]) -> dict:
@@ -26,6 +27,7 @@ def _median_side(sides: list[dict]) -> dict:
             result[key] = max(errors)
     result["correctness"] = correctness_summary(sides, passed=all(
         side.get("correct", side.get("all_pass")) is True for side in sides))
+    result["correctness_by_shape"] = merge_feedback(sides)["correctness_by_shape"]
     return result
 
 

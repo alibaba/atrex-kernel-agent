@@ -17,8 +17,9 @@ the Supervisor performs independent submission review.
    becomes `kernel_commit_id`.
 3. Read `python3 tools/sandbox.py --help` and choose an enabled operation. Standard full Evaluate
    is authoritative submission evidence. Subset results, comparisons and custom probes are diagnostic.
-4. Run the request in the foreground and wait for the same invocation. Do not add shell timeouts,
-   background it, edit the candidate while it runs, or submit parallel duplicates.
+4. Start the request and collect the same invocation's receipt before using its results. With Agent
+   suspension disabled, independent work may continue; use the backend's task/output facility for
+   background calls. Keep in-flight request inputs unchanged. Do not add shell timeouts or duplicates.
 5. For a measurement, inspect the complete canonical Runtime result. The identical durable result is
    saved at `records/<gateway_record_id>.json`; open it only when later work needs the persisted
    evidence. A completed job can still contain a correctness failure.
