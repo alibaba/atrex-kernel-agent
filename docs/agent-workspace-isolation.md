@@ -137,6 +137,9 @@ uncommitted edits or scratch at an Episode boundary.
 Use `proc_mode: host` as the default for Light inside Aone Sandbox. It preserves Bubblewrap's
 filesystem isolation but shares the outer container's PID namespace and complete `/proc` with
 the Agent. Ordinary Linux and Lima continue to default to `private`.
+The isolated Wiki worker inherits this selected proc mode. Its Python/Claude subprocesses
+receive a usable `/proc`, rather than an empty directory; filesystem grants remain scoped
+to the prepared request and required installations.
 
 This is the default and required Bubblewrap mode in the current Aone Sandbox environment: its outer
 container policy rejects Bubblewrap's normal nested procfs mount. Use an Agent composition patch

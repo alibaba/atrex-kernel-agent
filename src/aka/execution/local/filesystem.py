@@ -114,8 +114,10 @@ def mount(argv, fd, target, writable=False):
     argv.extend(("--bind" if writable else "--ro-bind", "/proc/self/fd/" + str(fd), str(target)))
 
 
-def prefix(binary, sources):
-    argv = [binary, "--new-session", "--die-with-parent", "--unshare-user", "--unshare-pid",
+def prefix(binary, sources, *, proc_mode="private"):
+    if proc_mode not in {"private", "host"}:
+        raise ValueError("Local executor proc_mode must be private or host")
+    argv = [binary, "--new-session", "--die-with-parent", "--unshare-user",
         "--unshare-ipc", "--unshare-uts", "--unshare-cgroup-try", "--cap-drop", "ALL"]
     runtime = []
     for name in RUNTIME_PATHS:
@@ -126,7 +128,11 @@ def prefix(binary, sources):
             fd = sources.open(source)
             mount(argv, fd, path)
             runtime.append((source, path, False, fd))
-    argv.extend(("--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run", "--dir", "/proc", "--dir", "/tmp/aka-home"))
+    argv.extend(("--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run", "--dir", "/tmp/aka-home"))
+    if proc_mode == "host":
+        argv.extend(("--bind", "/proc", "/proc"))
+    else:
+        argv.extend(("--unshare-pid", "--proc", "/proc"))
     return argv, runtime
 
 
@@ -150,7 +156,7 @@ def exec_command(argv, sources, command, environment=None):
         ",".join(map(str, sources.fds)), *command))
 
 
-def availability(value):
+def availability(value, *, proc_mode="private"):
     if platform.system() != "Linux":
         return None, "Linux mount namespaces are unavailable"
     binary = shutil.which(value)
@@ -158,7 +164,7 @@ def availability(value):
         return None, "Bubblewrap executable is unavailable"
     sources = Sources()
     try:
-        argv, _ = prefix(binary, sources)
+        argv, _ = prefix(binary, sources, proc_mode=proc_mode)
         argv.extend(("--chdir", "/tmp"))
         exec_command(argv, sources, ("/bin/true",))
         probe = subprocess.run(argv, env={"PATH": "/usr/bin:/bin"}, capture_output=True,
@@ -191,17 +197,17 @@ def restrictions(paths, grants):
 
 
 @contextmanager
-def launch(binary, command):
+def launch(binary, command, *, proc_mode="private"):
     sources = Sources()
     try:
-        yield _launch(binary, command, sources)
+        yield _launch(binary, command, sources, proc_mode=proc_mode)
     except OSError as error:
         raise UnsupportedExecution("filesystem source could not be pinned: " + type(error).__name__) from error
     finally:
         sources.close()
 
 
-def _launch(binary, command, sources):
+def _launch(binary, command, sources, *, proc_mode="private"):
     access = command.filesystem_access
     grants = []
     for grant in sorted(access.mounts, key=lambda value: len(value.source.parts)):
@@ -234,7 +240,7 @@ def _launch(binary, command, sources):
     working = sources.open(workspace.relative_to(writable[0][1]), parent=writable[0][3])
     if not stat.S_ISDIR(os.fstat(working).st_mode):
         raise UnsupportedExecution("command workspace is not an existing granted directory")
-    argv, runtime = prefix(binary, sources)
+    argv, runtime = prefix(binary, sources, proc_mode=proc_mode)
     for source, target, writable, fd in grants:
         mount(argv, fd, target, writable)
     visible = [*grants, *runtime]

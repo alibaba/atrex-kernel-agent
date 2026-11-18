@@ -153,6 +153,7 @@ class Agent:
     def capabilities(self):
         return AgentCapabilities(
             filesystem_isolation=self.options.sandbox == "bwrap", tool_runtime=True,
+            proc_mode=self.options.proc_mode,
             pause_agent_during_requests=(
                 self.options.pause_agent_during_requests and self._process_runner is None
             ),

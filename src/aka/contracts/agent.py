@@ -175,6 +175,9 @@ class AgentCapabilities:
     filesystem_isolation: bool = False
     tool_runtime: bool = False
     pause_agent_during_requests: bool = False
+    # Selected namespace policy for trusted auxiliary processes using the same
+    # host. Aone environments require host proc instead of mounting procfs.
+    proc_mode: str = "private"
 
 
 @dataclass(frozen=True)

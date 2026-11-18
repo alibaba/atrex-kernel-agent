@@ -16,21 +16,24 @@ class LocalCommandExecutor:
     sandbox_cli_options = False
     sandbox_cli_endpoint_environment = False
 
-    def __init__(self, *, bwrap="bwrap", context=None):
+    def __init__(self, *, bwrap="bwrap", context=None, proc_mode="private"):
+        if proc_mode not in {"private", "host"}:
+            raise ValueError("Local executor proc_mode must be private or host")
         self.bwrap = bwrap
+        self.proc_mode = proc_mode
         self.context = context
         self._availability = None
 
     @property
     def capabilities(self):
         if self._availability is None:
-            self._availability = filesystem.availability(self.bwrap)
+            self._availability = filesystem.availability(self.bwrap, proc_mode=self.proc_mode)
         return BackendCapabilities(operations=frozenset(("run", "dev")), cancellation=True,
             filesystem_isolation=self._availability[0] is not None)
 
     def bind(self, context):
         require_scope_backend(context, self.capabilities)
-        executor = type(self)(bwrap=self.bwrap, context=context)
+        executor = type(self)(bwrap=self.bwrap, context=context, proc_mode=self.proc_mode)
         executor._availability = self._availability
         return executor
 
@@ -44,7 +47,7 @@ class LocalCommandExecutor:
             binary, reason = self._availability
             if binary is None:
                 raise UnsupportedExecution(reason)
-            prepared = filesystem.launch(binary, command)
+            prepared = filesystem.launch(binary, command, proc_mode=self.proc_mode)
         cancelled = command.cancel_event is not None and command.cancel_event.is_set()
         budgets = (ExecutionBudget("local-run", command.timeout, command.timeout),)
         if cancelled:

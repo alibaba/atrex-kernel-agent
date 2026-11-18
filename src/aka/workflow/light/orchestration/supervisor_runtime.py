@@ -464,7 +464,9 @@ class SupervisorRuntime:
         # selected GPU transport. Keep the caller's filesystem scope enforced
         # by the local Execution plugin rather than dropping it for Gateway.
         from aka.execution.assembly import compose_execution
-        self._wiki_execution = compose_execution(profile="local")
+        self._wiki_execution = compose_execution(profile="local", patches=({
+            "id": "executor", "config": {"proc_mode": self.agent.capabilities.proc_mode},
+        },))
         self.wiki_executor = self._wiki_execution.executor
         if config.workspace:
             from aka.workflow.light.support.paths import record_campaign_runtime_configuration
