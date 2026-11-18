@@ -5,27 +5,20 @@ description: Query GPU optimization knowledge and hardware facts through the ses
 
 # GPU Wiki
 
-In every natural-language Wiki request, state the true target product separately from
-the authoritative runtime architecture; never infer either from a scheduler label or
-masked device name. If the true product is unavailable, say so rather than substitute
-another GPU. Ask for that product's hardware specification and relevant architecture/ISA
-facts alongside the operator, DSL and bottleneck. Distinguish measurements from hypotheses.
-Do not reduce the question to arbitrary keywords.
+Use the actual architecture returned by `python3 tools/sandbox.py --kind env`
+for Wiki queries. Describe the operator, DSL, bottleneck and relevant architecture/ISA
+question; distinguish measurements from hypotheses. Include a public product name
+only when it is known and a product-specific specification is needed. Do not infer
+product identity from a deployment name.
+
+For example, when Env reports `sm_120`:
 
 ```bash
-python3 tools/sandbox.py --kind wiki-query "Target B200, runtime sm_100. Triton normalization is measured DRAM-bound; which fusion strategies apply? Include B200 hardware specifications and relevant architecture/ISA facts." --brief
+python3 tools/sandbox.py --kind wiki-query "Runtime architecture sm_120. Triton normalization is measured DRAM-bound; which fusion strategies and architecture/ISA facts apply?" --brief
 python3 tools/sandbox.py --kind wiki-query --file scratch/wiki-question.txt
 python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverage
-python3 tools/sandbox.py --kind wiki-hardware --product B200
+python3 tools/sandbox.py --kind wiki-hardware --capability sm_120 --list features
 ```
-
-Hardware names such as `L20N` and `L20D` are deployment aliases, not public products.
-`wiki-hardware --product L20N` returns `not-recorded` (exit 4) with instructions for
-obtaining the device facts; it does not substitute another GPU's specifications.
-Use the observed architecture for architecture facts, for example
-`--kind wiki-hardware --capability sm_120 --list features` when Env reports `sm_120`.
-The `sm120` spec sheet describes an architecture; its product-specific numbers must not
-be assumed to describe the assigned device.
 
 `wiki-hardware` with no arguments lists products. A bare product name is accepted,
 as are a leading `--` separator and a single quoted option string; prefer the explicit

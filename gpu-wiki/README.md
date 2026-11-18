@@ -105,8 +105,8 @@ against a compatible external checkout.
 The default entry point is natural language. AKA should describe the real
 optimization context instead of guessing Wiki flags:
 
-- true public GPU product, such as `B200`, `B300`, `H20`, or `MI308X`;
-- runtime architecture exactly as reported, such as `sm_100` or `gfx942`;
+- actual architecture reported by Runtime Env, such as `sm_100` or `gfx942`;
+- public GPU product, only when known and relevant to a product-specific question;
 - operator, framework, shapes, and dtypes;
 - measured symptoms with numbers, separated from unverified assumptions;
 - previous attempts, failures, and relevant error text;
@@ -122,10 +122,10 @@ python3 gpu-wiki/tools/query_nl.py \
 
 Do not substitute a scheduler label for the product name. Product normalization
 only repairs formatting differences such as case, separators, or vendor wrappers;
-it does not translate one hardware identity into another. Deployment names such as
-`L20N`, `L20D`, and `L20Z` return a structured `not-recorded` result (exit 4), with no
-substitute product specification. Use the observed runtime architecture for ISA/feature
-lookups and runtime device queries for device-specific counts, clocks, and capacities.
+it does not translate one hardware identity into another. Use the actual architecture
+reported by Runtime Env for architecture/ISA and optimization queries. Request a
+product spec only when the public product identity is known; use runtime device
+queries for device-specific counts, clocks, and capacities.
 
 ## 4. The bridge stays small; scripts perform retrieval
 
