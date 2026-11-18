@@ -39,7 +39,7 @@ Capture reads and processes output concurrently with the CLI, so some of its wor
 - CPU uses `time.process_time()`: Supervisor CPU across its threads, excluding child-process CPU. Peak RSS uses `resource.getrusage(RUSAGE_SELF)` for the fresh Supervisor process, including its imports; it is not the RSS delta over the timed interval.
 - Files are on the workstation's local temporary storage. Filesystem caches are warm; there is no cache flush or CPU isolation. The implementation polls native files at 1 Hz; short invocations may only reach the final native sync.
 
-This burst-output benchmark exposes capture overhead without hiding it behind model/network wait time. Its off/on ratios are **not** production Agent slowdown ratios. It does not cover long-running discovery, large resumed histories, many subagents, all provider formats, Linux storage, or concurrent Campaigns. The three points cannot establish asymptotic complexity. Those conditions require additional measurements before claiming negligible production overhead. Operators can use [the capture configuration](session-observability.md#disable-capture-and-roll-back) if the extra resource cost is unacceptable.
+This burst-output benchmark exposes capture overhead without hiding it behind model/network wait time. Its off/on ratios are **not** production Agent slowdown ratios. It does not cover long-running discovery, large resumed histories, many subagents, all provider formats, Linux storage, or concurrent Campaigns. The three points cannot establish asymptotic complexity. Those conditions require additional measurements before claiming negligible production overhead. Operators can use [the capture configuration](session-observability.md#configuration-and-compatibility) if the extra resource cost is unacceptable.
 
 ## Read the archived samples
 
@@ -47,7 +47,7 @@ These measurements describe the 2026-09-16 implementation identified by hashes i
 raw JSON. They are retained as historical capture-cost evidence, not current Light
 performance measurements. The old checkout-import benchmark no longer runs against the
 installed module layout. Current capture selection is documented in
-[Session observability](session-observability.md#disable-capture-and-roll-back).
+[Session observability](session-observability.md#configuration-and-compatibility).
 
 Summarize the unchanged archived samples from the repository root:
 

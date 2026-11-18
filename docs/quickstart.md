@@ -223,22 +223,20 @@ Save a composition patch, then pass `--patch /path/to/options.json` alongside th
   "patches": [
     {"id": "workflow", "config": {
       "startup": true,
-      "numerical_validation": true,
       "tool_modules": ["directions"]
     }}
   ]
 }
 ```
 
-This example enables optional numerical probes and Direction-only research. Both research modules
+This example enables Direction-only research. Both research modules
 are disabled by default. Agent Sessions and Reviews have no active-time limit. All measurement
 evidence is retained centrally; explicit ABBA is optional.
 
 A patch replaces the provider's **whole configuration**; omitted values take provider
-defaults. A Workflow patch used by `aka optimize` must retain `"startup": true` to
-provide the launch entry point. An Agent patch for `light-sandbox` should retain
+defaults. `startup` defaults to `true` so `aka optimize` installs its launch entry point. An Agent patch for `light-sandbox` should retain
 `"sandbox": "bwrap"`  when those behaviors are desired.
-See [all module options](optional-light-modules.md#other-module-options).
+See [all module options](optional-light-modules.md#research-and-parallel-search).
 
 ### Candidate layouts
 
@@ -260,21 +258,22 @@ Native Atrex-Bench `source_tree`, CUDA manifest, Evaluate, ABBA and typed diagno
 
 ## Budgets and recovery
 
-- `--max-iters` bounds canonical versions/Episodes; `--max-stall` can stop stalled campaigns.
+- `--max-iters` limits naturally completed Episode segments; it does not interrupt a running Session.
 - `--token-budget` controls Episode admission from main-Agent usage receipts. Independent Review
   calls are measured separately by kind and do not consume this budget. In-flight work may
   overshoot, and no counter can include tokens a provider does not report.
-- Agent and Review time limits are unset by default. Runtime requests do not pause the Agent;
-  independent work can continue, and request time counts toward any configured Agent time limit.
-  The Agent provider's `pause_agent_during_requests=true` opts into process suspension and excludes
-  request waits from active time. An explicit active-time budget is shared across Session repairs
-  within the running controller; it is not persisted across controller restarts.
-- GPU queue/execution, independent commit review and Wiki deadlines are independent of Agent active time.
+- **Episode active time is intentionally unbounded.** There is no Episode timeout option.
+  Natural Agent stops delimit Episodes; cancellation or Session revocation ends active execution.
+  Reviews also have no active-time limit. An explicitly configured Agent provider
+  `timeout_seconds` limits a provider invocation, independently of Episode segmentation.
+- Runtime requests do not pause the Agent by default. Independent work can continue;
+  `pause_agent_during_requests=true` opts into process suspension.
+- GPU queue, request and per-Shape execution budgets remain finite and separately configurable.
 - Resume with the original workspace, composition, source layout, and frozen resources.
   Accepted job IDs and saved Gateway Records are reconciled before further GPU execution.
 
-Light uses three persistent search islands by default; set the Workflow plugin's `search`
-configuration to `{}` for an explicit serial run. Use a new workspace when switching
+Light runs serially by default. Configure `search.trajectories` for pooled search; an empty
+`search` object retains serial execution. Use a new workspace when switching
 serial/island search. Do not edit
 locks, private records, or job checkpoints to bypass an identity failure.
 See [execution recovery](measurement-records.md#failure-and-recovery-policy).
@@ -289,8 +288,6 @@ See [execution recovery](measurement-records.md#failure-and-recovery-policy).
 
 Light does not write Campaign or Episode control state into the Agent workspace. Raw private
 stores and Session traces are not public submission artifacts. The optional
-[dashboard](optimization-dashboard.md) reads persisted observations; its default file exporter
-does not package complete multi-file source trees. Use the workflow's source-aware export
-for those candidates.
+[dashboard](optimization-dashboard.md) reads persisted observations; use `observability/export_light_kernel.py` to export the complete source tree and evidence.
 
 Run `aka optimize --repo-root "$PWD" --help` for the native `WorkflowLaunch` CLI. All flags use one parser; no `--` separator is needed.

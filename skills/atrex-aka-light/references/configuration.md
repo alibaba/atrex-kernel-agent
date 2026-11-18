@@ -78,7 +78,6 @@ Research and pooled search belong to `workflow`:
   "api_version": 1,
   "patches": [{"id": "workflow", "config": {
     "tool_modules": ["directions", "experiments"],
-    "numerical_validation": false,
     "search": {
       "epochs": 5,
       "trajectories": 3,
@@ -93,7 +92,7 @@ Research and pooled search belong to `workflow`:
 
 `search: {}` is serial. Research defaults to `tool_modules: []`. For pooled runs,
 choose synchronous Epoch barriers or asynchronous publication. Role specialization
-is off by default. `numerical_validation` enables optional supplemental probes.
+is off by default. The old terminal numerical-planner option is not supported.
 `request_timeout` and `queue_timeout` control Runtime requests, not Reviewer active time.
 
 Agent isolation is independent:
@@ -109,7 +108,7 @@ Agent isolation is independent:
 
 Aone Sandbox requires `host`; ordinary Linux/Lima can use `private`. Capture is built
 into the shared Agent execution path and is not a `capture` patch field. Claim
-Review always requires Bubblewrap, even with a native optimizer Agent.
+Review follows the selected Agent sandbox mode. Bubblewrap makes supplied evidence read-only; native Review has a separate workspace and Home but no OS isolation boundary.
 
 ## Environment and Runtime options
 

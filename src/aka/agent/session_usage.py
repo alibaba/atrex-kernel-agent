@@ -439,7 +439,7 @@ class UsageAccumulator:
             try:
                 event = json.loads(line)
             except ValueError:
-                if is_native:
+                if is_native and not previous:
                     self.missing.add(path + ":malformed-json")
                 continue
             if not isinstance(event, dict):

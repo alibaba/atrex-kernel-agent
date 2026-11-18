@@ -106,22 +106,10 @@ class LongSessionRunner:
         self.agent = agent
         self.usage_policy = usage_policy
 
-    def run(
-        self,
-        *args,
-        episode_timeout_seconds: float | None = None,
-        active_timeout_seconds: float | None = None,
-        **kwargs,
-    ) -> SessionResult:
+    def run(self, *args, **kwargs) -> SessionResult:
+        """Episode active time is intentionally unbounded."""
         from aka.core.active_time import ActiveBudget, budget_scope
-        if episode_timeout_seconds is not None and active_timeout_seconds is not None:
-            raise ValueError(
-                "configure only one of episode_timeout_seconds or active_timeout_seconds"
-            )
-        timeout = (active_timeout_seconds
-                   if active_timeout_seconds is not None
-                   else episode_timeout_seconds)
-        with budget_scope(ActiveBudget(timeout)) as budget:
+        with budget_scope(ActiveBudget(None)) as budget:
             return self._run(*args, **kwargs, active_budget=budget)
 
     def _run(

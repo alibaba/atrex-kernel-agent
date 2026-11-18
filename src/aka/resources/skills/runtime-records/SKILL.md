@@ -9,6 +9,9 @@ allowed-tools: "Bash Read"
 Use `python3 tools/sandbox.py`. Runtime owns immutable measurements, exact measured source, and
 commit review; the Agent owns optimization objectives, plans, and interpretations.
 
+Independent Runtime requests may run concurrently. Collect a request's completed receipt
+before using its result or revising the same Direction, Experiment, or Submission.
+
 Start with `PROGRESS.md`. Open `frontier.json` only for the complete accepted-submission frontier, then only relevant
 Direction, Experiment, and `records/<gateway_record_id>.json` files. Projections are read-only.
 Gateway Records are measurement authority; all analysis is fallible.
@@ -75,5 +78,5 @@ its configured DSL.
 
 - [Research mutations and report schemas](references/journal.md)
 - [Saved results and source](references/records.md)
-- New measurements: `skills/gpu-measurement/SKILL.md`
-- Knowledge queries, when installed: `skills/KernelWiki/SKILL.md`
+- New measurements: `.agents/skills/gpu-measurement/SKILL.md`
+- Knowledge queries, when installed: `.agents/skills/kernel-wiki/SKILL.md`

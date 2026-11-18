@@ -35,7 +35,7 @@ def _content_inputs(workspace, reference, excluded=(), evaluation_input=None):
     content = {}
     skipped = {".git", ".atrex_verify", ".atrex_long_horizon", ".atrex_plugins",
                ".claude", ".agents", ".qoder", "__pycache__", "memory", "profiles",
-               "plans", "gpu-wiki", "reference-projects", "skills", "verification_artifacts",
+               "plans", "gpu-wiki", "reference-projects", "references", "skills", "verification_artifacts",
                "eval_output", "profile_output", ".mypy_cache", ".pytest_cache", ".ruff_cache",
                ".atrex_environment"}
     excluded = set(excluded)
@@ -191,14 +191,14 @@ def gateway_identity(request, reference_files, kind="run", *, full_request=None,
     parameters["candidate_source_format"] = "raw-kernel/1"
     parameters.update(source_parameters)
     parameters["workload_scope"] = workload_scope
-    # Six complete typed correctness cases are the proved full/untimed
-    # equivalence. Other seed policies keep their identities but cannot reuse it.
+    # Full and untimed requests use the same five deterministic cases. The
+    # workload digest includes seed/case policy; only mode differs for reuse.
     parameters["correctness_digest"] = _digest({"workload": workload,
         "candidate_source_sha256": parameters["candidate_source_sha256"]})
-    parameters["correctness_reuse_policy"] = "typed-six-case/1" if (
+    parameters["correctness_reuse_policy"] = "typed-five-case/1" if (
         kind == "run" and not abba and workload_scope == "full-task"
         and full.get("mode") in {"full", "correctness_only"}
-        and type(options.get("num_correctness_cases")) is int and options["num_correctness_cases"] == 6) else "none"
+        and type(options.get("num_correctness_cases")) is int and options["num_correctness_cases"] == 5) else "none"
     requirements = tuple(request.get("requirements", ()))
     policy = str(request.get("deps_mode") or ("explicit-requirements" if requirements else "unknown"))
     method = "atrex-bench/" + kind if kind in {"profile", "check", "disassemble"} else "atrex-bench/abba" if abba else "atrex-bench/eval"

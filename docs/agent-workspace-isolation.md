@@ -158,10 +158,23 @@ host mode as process isolation.
 
 ## Verification and rollback
 
-[Light verification](optional-light-modules.md#verification-scope) records local process,
+[Light verification](optional-light-modules.md#research-and-parallel-search) records local process,
 allowlist, auxiliary-publication, and Linux Bubblewrap evidence. These checks do not establish
 all-provider authentication or live GPU qualification.
 
 Stop the campaign before deployment/configuration changes. Preserve the original Home,
 private store, and frozen selection for recovery. Use a new workspace when changing workflows
 or incompatible provider/resource identities.
+
+## Limits of the boundary
+
+`private` creates a PID namespace and private procfs. `host` shares the existing PID namespace
+and complete `/proc`; same-UID processes can be inspected or signalled where the host permits it.
+Host mode is intended for a dedicated, trusted outer container such as Aone Sandbox. Its read-only
+filesystem mounts are not a process-isolation guarantee. Native mode has neither restriction.
+Provider-spawned child agents inherit the parent's namespace and filesystem grants; they do not
+receive a separately narrowed sandbox. A reviewer has separate evidence and native Session state,
+but only Bubblewrap enforces the evidence mounts as read-only. Review outputs are consumed only
+after successful process completion, using bounded no-follow regular-file reads and schema checks.
+GPU-library imports in development are not treated as final-submission violations; the submission
+policy evaluates the implementation that is actually submitted.

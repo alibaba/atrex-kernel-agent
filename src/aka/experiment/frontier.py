@@ -140,9 +140,9 @@ def kernel_full_evaluation_evidence(
             header = read_record_header(path)
             if header["operation"] != "evaluate":
                 continue
-            record = store.read(record_id)
-            if record["kernels"]["candidate"]["kernel_id"] != kernel_id:
+            if header["kernels"]["candidate"]["kernel_id"] != kernel_id:
                 continue
+            record = store.read(record_id)
             parsed = standard_full_evaluation(record)
             if parsed is None:
                 continue
@@ -323,6 +323,9 @@ def kernel_pareto_frontier(
             # Do not load response bodies or source artifacts for other operations.
             header = read_record_header(path)
             if header["operation"] != "evaluate":
+                continue
+            kernel_id = header["kernels"]["candidate"]["kernel_id"]
+            if kernel_ids is not None and kernel_id not in kernel_ids:
                 continue
             record = store.read(record_id)
             parsed = standard_full_evaluation(record)

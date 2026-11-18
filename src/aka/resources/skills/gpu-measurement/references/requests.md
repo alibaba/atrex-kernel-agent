@@ -100,7 +100,7 @@ formats. Assembly is diagnostic evidence, not a correctness or performance measu
 
 ## Waiting and results
 
-With Agent suspension disabled, independent work may continue while a call is pending. Collect the
+With Agent suspension disabled, independent work and independent Runtime calls may continue while a call is pending. Collect the
 same call's receipt before using its results; use the Agent backend's task/output facility for
 background calls. Keep in-flight request inputs unchanged, and do not add shell timeouts or parallel
 duplicates. --no-sync disables artifact synchronization; it does not make the Runtime client return early.

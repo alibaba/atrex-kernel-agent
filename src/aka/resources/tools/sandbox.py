@@ -38,13 +38,13 @@ class _ClientParser(argparse.ArgumentParser):
     def error(self, message):
         client_error("invalid_request", message,
                      "Correct the CLI arguments or JSON request file and retry; no request was sent. "
-                     "Use --kind OPERATION --help and skills/runtime-records/references/journal.md.",
+                     "Use --kind OPERATION --help and .agents/skills/runtime-records/references/journal.md.",
                      repairable=True)
         raise SystemExit(2)
 
 
 def journal_request(kind: str, argv: list[str]) -> dict:
-    parser = _ClientParser(allow_abbrev=False, description="Runtime research and submission mutations; request schemas: skills/runtime-records/references/journal.md")
+    parser = _ClientParser(allow_abbrev=False, description="Runtime research and submission mutations; request schemas: .agents/skills/runtime-records/references/journal.md")
     parser.add_argument("--kind", choices=[*REQUEST_KINDS], required=True)
     parser.add_argument(
         "--request-file",
@@ -105,13 +105,12 @@ def proxy_command(path: str, payload: dict) -> int:
         if status >= 400:
             print(json.dumps(result), file=sys.stderr)
             return 2 if status in {400, 404, 413, 422} else 75
-        raw = json.dumps(result, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()
+        json.dumps(result, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
     except (ValueError, UnicodeError):
         client_error("invalid_runtime_response", "The operation reply is invalid.",
                      "Inspect saved records; do not resubmit blindly.")
         return 75
     try:
-        result = json.loads(raw)
         if (isinstance(result, dict) and isinstance(result.get("operation"), str)
                 and result.get("status") in {"completed", "failed", "cancelled", "unknown"}
                 and isinstance(result.get("result"), dict)):

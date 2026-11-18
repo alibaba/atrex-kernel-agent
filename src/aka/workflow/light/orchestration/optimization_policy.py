@@ -25,7 +25,6 @@ def optimization_mode_directive(
     *,
     source_checks_enabled: bool = True,
     specify_dsl: bool = True,
-    numerical_validation_enabled: bool = False,
 ) -> str:
     """Use the same production rules, without requiring Agent Git/private-file access."""
     policy = canonical_submission_policy(mode, specify_dsl=specify_dsl)
@@ -46,11 +45,6 @@ def optimization_mode_directive(
             else "Independent source review is disabled for this task; correctness and the open "
             "DSL policy still apply.\n"
         )
-        numerical_policy = (
-            "Supplemental numerical review is enabled; measured probe failures are returned for repair.\n"
-            if numerical_validation_enabled
-            else "Supplemental numerical review is disabled for this campaign.\n"
-        )
         return (
             "## Optimization mode: performance\n\n"
             +
@@ -69,20 +63,13 @@ def optimization_mode_directive(
             "keep it consistent with the actual implementation; otherwise do not edit it.\n"
             "Validate correctness with the immutable evaluator over the full workload. Read "
             "`metadata.json` when present; every declared correctness condition must pass. "
-            + review_policy + numerical_policy
+            + review_policy
         )
     if policy != "ultra":
         raise ValueError(f"unsupported optimization mode: {mode!r}")
     framework_rule = (
         f"The submitted candidate's implementation framework is exactly **{framework}**. "
         "This is a hard final-candidate constraint, not a development-method restriction."
-    )
-    numerical_rule = (
-        "Numerical review produces targeted Supervisor-run probes. A measured failure is returned "
-        "for repair; fix the candidate, rerun ordinary validation, and resubmit without changing "
-        "trusted probes or thresholds."
-        if numerical_validation_enabled
-        else "Supplemental numerical review is disabled for this campaign."
     )
     return (
         "## Optimization mode: ultra\n\n"
@@ -100,7 +87,6 @@ def optimization_mode_directive(
         "- Validate the immutable full workload. Before reasoning about numerical acceptance, read "
         "workspace `metadata.json` when present; its benchmark correctness contract is authoritative. "
         "Do not assume, invent, or override tolerances; one passing check never overrides another reported failure.\n"
-        f"- {numerical_rule}\n"
         "- Keep editable `solution.json`, when present, consistent with the implementation. The "
         "Supervisor returns review or validation failures for repair before accepting the submission.\n"
     )
@@ -112,14 +98,12 @@ def workspace_policy_block(
     *,
     source_checks_enabled: bool = True,
     specify_dsl: bool = True,
-    numerical_validation_enabled: bool = False,
 ) -> str:
     directive = optimization_mode_directive(
         mode,
         framework,
         source_checks_enabled=source_checks_enabled,
         specify_dsl=specify_dsl,
-        numerical_validation_enabled=numerical_validation_enabled,
     ).rstrip()
     return f"{POLICY_BEGIN}\n\n{directive}\n\n{POLICY_END}\n"
 
@@ -133,7 +117,6 @@ def install_workspace_policy(
     update_tracked_files: bool = True,
     source_checks_enabled: bool = True,
     specify_dsl: bool = True,
-    numerical_validation_enabled: bool = False,
     expose_evaluator_shapes: bool = True,
 ) -> None:
     """Pin policy in the Campaign manifest and render Agent guidance."""
@@ -169,7 +152,6 @@ def install_workspace_policy(
         policy_framework,
         source_checks_enabled=source_checks_enabled,
         specify_dsl=specify_dsl,
-        numerical_validation_enabled=numerical_validation_enabled,
     )
     if POLICY_BEGIN in current and POLICY_END in current:
         before, remainder = current.split(POLICY_BEGIN, 1)

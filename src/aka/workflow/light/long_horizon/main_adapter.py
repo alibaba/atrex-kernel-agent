@@ -20,7 +20,6 @@ def link_episode_runtime(campaign: Campaign, workspace: Path) -> None:
         update_tracked_files=False,
         source_checks_enabled=campaign.source_checks_enabled,
         specify_dsl=campaign.specify_dsl,
-        numerical_validation_enabled=campaign.module_options.numerical_validation,
         expose_evaluator_shapes=campaign.expose_evaluator_shapes,
     )
 
@@ -33,7 +32,6 @@ def session_execution_policy(campaign: Campaign) -> dict[str, object]:
     from aka.workflow.light.orchestration.constants import DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES
 
     return {
-        "episode_timeout_seconds": getattr(campaign.module_options, "episode_timeout_seconds", None),
         "reasoning_effort": "max",
         "output_limit_recovery_retries": getattr(
             campaign.module_options, "output_limit_recovery_retries",

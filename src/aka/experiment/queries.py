@@ -107,7 +107,7 @@ def shape_minima(records, identities, environment_identity):
 
 def correctness_reuse(records, identities, environment_identity):
     def key(identity):
-        if not _ordinary(identity, correctness=True) or identity.parameters.get("correctness_reuse_policy") != "typed-six-case/1":
+        if not _ordinary(identity, correctness=True) or identity.parameters.get("correctness_reuse_policy") != "typed-five-case/1":
             return None
         digest = identity.parameters.get("correctness_digest")
         if not _sha256(digest):

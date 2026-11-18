@@ -102,15 +102,17 @@ class TranscriptTail:
         self.invalidated = False
         self.history_incomplete = False
 
-    def resume_history(self, path: Path, budget: CaptureBudget, previous_size: int):
+    def resume_history(self, path: Path, budget: CaptureBudget, previous_size: int, *, start: int = 0, identity=None):
         """Parse a bounded prefix without charging or stopping the live tail."""
         if self.offset or self.captured_bytes or self.identity is not None:
             raise ValueError("Resume history must be initialized before live capture")
         # Even if the scan is capped or fails, never replay old bytes as new output.
         self.offset = previous_size
         history = TranscriptTail()
+        history.offset = start
+        history.identity = identity
         try:
-            yield from history.read(path, budget, through=previous_size, final=True)
+            yield from history.read(path, budget, through=previous_size)
         except (OSError, ValueError):
             self.stopped = True
             raise
@@ -118,7 +120,9 @@ class TranscriptTail:
             self.identity = history.identity
             self.invalidated = history.invalidated
             self.history_incomplete = history.stopped or history.incomplete or self.stopped
-            self.dropping_line = history.dropping_line
+            # An interrupted old JSONL suffix is history, not a malformed new
+            # response. Skip its continuation through the next newline.
+            self.dropping_line = history.dropping_line or bool(history.pending)
             self.stopped = self.stopped or history.invalidated
 
     def read(

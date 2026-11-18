@@ -19,7 +19,7 @@ Config = {
         "sandbox": {"type": "string", "enum": ["none", "bwrap"]},
         "bwrap_executable": {"type": "string", "minLength": 1},
         "proc_mode": {"type": "string", "enum": ["private", "host"]},
-        "timeout_seconds": {"type": "number", "minimum": 0.001},
+        "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
         "pause_agent_during_requests": {"type": "boolean"},
         "state_directory": {"type": "string", "minLength": 1},
     },

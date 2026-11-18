@@ -331,25 +331,23 @@ class AgentSession(Protocol):
 
 
 def merge_token_usage_evidence(left: TokenUsage, right: TokenUsage) -> TokenUsage:
-    """Preserve known counters without adding possibly overlapping observations.
+    """Choose one coherent observation of overlapping provider usage.
 
-    Component maxima are a conservative reconciliation, not a proven total for
-    unseen child requests. The result must remain partial.
+    Never synthesize a bill by adding maxima from incompatible partitions.
+    Identical evidence preserves its quality; divergent evidence is partial.
     """
     if left.total_tokens is None and right.total_tokens is None:
         return TokenUsage.unavailable()
-    values = {}
-    for key in (
+    if left.total_tokens is None:
+        return right
+    if right.total_tokens is None:
+        return left
+    keys = (
         "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
-        "reasoning_tokens",
-    ):
-        known = [getattr(row, key) for row in (left, right) if getattr(row, key) is not None]
-        values[key] = max(known) if known else None
-    total = max(
-        left.total_tokens or 0,
-        right.total_tokens or 0,
-        sum(values[key] or 0 for key in (
-            "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens"
-        )),
+        "reasoning_tokens", "total_tokens",
     )
-    return TokenUsage(**values, total_tokens=total, measurement="partial")
+    quality = {"exact": 3, "estimated": 2, "partial": 1, "unavailable": 0}
+    if all(getattr(left, key) == getattr(right, key) for key in keys):
+        return max((left, right), key=lambda row: quality.get(row.measurement, 0))
+    chosen = max((left, right), key=lambda row: (row.total_tokens, quality.get(row.measurement, 0)))
+    return TokenUsage(**{key: getattr(chosen, key) for key in keys}, measurement="partial")

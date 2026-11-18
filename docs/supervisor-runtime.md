@@ -166,7 +166,7 @@ python3 tools/plugin.py call gpu-wiki.query --input scratch/wiki-request.json
 A provider with a compatible CLI root also supports `wiki-query`, `wiki-search`,
 and `wiki-hardware` through the sandbox client. Wiki query caching, concurrency,
 timeouts, and failures are separate from GPU jobs.
-See [Wiki providers](optional-light-modules.md#wiki-providers).
+See [Wiki providers](optional-light-modules.md#independent-wiki-execution).
 
 ## Deadlines, isolation and recovery
 
@@ -183,7 +183,7 @@ Cancellation and capability revocation terminate owned work rather than granting
 The default queue timeout is 60 seconds per queue stage. An omitted request timeout
 uses the controller's derived queue/execution policy; an explicit positive value is the
 whole-request limit. GPU allocation deadlines and Wiki execution budgets remain separate.
-See [module options](optional-light-modules.md#other-module-options) and
+See [module options](optional-light-modules.md#research-and-parallel-search) and
 [active-time accounting](optional-light-modules.md#agent-active-time-limit-and-blocking-runtime-calls).
 
 All Agate control-plane calls use the public SDK. Accepted jobs are short-polled by ID within
@@ -203,4 +203,4 @@ The Agent uses `python3 tools/sandbox.py --kind KIND --help` for operation-speci
 The client requires a live Session capability. Operator inspection uses the eight supported
 observability scripts; direct Agate SDK probes are outside the Campaign measurement history.
 
-For evidence and limitations, see [Light verification](optional-light-modules.md#verification-scope).
+For evidence and limitations, see [Light verification](optional-light-modules.md#research-and-parallel-search).

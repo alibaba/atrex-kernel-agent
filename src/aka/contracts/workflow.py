@@ -14,7 +14,6 @@ from .evaluation import (
 )
 
 
-DEFAULT_LIGHT_EPISODE_TIMEOUT = None
 
 
 @dataclass(frozen=True)

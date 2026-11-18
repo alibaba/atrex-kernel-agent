@@ -62,18 +62,19 @@ def submit_prepared(args, workspace, grace, prepared):
     archives = read_archives(prepared)
     validate_archives(prepared, archives, args.kind)
     from .sdk import route
-    args.url = route(args.url, args.gateway_profile)
+    url = route(args.url, args.gateway_profile)
     try:
         if archives:
-            process = run_archived(args, workspace, grace, request, archives, transport=transport)
+            process = run_archived(args, workspace, grace, request, archives, transport=transport, url=url)
         else:
-            process = transport._run_sdk_job(url=args.url,
+            process = transport._run_sdk_job(url=url,
                 kind={"run":"eval", "check":"compile"}.get(kind, kind),
                 payload=request, timeout=args.timeout, queue_wait_grace=grace)
     except SourceArchiveError as error:
-        emit_diagnostic({"failure_class": "infrastructure", "reason": error.code,
+        permanent = error.code in {"upload-invalid-url", "upload-rejected"}
+        emit_diagnostic({"failure_class": "request" if permanent else "infrastructure", "reason": error.code,
                          **({"http_status": error.status} if error.status is not None else {})})
-        return transport.ENVIRONMENT_TEMPFAIL
+        return 2 if permanent else transport.ENVIRONMENT_TEMPFAIL
     except transport.GatewayHTTPError as error:
         from .diagnostics import report_typed_limitation
         report_typed_limitation(f"http {error.status}")

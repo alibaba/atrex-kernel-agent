@@ -1,16 +1,14 @@
-"""Supervisor-owned Direction, Experiment, and terminal-report Journal.
+"""Supervisor-owned research transactions and exact-commit submission processing.
 
 The Agent submits interpretation, intent, and explicit Gateway Record references.
-The private Gateway store owns their exact Kernel bindings; the Journal does not
+The private Gateway store owns their exact Kernel bindings; this transaction layer does not
 duplicate source identity or require a before/after comparison structure.
 """
 
 from __future__ import annotations
 
 import errno
-import fcntl
 import hashlib
-import inspect
 import json
 import logging
 import math
@@ -24,11 +22,15 @@ import threading
 import uuid
 from collections import ChainMap
 from collections.abc import Callable, Iterable, Mapping, MutableMapping, Set as AbstractSet
-from contextlib import contextmanager
-from copy import deepcopy
+from copy import copy, deepcopy
+from functools import wraps
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+
+_FANOUT_LOCK = threading.Lock()
+_FANOUT_RUNNING: set[Path] = set()
+_FANOUT_PENDING: set[Path] = set()
 from typing import Any
 
 from aka.agent.execution.home import open_private_directory
@@ -328,42 +330,8 @@ def _module_enabled(journal: Mapping[str, object], module: str) -> bool:
     return module in _tool_modules(journal)
 
 
-class _HistoryIndex:
-    """Process-local projection of finalized, immutable Episode Journals."""
-
-    def __init__(self) -> None:
-        self.next_episode = 0
-        self.shared_revision: str | None = None
-        self.shared_direction_ids: set[str] = set()
-        self.shared_experiment_ids: set[str] = set()
-        self.directions: dict[str, dict[str, Any]] = {}
-        self.statuses: dict[str, str] = {}
-        self.experiments: list[dict[str, Any]] = []
-        self.experiments_by_id: dict[str, dict[str, Any]] = {}
-        self.experiment_ids: set[str] = set()
-        self.pending: set[int] = set()
-
-    def fork(self) -> "_HistoryIndex":
-        """Return an unpublished copy that can ingest the next Episode safely."""
-        result = _HistoryIndex()
-        result.next_episode = self.next_episode
-        result.shared_revision = self.shared_revision
-        result.shared_direction_ids = set(self.shared_direction_ids)
-        result.shared_experiment_ids = set(self.shared_experiment_ids)
-        # Direction events and Experiment association update nested lists, so
-        # these views require a deep copy. Existing Experiment rows are
-        # immutable after finalization and can be shared between snapshots.
-        result.directions = deepcopy(self.directions)
-        result.statuses = dict(self.statuses)
-        result.experiments = list(self.experiments)
-        result.experiments_by_id = dict(self.experiments_by_id)
-        result.experiment_ids = set(self.experiment_ids)
-        result.pending = set(self.pending)
-        return result
 
 
-_HISTORY_LOCK = threading.RLock()
-_HISTORY_INDEXES: dict[Path, _HistoryIndex] = {}
 
 
 @dataclass(frozen=True)
@@ -383,28 +351,6 @@ def _now() -> str:
     return datetime.now(UTC).isoformat()
 
 
-@contextmanager
-def journal_lock(path: Path):
-    """Serialize processes as well as Sessions; no blocking global Runtime lock."""
-    with open_private_directory(path.parent) as parent:
-        descriptor = os.open(
-            "journal.lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600, dir_fd=parent
-        )
-        try:
-            try:
-                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError as error:
-                raise AgentRequestError(
-                    "Another controller is updating this Episode's private Runtime state; "
-                    "this request made no changes",
-                    code="journal_busy",
-                    next_action=(
-                        "Wait briefly and retry with backoff; do not edit projected research files"
-                    ),
-                ) from error
-            yield
-        finally:
-            os.close(descriptor)
 
 
 def _text(value: object, label: str) -> str:
@@ -439,141 +385,10 @@ def _change_scope(value: object) -> str:
     return value
 
 
-def initialize_journal(
-    path: Path,
-    *,
-    episode: int,
-    base_commit: str,
-    branch: str,
-    memory_version: int | None = None,
-    tool_modules: tuple[str, ...] | list[str] = (),
-) -> dict[str, Any]:
-    """Create one private Runtime-managed Episode Journal."""
-    modules = tuple(tool_modules)
-    if len(set(modules)) != len(modules) or set(modules) - JOURNAL_MODULES:
-        raise ValueError("tool_modules may contain only unique directions and experiments")
-    value: dict[str, Any] = {
-        "schema_version": 2,
-        "runtime_managed": True,
-        "research_records": bool(modules),
-        "tool_modules": list(modules),
-        "episode": episode,
-        "memory_version": memory_version,
-        "base_commit": base_commit,
-        # Public identity for the same V0 source in Agent-owned Git. The
-        # controller commit above identifies only the private task baseline.
-        "base_kernel_id": None,
-        "episode_branch": branch,
-        "state": "in_progress",
-        "direction_events": [],
-        "experiments": [],
-        # Every explicit Agent commit submission and its independent source
-        # review are retained privately for audit. They are not handoffs and
-        # never mutate the incumbent or Agent Git.
-        "kernel_submissions": [],
-        "created_at": _now(),
-    }
-    private_write(path, value)
-    return value
 
 
-def load_journal(path: Path) -> dict[str, Any]:
-    try:
-        value = read_json(path, limit=MAX_FILE_BYTES)
-    except (OSError, ValueError) as exc:
-        raise RuntimeStateError("The private Runtime Episode state is missing or unreadable.") from exc
-    if (
-        not isinstance(value, dict)
-        or value.get("schema_version") != 2
-        or value.get("runtime_managed") is not True
-    ):
-        raise RuntimeStateError("The private Runtime Episode state has an unsupported schema.")
-    if not isinstance(value.get("direction_events"), list) or not isinstance(
-        value.get("experiments"), list
-    ):
-        raise RuntimeStateError("The private Runtime Episode state has invalid collections.")
-    submissions = value.setdefault("kernel_submissions", [])
-    if not isinstance(submissions, list):
-        raise RuntimeStateError("The private Runtime Episode state has invalid Kernel submissions.")
-    if type(value.get("research_records", True)) is not bool:
-        raise RuntimeStateError("The private Runtime Episode state has an invalid research policy.")
-    base_kernel_id = value.get("base_kernel_id")
-    if base_kernel_id is not None and (
-        not isinstance(base_kernel_id, str)
-        or KERNEL_RECORD_ID_RE.fullmatch(base_kernel_id) is None
-    ):
-        raise RuntimeStateError(
-            "The private Runtime Episode state has an invalid Agent baseline identity."
-        )
-    modules = _tool_modules(value)
-    if bool(modules) != value.get("research_records", True):
-        raise RuntimeStateError(
-            "The private Runtime Episode state's research policy disagrees with tool_modules."
-        )
-    if "directions" not in modules and value["direction_events"]:
-        raise RuntimeStateError(
-            "Direction-disabled Runtime Episode state contains unexpected Direction records."
-        )
-    if "experiments" not in modules and value["experiments"]:
-        raise RuntimeStateError(
-            "Experiment-disabled Runtime Episode state contains unexpected Experiment records."
-        )
-    if not modules and (value["direction_events"] or value["experiments"]):
-        raise RuntimeStateError(
-            "Research-disabled Runtime Episode state contains unexpected research records."
-        )
-    return value
 
 
-def _index_historical_journal(index: _HistoryIndex, path: Path, episode: int) -> None:
-    try:
-        journal = load_journal(path)
-    except (ValueError, RuntimeStateError) as error:
-        raise RuntimeStateError(
-            "Historical private Runtime Episode state is unreadable; restore it before continuing."
-        ) from error
-    if journal["episode"] != episode:
-        raise RuntimeStateError(
-            "Historical private Runtime state has a mismatched Episode identity"
-        )
-    if not journal.get("finalized_at"):
-        index.pending.add(episode)
-        return
-    # Shared Epoch Directions belong to peer trajectories. A peer may keep its
-    # Direction active across Episodes, but that read-only lease is not a local
-    # active Direction while private historical Journals are replayed. Preserve the published peer status in
-    # ``index.statuses``; ignore it only in the lifecycle validation copy.
-    _apply_direction_events(
-        index.directions,
-        index.statuses,
-        journal,
-        ignored_active_ids=frozenset(index.shared_direction_ids),
-    )
-    for experiment in journal["experiments"]:
-        if not isinstance(experiment, dict):
-            continue
-        experiment_id = experiment.get("experiment_id")
-        if not isinstance(experiment_id, str):
-            continue
-        previous = index.experiments_by_id.get(experiment_id)
-        if previous is not None:
-            # Shared peer Experiments are immutable in this trajectory. Local
-            # Experiments may publish a newer reviewed revision in a later Episode.
-            if experiment_id in index.shared_experiment_ids:
-                continue
-            if _experiment_revision(experiment) <= _experiment_revision(previous):
-                continue
-            indexed = dict(experiment)
-            index.experiments_by_id[experiment_id] = indexed
-            index.experiments = [
-                indexed if item.get("experiment_id") == experiment_id else item
-                for item in index.experiments
-            ]
-            continue
-        index.experiment_ids.add(experiment_id)
-        indexed = dict(experiment)
-        index.experiments.append(indexed)
-        index.experiments_by_id[experiment_id] = indexed
 
 
 def shared_research_path(campaign_root: Path) -> Path:
@@ -780,14 +595,14 @@ def research_projection(current: Path, campaign_root: Path) -> dict[str, Any]:
 
 
 def _visible_history(
-    current: Path | dict[str, Any], campaign_root: Path
+    current: dict[str, Any], campaign_root: Path
 ) -> _VisibleHistory:
     """Build the visible research state for one validated mutation.
 
-    Current Light passes an in-memory snapshot read directly from the central
-    Research Store. Path input remains only for the separate Legacy workflow.
+    Mutations use an in-memory snapshot read directly from the central Research
+    Store. Episode files are not research authority.
     """
-    current_value = current if isinstance(current, dict) else load_journal(current)
+    current_value = current
     episode = current_value.get("episode")
     if not isinstance(episode, int) or isinstance(episode, bool) or episode < 0:
         raise RuntimeStateError("Private Runtime state has an invalid Episode identity")
@@ -866,89 +681,7 @@ def _visible_history(
             shared_experiment_ids=frozenset(shared_experiment_ids),
             shared_queue=tuple(_shared_queue(shared)),
         )
-    root = campaign_root.resolve()
-    shared = _shared_research(root)
-    with _HISTORY_LOCK:
-        index = _HISTORY_INDEXES.get(root)
-        # A straggling old-Episode binding may still issue a read while a newer
-        # Episode owns the Campaign. Build that older view privately; never
-        # replace the newest published Campaign snapshot with an older one.
-        older_snapshot = index is not None and episode < index.next_episode
-        rebuild = (
-            index is None
-            or older_snapshot
-            or index.shared_revision != shared["revision"]
-        )
-        if index is not None and not rebuild:
-            for pending in index.pending:
-                path = root / "episodes" / f"e{pending:08d}" / "journal.json"
-                try:
-                    pending_journal = load_journal(path)
-                except RuntimeStateError:
-                    # Rebuild via the directory index. A deleted abandoned
-                    # Episode disappears as it did in the former glob-based
-                    # implementation; an existing corrupt file still fails
-                    # closed when _index_historical_journal reads it below.
-                    rebuild = True
-                    break
-                if pending_journal.get("finalized_at"):
-                    rebuild = True
-                    break
-        if rebuild:
-            rebuilt = _HistoryIndex()
-            rebuilt.shared_revision = shared["revision"]
-            rebuilt.shared_direction_ids = set(shared["directions"])
-            rebuilt.shared_experiment_ids = set(shared["experiments_by_id"])
-            rebuilt.directions = deepcopy(shared["directions"])
-            rebuilt.statuses = dict(shared["statuses"])
-            rebuilt.experiments = list(shared["experiments"])
-            rebuilt.experiments_by_id = dict(shared["experiments_by_id"])
-            rebuilt.experiment_ids = set(shared["experiments_by_id"])
-            for path in sorted((root / "episodes").glob("e*/journal.json")):
-                identity = re.fullmatch(r"e([0-9]{8,})", path.parent.name)
-                if identity is not None and int(identity[1]) < episode:
-                    _index_historical_journal(rebuilt, path, int(identity[1]))
-            rebuilt.next_episode = episode
-            index = rebuilt
-            if not older_snapshot:
-                _HISTORY_INDEXES[root] = index
-                if len(_HISTORY_INDEXES) > 16:
-                    _HISTORY_INDEXES.pop(next(iter(_HISTORY_INDEXES)))
-        elif episode > index.next_episode:
-            # Published indexes are immutable. Build the next snapshot in
-            # private, then replace the cache entry atomically while holding
-            # _HISTORY_LOCK. Readers that already hold the old snapshot can
-            # continue iterating it without observing partial ingestion.
-            updated = index.fork()
-            # Sequential Episode numbers avoid re-globbing the entire Campaign.
-            # A sparse jump falls back to one directory scan, not an unbounded range.
-            if episode - index.next_episode > 4096:
-                paths = sorted((root / "episodes").glob("e*/journal.json"))
-                numbered = (
-                    (path, re.fullmatch(r"e([0-9]{8,})", path.parent.name))
-                    for path in paths
-                )
-                for path, identity in numbered:
-                    if identity is not None and index.next_episode <= int(identity[1]) < episode:
-                        _index_historical_journal(updated, path, int(identity[1]))
-            else:
-                for previous in range(index.next_episode, episode):
-                    path = root / "episodes" / f"e{previous:08d}" / "journal.json"
-                    if path.exists() or path.is_symlink():
-                        _index_historical_journal(updated, path, previous)
-            updated.next_episode = episode
-            _HISTORY_INDEXES[root] = updated
-            index = updated
-        return _VisibleHistory(
-            current=current_value,
-            directions=index.directions,
-            statuses=index.statuses,
-            experiments=index.experiments,
-            experiments_by_id=index.experiments_by_id,
-            shared_direction_ids=frozenset(index.shared_direction_ids),
-            shared_experiment_ids=frozenset(index.shared_experiment_ids),
-            shared_queue=tuple(_shared_queue(shared)),
-        )
+    raise RuntimeStateError("Research mutation requires a central Research Store snapshot")
 
 
 def _editable_direction(
@@ -1095,7 +828,7 @@ def _apply_direction_events(
 
 
 def _direction_state(
-    current: Path | dict[str, Any],
+    current: dict[str, Any],
     campaign_root: Path,
     *,
     history: _VisibleHistory | None = None,
@@ -1114,7 +847,7 @@ def _direction_state(
 
 
 def _direction_views(
-    current: Path | dict[str, Any],
+    current: dict[str, Any],
     campaign_root: Path,
     *,
     history: _VisibleHistory | None = None,
@@ -1123,7 +856,7 @@ def _direction_views(
 
 
 def _visible_experiments(
-    current: Path | dict[str, Any],
+    current: dict[str, Any],
     campaign_root: Path,
     *,
     history: _VisibleHistory | None = None,
@@ -1806,10 +1539,9 @@ def publish_catalog_shared_research(
                 raise RuntimeStateError("Central Experiment has an invalid identity")
             value["owner_lineage"] = f"T{owner}"
             experiments[experiment_id] = value
-    try:
-        previous = _shared_research(research_root)
-    except RuntimeStateError:
-        previous = {}
+    # An unreadable peer view is not an empty view. Leave the published winners
+    # untouched and let the next publication retry after the read is repaired.
+    previous = _shared_research(research_root)
     queue = [
         direction_id
         for direction_id in previous.get("research_queue", [])
@@ -2976,30 +2708,21 @@ def _progress_markdown(
 
 
 def _save_journal(
-    target: Path | dict[str, Any],
+    target: dict[str, Any],
     campaign_root: Path,
     journal: dict[str, Any],
 ) -> None:
-    if (
-        len(json.dumps(journal, indent=2, sort_keys=True, allow_nan=False).encode()) + 1
-        > MAX_FILE_BYTES
-    ):
-        raise AgentRequestError(
-            "Runtime-managed Episode state exceeds 16 MiB; finish this Episode before adding more evidence",
-            code="journal_size_limit",
-        )
     if isinstance(target, dict):
         if target is not journal:
             target.clear()
             target.update(journal)
         return
-    private_write(target, journal)
 
 
 def _mutable_journal(
-    source: Path | dict[str, Any], module: str | None = None
+    source: dict[str, Any], module: str | None = None
 ) -> dict[str, Any]:
-    journal = source if isinstance(source, dict) else load_journal(source)
+    journal = source
     if module is not None and not _module_enabled(journal, module):
         label = "Direction" if module == "directions" else "Experiment"
         raise AgentRequestError(
@@ -3023,7 +2746,7 @@ def _mutable_journal(
 
 
 def _append_event(
-    state: Path | dict[str, Any], campaign_root: Path, event: dict[str, Any]
+    state: dict[str, Any], campaign_root: Path, event: dict[str, Any]
 ) -> None:
     journal = _mutable_journal(state, "directions")
     events = journal["direction_events"]
@@ -3032,7 +2755,7 @@ def _append_event(
 
 
 def update_direction(
-    path: Path | dict[str, Any],
+    path: dict[str, Any],
     campaign_root: Path,
     request: Mapping[str, object],
     *,
@@ -3482,7 +3205,7 @@ def _completed_record(record: Mapping[str, Any]) -> bool:
 
 
 def _closure_support(
-    path: Path | dict[str, Any], campaign_root: Path, direction_id: str, value: Mapping[str, object],
+    path: dict[str, Any], campaign_root: Path, direction_id: str, value: Mapping[str, object],
     *, history: _VisibleHistory | None = None, experiments_enabled: bool = True,
     measurement_root: Path | None = None,
 ) -> list[str]:
@@ -3531,7 +3254,7 @@ def _closure_support(
 
 
 def record_experiment(
-    path: Path | dict[str, Any],
+    path: dict[str, Any],
     campaign_root: Path,
     request: Mapping[str, object],
     *,
@@ -3827,6 +3550,14 @@ def record_experiment(
 
 
 
+def _serialize_research_publication(method):
+    @wraps(method)
+    def locked(self, *args, **kwargs):
+        with self._projection_lock:
+            return method(self, *args, **kwargs)
+    return locked
+
+
 class SupervisorJournalService:
     """Execute scoped research and submission operations for one audit segment.
 
@@ -3901,6 +3632,11 @@ class SupervisorJournalService:
 
         self.review_staging_root = supervisor_review_root(self.git_workspace)
         self._claim_audits: dict[str, dict[str, object]] = {}
+        # Reviews use request-local snapshots. Only publication and mutations
+        # of the same identity serialize; unrelated tools/claims keep running.
+        self._projection_lock = threading.RLock()
+        self._claim_locks_guard = threading.Lock()
+        self._claim_locks: dict[tuple[str, str], threading.Lock] = {}
         self.research_catalog = ResearchStore(self.research_catalog_root / "events")
         trajectory = self.origin.get("trajectory", 1)
         if type(trajectory) is not int or trajectory <= 0:
@@ -3966,6 +3702,30 @@ class SupervisorJournalService:
     def _fanout_asynchronous_catalog(self) -> None:
         if self.research_synchronization != "asynchronous":
             return
+        key = self.research_catalog_root.resolve()
+        # Fold overlapping publications into the active projector's next pass.
+        # No timer or stale watermark: the owner drains updates before exiting.
+        with _FANOUT_LOCK:
+            _FANOUT_PENDING.add(key)
+            if key in _FANOUT_RUNNING:
+                return
+            _FANOUT_RUNNING.add(key)
+        try:
+            while True:
+                with _FANOUT_LOCK:
+                    _FANOUT_PENDING.discard(key)
+                self._project_asynchronous_catalog()
+                with _FANOUT_LOCK:
+                    if key not in _FANOUT_PENDING:
+                        _FANOUT_RUNNING.remove(key)
+                        return
+        except BaseException:
+            with _FANOUT_LOCK:
+                _FANOUT_RUNNING.discard(key)
+                _FANOUT_PENDING.discard(key)
+            raise
+
+    def _project_asynchronous_catalog(self) -> None:
         registrations = self.research_catalog_root / "lineages"
         for path in sorted(registrations.glob("T*.json")):
             try:
@@ -4336,6 +4096,7 @@ class SupervisorJournalService:
             )
             shutil.rmtree(reference_snapshot.parent)
 
+    @_serialize_research_publication
     def _observe_direction(self, direction_id: str) -> int:
         direction = _direction_views(self._research_state, self.campaign_root).get(direction_id)
         if direction is None:
@@ -4358,6 +4119,7 @@ class SupervisorJournalService:
             through_sequence=int(catalog_state["sequence"]),
         )
 
+    @_serialize_research_publication
     def _observe_experiment(self, experiment_id: str) -> int:
         experiment = next(
             (
@@ -4425,6 +4187,7 @@ class SupervisorJournalService:
         # imported claims so its queue cannot reference a newer unseen ID.
         self.research.synchronize_shared_queue(list(history.shared_queue), origin=self.origin)
 
+    @_serialize_research_publication
     def observe_measurement(self, agent_result: Mapping[str, object]) -> None:
         """Checkpoint a Kernel-bound operation in the current lineage.
 
@@ -4454,7 +4217,7 @@ class SupervisorJournalService:
         ):
             gateway_record_ids.append(record_id)
             self.research.checkpoint_lineage(
-                {"gateway_record_ids": gateway_record_ids}, origin=self.origin
+                {"gateway_record_ids": [record_id]}, origin=self.origin
             )
         if (
             not isinstance(kernel_commit_id, str)
@@ -4521,11 +4284,13 @@ class SupervisorJournalService:
         }
         if "directions" in self.tool_modules:
             try:
-                history = _visible_history(self._research_state, self.campaign_root)
+                current = copy(self)
+                current._refresh_research_state()
+                history = _visible_history(current._research_state, self.campaign_root)
                 local = [
                     direction
                     for direction in _direction_views(
-                        self._research_state,
+                        current._research_state,
                         self.campaign_root,
                         history=history,
                     ).values()
@@ -4542,7 +4307,13 @@ class SupervisorJournalService:
                 hint["direction_id"] = local[0]["direction_id"]
         return hint
 
-    def publish_research_files(
+    @_serialize_research_publication
+    def publish_research_files(self, **kwargs) -> None:
+        # Never replace a request's in-flight transaction when a measurement
+        # completes or an early failure publishes its Record concurrently.
+        copy(self)._publish_research_files(**kwargs)
+
+    def _publish_research_files(
         self,
         *,
         synchronize: bool = True,
@@ -4567,7 +4338,8 @@ class SupervisorJournalService:
         research = self.research.read()
         from aka.experiment.frontier import kernel_pareto_frontier, latest_gateway_result
         from aka.task.candidate_workspace.agent_git import AgentGit
-        store = MeasurementStore(self.measurement_root)
+        from aka.experiment.measurement_store import MeasurementReadView
+        store = MeasurementReadView(self.measurement_root)
         trajectory = self.origin.get("trajectory", 1)
         git = AgentGit(
             self.workspace,
@@ -4591,42 +4363,6 @@ class SupervisorJournalService:
             )
             if isinstance(value, str)
         )
-        if self.measurement_root.resolve() == (
-            self.campaign_root.parent / "measurements"
-        ).resolve():
-            # Serial Campaigns own the complete Campaign Store. The explicit
-            # lineage Record index is required only when several trajectories
-            # share one central Store.
-            local_record_ids.update(store.record_ids())
-        # Older Campaigns did not checkpoint local Record IDs in Research.
-        # Runtime lifecycle receipts preserve the exact lineage ownership.
-        from aka.workflow.light.support.paths import runtime_audit_files
-
-        for path in runtime_audit_files(self.campaign_root.parent):
-            try:
-                audit = read_json(path, limit=MAX_FILE_BYTES)
-            except (FileNotFoundError, OSError, ValueError):
-                continue
-            record_id = audit.get("gateway_record_id")
-            if isinstance(record_id, str):
-                local_record_ids.add(record_id)
-        from aka.workflow.light.initial_measurement import read_baseline_gateway_record
-
-        baseline_gateway_record = read_baseline_gateway_record(
-            self.git_workspace,
-            measurement_root=self.measurement_root,
-        )
-        baseline_gateway_record_id = (
-            baseline_gateway_record.get("gateway_record_id")
-            if isinstance(baseline_gateway_record, Mapping)
-            else None
-        )
-        if isinstance(baseline_gateway_record_id, str):
-            # Raw V0 requests and physical Job details stay private, while the
-            # standardized public Gateway projection is readable like every
-            # other exact, Git-reachable measurement. Otherwise each lineage
-            # reruns V0 merely to inspect per-Shape evidence.
-            local_record_ids.add(baseline_gateway_record_id)
         shared = _shared_research(self.campaign_root)
         shared_record_ids = {
             value
@@ -4667,29 +4403,6 @@ class SupervisorJournalService:
         board["latest_result"] = latest_gateway_result(
             store, record_ids=visible_record_ids
         )
-        from aka.workflow.light.initial_measurement import read_baseline_record
-        # V0 is an ordinary Campaign MeasurementStore record. Project only its
-        # bounded summary and stable Gateway identity into PROGRESS.md.
-        baseline = read_baseline_record(
-            self.git_workspace,
-            measurement_root=self.measurement_root,
-        ) or {}
-        performance = baseline.get("performance")
-        performance = performance if isinstance(performance, Mapping) else {}
-        correctness = baseline.get("correctness")
-        correctness = correctness if isinstance(correctness, Mapping) else {}
-        board["v0_baseline"] = {
-            # V0 owns a stable Agent Git identity in its immutable Campaign
-            # Measurement Record.  ``base_kernel_id`` is the starting commit
-            # of the *current* Episode and advances with the trajectory, so
-            # using it here mixes a later comparison base with V0's latency
-            # and Gateway Record.
-            "kernel_commit_id": baseline.get("git_commit_hash"),
-            "latency_us_geomean": performance.get("latency_us_geomean"),
-            "measured_shape_count": performance.get("measured_shape_count"),
-            "correctness_status": correctness.get("status"),
-            "gateway_record_id": baseline.get("gateway_record_id"),
-        }
         visible_lineage_winners = {
             lineage: deepcopy(winner)
             for lineage, winner in shared.get("lineage_winners", {}).items()
@@ -5061,28 +4774,9 @@ class SupervisorJournalService:
                 resume_session_id = self._prior_claim_review_session(
                     claim_type, target
                 )
-                try:
-                    reviewer_parameters = inspect.signature(
-                        self.claim_reviewer
-                    ).parameters.values()
-                except (TypeError, ValueError):
-                    reviewer_parameters = ()
-                supports_resume = any(
-                    parameter.name == "resume_session_id"
-                    or parameter.kind == inspect.Parameter.VAR_KEYWORD
-                    for parameter in reviewer_parameters
+                raw_review = self.claim_reviewer(
+                    root, resume_session_id=resume_session_id, archive_root=staging_root
                 )
-                supports_archive = any(
-                    parameter.name == "archive_root"
-                    or parameter.kind == inspect.Parameter.VAR_KEYWORD
-                    for parameter in reviewer_parameters
-                )
-                reviewer_kwargs: dict[str, object] = {}
-                if supports_resume:
-                    reviewer_kwargs["resume_session_id"] = resume_session_id
-                if supports_archive:
-                    reviewer_kwargs["archive_root"] = staging_root
-                raw_review = self.claim_reviewer(root, **reviewer_kwargs)
                 if not isinstance(raw_review, Mapping):
                     raise ValueError("research review must be a JSON object")
                 review_value = dict(raw_review)
@@ -5212,6 +4906,39 @@ class SupervisorJournalService:
         }
 
     def execute(
+        self, request: Mapping[str, object], *,
+        review_kernel: Callable[[str, str], dict[str, Any]] | None = None,
+        check_wait: Callable[[], None] | None = None,
+    ) -> dict[str, object]:
+        body = request.get("request")
+        operation = request.get("operation")
+        field = {"direction_update": "direction_id", "experiment_record": "experiment_id",
+                 "kernel_submit": "submission_id"}.get(operation if isinstance(operation, str) else "")
+        identity = body.get(field) if field and isinstance(body, Mapping) else None
+        lock = None
+        if isinstance(identity, str) and identity:
+            with self._claim_locks_guard:
+                lock = self._claim_locks.setdefault((field, identity), threading.Lock())
+        elif operation == "direction_prioritize":
+            lock = self._projection_lock
+        acquired = False
+        try:
+            while lock is not None:
+                if check_wait is not None:
+                    check_wait()
+                if lock.acquire(timeout=0.1):
+                    acquired = True
+                    break
+            if check_wait is not None:
+                check_wait()
+            worker = copy(self)
+            worker._claim_audits = {}
+            return worker._execute(request, review_kernel=review_kernel)
+        finally:
+            if acquired:
+                lock.release()
+
+    def _execute(
         self, request: Mapping[str, object], *,
         review_kernel: Callable[[str, str], dict[str, Any]] | None = None,
     ) -> dict[str, object]:
@@ -5519,36 +5246,7 @@ class SupervisorJournalService:
                     candidate_session_id = previous_review_value.get("session_id")
                     if isinstance(candidate_session_id, str) and candidate_session_id:
                         resume_session_id = candidate_session_id
-            try:
-                review_parameters = inspect.signature(
-                    review_kernel
-                ).parameters.values()
-            except (TypeError, ValueError):
-                review_parameters = ()
-            accepts_varargs = any(
-                parameter.kind in {
-                    inspect.Parameter.VAR_POSITIONAL,
-                    inspect.Parameter.VAR_KEYWORD,
-                }
-                for parameter in review_parameters
-            )
-            positional_count = sum(
-                parameter.kind
-                in {
-                    inspect.Parameter.POSITIONAL_ONLY,
-                    inspect.Parameter.POSITIONAL_OR_KEYWORD,
-                }
-                for parameter in review_parameters
-            )
-            review_arguments = (
-                commit_id,
-                submission_id,
-                revision,
-                resume_session_id,
-            )
-            reviewed = review_kernel(
-                *(review_arguments if accepts_varargs else review_arguments[:positional_count])
-            )
+            reviewed = review_kernel(commit_id, submission_id, revision, resume_session_id)
             if not isinstance(reviewed, dict):
                 raise RuntimeStateError(
                     "Kernel submission review returned invalid state"
@@ -5614,8 +5312,5 @@ __all__ = [
     "EXPERIMENT_FIELDS",
     "EXPERIMENT_OPTIONAL_FIELDS",
     "SupervisorJournalService",
-    "initialize_journal",
-    "journal_lock",
-    "load_journal",
     "shared_research_queue",
 ]

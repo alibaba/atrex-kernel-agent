@@ -10,7 +10,6 @@ from contextlib import contextmanager
 from pathlib import Path
 
 
-SESSION_SHELL_GUARD = Path(__file__).resolve().parents[3] / "execution" / "runtime_tools" / "session_shell_guard.sh"
 CAMPAIGN_MANIFEST = "campaign.json"
 CAMPAIGN_LOCK = "campaign.lock"
 CAMPAIGN_LAYOUT = "atrex.light.campaign.v3"

@@ -130,7 +130,6 @@ class Campaign:
     agent_read_only_paths: tuple[str, ...] = ()
     agent_reference_paths: tuple[tuple[str, str], ...] = ()
     optimization_mode: str = "fast"
-    expose_evaluator_shapes: bool = True
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     # One Runtime-owned per-Shape budget shared by Eval and ABBA. The legacy
     # ``verify_run_timeout`` accessor below remains a structural compatibility
@@ -205,12 +204,6 @@ class Campaign:
 
     @property
     def dsl_context(self) -> str:
-        if self.optimization_mode == "leaderboard":
-            return (
-                f"- Recommended candidate DSL: `{self.framework}`"
-                if self.specify_dsl
-                else ""
-            )
         policy = canonical_submission_policy(
             self.optimization_mode,
             specify_dsl=self.specify_dsl,
@@ -461,7 +454,6 @@ class Campaign:
                 self.framework,
                 source_checks_enabled=self.source_checks_enabled,
                 specify_dsl=self.specify_dsl,
-                numerical_validation_enabled=self.module_options.numerical_validation,
             ),
             workspace=self.workspace,
             measurement_root=self._measurement_store_root,
@@ -478,8 +470,6 @@ class Campaign:
         self._supervisor_runtime.production_review_required = (
             self.source_checks_enabled
         )
-        self._supervisor_runtime.submission_specify_dsl = self.specify_dsl
-        self._supervisor_runtime.numerical_validator = self.supplemental_numerical_feedback
         self._supervisor_runtime.research_claim_reviewer = self.review_research_claim
 
     def review_research_claim(
@@ -508,7 +498,7 @@ class Campaign:
     ) -> dict[str, object]:
         """Run the strict three-tier reviewer with the Qwen-only provider policy."""
         from aka.workflow.light.orchestration.session_tail import read_regular_bytes
-        from aka.workflow.light.orchestration.infrastructure_retry import check_review_service
+        from aka.workflow.light.orchestration.infrastructure_retry import check_review_service, ReviewerRetryableFailure
         from aka.workflow.light.long_horizon.claim_review import validate_review
 
         evidence_root = Path(evidence_root).resolve(strict=True)
@@ -700,6 +690,7 @@ class Campaign:
                 }
                 continue
             try:
+                check_review_service(result)
                 value = json.loads(read_regular_bytes(response, limit=128 * 1024 + 1))
                 if response.stat().st_size > 128 * 1024:
                     raise ValueError("research claim review exceeds 128 KiB")
@@ -732,34 +723,18 @@ class Campaign:
                         archive_root / "token-usage.json",
                         token_data,
                     )
-                if result.timed_out:
-                    print(
-                        "[research-review] recovered a valid review from a timed-out reviewer",
-                        flush=True,
-                    )
-                else:
-                    check_review_service(result)
                 if conversation_path is not None:
                     attempt_audit["status"] = "accepted"
                 return {
                     **review,
                     "_review_session_audit": session_audit(),
                 }
-            except (OSError, ValueError, TypeError, KeyError) as error:
+            except (OSError, ValueError, TypeError, KeyError, ReviewerRetryableFailure) as error:
                 last_error = error
                 attempt_audit["error"] = {
                     "type": type(error).__name__,
                     "message": str(error)[:2000],
                 }
-                if not result.timed_out:
-                    try:
-                        check_review_service(result)
-                    except ValueError as service_error:
-                        last_error = service_error
-                        attempt_audit["error"] = {
-                            "type": type(service_error).__name__,
-                            "message": str(service_error)[:2000],
-                        }
         failure = RuntimeError(
             "Qwen research-claim reviewer produced no valid strict review"
         )
@@ -839,29 +814,6 @@ class Campaign:
             "implementation_review": implementation_review,
         }
 
-    def supplemental_numerical_feedback(
-        self,
-        workspace: Path,
-        source: bytes | None = None,
-        *,
-        parent=None,
-        flow: str = "episode",
-        standard_correctness_passed=None,
-    ) -> str:
-        """Validate frozen candidate bytes using private plans and recorded GPU probes."""
-        from aka.workflow.light.orchestration.numerical_policy import validate_candidate
-
-        if not self.module_options.numerical_validation:
-            return ""
-        self.start_runtime()
-        return validate_candidate(
-            self,
-            workspace,
-            source=source,
-            parent=parent,
-            flow=flow,
-            standard_correctness_passed=standard_correctness_passed,
-        )
 
     @property
     def plugin_registry(self):
@@ -879,21 +831,7 @@ class Campaign:
         """The selected Wiki provider's replacement for a built-in Wiki prompt fragment."""
         return self.plugin_registry.wiki_prompt(slot) if self.tool_runtime.wiki else None
 
-    def measure_for_acceptance(self, workspace: Path, argv: list[str], *, execution_timeout: int | None = None,
-                               parent=None, reference_snapshot: Path | None = None,
-                               terminal_validation: bool = False,
-                               kernel_ids: dict[str, str] | None = None,
-                               journal_workspace: Path | None = None) -> dict:
-        self.start_runtime()
-        return self._supervisor_runtime.execute_trusted(workspace, argv, execution_timeout=execution_timeout,
-                                                       parent=parent, reference_snapshot=reference_snapshot,
-                                                       terminal_validation=terminal_validation,
-                                                       kernel_ids=kernel_ids,
-                                                       journal_workspace=journal_workspace)
 
-    def recorded_kernel(self, kernel_id: str) -> bytes:
-        self.start_runtime()
-        return self._supervisor_runtime.measurements.read_kernel(kernel_id)
 
     def acceptance_measurement_context(
         self, agent_workspace: Path, incumbent_source: bytes
@@ -1343,9 +1281,11 @@ class Campaign:
                     changed.append(relative)
             review_path = review_workspace / "dependency_review.json"
             try:
-                review_payload = json.loads(
-                    review_path.read_text(encoding="utf-8")
-                )
+                from aka.core.filesystem import read_regular_bytes
+                raw_review = read_regular_bytes(review_path, limit=128 * 1024 + 1)
+                if len(raw_review) > 128 * 1024:
+                    raise ValueError("final-source review exceeds 128 KiB")
+                review_payload = json.loads(raw_review)
                 if runtime is not None and hasattr(runtime, "audit_service_exchange"):
                     runtime.audit_service_exchange(
                         service="independent_final_source_reviewer",
@@ -1636,8 +1576,7 @@ class Campaign:
     def _mode_directive(self) -> str:
         return optimization_mode_directive(self.optimization_mode, self.framework,
                                            source_checks_enabled=self.source_checks_enabled,
-                                           specify_dsl=self.specify_dsl,
-                                           numerical_validation_enabled=self.module_options.numerical_validation)
+                                           specify_dsl=self.specify_dsl)
 
     def run(self) -> str:
         """Run the native long-horizon episode supervisor for this campaign."""
@@ -1659,16 +1598,6 @@ class Campaign:
 
     def _finish(self, reason: str) -> str:
         print(f"\n[orchestrator] STOP — {reason}", flush=True)
-        # Production output is fail-closed: do not package a PyTorch baseline,
-        # alternate DSL, or independently rejected dependency as a production candidate.
-        if self.optimization_mode == "production":
-            violations = self._production_kernel_violations(
-                require_gluon=kernel_is_gluon(self.workspace)
-            )
-            if violations:
-                raise RuntimeError(
-                    "no production-compliant final kernel: " + "; ".join(violations)
-                )
         # SOL op: emit the self-contained, validated submission (SOL's output format).
         if (self.workspace / "definition.json").exists() and (
             self.workspace / "solution.json"

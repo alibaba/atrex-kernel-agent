@@ -140,10 +140,6 @@ class DuplicateTask(RuntimeError):
         super().__init__("Identical Gateway task is already recorded" if record_id else
                          "Identical Gateway task is already running")
 
-    def response(self) -> dict:
-        raise RuntimeError(
-            "Completed exact Gateway tasks are internal cache hits, not Agent errors"
-        )
 
 
 class MeasurementWaitTimeout(TimeoutError):
@@ -393,13 +389,22 @@ class MeasurementStore:
 
     @contextmanager
     def reserve(self, request: dict, kernels: dict, *, deadline: float | None = None,
-                request_id: str = "", check_wait=None):
+                request_id: str = "", check_wait=None, reusable: bool = True):
         """Join an identical active request, or own its execution/recovery.
 
         Poll only the local reservation so cancellation and the caller's own
         budget remain effective. No duplicate GPU request is submitted.
         """
         key = digest(request)
+        if not reusable:
+            # One-shot observations cannot be joined or resumed by another call.
+            # Keep their complete immutable Record, without permanent task inodes.
+            record_id = "gateway-" + uuid.uuid4().hex
+            directory = self.root / "records" / record_id
+            private_write(directory / "request.json", request)
+            yield MeasurementTask(self, key, record_id, directory, request, kernels,
+                                  None, request_id=request_id)
+            return
         wait_deadline = deadline if type(deadline) in (int, float) and math.isfinite(deadline) else None
         with open_private_directory(self.root / "tasks") as directory:
             try:
@@ -559,9 +564,29 @@ class MeasurementTask:
             raise EvidenceUnavailable("Measurement record exceeds its size limit; existing job evidence retained")
         private_write(self.directory / "record.json", record)
         # Keep a reference even if post-write validation encounters transient IO.
-        private_write(self.marker, {"status": "validation_pending", "gateway_record_id": self.record_id})
+        if self.marker is not None:
+            private_write(self.marker, {"status": "validation_pending", "gateway_record_id": self.record_id})
         if cacheable and self.store._cached(self.record_id, self.key) is None:
             raise ValueError("Recorded measurement failed validation")
-        private_write(self.marker, {"status": "running" if pending else "completed" if cacheable else "not_cacheable",
-                                    "gateway_record_id": self.record_id})
+        if self.marker is not None:
+            private_write(self.marker, {"status": "running" if pending else "completed" if cacheable else "not_cacheable",
+                                        "gateway_record_id": self.record_id})
         return record
+
+
+class MeasurementReadView(MeasurementStore):
+    """Request-local validation cache for immutable records and source artifacts."""
+    def __init__(self, root):
+        super().__init__(root)
+        self._records = {}
+        self._kernels = {}
+
+    def read(self, record_id):
+        if record_id not in self._records:
+            self._records[record_id] = super().read(record_id)
+        return self._records[record_id]
+
+    def read_kernel(self, kernel_id):
+        if kernel_id not in self._kernels:
+            self._kernels[kernel_id] = super().read_kernel(kernel_id)
+        return self._kernels[kernel_id]

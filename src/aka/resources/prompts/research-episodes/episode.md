@@ -18,7 +18,7 @@ inherits the same conversation, workspace, and Agent Git history.
 
 ## Workflow
 
-1. Read `CLAUDE.md`, `WORKSPACE.md`, `PROGRESS.md`, `skills/runtime-records/SKILL.md`, and the current Kernel. Open only relevant research files and bounded fields from needed Gateway Records. Gateway Records are measurement authority.
+1. Read `CLAUDE.md`, `WORKSPACE.md`, `PROGRESS.md`, `.agents/skills/runtime-records/SKILL.md`, and the current Kernel. Open only relevant research files and bounded fields from needed Gateway Records. Gateway Records are measurement authority.
 2. Choose the unresolved path with the greatest plausible full-workload impact. A Direction is a durable program around a bottleneck, regime, or architecture objective; Experiments summarize concrete trials and may combine related candidates that inform one decision. Bound risk with probes instead of avoiding high-upside work.
 3. Manage development with Agent Git. Commit the complete candidate and leave the worktree clean before Kernel-bound Runtime requests. Run the smallest decisive measurement, inspect its Record, then keep, repair, or restore from evidence.
 4. Repeat `probe → candidate → measurement → revert/keep` cycles while valuable work remains. A checkpoint or failed candidate is not a reason to stop.

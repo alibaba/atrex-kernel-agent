@@ -220,8 +220,7 @@ class JournalBinding:
 class Capability:
     workspace: Path
     context: dict[str, str]
-    lock: threading.Lock = field(default_factory=threading.Lock)
-    # Set only while holding this capability's request lock.
+    # Request-local: handlers derive their own capability from the Session grant.
     deadline: float | None = field(default=None, repr=False)
     request_id: str = ""
     journal: JournalBinding | None = None
@@ -361,14 +360,8 @@ class _OperationHandler:
                         else time.monotonic() + owner.request_timeout_seconds)
             if context.deadline is not None:
                 deadline = min(deadline, context.deadline)
-            if owner.is_wiki_request(self.route, request):
-                capability.deadline = deadline
+            with owner.request_context(capability, deadline, request_id):
                 result = owner.execute(capability, self.route, request)
-            else:
-                with owner.request_lock(capability, deadline, request_id):
-                    if not owner._live(capability):
-                        raise SessionRevokedError("Tool binding revoked")
-                    result = owner.execute(capability, self.route, request)
             result, exit_code = agent_runtime_response(self.route, request, result)
         except AgentRequestError as error:
             status, result = 400, error.response
@@ -508,7 +501,7 @@ class SupervisorRuntime:
         response = {"exit_code": exit_code if exit_code is not None else (0 if status < 400 else 2),
                     "stdout": result.get("stdout", ""), "stderr": result.get("stderr", ""),
                     "agent_result": result, "http_status": status}
-        with self.measurements.reserve(identity, {}, request_id=capability.request_id or "") as task:
+        with self.measurements.reserve(identity, {}, request_id=capability.request_id or "", reusable=False) as task:
             returned = dict(result, gateway_record_id=task.record_id,
                             record_path=f"records/{task.record_id}.json")
             response["agent_result"] = returned
@@ -686,18 +679,22 @@ class SupervisorRuntime:
             if lock.acquire(timeout=min(0.2, remaining)):
                 return
 
+    def _check_request_live(self, capability):
+        if not self._live(capability):
+            raise SessionRevokedError("Tool binding revoked")
+        if capability.deadline is not None and time.monotonic() >= capability.deadline:
+            raise RequestDispatchTimeout("Caller execution budget expired before the operation started")
+
     @contextmanager
-    def request_lock(self, capability, deadline, request_id):
-        self._acquire(capability.lock, capability, deadline)
+    def request_context(self, capability, deadline, request_id):
+        if not self._live(capability):
+            raise SessionRevokedError("Tool binding revoked")
         previous = capability.deadline, capability.request_id
         capability.deadline, capability.request_id = deadline, request_id
         try:
             yield
         finally:
-            # Archival and audit completion still belong to this request after
-            # execution releases the lock (including Env and early failures).
             capability.deadline, capability.request_id = previous
-            capability.lock.release()
 
     def run_executor(self, command, cwd, environment, capability, *, deadline=None):
         from aka.contracts.execution import CommandSpec, UnsupportedExecution
@@ -710,10 +707,13 @@ class SupervisorRuntime:
             raise RequestDispatchTimeout("Caller execution budget has expired")
         self._acquire(self.slots, capability, effective)
         try:
+            environment = dict(environment)
+            environment["PYTHONPATH"] = os.pathsep.join(filter(None, (
+                str(ROOT.parents[2]), environment.get("PYTHONPATH", ""))))
             result = self.wiki_executor.run(CommandSpec(Path(cwd), tuple(command),
                 timeout=max(1, math.ceil(remaining)), environment=environment, operation="dev",
                 cancel_event=_OperationCancellation(self, capability),
-                filesystem_access=self._request_access(capability, Path(cwd))))
+                filesystem_access=self._wiki_access(capability, Path(cwd), command, environment)))
         except UnsupportedExecution as error:
             raise RuntimeStateError("The local Wiki executor cannot enforce this request's execution scope.",
                 code="wiki_execution_unavailable", next_action=(
@@ -729,6 +729,39 @@ class SupervisorRuntime:
             result.returncode if result.returncode is not None else 2, result.stdout, result.stderr)
         process.execution_result = result
         return process
+
+    def _wiki_access(self, capability, staged, command, environment):
+        """Restore the trusted Wiki worker's runtime, not the host workspace.
+
+        Agent filesystem grants omit its launcher's implicit installation mounts.
+        The local executor therefore needs an explicit Python/CLI closure too.
+        """
+        access = self._request_access(capability, staged)
+        if access is None:
+            return None
+        from aka.agent.execution.installations import installation_mounts
+        from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
+        from aka.execution.local.filesystem import RUNTIME_PATHS
+        mounts = list(access.mounts)
+        visible = tuple(mount.target for mount in mounts) + tuple(map(Path, RUNTIME_PATHS))
+        installations = installation_mounts(list(command), ("claude",), environment, Path.home(),
+            hidden_paths=access.hidden_paths, forbidden_paths=(staged, capability.workspace),
+            visible_paths=visible)
+        mounts.extend(FilesystemMount(source, target, False) for source, target in installations)
+        # Installed wheels are under the selected Python library. Also support
+        # the explicitly selected checkout and Wiki resource tree in development.
+        resources = [ROOT.parents[2],
+                     self.plugins.resource_file("gpu-wiki", "tools/query_nl.py").parent.parent]
+        if self.config.wiki_options.settings_file:
+            resources.append(Path(self.config.wiki_options.settings_file))
+        if self.config.wiki_profile_root:
+            resources.append(self.config.wiki_profile_root)
+        resources.extend(Path(path) for path in ("/etc/resolv.conf", "/etc/hosts",
+            "/etc/nsswitch.conf", "/etc/ssl/certs", "/etc/pki/tls/certs"))
+        for path in resources:
+            if path.exists() and not any(path.is_relative_to(mount.target) for mount in mounts):
+                mounts.append(FilesystemMount(path.resolve(strict=True), path, False))
+        return FilesystemAccess(tuple(mounts), access.hidden_paths, access.read_only_paths)
 
     def _request_access(self, capability, staged):
         from aka.contracts.filesystem import FilesystemAccess
@@ -847,7 +880,7 @@ class SupervisorRuntime:
             deadline = time.monotonic() + self.request_timeout_seconds
             if parent is not None and parent.deadline is not None:
                 deadline = min(deadline, parent.deadline)
-            with self.request_lock(capability, deadline, "acceptance"):
+            with self.request_context(capability, deadline, "acceptance"):
                 return self.execute(capability, "/v1/gateway/execute", {"argv": argv}, reuse_completed=True,
                                     execution_timeout=execution_timeout, reference_snapshot=reference_snapshot, trusted=True)
         finally:
@@ -1075,53 +1108,50 @@ class SupervisorRuntime:
         if binding is None:
             raise AgentRequestError("Research and submission tools require an active Campaign binding", repairable=False,
                                     code="journal_unavailable", next_action="Report the missing Campaign binding to the operator.")
-        self._acquire(binding.lock, capability, capability.deadline)
+        if not self._live(capability):
+            raise SessionRevokedError()
         try:
-            if not self._live(capability):
-                raise SessionRevokedError()
-            try:
-                agent_git = None
-                if request.get("operation") == "kernel_submit":
-                    from aka.task.candidate_workspace.agent_git import AgentGit
-                    agent_git = (
-                        binding.view.agent_git
-                        if binding.view is not None
-                        else AgentGit(binding.service.workspace)
-                    )
-                review_kernel = None
-                if agent_git is not None and request.get("operation") == "kernel_submit":
-                    def review_kernel(
+            agent_git = None
+            if request.get("operation") == "kernel_submit":
+                from aka.task.candidate_workspace.agent_git import AgentGit
+                agent_git = (
+                    binding.view.agent_git
+                    if binding.view is not None
+                    else AgentGit(binding.service.workspace)
+                )
+            review_kernel = None
+            if agent_git is not None and request.get("operation") == "kernel_submit":
+                def review_kernel(
+                    commit_id,
+                    submission_id,
+                    submission_revision,
+                    resume_session_id,
+                ):
+                    return self._review_submitted_kernel(
+                        capability,
+                        binding,
+                        agent_git,
                         commit_id,
                         submission_id,
                         submission_revision,
                         resume_session_id,
-                    ):
-                        return self._review_submitted_kernel(
-                            capability,
-                            binding,
-                            agent_git,
-                            commit_id,
-                            submission_id,
-                            submission_revision,
-                            resume_session_id,
-                        )
-                value = binding.service.execute(
-                    request,
-                    review_kernel=review_kernel,
-                )
-            except (AgentRequestError, RuntimeStateError):
-                raise
-            except ValueError as error:
-                evidence_hint = "Read PROGRESS.md, research-library/ and records/ for current evidence."
-                raise AgentRequestError(str(error), next_action=(
-                    "Correct the indicated field or lifecycle state, then retry. Read skills/runtime-records/references/journal.md. "
-                    + evidence_hint)) from error
-            response = {"exit_code": 0, "stdout": json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n", "stderr": ""}
-            self.audit_process(capability, "journal", [str(request.get("operation"))],
-                               subprocess.CompletedProcess([], 0, response["stdout"], ""))
-            return response
-        finally:
-            binding.lock.release()
+                    )
+            value = binding.service.execute(
+                request,
+                review_kernel=review_kernel,
+                check_wait=lambda: self._check_request_live(capability),
+            )
+        except (AgentRequestError, RuntimeStateError):
+            raise
+        except ValueError as error:
+            evidence_hint = "Read PROGRESS.md, research-library/ and records/ for current evidence."
+            raise AgentRequestError(str(error), next_action=(
+                "Correct the indicated field or lifecycle state, then retry. Read skills/runtime-records/references/journal.md. "
+                + evidence_hint)) from error
+        response = {"exit_code": 0, "stdout": json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n", "stderr": ""}
+        self.audit_process(capability, "journal", [str(request.get("operation"))],
+                           subprocess.CompletedProcess([], 0, response["stdout"], ""))
+        return response
 
     def audit_process(self, capability, kind, argv, process, record_id=None):
         if self.audit_root:

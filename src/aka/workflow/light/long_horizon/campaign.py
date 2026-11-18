@@ -231,7 +231,7 @@ class LongHorizonCampaign:
                     "authenticated request is pending; this wait is excluded from the configured "
                     "active-time budget."
                     if self.base_campaign.tool_runtime.pause_agent_during_requests
-                    else "- Runtime requests do not suspend Agent execution. Independent work may "
+                    else "- Runtime requests do not suspend Agent execution. Independent work and Runtime calls may "
                     "continue while a request is pending; collect its completed receipt before "
                     "making decisions that depend on its result. Request time counts toward any "
                     "configured Agent time limit."

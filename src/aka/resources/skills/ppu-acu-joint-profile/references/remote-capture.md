@@ -40,11 +40,11 @@ harness needs the adapter, header, decoder, and possibly ACU extraction:
 ```bash
 ATTEMPT=scratch/episode_N/timeline/attempt-N
 python3 tools/sandbox.py --kind profile \
-  --input skills/ppu-acu-joint-profile \
+  --input .agents/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
-      PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
+      PPU_PROFILE_SKILL=.agents/skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_ppu.py"
 ```
 
@@ -63,11 +63,11 @@ instrumented commands before returning:
 ```bash
 ATTEMPT=scratch/episode_N/timeline/attempt-N
 python3 tools/sandbox.py --kind profile \
-  --input skills/ppu-acu-joint-profile \
+  --input .agents/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
-      PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
+      PPU_PROFILE_SKILL=.agents/skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_and_measure_ppu.py" \
         --baseline-command '["python","scratch/episode_N/timeline/attempt-N/harness/run_a.py"]' \
         --instrumented-command '["python","scratch/episode_N/timeline/attempt-N/harness/run_b.py"]' \
@@ -92,7 +92,7 @@ The attempt harness performs these operations inside the remote environment:
    uploaded backend header through a native include.
 4. Pass the device buffer through the existing launch interface without changing useful-work
    predicates, barriers, waits, or control flow.
-5. Follow the [timer contract](recorder.md#timer-contract-and-correctness-evidence), including the declared bound and raw
+5. Follow the timer contract in the selected backend documentation, including the declared bound and raw
    artifact when an environment sanity experiment is run.
 6. Warm up and validate the representative output, write the accepted correctness artifact, then
    capture one identified target launch, synchronize, and save the entire raw buffer with

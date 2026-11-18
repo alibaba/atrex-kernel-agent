@@ -33,7 +33,7 @@ This example uses the default headless profile with the official DeepSeek route:
 export ATREX_DSH_SESSION_SETTINGS='{"provider":"deepseek-official","model":"deepseek-flash"}'
 
 aka optimize --repo-root /path/to/aka \
-  --op-dir /path/to/operator \
+  --problem /path/to/operator \
   --platform '<gpu-target>' --framework Triton \
   --agent-cli dsh --workspace-base /path/to/runs
 ```

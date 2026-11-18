@@ -12,14 +12,8 @@ from aka.agent.execution.home import open_private_directory
 from aka.agent.session_tail import read_regular_bytes
 
 
-TOKEN_KEYS = (
-    "input_tokens",
-    "output_tokens",
-    "reasoning_tokens",
-    "cache_read_tokens",
-    "cache_write_tokens",
-    "total_tokens",
-)
+from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage as _summary
+
 MAX_USAGE_BYTES = 64 * 1024 * 1024
 
 
@@ -41,57 +35,6 @@ def _timestamp(value: object) -> datetime | None:
         return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
     except ValueError:
         return None
-
-
-def _usage(value: object) -> dict:
-    value = value if isinstance(value, Mapping) else {}
-    return {
-        key: value.get(key) if type(value.get(key)) is int else None
-        for key in TOKEN_KEYS
-    } | {
-        "measurement": (
-            value.get("measurement")
-            if value.get("measurement") in {"exact", "estimated", "partial"}
-            else "unavailable"
-        )
-    }
-
-
-def _summary(rows: list[dict], *, missing_expected: bool = False) -> dict:
-    available = {
-        key: sum(type(row["usage"].get(key)) is int for row in rows)
-        for key in TOKEN_KEYS
-    }
-    usage = {
-        key: (
-            sum(
-                row["usage"][key]
-                for row in rows
-                if type(row["usage"].get(key)) is int
-            )
-            if available[key]
-            else None
-        )
-        for key in TOKEN_KEYS
-    }
-    measurements = [row["usage"].get("measurement") for row in rows]
-    totals_complete = bool(rows) and available["total_tokens"] == len(rows)
-    usage["measurement"] = (
-        "unavailable"
-        if not rows or not available["total_tokens"]
-        else "partial"
-        if missing_expected or not totals_complete
-        else "exact"
-        if all(value == "exact" for value in measurements)
-        else "estimated"
-        if all(value in {"exact", "estimated"} for value in measurements)
-        else "partial"
-    )
-    return {
-        "invocation_count": len(rows),
-        "usage_available_invocations": available,
-        "usage": usage,
-    }
 
 
 def _main_rows(session_capture_root: Path | None, occurred_at: datetime) -> tuple[list[dict], list[str]]:

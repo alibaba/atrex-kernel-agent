@@ -130,6 +130,7 @@ INPUT_SKIP_DIRS = {
     ".agents",
     "gpu-wiki",
     "reference-projects",
+    "references",
     "skills",
     # Plans are local campaign inputs for the agent, never runtime inputs for
     # the command executing in the GPU pod. In particular, preserved
@@ -179,7 +180,6 @@ DEFAULT_EVAL_BATCH_WORKERS = 4
 MAX_HTTP_REQUEST_TIMEOUT = 600
 SSH_CONNECT_TIMEOUT = 15
 ENVIRONMENT_TEMPFAIL = 75
-INFRASTRUCTURE_MARKER = "__ATREX_INFRASTRUCTURE_UNAVAILABLE__"
 SSH_RUNTIME_BINDS_ENV = "ATREX_SANDBOX_SSH_RUNTIME_BINDS"
 SSH_GPU_ENV = "ATREX_SANDBOX_SSH_GPU"
 SSH_GPU_LOCK_ACQUIRED_MARKER = "__ATREX_SSH_GPU_LOCK_ACQUIRED__"
@@ -262,8 +262,6 @@ EPISODE_EVALUATIONS_PATH = ".atrex_long_horizon/evaluations.jsonl"
 
 
 
-def _uses_standard_oss_gateway(*args, **kwargs):
-    return False
 
 
 
@@ -417,6 +415,8 @@ def _candidate_runtime_input_paths(workspace: Path) -> set[str]:
 def _expand_workspace_input(workspace: Path, value: str) -> set[str]:
     """Expand one explicitly named workspace file or directory."""
     normalized = _safe_relative(value)
+    if "references" in Path(normalized).parts:
+        raise ValueError("Reference knowledge cannot be selected as a GPU request input")
     source = workspace / normalized
     if source.is_file():
         return {normalized}
@@ -1905,8 +1905,7 @@ def _report_agate_transport_failure(proc: subprocess.CompletedProcess) -> bool:
     if _job_response(proc.stdout or "") is not None:
         return False
     detail = proc.stderr or ""
-    if (proc.returncode == ENVIRONMENT_TEMPFAIL and INFRASTRUCTURE_MARKER in detail.splitlines()
-            or re.search(r"\bHTTP(?: Error)?\s*[:=]?\s*(429|502|503|504)\b", detail)
+    if (re.search(r"\bHTTP(?: Error)?\s*[:=]?\s*(429|502|503|504)\b", detail)
             or any(message in detail for message in (
                 "Connection refused", "Connection reset by peer", "Temporary failure in name resolution"))):
         emit_diagnostic({"failure_class": "infrastructure", "reason": "transport-unavailable"})

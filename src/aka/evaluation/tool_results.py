@@ -33,14 +33,36 @@ PUBLIC_IDENTITIES = (
 IDENTITIES = (*PRIVATE_IDENTITIES, *PUBLIC_IDENTITIES)
 
 
-def _omit_gateway_policy(receipt: dict) -> dict:
-    """Remove internal recovery observations from an owned Agent projection."""
-    for value in (receipt, receipt.get("result")):
-        if not isinstance(value, dict) or not isinstance(value.get("diagnostics"), list):
+_PRIVATE_EXECUTION_DIAGNOSTICS = {
+    ("recovery", "gateway-policy"),
+    ("observation", "gateway-job-wait"),
+}
+
+
+def _omit_execution_metadata(receipt: dict) -> dict:
+    """Keep execution bookkeeping in the audit, not the owned Agent projection.
+
+    Only visit known result envelopes; never rewrite upstream error payloads,
+    stdout, or individual correctness checks.
+    """
+    values = [receipt, receipt.get("result")]
+    is_evaluation = receipt.get("operation") in {"evaluate", "same_allocation_abba"}
+    if is_evaluation and isinstance(receipt.get("result"), dict):
+        values.extend(receipt["result"].get(side) for side in ("baseline", "candidate"))
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        if is_evaluation:
+            for key in ("evaluator", "eval_id"):
+                value.pop(key, None)
+            if value.get("actionable_diagnostics") == []:
+                value.pop("actionable_diagnostics")
+        if not isinstance(value.get("diagnostics"), list):
             continue
         diagnostics = [item for item in value["diagnostics"]
-                       if not (isinstance(item, dict) and item.get("category") == "recovery"
-                               and item.get("code") == "gateway-policy")]
+                       if not (isinstance(item, dict)
+                               and (item.get("category"), item.get("code"))
+                               in _PRIVATE_EXECUTION_DIAGNOSTICS)]
         if diagnostics:
             value["diagnostics"] = diagnostics
         else:
@@ -56,7 +78,7 @@ def compact_receipt(agent_result: dict) -> dict:
     record_id = receipt.get("gateway_record_id")
     if isinstance(record_id, str):
         receipt["record_path"] = f"records/{record_id}.json"
-    return _omit_gateway_policy(receipt)
+    return _omit_execution_metadata(receipt)
 
 
 def with_execution_error(response: dict, receipt, *, operation=None) -> dict:
@@ -75,7 +97,8 @@ def with_execution_error(response: dict, receipt, *, operation=None) -> dict:
         return response
     information = [{"category": item.category, "code": item.code, "details": dict(item.details)}
                    for item in receipt.diagnostics if item.category in INFORMATION_CATEGORIES
-                   and item.code not in {"replay-forbidden", "retained-instruction", "gateway-policy"}]
+                   and item.code not in {"replay-forbidden", "retained-instruction"}
+                   and (item.category, item.code) not in _PRIVATE_EXECUTION_DIAGNOSTICS]
     response = {**response, **({"diagnostics": information} if information else {})}
     stdout = response.get("stdout", "")
     for line in stdout.splitlines():
@@ -157,7 +180,7 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             result["baseline_kernel_commit_id"] = result.pop("baseline_kernel_id")
         if "baseline_kernel_commit_id" in result and "kernel_commit_id" in result:
             result["candidate_kernel_commit_id"] = result.pop("kernel_commit_id")
-        return _omit_gateway_policy(latency_only_result(result)
+        return _omit_execution_metadata(latency_only_result(result)
             if result.get("operation", request.get("operation")) in {"evaluate", "same_allocation_abba"}
             else result)
     operation = request["operation"]
@@ -303,7 +326,7 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
         # streams and exit code without obscuring them with a synthetic
         # result_unavailable/outcome_unknown wrapper.
         result["exit_code"] = response.get("exit_code")
-    return _omit_gateway_policy({"operation": "evaluate" if operation == "same_allocation_abba" else operation,
+    return _omit_execution_metadata({"operation": "evaluate" if operation == "same_allocation_abba" else operation,
             "status": status, "result": result, **identity})
 
 

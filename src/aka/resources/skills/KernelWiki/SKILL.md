@@ -1,5 +1,5 @@
 ---
-name: KernelWiki
+name: kernel-wiki
 description: Query GPU optimization knowledge and hardware facts through the session's Supervisor Runtime.
 ---
 
@@ -41,5 +41,5 @@ Experiment when knowledge materially affects it; retrieval alone is not adoption
 is disabled, use the query normally but do not invent an Experiment or attribution mutation.
 Use `applied`, `partially_applied`, `reference_only` or `rejected` for `disposition`;
 `used`, `material_use` and `considered` are invalid. See the complete attribution JSON example in
-`skills/runtime-records/references/journal.md`. Correct rejected attribution fields and resubmit
+`.agents/skills/runtime-records/references/journal.md`. Correct rejected attribution fields and resubmit
 with the existing Gateway Record IDs; do not repeat GPU work.

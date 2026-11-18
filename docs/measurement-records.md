@@ -198,7 +198,10 @@ rejected repetition cannot become a successful median.
 Per-Shape numerical checks are preserved in `result.correctness_by_shape` in both
 the Agent receipt and the Record. A single measurement exposes the native status
 and cases directly; repeated measurements retain those entries in a `runs` list.
-Passing checks keep their numerical errors and tolerance thresholds too.
+Each case retains `outputs`, `mutated_inputs` (declared in-place results), and
+`unexpected_mutations` (checks for unintended input changes). Passing and failing
+checks keep the original error, numerical errors, mismatch counts, element counts,
+and complete tolerance thresholds returned by Agate.
 
 This repetition count is separate from native five-case correctness and ABBA's even
 measurement count per side. Standard native Evaluate uses five correctness cases;
@@ -211,6 +214,20 @@ must be explicit, and its ordinary evaluation support does not imply Light ABBA 
 
 ## Public feedback and limits
 
+Runtime requests have independent identities and execution deadlines; a pending Gateway
+call or Claim Review does not hold a Session-wide lock. Research operations use isolated
+validation snapshots. Revisions of the same Direction, Experiment, or Submission serialize
+until the preceding request completes (or the caller cancels); they do not inherit the
+60-second dispatch queue limit. Publication holds only a short projection lock. Wiki keeps
+its separate configured concurrency budget and explicitly mounts the selected Python/CLI
+installation read-only when filesystem isolation is enabled.
+
+Agent Evaluate and ABBA receipts omit internal `evaluator` / `eval_id` fields,
+Gateway polling observations (`gateway-job-wait`), and empty diagnostic lists.
+Execution audits retain the polling observations and original responses. The public
+Gateway Record ID and path remain available for tracing; correctness, performance,
+nonempty actionable diagnostics, and original upstream errors remain visible.
+
 Response reuse requires a normal terminal Evaluate response, not a boolean correctness verdict
 or complete performance data. Runtime records response availability separately from measurement
 qualification. Candidate rejections can be reused; infrastructure and Gateway failures cannot.
@@ -218,9 +235,10 @@ qualification. Candidate rejections can be reused; infrastructure and Gateway fa
 
 Feedback retains actionable compiler, runner, rank-local, numerical, and tolerance details.
 Private dimensions/credentials are redacted; failing-case seeds are exposed repair metadata.
-The diagnostic response limit is 8 MiB of ASCII-escaped JSON, with explicit omissions.
+The Runtime client preserves complete provider errors and Dev/Command streams rather than
+applying a response-length truncation. This consumes memory proportional to the response.
 The complete record plus newline must fit 32 MiB before publication.
 
 See [evaluator outcomes](evaluator-outcomes/README.md) for exact cache, diagnostic, and
 objective-score versus latency-ratio semantics, and
-[Supervisor promotion](supervisor-promotion.md) for acceptance reuse.
+[submissions](design.md#optimization-and-submissions) for accepted-winner eligibility.

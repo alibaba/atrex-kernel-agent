@@ -14,7 +14,6 @@ class WorkflowOptions:
     file_system: str | None = None
     source_tree: dict | None = None
     goal_episodes: bool = False
-    numerical_validation: bool = False
     output_limit_recovery_retries: int = 2
     dependency_policy_recovery_retries: int = 2
     search: SearchOptions | dict | None = None
@@ -29,17 +28,13 @@ class WorkflowOptions:
     def research_records(self):
         return bool(self.tool_modules)
 
-    @property
-    def episode_timeout_seconds(self):
-        return None
-
     def __post_init__(self):
         from .journal import JournalFactory
         object.__setattr__(self, "tool_modules", JournalFactory(self.tool_modules).tool_modules)
         if self.file_system is not None:
             from aka.task.source.formats import select
             select(self.file_system)
-        for name in ("numerical_validation", "wiki", "inherit_state", "goal_episodes"):
+        for name in ("wiki", "inherit_state", "goal_episodes"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be boolean")
         for name in ("request_timeout", "queue_timeout"):

@@ -38,8 +38,8 @@ Use this JSON contract:
 ```
 
 In this schema, `evaluation.exact_cases="private"` refers to the complete generated evaluator
-instances (including tensor values, seeds and private state), not to a later bounded disclosure of
-No exact evaluator Shape parameters are public in this mode.
+instances, including tensor values, seeds and private state. Exact evaluator Shape parameters
+are also private in this mode.
 
 Authoring requirements:
 

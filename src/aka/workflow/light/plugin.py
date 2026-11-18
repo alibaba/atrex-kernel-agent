@@ -15,7 +15,6 @@ Config = {"type": "object", "properties": {
     "source_tree": {"type": "object"},
     "dependency_policy_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
     "goal_episodes": {"type": "boolean"},
-    "numerical_validation": {"type": "boolean"},
     "output_limit_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
     "wiki": {"type": "boolean"},
     "wiki_options": {"type": "object"},
@@ -32,7 +31,7 @@ Config = {"type": "object", "properties": {
         "max_parallel_episodes": {"type": "integer", "minimum": 1, "maximum": 64},
     }, "additionalProperties": False},
 }, "additionalProperties": False}
-Defaults = {"startup": True, "numerical_validation": False,
+Defaults = {"startup": True,
             "wiki": True, "tool_modules": [], "inherit_state": True, "queue_timeout": 60,
             "output_limit_recovery_retries": 2, "search": {}}
 
@@ -61,7 +60,7 @@ def apply(ctx, config):
                              }))
     ctx.effect(workflow.close, label="close light Workflow and private runtimes")
     ctx.provide(WORKFLOW, workflow)
-    if config.get("startup", False):
+    if config.get("startup", Defaults["startup"]):
         from .startup import WorkflowStartup
         ctx.provide("startup", WorkflowStartup(
             workflow, configuration=config, observer=ctx.workflow_observer,

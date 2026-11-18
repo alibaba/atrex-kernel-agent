@@ -67,7 +67,6 @@ def _empty() -> dict[str, Any]:
         "promotions": [],
         # Private idempotency index.  Keeping this in the compact projection
         # avoids rescanning the complete event history for every append.
-        "dedupe_keys": [],
     }
 
 
@@ -309,7 +308,8 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
             "gateway_record_ids",
         ):
             if key in payload:
-                current[key] = deepcopy(payload[key])
+                current[key] = (list(dict.fromkeys([*current.get(key, []), *payload[key]]))
+                                if key == "gateway_record_ids" else deepcopy(payload[key]))
     elif kind == "kernel.adopted":
         lineage = _lineage_key(origin)
         current = state["lineages"].setdefault(lineage, {})
@@ -337,9 +337,6 @@ def _apply(state: dict[str, Any], event: Mapping[str, object]) -> None:
         state["promotions"] = state["promotions"][-64:]
     else:
         raise ValueError(f"unsupported research event type: {kind}")
-    dedupe_key = event.get("dedupe_key")
-    if isinstance(dedupe_key, str) and dedupe_key not in state["dedupe_keys"]:
-        state["dedupe_keys"].append(dedupe_key)
     state["sequence"] = event["sequence"]
 
 
@@ -464,7 +461,6 @@ class ResearchStore:
         if state.get("schema_version") != SCHEMA_VERSION or type(state.get("sequence")) is not int:
             return None
         _remove_retired_plan_progress(state)
-        state.setdefault("dedupe_keys", [])
         state.setdefault("shared_queue", [])
         active_size = self._active_size()
         offset = value["active_offset"]
@@ -605,14 +601,10 @@ class ResearchStore:
         payload: Mapping[str, object],
         *,
         origin: Mapping[str, object] | None = None,
-        dedupe_key: str | None = None,
         skip_if_projection_unchanged: str | None = None,
     ) -> dict[str, Any]:
         with self._locked():
             state, active_size = self._current_state()
-            if dedupe_key is not None:
-                if dedupe_key in state.get("dedupe_keys", []):
-                    return deepcopy(state)
             event = {
                 "sequence": state["sequence"] + 1,
                 "type": event_type,
@@ -620,8 +612,6 @@ class ResearchStore:
                 "origin": _origin(origin),
                 "payload": deepcopy(dict(payload)),
             }
-            if dedupe_key is not None:
-                event["dedupe_key"] = dedupe_key
             projected = deepcopy(state)
             _apply(projected, event)
             if (

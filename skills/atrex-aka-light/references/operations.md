@@ -31,7 +31,7 @@ access under the coordinator OS user.
 
 For Atrex-Bench, offer exactly two acquisition paths: use an existing canonical checkout supplied
 by the user, or clone `https://github.com/alibaba/atrex-bench` into a destination selected by the
-user. Do not suggest `/Users/guoyuqi/atrex-bench` merely because it exists locally.
+user. Do not suggest `/path/to/atrex-bench` merely because it exists locally.
 
 | Agent CLI | Selection meaning |
 |---|---|

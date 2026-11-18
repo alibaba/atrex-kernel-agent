@@ -14,6 +14,7 @@ import threading
 import time
 import uuid
 from contextvars import ContextVar
+from collections import OrderedDict
 from dataclasses import asdict, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -43,7 +44,6 @@ class CapturedObservation(NamedTuple):
     terminal_usage: TokenUsage
     capabilities: AgentRuntimeCapabilities
     errors: tuple[str, ...]
-    capture_complete: bool
 
 
 class CompleteSessionArchive(NamedTuple):
@@ -110,6 +110,13 @@ def latest_complete_session_archive(root: Path) -> CompleteSessionArchive | None
 
 
 _LAST_CAPTURE: ContextVar[tuple[str, dict] | None] = ContextVar("aka_session_capture", default=None)
+
+# Repeated invocations of a persistent provider Session seed usage from compact
+# counters/IDs. Only newly appended transcript bytes are parsed again. A process
+# restart or replaced transcript performs one bounded rebuild.
+_HISTORY_INDEX = OrderedDict()
+_HISTORY_INDEX_LOCK = threading.Lock()
+_HISTORY_INDEX_LIMIT = 32
 
 
 def _claude_root_output_limit(text: str) -> bool:
@@ -180,7 +187,6 @@ def captured_observation(stdout: str, events, capabilities) -> CapturedObservati
         usage,
         capabilities,
         tuple([*report["warnings"], *report.get("capture_errors", [])]),
-        report["capture_complete"],
     )
 
 
@@ -306,6 +312,7 @@ class SessionCapture:
         self._usage = UsageAccumulator(backend)
         self._usage_dirty = True
         self._tails: dict[str, TranscriptTail] = {}
+        self._history_seeds = {}
         self._initial_sizes: dict[str, int] = {}
         self._host_transcripts = None
         if native_environment is not None:
@@ -352,13 +359,52 @@ class SessionCapture:
                 self._budget.warning("native_files_exceeded")
                 return None
             tail = self._tails[name] = TranscriptTail()
+            key = (self.backend, str(path.absolute()))
+            status = path.stat()
+            identity = (status.st_dev, status.st_ino)
+            with _HISTORY_INDEX_LOCK:
+                cached = _HISTORY_INDEX.get(key)
+            seed = UsageAccumulator(self.backend)
+            start = 0
+            if cached and cached[0] == identity and cached[1] <= previous_size:
+                start = cached[1]
+                seed.old_ids.update(cached[2])
+                seed.prior_codex.update(cached[3])
+                if self.backend == "dsh":
+                    seed.dsh_sessions.update(cached[4])
+                    seed.dsh_seeded.update(cached[5])
+            self._history_seeds[name] = (key, seed)
             try:
-                for line in tail.resume_history(path, self._history_budget, previous_size):
-                    self._feed_usage(name, line.decode("utf-8", errors="replace"), previous=True)
+                for line in tail.resume_history(path, self._history_budget, previous_size,
+                                                start=start, identity=identity):
+                    seed.feed(name, line.decode("utf-8", errors="replace"), previous=True)
+                self._usage.old_ids.update(seed.old_ids)
+                self._usage.prior_codex.update(seed.prior_codex)
+                if self.backend == "dsh":
+                    self._usage.dsh_sessions.update(seed.dsh_sessions)
+                    self._usage.dsh_seeded.update(seed.dsh_seeded)
             finally:
+                if seed.missing:
+                    tail.history_incomplete = True
                 if tail.history_incomplete:
                     self._usage.mark_history_incomplete(name)
         return self._tails[name]
+
+    def _checkpoint_history(self, name, tail):
+        if tail.invalidated or tail.history_incomplete or tail.stopped or tail.dropping_line:
+            return
+        key, seed = self._history_seeds[name]
+        # Incomplete trailing bytes are rescanned once, never cached as a record.
+        offset = tail.offset - len(tail.pending)
+        value = (tail.identity, offset, frozenset(seed.old_ids), dict(seed.prior_codex),
+                 dict(getattr(seed, "dsh_sessions", {})), dict(getattr(seed, "dsh_seeded", {})))
+        with _HISTORY_INDEX_LOCK:
+            old = _HISTORY_INDEX.get(key)
+            if old is None or old[0] != value[0] or old[1] <= offset:
+                _HISTORY_INDEX[key] = value
+                _HISTORY_INDEX.move_to_end(key)
+            while len(_HISTORY_INDEX) > _HISTORY_INDEX_LIMIT:
+                _HISTORY_INDEX.popitem(last=False)
 
     def _feed_usage(self, path: str, text: str, *, previous: bool = False) -> None:
         if (
@@ -419,6 +465,7 @@ class SessionCapture:
                     for addition in tail.read(path, self._budget, final=final):
                         text = addition.decode("utf-8", errors="replace")
                         self._feed_usage(name, text)
+                        self._history_seeds[name][1].feed(name, text, previous=True)
                         self.native.setdefault(name, bytearray()).extend(addition)
                         destination = self.root / name
                         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -426,6 +473,7 @@ class SessionCapture:
                             output.write(addition)
                         if record_provider_line(text):
                             self._append(name, text)
+                    self._checkpoint_history(name, tail)
                 except (OSError, ValueError) as error:
                     self._capture_error("native_capture", error)
             self._write_usage(False)
@@ -456,6 +504,11 @@ class SessionCapture:
         with self._lock:
             if warning not in self.errors and len(self.errors) < 100:
                 self.errors.append(warning)
+
+    def output_sizes(self) -> tuple[int, int]:
+        """Live pipe bytes, including output already moved into capture files."""
+        with self._lock:
+            return self._pipe_bytes["stdout"], self._pipe_bytes["stderr"]
 
     def _read_pipe(self, name: str, pipe) -> None:
         path = "provider/" + ("stdout.stream-json" if name == "stdout" else "stderr.log")

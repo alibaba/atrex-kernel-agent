@@ -120,11 +120,28 @@ def read_archives(prepared):
 
 
 def upload_bytes(url, data, *, timeout):
+    """PUT through the SDK; its upload_file rejects redirects (non-2xx).
+
+    Validate before handing candidate source to the SDK. Presigned query strings
+    are permitted, but embedded login credentials and fragments are not.
+    """
     from .sdk import upload_bytes as upload
+    try:
+        parts = urlsplit(url)
+        valid = (parts.scheme in {"http", "https"} and parts.hostname
+                 and parts.username is None and parts.password is None
+                 and not parts.fragment)
+        parts.port  # Validate malformed port syntax without logging the URL.
+        if not valid:
+            raise ValueError("invalid presigned upload URL")
+    except (TypeError, ValueError) as error:
+        raise SourceArchiveError("upload-invalid-url") from error
     try:
         return upload(url, data, timeout=timeout)
     except Exception as error:
-        raise SourceArchiveError("upload-unavailable", status=getattr(error, "status", None), upstream_error=error) from error
+        status = getattr(error, "status", getattr(error, "status_code", None))
+        code = "upload-rejected" if type(status) is int and 300 <= status < 500 and status not in {408, 429} else "upload-unavailable"
+        raise SourceArchiveError(code, status=status, upstream_error=error) from error
 
 
 class SourceArchiveState:
@@ -279,14 +296,14 @@ def retained_upload(workspace, request, archives, *, route, key, clock=time.mono
             os.close(descriptor)
 
 
-def run_archived(args, workspace, grace, request, archives, *, transport):
+def run_archived(args, workspace, grace, request, archives, *, transport, url=None):
     """Prepare once, then submit or observe the original allocation identity."""
     import subprocess
     from .jobs import GatewayJobs
     from aka.contracts.execution_recovery import JobReference
     from aka.execution.outcomes import emit_fact, observe_attempt
 
-    endpoint, profile = transport._submission_route(args.url)
+    endpoint, profile = transport._submission_route(args.url if url is None else url)
     if not endpoint:
         raise UnsupportedExecution("source archives require a confirmed HTTP gateway route")
     key = request.get("idempotency_key")
@@ -385,7 +402,7 @@ def replay_archived(jobs, command, *, idempotency_key, retry):
                          key=idempotency_key, clock=jobs.clock, kind='profile' if prepared['kind'] == 'profile' else 'eval') as state:
         def preparation_failure(error):
             cancelled = error.code == "upload-cancelled"
-            category = "cancelled" if cancelled else "request" if error.status in {400, 401, 403, 404, 405, 409, 413, 422} else "infrastructure"
+            category = "cancelled" if cancelled else "request" if error.code in {"upload-invalid-url", "upload-rejected"} or error.status in {400, 401, 403, 404, 405, 409, 413, 422} else "infrastructure"
             diagnostic = ExecutionDiagnostic(category, error.code,
                 {"http_status": error.status} if type(error.status) is int else {})
             from .jobs import causes_from_error

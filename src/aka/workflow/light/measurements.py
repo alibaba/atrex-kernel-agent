@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from dataclasses import asdict
 import json
 from pathlib import Path
-import re
 import uuid
 
 from aka.contracts.evaluation import EvaluationRequest
@@ -18,9 +17,6 @@ from aka.contracts.execution import CommandSpec
 from aka.contracts.experiment import ExperimentRecordError
 from aka.contracts.workspace import RevisionContent
 
-RECORD_ID = re.compile(r"gateway-[0-9a-f]{64}")
-KERNEL_ID = re.compile(r"kernel-[0-9a-f]{64}")
-QUERY_KINDS = frozenset()
 _PREFIXES = {"run": "[test_kernel] RESULT_JSON=", "same_allocation_abba": "[sandbox] ABBA_JSON=",
              "profile": "[sandbox] PROFILE_JSON=", "check": "[sandbox] CHECK_JSON=",
              "disassemble": "[sandbox] DISASSEMBLE_JSON="}
@@ -216,9 +212,7 @@ class RecordedMeasurements:
                 "gateway_kind": operation, **binding, "source_sha256": binding.get("sha256"), "result": result,
                 "execution_status": "completed" if completed else "failed" if failed else "unknown", "exit_code": exit_code,
                 "standard_full_evaluation": full_task and known,
-                "typed_six_case_correctness": known and bool(identities) and all(
-                    identity.method == "atrex-bench/eval" and identity.parameters.get("correctness_reuse_policy") == "typed-six-case/1"
-                    for identity in identities), "created_at": record.created_at}
+                "created_at": record.created_at}
 
 
 class SharedMeasurements(RecordedMeasurements):
@@ -245,58 +239,13 @@ class SharedMeasurements(RecordedMeasurements):
                                command_evaluator=self.command_evaluator) as experiment:
             yield experiment
 
-    def numerical(self, request, *, request_id):
-        """Run or resume the original public numerical experiment, then read its verdict."""
-        from aka.evaluation.numerical import decode_numerical_artifact
-        with self._open() as experiment:
-            try:
-                experiment.find(request_id)
-            except LookupError:
-                record = experiment.run_recorded(request, request_id=request_id)
-            else:
-                record = experiment.resume_recorded(request, request_id=request_id,
-                    recovery_timeout=request.numerical_probe.timeout, max_remeasurements=0)
-            if record.lifecycle != "terminal" or record.phase != "complete" or record.evaluation is None:
-                raise ValueError("original numerical experiment is pending")
-            artifacts = [item for item in record.artifacts if item.artifact_id == record.evaluation.artifact]
-            if len(artifacts) != 1:
-                raise ValueError("numerical experiment has no unique interpreted artifact")
-            value = decode_numerical_artifact(experiment.read_artifact(artifacts[0]))
-            return {**value['summary'], 'probes': value['probes'], 'experiment_ref': record.ref.as_dict()}
-
-    def _record(self, experiment, record_id):
-        if not isinstance(record_id, str) or RECORD_ID.fullmatch(record_id) is None:
-            raise ValueError("Record ID must be the full gateway-... ID returned by this Campaign")
-        # The namespace is selected by the host, never by an Agent argument.
-        records = tuple(experiment.iter_records())
-        found = [record for record in records if record.ref.experiment_id == record_id[len("gateway-"):]]
-        if len(found) != 1:
-            raise LookupError("Record is not available in this Campaign")
-        return found[0]
 
 
-    def read(self, record_id):
-        """Return Workflow facts from public owner DTOs, not a file record envelope."""
-        with self._open() as experiment:
-            return self._evidence(experiment, self._record(experiment, record_id))
 
-    evidence = read
 
-    def records(self):
-        with self._open() as experiment:
-            return tuple(self._evidence(experiment, record) for record in experiment.iter_records())
 
-    def read_kernel(self, kernel_id):
-        if not isinstance(kernel_id, str) or KERNEL_ID.fullmatch(kernel_id) is None:
-            raise ValueError("Kernel ID must be the full kernel-... ID returned by this Campaign")
-        with self._open() as experiment:
-            for record in experiment.iter_records():
-                source = self._source(experiment, record)
-                if source is not None and self.kernel(source)["kernel_id"] == kernel_id:
-                    return source
-        raise LookupError("Kernel is not available in this Campaign")
 
-    source = read_kernel
+
 
     def _response(self, experiment, record, *, reused=False):
         evidence = self._evidence(experiment, record)
@@ -423,7 +372,7 @@ class SharedMeasurements(RecordedMeasurements):
             identity = {**identity, "invocation_id": uuid.uuid4().hex}
         try:
             with self.store.reserve(identity, kernels, deadline=deadline, request_id=request_id or "",
-                                    check_wait=check_wait) as task:
+                                    check_wait=check_wait, reusable=deduplicate) as task:
                 try:
                     response = self._execute(request, request_id=task.record_id,
                         reuse_completed=deduplicate,

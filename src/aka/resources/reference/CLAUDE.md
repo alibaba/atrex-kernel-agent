@@ -30,7 +30,7 @@ operations and request schemas. Do not infer a different workflow from unrelated
 - In exposed mode, `shapes.json` is the authoritative public evaluator workload. In hidden mode,
   exact Shape parameters are private and Runtime result Shape IDs are opaque. Never infer or search
   for private cases. Shape-subset measurements are diagnostic, not full-contract evidence.
-- Use `scratch/` for temporary probes and outputs. Installed `tools/` and `skills/`, Runtime
+- Use `scratch/` for temporary probes and outputs. Installed `tools/` and `.agents/skills/`, Runtime
   projections, public inputs, and historical evidence are Supervisor-owned; do not edit them.
   Do not create extra plan, profile, or benchmark documents unless the Prompt or a Skill requires
   one.
@@ -39,7 +39,7 @@ operations and request schemas. Do not infer a different workflow from unrelated
 
 - The local Agent workspace is CPU-only. Do not run or import the candidate locally or probe for a
   local GPU/toolchain with `torch`, `cuda`, `nvidia-smi`, `nvcc`, `ptxas`, `ncu`, or equivalents.
-  Use `python3 tools/sandbox.py` and `skills/gpu-measurement/SKILL.md` for compilation, execution,
+  Use `python3 tools/sandbox.py` and `.agents/skills/gpu-measurement/SKILL.md` for compilation, execution,
   evaluation, profiling, and diagnostics. Do not invoke Agate directly or obtain its credentials.
 - `python3 tools/sandbox.py --help` lists the enabled operations. Typed Evaluate selects managed
   inputs automatically. Use an enabled Command for custom remote probes; it uploads the engineering
@@ -62,7 +62,7 @@ operations and request schemas. Do not infer a different workflow from unrelated
 
 ## Research and commit review
 
-- Read `skills/runtime-records/SKILL.md` for the research modules and request schemas enabled in this
+- Read `.agents/skills/runtime-records/SKILL.md` for the research modules and request schemas enabled in this
   Episode. Do not call disabled Direction or Experiment operations or edit their projected files.
 - The persistent optimization Session starts directly from V0. Bring-up, diagnostics, correctness
   work, implementation and optimization all happen in this one conversation and Agent Git history.

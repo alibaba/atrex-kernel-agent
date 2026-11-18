@@ -32,7 +32,7 @@ nearby checkout:
 2. **Canonical Atrex-Bench checkout root.** Ask the user either to provide an existing checkout path
    containing `scripts/run_eval.py` and `src/atrex_bench/`, or to choose a destination where
    `https://github.com/alibaba/atrex-bench` should be cloned. Do not assume
-   `/Users/guoyuqi/atrex-bench` or any nearby checkout.
+   `/path/to/atrex-bench` or any nearby checkout.
 3. **Target GPU/platform token.** Require the user to select an explicit value such as `L20N` or
    `L20D`. Never infer it from the operator, an older Campaign, a currently available Sandbox or
    queue availability. If the Agate worker alias differs, ask the user to confirm that token
@@ -140,7 +140,7 @@ the Skill select it automatically.
 | `performance` | Agent selects a DSL using expert guidance; final core computation must be self-authored |
 | `ultra` | One DSL must be explicitly configured and is enforced; final core computation must be self-authored |
 
-All modes require a passing standard full Evaluate with complete per-Shape performance before `submit-kernel` can accept a commit. No mode requires automatic terminal ABBA or a minimum speedup. `leaderboard` and `production` remain compatibility aliases for existing workspaces.
+All modes require a passing standard full Evaluate with complete per-Shape performance before `submit-kernel` can accept a commit. No mode requires automatic terminal ABBA or a minimum speedup. Only `fast`, `performance` and `ultra` are supported; old mode names are not aliases.
 
 Evaluator Shapes are exposed by default. A hidden request is valid only for the supported Performance/Ultra generalized flow and only when Light actually creates/loads the hidden `agent_problem.json`; otherwise launch fails instead of silently claiming Shapes are hidden.
 
@@ -174,7 +174,7 @@ the user-selected number of Episode audit segments. Pooled mode uses
 `epochs × trajectories × episodes_per_trajectory` and does not use `--max-iters` as its segment
 count. Direction and Experiment annotations default to disabled.
 
-Episode active time has no limit by default; set `workflow.config.episode_timeout_seconds` only when a limit is wanted. `--token-budget 0` means no token cap. Agate request, queue and per-Shape execution budgets are separate.
+Episode active time is intentionally unbounded. There is no `workflow.config.episode_timeout_seconds` option. The Agent stops naturally or through operator cancellation/session revocation. A positive Campaign token budget is checked at invocation boundaries; it is not a wall-clock watchdog. `--token-budget 0` disables that cap. An optional `agent.config.timeout_seconds` bounds individual provider invocations; it is unset by default. Agate request, queue and per-Shape execution budgets are separate.
 
 Pooled search keeps Campaign-wide scheduling facts in root `coordinator.json`, serialized by
 `coordinator.lock`. Each immutable synchronization event is self-contained under

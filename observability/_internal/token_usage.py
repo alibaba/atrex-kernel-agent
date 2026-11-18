@@ -26,30 +26,11 @@ from observability._internal.common import (
 from aka.workflow.light.long_horizon.review_usage import REVIEW_KINDS
 
 
-TOKEN_KEYS = (
-    "input_tokens",
-    "output_tokens",
-    "reasoning_tokens",
-    "cache_read_tokens",
-    "cache_write_tokens",
-    "total_tokens",
-)
-
-
-def _usage(value: object) -> dict:
-    value = value if isinstance(value, dict) else {}
-    return {
-        key: value.get(key) if type(value.get(key)) is int else None
-        for key in TOKEN_KEYS
-    } | {"measurement": value.get("measurement", "unavailable")}
+from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage
 
 
 def _summed_session_usage(rows: list[dict]) -> dict:
-    usage = {}
-    for key in TOKEN_KEYS:
-        values = [row["usage"].get(key) for row in rows if type(row["usage"].get(key)) is int]
-        usage[key] = sum(values) if values else None
-    return usage | {"measurement": "session_capture_fallback"}
+    return summarize_usage(rows)["usage"]
 
 
 def _review_rows(scope) -> list[dict]:
@@ -110,43 +91,10 @@ def _review_rows(scope) -> list[dict]:
 
 
 def _review_summary(rows: list[dict]) -> dict:
-    available = {
-        key: sum(type(row["usage"].get(key)) is int for row in rows)
-        for key in TOKEN_KEYS
-    }
-
-
-    usage = {
-        key: (
-            sum(row["usage"][key] for row in rows if type(row["usage"].get(key)) is int)
-            if available[key]
-            else None
-        )
-        for key in TOKEN_KEYS
-    }
-    total_available = available["total_tokens"]
-    measurements = [row["usage"].get("measurement") for row in rows]
-    usage["measurement"] = (
-        "unavailable"
-        if not total_available
-        else "exact"
-        if total_available == len(rows) and all(value == "exact" for value in measurements)
-        else "estimated"
-        if total_available == len(rows)
-        and all(value in {"exact", "estimated"} for value in measurements)
-        else "partial"
-    )
-    return {
-        "invocation_count": len(rows),
-        "successful_invocation_count": sum(
-            row.get("exit_status") == 0 and not row.get("timed_out") for row in rows
-        ),
-        "failed_invocation_count": sum(
-            row.get("exit_status") not in {0, None} for row in rows
-        ),
+    return summarize_usage(rows) | {
+        "successful_invocation_count": sum(row.get("exit_status") == 0 and not row.get("timed_out") for row in rows),
+        "failed_invocation_count": sum(row.get("exit_status") not in {0, None} for row in rows),
         "timed_out_invocation_count": sum(bool(row.get("timed_out")) for row in rows),
-        "usage_available_invocations": available,
-        "usage": usage,
     }
 
 
@@ -186,42 +134,11 @@ def _token_checkpoint_rows(scope) -> list[dict]:
     return rows
 
 
-def _all_paths_totals(
-    main_usage: dict,
-    review_summary: dict,
-    *,
-    main_rows: list[dict],
-    review_rows: list[dict],
-) -> dict:
-    """Combine disjoint main-Agent and reviewer bills without double-counting reasoning."""
-    review_usage = review_summary["usage"]
-    combined = {}
-    for key in TOKEN_KEYS:
-        values = [
-            value
-            for value in (main_usage.get(key), review_usage.get(key))
-            if type(value) is int
-        ]
-        combined[key] = sum(values) if values else None
-
-    rows = [*main_rows, *review_rows]
-    observed_total_rows = sum(
-        type(row.get("usage", {}).get("total_tokens")) is int for row in rows
-    )
-    measurements = [row.get("usage", {}).get("measurement") for row in rows]
-    combined["measurement"] = (
-        "unavailable"
-        if not rows or not observed_total_rows
-        else "exact"
-        if observed_total_rows == len(rows) and all(value == "exact" for value in measurements)
-        else "estimated"
-        if observed_total_rows == len(rows)
-        and all(value in {"exact", "estimated"} for value in measurements)
-        else "partial"
-    )
-    combined["main_agent_total_tokens"] = main_usage.get("total_tokens")
-    combined["review_total_tokens"] = review_usage.get("total_tokens")
-    return combined
+def _all_paths_totals(main_usage, review_summary, *, main_rows, review_rows) -> dict:
+    return summarize_usage([*main_rows, *review_rows])["usage"] | {
+        "main_agent_total_tokens": main_usage.get("total_tokens"),
+        "review_total_tokens": review_summary["usage"].get("total_tokens"),
+    }
 
 
 def _session_rows(scope) -> list[dict]:
@@ -293,6 +210,7 @@ def snapshot(workspace: Path) -> dict:
     sessions = []
     episodes = []
     reviews = []
+    review_index = {}
     token_checkpoints = []
     for scope in discover_scopes(workspace):
         attempts = {
@@ -301,7 +219,16 @@ def snapshot(workspace: Path) -> dict:
             if type(attempt.get("episode")) is int
         }
         scope_sessions = _session_rows(scope)
-        reviews.extend(_review_rows(scope))
+        # A central Review is visible from both Campaign and lineage scopes.
+        # Keep its owner scope when available, but count its immutable path once.
+        for row in _review_rows(scope):
+            key = row["record_path"]
+            previous = review_index.get(key)
+            if previous is None:
+                review_index[key] = len(reviews)
+                reviews.append(row)
+            elif row["trajectory"] is not None:
+                reviews[previous] = row
         token_checkpoints.extend(_token_checkpoint_rows(scope))
         sessions.extend(scope_sessions)
         session_by_episode: dict[int, list[dict]] = {}

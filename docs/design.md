@@ -69,3 +69,53 @@ retains the full reference and selects batch IDs. The removable ABBA compatibili
 constructs a complete batch-local reference and omits Shape selectors. Requests ask for
 best-effort clock locking without prescribing MHz. Structured SDK rejection and candidate
 failure diagnostics remain in both audit evidence and actionable Agent receipts.
+
+## Runtime and lifetime boundaries
+
+**Episode active time is intentionally unbounded.** An Episode is an audit segment delimited
+by a natural Agent stop. Continuing resumes the same Session, workspace and Git history;
+there is no Episode timer, automatic handoff, promotion or rollback. A positive Campaign token
+budget is checked at invocation boundaries. Operators can cancel or revoke a Session; revocation
+also terminates its owned Agent process tree. GPU request/queue/per-step limits are separate.
+The optional Agent provider `timeout_seconds` is unset by default.
+
+Independent Runtime requests can overlap within one Session. Each has its own authenticated
+identity, cancellation and deadline. Only updates to the same research/submission identity are
+serialized; slow Reviews do not hold a global Session lock. Read-modify-publish sections use
+short locks, with request-local research snapshots across external calls.
+
+![Campaign, measurement, submission, token and failure flows](assets/light-campaign-flow.png)
+
+## Why this workflow
+
+The old Episode protocol required a handoff, private source sealing, acceptance ABBA and
+promotion before continuing. That duplicated Agent Git and measurement identity and made
+ordinary probes depend on an Episode state machine. This workflow serves operators running
+long optimization Sessions and pooled searches: Agent-owned Git remains authoritative, all
+measurements enter one Campaign Store, and only accepted submissions participate in winners.
+Research records help choose the next trial; they do not gate experimentation.
+
+Observable acceptance criteria are: exact-commit evidence can be traced to its source and raw
+Agate response; duplicate in-flight Evaluate requests share one physical execution and each
+receive a normal receipt; rejected submissions retain their reviews and do not move winners;
+main-Agent and Review tokens remain separate and each invocation is counted once. These are
+correctness/operability criteria, not a claim of improved Kernel latency or reduced token use.
+
+The tradeoffs are larger private evidence archives and potentially long Sessions/Reviews.
+There is no automatic wall-clock watchdog at the Episode layer. Native mode trusts the local
+OS user; Bubblewrap host-proc mode preserves filesystem mounts but shares the host PID namespace
+and cannot protect same-UID processes from signals. See [isolation](agent-workspace-isolation.md).
+
+## Migration and rollback
+
+Use a new Campaign directory for this workflow and keep the original checkout/environment for
+old handoff/promotion Campaigns. This change does not convert a live old Campaign or its Journal.
+`production`/`leaderboard` are replaced by `fast`/`performance`/`ultra`; Ultra requires a DSL.
+`projected` proc mode is removed; choose `private`, or `host` for Aone Sandbox. GPU Wiki and the
+Workflow startup entry point default to enabled so normal launches expose the selected knowledge
+provider and CLI; disable Wiki explicitly with `wiki: false` if unwanted.
+
+To roll back, stop the current controller, retain its evidence, and use the pinned older checkout
+with its own compatible Campaign directory. Do not delete private records, rewrite the Agent Git,
+or downgrade an in-flight Campaign. The obsolete terminal numerical-planner option is removed;
+standard Evaluate still uses **five correctness cases per Shape**.

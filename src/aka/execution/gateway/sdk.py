@@ -267,7 +267,8 @@ def upload_bytes(url, data, *, timeout):
             output.write(data)
         api.upload_file(url, str(path))
     finally:
-        if path is not None:path.unlink(missing_ok=True)
+        if path is not None:
+            path.unlink(missing_ok=True)
 
 
 def submission_rejection(process):

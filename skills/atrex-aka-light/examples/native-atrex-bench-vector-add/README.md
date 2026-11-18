@@ -26,7 +26,7 @@ Before preparing or launching this example, explicitly obtain from the user:
    in the Supervisor environment; never ask the user to paste them into chat);
 2. an existing canonical Atrex-Bench checkout root, or a user-selected destination where
    `https://github.com/alibaba/atrex-bench` should be cloned; never assume
-   `/Users/guoyuqi/atrex-bench`;
+   `/path/to/atrex-bench`;
 3. the exact target GPU/platform token accepted by Agate, such as `L20N` or `L20D`; examples are
    not defaults;
 4. the Agent CLI: `claude` (Claude Code), `codex`, `qodercli`, or `pi`;
