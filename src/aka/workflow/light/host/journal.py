@@ -3342,27 +3342,21 @@ def record_experiment(
                 supplied_direction_id = _text(
                     supplied_direction_id, "Experiment Direction ID"
                 )
-                if supplied_direction_id != direction_id:
+                if direction_id is not None and supplied_direction_id != direction_id:
                     raise field_error(
                         "direction_id",
                         "An Experiment revision cannot change its Direction",
                         code="experiment_direction_immutable",
                         existing_direction_id=direction_id,
                     )
+                direction_id = supplied_direction_id
         elif value.get("direction_id") is None:
             active = [
                 item["direction_id"] for item in views.values()
                 if item.get("status") == "in_progress"
                 and item.get("direction_id") not in history.shared_direction_ids
             ]
-            if len(active) != 1:
-                raise field_error(
-                    "direction_id",
-                    "Omit direction_id only when exactly one local Direction is in progress",
-                    code="direction_ambiguous",
-                    active_direction_ids=active,
-                )
-            direction_id = active[0]
+            direction_id = active[0] if len(active) == 1 else None
         else:
             direction_id = _text(value["direction_id"], "Experiment Direction ID")
         if direction_id is not None:
@@ -3372,7 +3366,9 @@ def record_experiment(
             if direction is None:
                 raise ValueError("Experiment Direction is outside visible history")
             direction_status = str(direction["status"])
-            if direction_id in history.shared_direction_ids and existing is None:
+            if direction_id in history.shared_direction_ids and (
+                existing is None or existing.get("direction_id") != direction_id
+            ):
                 raise AgentRequestError(
                     "A shared Direction is read-only and cannot own a local Experiment.",
                     code="shared_direction_read_only",

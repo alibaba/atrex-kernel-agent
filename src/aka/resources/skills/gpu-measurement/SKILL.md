@@ -23,6 +23,9 @@ the Supervisor performs independent submission review.
 5. For a measurement, inspect the complete canonical Runtime result. The identical durable result is
    saved at `records/<gateway_record_id>.json`; open it only when later work needs the persisted
    evidence. A completed job can still contain a correctness failure.
+6. If Experiment recording is enabled and you use the result to choose the next implementation or
+   probe, call `record-experiment` with the observation, measured scope, and next action before
+   proceeding. Later evidence can revise it; do not wait for another probe to record this decision.
 
 Use the enabled tools listed by Help and their examples in [Runtime requests](references/requests.md).
 Read `--kind OPERATION --help` for exact options; do not transfer flags between operations.

@@ -5,3 +5,25 @@ Experiment recording is enabled; Direction recording is disabled. Read only rele
 Records cited by an Experiment currently visible to this lineage and passing standard full-Evaluate Records are visible here; accepted submissions and winners therefore carry their complete Evaluate evidence. Other local Records remain private.
 
 Each submission returns an inline independent `review`. `archive_status`, `claim_review_quality`, and `evidence_eligible` distinguish storage from established support. Partial records may guide further trials within `scope_safe_interpretation`; unresolved claims remain uncertain. `scientific_next_check` is advisory and may say no additional check is needed. Perform it or revise only when the uncertainty affects the next implementation choice; do not seek `supported` through irrelevant mechanism probes or repeated submissions. Every archived revision enters `research-library/` with its actual quality. Synchronous peers see the revision frozen at the last Epoch boundary; asynchronous peers see revisions immediately. Unsupported submissions have no `archive_path`. Runtime retries an unavailable Reviewer once before archiving with `claim_review_quality=review_unavailable`. Runtime returns the full Review once; compact fields remain projected while full receipts and conversations are Supervisor-private. Revise local Experiments by stable `experiment_id`.
+
+## Record the decision
+
+After using a measurement to choose the next action, write `scratch/experiment.json`:
+
+```json
+{
+  "name": "MMA probe selects the next candidate",
+  "intent": "Choose the compute path for the next implementation",
+  "gateway_record_ids": ["gateway-<actual-record-id>"],
+  "interpretation": "The tested configuration passed the probe check. Next implement a candidate using it; full-Kernel correctness and performance remain untested."
+}
+```
+
+Use the actual observation and Record ID, then run:
+
+```bash
+python3 tools/sandbox.py --kind record-experiment --request-file scratch/experiment.json
+```
+
+Do this before the next implementation or probe that relies on that decision. To update the same
+conclusion later, submit the required fields with the returned `experiment_id`.

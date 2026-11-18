@@ -1,97 +1,84 @@
 ---
 name: runtime-records
-description: Manage research Directions and Experiments, inspect durable evidence, and review exact Kernel commits.
+description: Maintain enabled research records and review exact Kernel commits through Runtime.
 allowed-tools: "Bash Read"
 ---
 
 # Runtime records
 
-Use `python3 tools/sandbox.py`. Runtime owns immutable measurements, exact measured source, and
-commit review; the Agent owns optimization objectives, plans, and interpretations.
+Use `python3 tools/sandbox.py`; Help lists the enabled operations. Runtime owns immutable
+measurements and commit review; the Agent owns optimization decisions and interpretations.
+Independent requests may run concurrently. Collect the completed receipt before using its result
+or revising the same identity.
 
-Independent Runtime requests may run concurrently. Collect a request's completed receipt
-before using its result or revising the same Direction, Experiment, or Submission.
+Read `PROGRESS.md`, then only the research versions and bounded Record fields needed for the next
+decision. Gateway Records are measurement authority. The greatest visible `vN` is current.
+`research-library/` and `records/` are read-only projections; change research only through Runtime.
+Revise only `local_writable` identities. Extend peer evidence with a new local record.
+Synchronous peers see revisions at Epoch boundaries; asynchronous peers see revisions immediately.
 
-Start with `PROGRESS.md`. Open `frontier.json` only for the complete accepted-submission frontier, then only relevant
-Direction, Experiment, and `records/<gateway_record_id>.json` files. Projections are read-only.
-Gateway Records are measurement authority; all analysis is fallible.
-Direction and Experiment citations need not bind a Kernel. Cite Env for environment facts and
-unbound probes for their observations; Review judges whether each Record supports the claim.
-`research-library/` is a read-only, visibility-filtered copy of the versioned Campaign Library. Local identities remain writable
-only through Runtime; peer identities are always read-only. Synchronous pooled search freezes peer
-revisions at an Epoch watermark, while asynchronous pooled search projects the latest peer revision
-immediately.
-Read or query `records/<gateway_record_id>.json` directly with ordinary file operations. Select only
-the fields or bounded text needed; do not print an entire Record or long stdout/stderr into the Session.
-Records observed by this trajectory remain local by default. A lineage sees Records cited by the
-Direction/Experiment revisions currently visible in its own projection, plus passing standard full
-Evaluates. Accepted submissions and winners therefore include their complete Evaluate evidence.
+## Directions
 
-## Research loop
+A Direction is a durable program around a bottleneck, workload regime, or architecture objective,
+spanning multiple candidates. Check duplicates and rank by expected benefit. Choose executable
+work from the Local work queue; absorb Shared pool ideas into local derivatives with source IDs.
+`propose` requires an objective and plan, not prior measurements. It runs admission Review.
+`start` changes `proposed`, `deferred`, or `blocked` to `in_progress` without another Review.
+It accepts `action`, `direction_id`, and optional `analysis`. Multiple Directions may be active;
+starting sets focus, while queue reordering does not.
 
-- A Direction is a durable optimization program organized around a consequential bottleneck, workload regime, or architecture objective, not necessarily an immediate source edit. It should normally span multiple candidates and, when enabled, multiple Experiments. A single implementation, parameter sweep, capability probe, or mechanism test belongs under an existing Direction rather than becoming one. Do not use Directions for Runtime/evaluator maintenance or infrastructure work. Check duplicates and rank by expected benefit and applicability. Multiple local Directions may be `in_progress`; the latest started one is the focus, while queue reordering does not change focus.
-- Choose work from the Local work queue. The Shared direction pool is discovery-only: absorb
-  compatible peer ideas into one local derivative and cite every source ID in
-  `derived_from_direction_ids`.
-- Revise a proposed or active local Direction using its stable ID and complete replacement claim.
-  Restart deferred or blocked work first. Completed and abandoned Directions are terminal; continue
-  them through a derived Direction.
-- Direction lifecycle is `proposed --start--> in_progress`. Only `in_progress` may be completed,
-  abandoned, deferred, or blocked. Direction records an optimization objective, not a single
-  supported/refuted hypothesis; concrete falsifiable work and outcomes belong in Experiments.
-- `propose` runs admission Review without requiring an Experiment or prior measurement. State the
-  objective and plan without measured numeric claims when evidence is not yet recorded; do not wait
-  for another probe to complete the proposal narrative. Every
-  `revise` and closure is reviewed; `start` only changes lifecycle and retains the prior review.
-  `start` requires only `action` and `direction_id`; optional `analysis` replaces the current
-  assessment, and omitting it preserves that assessment.
-  `start`, `defer`, and `block` allow `partially_supported`. Only `complete` and `abandon`
-  require `supported` Review of the submitted terminal decision; otherwise the state stays
-  `in_progress` and the Review is returned for correction.
-  Every archived state is published to peers with its actual review quality; only eligible evidence
-  may support research conclusions.
-- Record an Experiment at a decision boundary: when you use measured results to keep or discard a
-  candidate, select a parameter or workload strategy, rule out a branch, or switch paths. Record the
-  observations and chosen next action before pursuing that action. Combine completed trials that
-  inform this same decision; once the decision is made, do not postpone recording for the next
-  probe, a complete implementation, full Evaluate, mechanism proof, or Direction closure. Revise the
-  Experiment when later evidence updates the same conclusion; use a new Experiment for a different
-  question. Not every Command or Evaluate needs an Experiment.
-  Record observations, their measured scope, and the
-  next action; the mechanism may remain unknown. Cite relevant Records or archived references,
-  including regressions that limit the conclusion. Runtime retains each measurement and its source
-  identity. Disposable probes that change no decision need not be recorded. Use `name`, concrete
-  `intent`, and bounded `interpretation`. A note alone does not establish a measured result. A proposed local
-  Direction may own an Experiment, but proposing or starting it does not require one. Revise only
-  `local_writable` Experiments; extend `peer_read_only` evidence with a new local Experiment.
-- Use local Git for candidate history. Imported peer history is available through remote-tracking refs such as `atrex/T2`; inspect it with `git log`/`git diff`, or continue it with `git switch -c <branch> atrex/T2`. Runtime moves the ref at its configured publication boundary without changing your HEAD. Commit or restore local work before switching.
-- Continue bounded probe/edit/measurement/revert-or-keep cycles while the selected path has a
-  concrete high-value step. A supported Experiment does not complete its Direction; compare the
-  remaining strategy branches and continue the highest-value trial. A Direction revision is not
-  required after each Experiment; revise when its assessment or remaining plan changes materially.
-  Close a Direction only when the optimization
-  program is genuinely completed or exhausted, strategically deferred, concretely blocked, or
-  reasonably abandoned.
-- Runtime returns the full Review once with the mutation result. `archive_status` reports storage,
-  `claim_review_quality` reports `review_unavailable` or scientific support, and
-  `evidence_eligible` controls whether the record may support a research conclusion, not visibility.
-  `runtime_action` is workflow guidance; `scientific_next_check` is advisory and may say no additional
-  check is needed. Perform it or revise only when the uncertainty affects the next implementation
-  choice or lifecycle decision. Do not repeat measurements or submissions merely to obtain `supported`.
-  Only projected
-  `claim_review_quality`, `scope_safe_interpretation`, and `scientific_next_check` remain Agent-visible afterward; full receipts and reviewer
-  conversations are Supervisor-private. Partial records may guide trials within
-  `scope_safe_interpretation`; unresolved claims remain uncertain. Stronger support is needed to
-  exclude a high-upside path, generalize beyond measured workloads, or declare a program exhausted.
-  Partial and `review_unavailable` records remain visible along with their cited Records.
+Use `revise` when the objective, plan, or interim `analysis` changes materially. Keep work active
+while high-value branches remain. Only `in_progress` may `complete`, `abandon`, `defer`, or `block`.
+`complete` and `abandon` require supported closure Review; partial closure leaves work active.
+Completed and abandoned Directions are terminal; continue through a derivative.
+See [Direction requests](references/journal.md#propose-and-select-a-direction).
 
-Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the
-current mode. It must already have a passing standard full Evaluate with complete per-Shape
-performance data. Submit when ready, not mechanically after every Evaluate. Fast permits declared reproducible compute libraries;
-Performance requires self-authored core compute with Agent-selected DSL; Ultra additionally enforces
-its configured DSL.
+## Experiments
 
-- [Research mutations and report schemas](references/journal.md)
-- [Saved results and source](references/records.md)
-- New measurements: `.agents/skills/gpu-measurement/SKILL.md`
-- Knowledge queries, when installed: `.agents/skills/kernel-wiki/SKILL.md`
+Record at a decision boundary: when you use a measurement to keep/discard a candidate, select a
+strategy, rule out a branch, or choose the next implementation or probe. Record the observations,
+measured scope, and next action before pursuing that action. Combine completed trials informing
+this decision; do not wait for another probe, a complete Kernel, full Evaluate, or mechanism proof.
+A disposable probe changing no decision need not be recorded. An unknown mechanism is acceptable.
+
+Write `scratch/experiment.json` with `name`, `intent`, `interpretation`, and optional
+`gateway_record_ids` and `references`, then run:
+
+```bash
+python3 tools/sandbox.py --kind record-experiment --request-file scratch/experiment.json
+```
+
+Cite only evidence supporting the bounded observation, including regressions. Env and unbound
+probe Records may establish environment facts or probe behavior, not full-Kernel performance.
+Later evidence updating the same conclusion uses the returned `experiment_id` and required fields;
+a different question gets a new Experiment. References are archived by Runtime.
+A supported Experiment does not imply that an optimization program is complete.
+
+<!-- directions:start -->
+An Experiment can exist before a Direction. Omitted `direction_id` is inferred only when exactly
+one local Direction is active; otherwise it stays unassociated. A revision can add a local
+`direction_id` later; an existing association cannot change. A proposed Direction may own an
+Experiment. Do not delay recording to create or review a Direction first.
+<!-- directions:end -->
+
+See [Experiment requests and examples](references/journal.md#record-an-experiment).
+
+## Research review
+
+Review returns inline. `archive_status` distinguishes storage from `claim_review_quality` and
+`evidence_eligible`. Use partial observations within `scope_safe_interpretation` for further trials.
+`scientific_next_check` is advisory: perform it only when the uncertainty affects the next choice.
+Do not repeat probes or submissions merely to obtain `supported`. Unsupported submissions have no
+archive path; unavailable Review is retried once. Archived versions remain visible with their
+actual quality. Full Review receipts and conversations are Supervisor-private.
+
+## Commit review
+
+Use `submit-kernel` when an exact commit is ready for the selected final-source policy and already
+has passing standard full-Evaluate evidence with complete per-Shape performance data. Submission
+does not require research records. Fast permits declared reproducible compute libraries;
+Performance requires self-authored core compute; Ultra also enforces the configured DSL.
+See [commit review requests](references/journal.md#review-an-exact-kernel-commit).
+
+Use Agent Git for checkpoints and peer refs such as `atrex/T2`. See [saved results](references/records.md)
+and `.agents/skills/gpu-measurement/SKILL.md` for measurements.

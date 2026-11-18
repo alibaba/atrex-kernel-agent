@@ -5,11 +5,12 @@ from aka.contracts.content import WorkspaceFile
 from aka.contracts.workspace import WorkspaceExclusion
 
 
-def runtime_resource_registry(campaign_root: Path, *, agate_tools, wiki: bool):
+def runtime_resource_registry(campaign_root: Path, *, agate_tools, wiki: bool, research_modules=()):
     """Adapt shared contributions to Light's Agent-facing Runtime interface."""
     from aka.resources.contributions import selected_resources
     from aka.resources.plugins import PluginRegistry
     from aka.resources.runtime_measurement import scoped_measurement_skill
+    from aka.resources.runtime_research import scoped_research_skill
 
     resources, skills = selected_resources()
     # These are host/operator manuals, not the Session's callable interface.
@@ -20,6 +21,8 @@ def runtime_resource_registry(campaign_root: Path, *, agate_tools, wiki: bool):
             continue
         if skill.name == "gpu-measurement":
             skill = scoped_measurement_skill(skill, campaign_root / "resources", agate_tools)
+        if skill.name == "runtime-records":
+            skill = scoped_research_skill(skill, campaign_root / "resources", research_modules)
         selected.append(skill)
     return PluginRegistry(resources=resources, agent_skills=tuple(selected),
         excluded_plugins=() if wiki else ("gpu-wiki",), excluded_skills=excluded)

@@ -164,7 +164,8 @@ class ManagedCampaign(Campaign):
         from .runtime_resources import runtime_resource_registry
         campaign.tool_runtime = ManagedRuntimeFactory(workflow, campaign)
         campaign._module_resources = runtime_resource_registry(campaign_root,
-            agate_tools=request.runtime.agate_tools, wiki=workflow.options.wiki)
+            agate_tools=request.runtime.agate_tools, wiki=workflow.options.wiki,
+            research_modules=campaign.research_modules)
         campaign._prepared_initial_content = initial_content
         campaign._selected_initial_source = initial_source
         return campaign

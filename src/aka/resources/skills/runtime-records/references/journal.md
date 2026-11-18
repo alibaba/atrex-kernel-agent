@@ -5,45 +5,11 @@ Requests must fit the documented 2 MiB envelope.
 
 ## Inspect progress and research files
 
-Runtime automatically maintains:
-
-```text
-research-library/directions/<direction_id>/vN/direction.json
-research-library/experiments/<experiment_id>/vN/experiment.json
-records/<gateway_record_id>.json
-PROGRESS.md
-```
-
-Direction and Experiment versions start at immutable `v1`. Each archived update creates the next
-per-identity catalog version containing the claim and its compact Review state. A Direction `start`
-retains the prior Review without running another one. The greatest visible `vN` is current for this lineage. Direction files contain their full decision-useful state, immutable `owner_lineage`,
-`access`, and the Agent-maintained plan. Runtime does not track completed plan steps or select the
-next action. Experiments identify their
-Direction through `direction_id`; Runtime derives the reverse association when needed instead of
-persisting a second index. `supporting_experiment_ids` is the reviewed evidence subset selected when
-closing the Direction. `owner` identifies the trajectory
-currently executing an in-progress Direction. Each version's `experiment.json` contains research semantics,
-Gateway Record references, immutable `owner_lineage`, and `access`. Root
-`records/` contains every currently visible standardized public result, flat and without per-
-Experiment copies. Neither contains private requests, input hashes or executor streams. Kernel
-commit IDs link Records to exact Git source. Search these files with normal file tools. They are
-visibility-filtered copies of the Campaign Library and must not be edited. Bubblewrap mounts the
-tree read-only; native-mode edits are discarded on the next Runtime refresh.
-
-Root `PROGRESS.md` is the bounded research projection and includes a capped accepted-submission per-Shape Pareto
-summary, an independently ordered Local work queue, paused and terminal sections, and an advisory Shared direction pool
-when Direction recording is enabled. Each listed Direction includes its current assessment (`analysis`)
-when recorded, alongside its objective and expected benefit. Global aggregation orders only the shared pool and never
-overwrites local priorities. Read root `frontier.json` for the complete eligible accepted-submission frontier.
-Peer Directions may appear as `in_progress(Tn)` in `PROGRESS.md`. Choose executable work from the
-Local work queue. Use the Shared pool to absorb compatible mechanisms, evidence, and applicability
-into one local Direction; cite every source ID in `derived_from_direction_ids`. Archived Direction
-and Experiment versions enter the central Campaign Research Library. Both are reviewed on first
-submission and start at immutable `v1`. `research-library/` is the
-read-only, visibility-filtered workspace copy. Synchronous search exposes peer revisions only through the
-watermark sealed at the last Epoch boundary; later revisions wait for the next Epoch. Asynchronous
-search exposes the current catalog head immediately. Quality fields distinguish context from
-established evidence and never change ownership or visibility.
+Read `PROGRESS.md` and relevant `records/<gateway_record_id>.json` files. Enabled research modules
+project immutable versions under `research-library/`; the highest visible `vN` is current.
+Use file reads for inspection and Runtime mutations for updates. Each version retains its
+`owner_lineage`, access, claim, and compact Review. Full receipts remain Supervisor-private.
+Read `frontier.json` only when the complete accepted-submission Pareto is needed.
 
 ## Cross-trajectory measurement visibility
 
@@ -58,7 +24,7 @@ Claim-bearing mutations return `review` once. Its workflow fields are deliberate
 
 - `archive_status`: whether Runtime stored the submitted claim;
 - `claim_review_quality`: `supported`, `partially_supported`, `unsupported`, or `review_unavailable`;
-- `evidence_eligible`: whether the claim may support Direction lifecycle conclusions; it does not control visibility;
+- `evidence_eligible`: whether the claim has established evidential support; it does not control visibility;
 - `runtime_action`: how to repair or continue the Runtime workflow;
 - `scientific_next_check`: an advisory decision-relevant check, or `No additional check needed for the next decision.`
 
@@ -184,7 +150,7 @@ this terminal gate; proposing and starting work still require no Experiment.
 
 A trajectory may own multiple local active Directions. The most recently started Direction is the
 focus; queue reordering does not change it. Runtime infers an omitted Experiment `direction_id` only
-when exactly one local Direction is active; with zero or multiple active Directions, include it.
+when exactly one local Direction is active; with zero or multiple active Directions, it remains unassociated.
 An explicitly named local proposed Direction may also own an Experiment. It is optional:
 proposing and starting work do not require one. A later `revise` Review receives the visible
 Experiments already bound to that Direction when assessing its interim findings.
@@ -251,14 +217,16 @@ observation before starting the Kernel that uses it; no full Evaluate is needed 
 }
 ```
 
-Use the actual Record ID and observations. With Directions enabled, add the appropriate
-`direction_id` as described below. A follow-up probe may revise this conclusion; it need not delay
-recording the decision already made.
+Use the actual Record ID and observations. A follow-up probe may revise this conclusion;
+it need not delay recording the decision already made.
 
+<!-- directions:start -->
 When Directions are enabled, Runtime infers `direction_id` only when exactly one local Direction is
-active. With zero or multiple active Directions, include the ID explicitly. An explicitly named
+active. With zero or multiple active Directions, omission records an unassociated Experiment. An explicitly named
 local proposed Direction is valid, but is never selected implicitly. When Directions are disabled,
 omit `direction_id`.
+
+<!-- directions:end -->
 
 Runtime validates every cited ID; its standardized public result is available under root `records/`.
 Direction and Experiment citations may include Records without a Kernel binding, including Env
@@ -270,17 +238,23 @@ needed for the decision in `interpretation`, rather than duplicating complete re
 
 `gateway_record_ids` and `references` are independent optional arrays. Either may be omitted or
 empty. An Experiment without Gateway Records remains a useful research note, but cannot by itself
-establish a measured Direction lifecycle conclusion. `submit-kernel` independently checks the
+establish measured correctness or performance. `submit-kernel` independently checks the
 exact commit's full Evaluate and final-source policy; it does not require an Experiment.
 
+<!-- directions:start -->
 An Experiment does not require an immediate Direction revision. Continue the highest-value branch;
 revise the Direction when its assessment or remaining plan changes materially.
+<!-- directions:end -->
 
 Revise a `local_writable` Experiment by resubmitting its required fields plus the `experiment_id` shown in
 the greatest visible `research-library/experiments/<experiment_id>/vN/experiment.json`. Runtime
 keeps that identity, increments `revision`, reruns independent Review, and writes a new immutable
 version. Omitted optional evidence is
-preserved; explicit empty arrays clear it. `direction_id` is immutable. Extend a `peer_read_only`
+preserved; explicit empty arrays clear it.
+<!-- directions:start -->
+A revision may add a local `direction_id` to an unassociated Experiment; an existing association is immutable.
+<!-- directions:end -->
+Extend a `peer_read_only`
 Experiment with a new local record rather than revising it. Prior submissions, Review receipts, conversations, and referenced bytes
 remain available to the Supervisor's private audit even though the Agent sees only the latest revision.
 The reviewer resumes that Experiment's latest valid Review Session; if native resume is unavailable,

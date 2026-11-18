@@ -124,7 +124,8 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
                 "description": (
                     "Intended local Direction. An explicitly named proposed Direction is valid "
                     "without requiring it to start first; omission is inferred only "
-                    "when exactly one local Direction is in progress."
+                    "when exactly one local Direction is in progress; otherwise it remains unassociated. "
+                    "A revision may attach it to a local Direction; an existing binding is immutable."
                 ),
             }
         properties.update(gateway_record_ids=_ids("gateway-", minimum=0),

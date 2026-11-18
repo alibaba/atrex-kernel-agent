@@ -11,6 +11,9 @@ from aka.task.source.formats import source_name
 
 
 EPISODE_COMPLETION_INSTRUCTION = (
+    "If Experiment recording is enabled, first record any measured decision already made but not "
+    "yet archived, using record-experiment, before the next implementation or probe that relies on it. "
+    "A scratch checklist does not replace that record. "
     "Continue the current optimization path in this same Episode from saved files and receipts. "
     "Do not submit a Kernel merely because this response was truncated. Preserve useful work "
     "in Agent Git and continue with bounded steps. Use submit-kernel only for an exact commit "
