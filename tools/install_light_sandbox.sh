@@ -9,7 +9,7 @@ if [[ ! -f "${deployment_config}" ]]; then
   exit 1
 fi
 
-IFS=$'\t' read -r required_agate_version required_atrex_bench_version < <(
+IFS= read -r required_agate_version < <(
   python3 - "${deployment_config}" <<'PY'
 import json
 import pathlib
@@ -23,7 +23,7 @@ except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
     raise SystemExit(f"cannot read deployment version contract {path}: {exc}")
 
 values = []
-for key in ("agate_client", "atrex_bench_version"):
+for key in ("agate_client",):
     value = config.get(key)
     if not isinstance(value, str) or not value.strip():
         raise SystemExit(f"deployment version contract requires non-empty {key!r}")
@@ -52,12 +52,11 @@ print("\t".join(values))
 PY
 )
 
-if [[ -z "${required_agate_version}" || -z "${required_atrex_bench_version}" ]]; then
-  echo "deployment version contract did not yield both required versions" >&2
+if [[ -z "${required_agate_version}" ]]; then
+  echo "deployment version contract did not yield the required Agate SDK version" >&2
   exit 1
 fi
 readonly required_agate_version
-readonly required_atrex_bench_version
 
 agate_wheels=(
   "${deploy_root}"/wheels/atrex_gateway_client-"${required_agate_version}"-*.whl
@@ -74,9 +73,6 @@ python3 -m pip install --no-index --no-deps --force-reinstall \
 
 command -v bwrap >/dev/null
 
-export ATREX_SANDBOX_ATREX_BENCH_VERSION="${required_atrex_bench_version}"
-
 aka optimize --help >/dev/null
 python3 -m aka.agent.preflight \
-  --require-agate-version "${required_agate_version}" \
-  --require-atrex-bench-version "${required_atrex_bench_version}"
+  --require-agate-version "${required_agate_version}"

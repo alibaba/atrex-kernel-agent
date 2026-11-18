@@ -202,7 +202,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     request = prepare_request(workspace, configuration.hardware, configuration.timeout, [f"{key}={value}" for key, value in environment.items()],
         list(command), "run" if kind == "run" and args.evaluation_mode != "correctness_only" else "profile", reference_dir=evaluation_input.directory if evaluation_input is not None else workspace,
         reference_content=references, requirements=requirements, candidate_source=candidate.decode(), candidate_solution=solution,
-        runtime_version=host_environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", ""), profiler=args.profiler,
+        profiler=args.profiler,
         profile_level=args.profile_level, counters=args.profile_counter, kernel_regex=args.kernel_regex, top_kernels=args.top_kernels)
     if args.deps_mode is not None:
         request["deps_mode"] = args.deps_mode

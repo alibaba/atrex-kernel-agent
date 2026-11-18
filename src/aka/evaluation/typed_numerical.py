@@ -58,7 +58,6 @@ def prepare_typed(request, configuration, suite, shapes, schedule, trusted, limi
                 payload = prepare_request(request.workspace, configuration.hardware, configuration.timeout,
                     [], list(command), 'run', reference_dir=request.workspace, reference_content=content,
                     candidate_source='', candidate_solution=solution, requirements=requirements,
-                    runtime_version=configuration.environment.get('ATREX_SANDBOX_ATREX_BENCH_VERSION', ''),
                     measurement_environment=configuration.environment)
                 payload['candidate'] = descriptor
                 payload['mode'] = 'correctness_only'

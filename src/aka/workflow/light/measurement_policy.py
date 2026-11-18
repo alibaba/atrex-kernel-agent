@@ -66,7 +66,7 @@ def runner_overrides(
         "warmup_iters": warmup_iters,
         "candidate_timeout_s": step_timeout,
         "perf_timeout_s": step_timeout,
-        "skip_kernel_attribution": True,
+        "skip_kernel_attribution": False,
     }
     # Kept in the Python signature for callers restoring older Campaign
     # configurations.  Agate owns frequency selection; never put this value on

@@ -99,6 +99,11 @@ uploaded correctly.
 | Env | Full worker capability response, archived in the central Measurement Store without Kernel performance |
 
 Profile uses `--profile-shape-id`, not Evaluate's `--shape-id`.
+Full Evaluate and ABBA collect Kernel Events by default. When Agate returns them,
+Agent results include per-Shape `kernel_events` with `name`, `calls`, and
+`device_time_us` under `performance_by_shape` (up to 64 events per Shape).
+Light does not pin the remote Atrex-Bench version. Agate selects the worker package,
+and its resolved version remains in the original response archived by Runtime.
 For hidden-shape production inputs, the Supervisor selects the requested opaque case without
 publishing its dimensions. Native Eval does not silently fall back to Dev after failure.
 

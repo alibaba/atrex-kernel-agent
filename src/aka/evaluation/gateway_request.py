@@ -104,7 +104,6 @@ def prepare_request(
     *,
     reference_dir: Path,
     reference_content=None,
-    runtime_version: str = "",
     requirements: Iterable[str] = (),
     profiler: str | None = None,
     profile_level: str = "sol",
@@ -213,18 +212,15 @@ def prepare_request(
         else None,
         reference.get("operator"),
     )
-    if runtime_version:
-        request["atrex_bench_version"] = runtime_version
     if requirements:
         request["requirements"] = list(requirements)
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
-        # Ordinary measurements need correctness and latency. Kernel attribution
-        # is a separate profiler pass and belongs to the explicit Profile route.
+        # Include per-Shape kernel events alongside correctness and latency.
         policy_environment = dict(_parse_env_items(env_items))
         policy_environment.update(measurement_environment or {})
-        request["runner_overrides"] = {"skip_kernel_attribution": True,
+        request["runner_overrides"] = {"skip_kernel_attribution": False,
                                        **runner_overrides(command, policy_environment,
                                            {key: value for key, value in (measurement_defaults or {}).items()
                                             if key in {"warmup_iters", "candidate_timeout_s", "perf_timeout_s"}})}

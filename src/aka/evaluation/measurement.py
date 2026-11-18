@@ -82,7 +82,7 @@ def _requirements(configuration, evaluation_input=None):
 def _environment_parameters(environment):
     # Values identify potentially material runtime configuration without exposing
     # credentials or machine-local paths through an evidence document.
-    keys = ("ATREX_SANDBOX_ATREX_BENCH_VERSION", "AKA_GATEWAY_WARMUP_ITERS",
+    keys = ("AKA_GATEWAY_WARMUP_ITERS",
             "ATREX_SANDBOX_URL", "ATREX_SANDBOX_PROFILE", "ATREX_SANDBOX_SSH",
             "ATREX_SANDBOX_SSH_INIT", "ATREX_SANDBOX_SSH_GPU",
             "ATREX_CORRECTNESS_MAX_REL_L2", "AKA_GATEWAY_DEV_DEPENDENCIES")

@@ -113,8 +113,9 @@ Review follows the selected Agent sandbox mode. Bubblewrap makes supplied eviden
 ## Environment and Runtime options
 
 Inject `AGATE_AK` / `AGATE_SK` securely into Supervisor environment. Keep credentials
-out of JSON patches, notes and argv. `AGATE_URL` or the SDK profile selects routing;
-`ATREX_SANDBOX_ATREX_BENCH_VERSION` optionally pins the worker package.
+out of JSON patches, notes and argv. `AGATE_URL` or the SDK profile selects routing.
+Light leaves the Atrex-Bench worker version to Agate; it does not send a version pin.
+The resolved version remains in the archived Agate response.
 Explicit SSH is configured by the public Execution selection and its documented
 `ATREX_SANDBOX_SSH*` settings; see [SSH backend](../../../docs/ssh-backend.md).
 
