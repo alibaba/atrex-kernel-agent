@@ -715,6 +715,7 @@ class SupervisorRuntime:
                 cancel_event=_OperationCancellation(self, capability),
                 filesystem_access=self._wiki_access(capability, Path(cwd), command, environment)))
         except UnsupportedExecution as error:
+            logging.getLogger(__name__).exception("Wiki execution scope rejected")
             raise RuntimeStateError("The local Wiki executor cannot enforce this request's execution scope.",
                 code="wiki_execution_unavailable", next_action=(
                     "Continue without Wiki and report the execution configuration to the operator. "
@@ -742,7 +743,10 @@ class SupervisorRuntime:
         from aka.agent.execution.installations import installation_mounts
         from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
         from aka.execution.local.filesystem import RUNTIME_PATHS
-        mounts = list(access.mounts)
+        # This trusted worker consumes only its prepared Wiki request. Inherit
+        # the staged workspace restrictions, not unrelated Agent Skill/reference
+        # mounts (which can contain hardlinked, versioned resource snapshots).
+        mounts = [mount for mount in access.mounts if mount.target == staged]
         visible = tuple(mount.target for mount in mounts) + tuple(map(Path, RUNTIME_PATHS))
         installations = installation_mounts(list(command), ("claude",), environment, Path.home(),
             hidden_paths=access.hidden_paths, forbidden_paths=(staged, capability.workspace),
@@ -761,7 +765,12 @@ class SupervisorRuntime:
         for path in resources:
             if path.exists() and not any(path.is_relative_to(mount.target) for mount in mounts):
                 mounts.append(FilesystemMount(path.resolve(strict=True), path, False))
-        return FilesystemAccess(tuple(mounts), access.hidden_paths, access.read_only_paths)
+        # Selected installation and Wiki resource roots can overlap. Collapse
+        # only equivalent mappings; conflicting grants must still fail.
+        from aka.contracts.filesystem_access import normalize_access
+        return normalize_access(FilesystemAccess(tuple(mounts),
+            tuple(path for path in access.hidden_paths if path.is_relative_to(staged)),
+            tuple(path for path in access.read_only_paths if path.is_relative_to(staged))))
 
     def _request_access(self, capability, staged):
         from aka.contracts.filesystem import FilesystemAccess

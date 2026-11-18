@@ -86,10 +86,10 @@ class Sources:
             raise
 
 
-def check_tree(fd):
+def check_tree(fd, *, writable=True):
     info = os.fstat(fd)
     if stat.S_ISREG(info.st_mode):
-        if info.st_nlink != 1:
+        if writable and info.st_nlink != 1:
             raise UnsupportedExecution("filesystem grants contain hardlink aliases")
         return
     for name in os.listdir(fd):
@@ -102,7 +102,7 @@ def check_tree(fd):
         try:
             if os.fstat(child).st_ino != info.st_ino or os.fstat(child).st_dev != info.st_dev:
                 raise UnsupportedExecution("filesystem source changed during validation")
-            check_tree(child)
+            check_tree(child, writable=writable)
         finally:
             os.close(child)
 
@@ -219,7 +219,9 @@ def _launch(binary, command, sources):
         parents = [item for item in grants if source.is_relative_to(item[0])]
         parent = max(parents, key=lambda value: len(value[0].parts)) if parents else None
         fd = sources.open(source.relative_to(parent[0]), parent=parent[3]) if parent else sources.open(source)
-        check_tree(fd)
+        # Package managers may hardlink immutable installation files. A read-only
+        # mount cannot modify their aliases; writable grants still reject them.
+        check_tree(fd, writable=grant.writable)
         grants.append((source, target, grant.writable, fd))
     workspace = absolute(command.workspace)
     try:
