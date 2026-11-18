@@ -2,7 +2,7 @@
  "schema": "clean-1.3",
  "generated_by": "build_kernel_records.py",
  "builder_version": "1.1",
- "count": 858,
+ "count": 859,
  "records": [
   {
    "id": "amd.cdna3.any.converter.cdna3",
@@ -43765,6 +43765,55 @@
    "gain_pct": null,
    "page_path": null,
    "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.transpose-load-unusable avoid simdgroup_load transpose=true; verify fragment layout with a collective probe {\"goal\": \"Do not rely on the transpose flag of simdgroup_load; verify fragment-layout semantics empirically.\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, Metal 3/4\", \"statemen"
+  },
+  {
+   "id": "apple.m-series.metal.pitfalls.q4-gemm.fine-granularity-software-pipelining-regresses",
+   "type": "anti-strategy",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal|pitfalls|pitfalls#q4-gemm|cross-operator",
+   "path": "records/anti-strategy/apple/m-series/metal/any/apple.m-series.metal.pitfalls.q4-gemm.fine-granularity-software-pipelining-regresses.json",
+   "title": "Avoid a known trap on Apple M-series Metal: software-pipelin",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "metal",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "software-pipelining",
+     "staging",
+     "barriers"
+    ],
+    "triggers": [
+     "a Metal kernel risks the 'software-pipelining staging at BK=8 k-granularity regresses 2.2x and breaks correctness' trap"
+    ]
+   },
+   "worth_score": 0.6,
+   "tier": "provisional",
+   "gain_pct": null,
+   "page_path": null,
+   "search_text": "apple.m-series.metal.pitfalls.q4-gemm.fine-granularity-software-pipelining-regresses {\"goal\": \"Avoid a known trap on Apple M-series Metal: software-pipelining staging at BK=8 k-granularity regresses 2.2x and breaks correctness\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-"
   }
  ]
 }

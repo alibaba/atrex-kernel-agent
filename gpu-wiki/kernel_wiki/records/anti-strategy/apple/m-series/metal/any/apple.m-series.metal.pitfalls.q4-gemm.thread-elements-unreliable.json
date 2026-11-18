@@ -46,16 +46,16 @@
    "target": "Apple Silicon (M-series) unified-memory GPU, Metal 4 toolchains",
    "statement": "writing b fragments via thread_elements() with a guessed layout produces wrong numerics"
   },
-  "attempted": "Materializing dequantized weights directly into simdgroup fragments using the two documented thread-element mappings ([t/4][(t%4)*2+{0,1}] and [(t%4)*2+{0,1}][t/4]); a read-back probe also returned zeros for every thread.",
+  "attempted": "Three independent experiments: (1) read-back probe; (2) register-side B dequant under two documented layout assumptions; (3) minimal MMA probe that builds fragment B via thread_elements() under 4 candidate layouts and runs one 8x8 MMA against a known A - all 4 variants output an all-zero product matrix (maxerr 140 = every element wrong).",
   "verdict": "rejected",
-  "lesson": "Stage fragments through threadgroup memory with simdgroup_load/store and measure; treat thread_elements() as write-only-opaque on metal4 toolchains until Apple documents the layout.",
+  "lesson": "Treat simdgroup fragments as opaque: stage through threadgroup memory with simdgroup_load/store. Sizing the MLX gap: with public APIs the practical ceiling observed is ~9 TFLOPS effective for q4 GEMM (33.2ms qkv shape) versus MLX ~43 TFLOPS; closing further needs Apple-internal primitives or upstream toolchain changes.",
   "established_fact": {
    "condition": {
     "toolchain": "metal4.0 (metalfe-32023.921.6)"
    },
-   "mechanism": "The per-thread element mapping of simdgroup_matrix fragments is not stable API on this toolchain: thread_elements() read-back returns zeros and neither documented layout matches hardware placement, so register-side dequant cannot be verified cheaply."
+   "mechanism": "On the metal4.0 toolchain (metalfe-32023.921.6), thread_elements() returns storage whose contents never influence simdgroup MMA inputs or reflect loaded fragment state - the accessor is effectively disconnected. Register-side dequantization into MMA fragments requires either documented layout-stable APIs or privileged Apple primitives."
   },
-  "observed": "Correctness failures on small/ragged/ungrouped shapes (max_abs 1.1-3.6) for both layouts.",
+  "observed": "(2) correctness failures max_abs 1.1-3.6; (3) MMA product all zeros for layouts 0-3. simdgroup_load/store round trips through threadgroup memory remain correct and fast.",
   "root_cause": "The per-thread element mapping of simdgroup_matrix fragments is not stable API on this toolchain: thread_elements() read-back returns zeros and neither documented layout matches hardware placement, so register-side dequant cannot be verified cheaply.",
   "typical_gain_pct": null,
   "success_rate_pct": null,
@@ -84,7 +84,7 @@
     "usage_bonus": 0.0,
     "recency": 1.0
    },
-   "computed_at": "2026-11-17T09:50:00",
+   "computed_at": "2026-11-18T06:35:00",
    "builder_version": "manual-metal-seed"
   },
   "gain": {
