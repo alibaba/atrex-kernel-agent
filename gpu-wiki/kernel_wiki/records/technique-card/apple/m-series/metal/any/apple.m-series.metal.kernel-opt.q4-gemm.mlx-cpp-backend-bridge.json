@@ -103,7 +103,7 @@
     {
      "metric": "gpu_median_latency",
      "delta_pct": 49.9,
-     "note": "engine m1024 4.10ms vs own best public-API kernel 8.4ms; 6.6x vs tile16 baseline; m16 0.374ms beats tile16 and python-mlx",
+     "note": "engine-level latency reduction versus our own best public-API Metal kernel; second comparison versus the scalar tile baseline is a larger reduction",
      "source": "engine-level ABBA medians, M5 Max, ctest-verified"
     }
    ]

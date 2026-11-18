@@ -2,7 +2,7 @@
  "schema": "clean-1.3",
  "generated_by": "build_kernel_records.py",
  "builder_version": "1.1",
- "count": 859,
+ "count": 861,
  "records": [
   {
    "id": "amd.cdna3.any.converter.cdna3",
@@ -43814,6 +43814,106 @@
    "gain_pct": null,
    "page_path": null,
    "search_text": "apple.m-series.metal.pitfalls.q4-gemm.fine-granularity-software-pipelining-regresses {\"goal\": \"Avoid a known trap on Apple M-series Metal: software-pipelining staging at BK=8 k-granularity regresses 2.2x and breaks correctness\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-"
+  },
+  {
+   "id": "apple.m-series.metal.kernel-opt.q4-gemm.mlx-cpp-backend-bridge",
+   "type": "technique-card",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal|kernel-opt|q4-gemm#mlx-cpp-backend-bridge|cross-operator",
+   "path": "records/technique-card/apple/m-series/metal/any/apple.m-series.metal.kernel-opt.q4-gemm.mlx-cpp-backend-bridge.json",
+   "title": "MLX C++ backend bridge",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "metal",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "mlx",
+     "quantized-gemm",
+     "backend-integration"
+    ],
+    "triggers": [
+     "a native Metal engine needs a fast quantized GEMM without hand-writing MMA kernels",
+     "integrating MLX operators into a non-MLX C++ pipeline"
+    ]
+   },
+   "worth_score": 0.65,
+   "tier": "provisional",
+   "gain_pct": 49.9,
+   "page_path": null,
+   "search_text": "apple.m-series.metal.kernel-opt.q4-gemm.mlx-cpp-backend-bridge MLX C++ backend bridge {\"goal\": \"Use mlx::core quantized_matmul as a drop-in backend for a native Metal engine.\", \"problem\": {\"target\": \"Apple Silicon (M-series) unified-memory GPU, mlx 0.32 C++ API\", \"statement\": \"Hand-wri"
+  },
+  {
+   "id": "apple.m-series.metal.pitfalls.q4-gemm.mlx-cpp-fp16-array-reads",
+   "type": "anti-strategy",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal|pitfalls|pitfalls#q4-gemm|cross-operator",
+   "path": "records/anti-strategy/apple/m-series/metal/any/apple.m-series.metal.pitfalls.q4-gemm.mlx-cpp-fp16-array-reads.json",
+   "title": "Avoid a known trap on Apple M-series Metal: unsynchronized m",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "metal",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "mlx",
+     "fp16",
+     "sync",
+     "zero-copy"
+    ],
+    "triggers": [
+     "a Metal engine risks the 'unsynchronized mlx fp16 array reads return garbage; zero-copy from foreign pointers segfaults' trap"
+    ]
+   },
+   "worth_score": 0.6,
+   "tier": "provisional",
+   "gain_pct": null,
+   "page_path": null,
+   "search_text": "apple.m-series.metal.pitfalls.q4-gemm.mlx-cpp-fp16-array-reads  {\"goal\": \"Avoid a known trap on Apple M-series Metal: unsynchronized mlx fp16 array reads return garbage; zero-copy from foreign pointers segfaults\", \"problem\": {\"target\": \"Apple Silicon (M-series), m"
   }
  ]
 }
