@@ -1,0 +1,111 @@
+{
+ "schema": "clean-1.3",
+ "id": "apple.m-series.metal-cpp.kernel-opt.transformer-block.mlx-lazy-fusion",
+ "type": "technique-card",
+ "level": "cross-operator",
+ "status": "active",
+ "episode_key": "m-series|metal-cpp|kernel-opt|transformer-block#mlx-lazy-fusion|cross-operator",
+ "retrieval": {
+  "scope": {
+   "vendor": "apple",
+   "arch": "m-series",
+   "architectures": [
+    "m-series"
+   ],
+   "product": "any",
+   "dsl": "metal",
+   "operator_family": null,
+   "operators": [],
+   "shape_signature": {}
+  },
+  "generality": {
+   "arch": "m-series",
+   "language": "mlx-cpp",
+   "workload_family": "any"
+  },
+  "signals": {
+   "metrics": {},
+   "shape_regime": {
+    "predicate": "*",
+    "var_axes": []
+   },
+   "symptoms": []
+  },
+  "technique_tags": [
+   "mlx",
+   "lazy-fusion",
+   "transformer-block",
+   "sdpa"
+  ],
+  "triggers": [
+   "a transformer block built from per-op graph launches needs 1.5x+",
+   "elementwise chains between quantized matmuls dominate launch and memory overhead"
+  ]
+ },
+ "payload": {
+  "goal": "Collapse a whole transformer block into one mlx lazy graph.",
+  "problem": {
+   "target": "Apple Silicon (M-series), mlx 0.32 C++ API",
+   "statement": "Per-op execution (each op = own graph launch + fp16 memory round-trip) leaves a transformer block 2x+ above the mlx lazy-graph composition."
+  },
+  "technique": "mlx lazy block fusion",
+  "what": "fast::rms_norm + quantized_matmul + fast::scaled_dot_product_attention + mlx elementwise (silu/mul/add) composed as one lazy graph keeps the residual resident in mlx and removes all per-op launches/round-trips. Measured m1024 q4 transformer block: 58.8 ms per-op -> 26.9 ms fused (2.17x); fused time equals the four quantized_matmul kernel times (~24 ms) - at kernel-SOTA parity the fusion overhead is amortized to zero.",
+  "when": "Any mlx C++ pipeline where blocks are assembled op-by-op through separate graph launches.",
+  "how": "1. Compose the block as a function array->array with no evals inside. 2. Keep residual activations as mlx arrays across blocks; read back only at sequence boundaries. 3. Elementwise chains between matmuls fuse automatically; use fast::rms_norm/fast::sdpa rather than hand-composed softmax. 4. Validate stage-by-stage against fp32 references before trusting the fused path.",
+  "caveats": [
+   "mlx fast::sdpa contract is (B, heads, seq, dim) - torch-style; the (B,seq,heads,dim) reading silently computes attention over the wrong axis",
+   "fp16 synthetic-data validation diverges on unnormalized weights; normalize scales by 1/sqrt(k) before comparing eval granularities"
+  ],
+  "success_rate_pct": null,
+  "typical_gain_pct": 116.7
+ },
+ "evidence": {
+  "summary": {
+   "confidence": "measured"
+  },
+  "raw": {
+   "page_path": null,
+   "seed": "onyx-infer kernel-agent episode E13, stage-verified vs fp32 references on Apple M5 Max, 2026-11-18"
+  }
+ },
+ "worth": {
+  "rank": {
+   "score": 0.65,
+   "tier": "provisional",
+   "formula": "clamp(prior + 0.35*signed_feedback*confidence + usage_bonus) * recency_decay(half_life=90d)",
+   "components": {
+    "prior": 0.65,
+    "base_rate": -1.0,
+    "feedback_signed": 0.0,
+    "feedback_confidence": 0.0,
+    "feedback_adjust": 0.0,
+    "usage_bonus": 0.0,
+    "recency": 1.0
+   },
+   "computed_at": "2026-11-18T11:05:00",
+   "builder_version": "manual-metal-seed"
+  },
+  "gain": {
+   "basis": "measured",
+   "kind": "measured",
+   "pct": 116.7,
+   "primary": "gpu_median_latency",
+   "metrics": [
+    {
+     "metric": "gpu_median_latency",
+     "delta_pct": 116.7,
+     "source": "comparable medians, onyx-infer E13, M5 Max: per-op 58.8 ms vs fused 26.9 ms per block",
+     "note": "latency-reduction percentage of the fused lazy graph versus the per-op composition"
+    }
+   ]
+  },
+  "track": {
+   "counters": {
+    "query_count": 0,
+    "served_count": 0,
+    "applied_count": 0,
+    "hurt_count": 0
+   }
+  }
+ }
+}

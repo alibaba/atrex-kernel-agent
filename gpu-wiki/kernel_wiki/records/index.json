@@ -2,7 +2,7 @@
  "schema": "clean-1.3",
  "generated_by": "build_kernel_records.py",
  "builder_version": "1.1",
- "count": 861,
+ "count": 863,
  "records": [
   {
    "id": "amd.cdna3.any.converter.cdna3",
@@ -43914,6 +43914,105 @@
    "gain_pct": null,
    "page_path": null,
    "search_text": "apple.m-series.metal.pitfalls.q4-gemm.mlx-cpp-fp16-array-reads  {\"goal\": \"Avoid a known trap on Apple M-series Metal: unsynchronized mlx fp16 array reads return garbage; zero-copy from foreign pointers segfaults\", \"problem\": {\"target\": \"Apple Silicon (M-series), m"
+  },
+  {
+   "id": "apple.m-series.metal-cpp.kernel-opt.transformer-block.mlx-lazy-fusion",
+   "type": "technique-card",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal-cpp|kernel-opt|transformer-block#mlx-lazy-fusion|cross-operator",
+   "path": "records/technique-card/apple/m-series/metal-cpp/any/apple.m-series.metal-cpp.kernel-opt.transformer-block.mlx-lazy-fusion.json",
+   "title": "mlx lazy block fusion",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "mlx-cpp",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "mlx",
+     "lazy-fusion",
+     "transformer-block",
+     "sdpa"
+    ],
+    "triggers": [
+     "a transformer block built from per-op graph launches needs 1.5x+",
+     "elementwise chains between quantized matmuls dominate launch and memory overhead"
+    ]
+   },
+   "worth_score": 0.65,
+   "tier": "provisional",
+   "gain_pct": 116.7,
+   "page_path": null,
+   "search_text": "apple.m-series.metal-cpp.kernel-opt.transformer-block.mlx-lazy-fusion {\"goal\": \"Collapse a whole transformer block into one mlx lazy graph.\", \"problem\": {\"target\": \"Apple Silicon (M-series), mlx 0.32 C++ API\", \"statement\": \"Per-op execution (each op = own graph launch +"
+  },
+  {
+   "id": "apple.m-series.metal-cpp.pitfalls.transformer-block.sdpa-heads-first-contract",
+   "type": "anti-strategy",
+   "level": "cross-operator",
+   "status": "active",
+   "episode_key": "m-series|metal-cpp|pitfalls|transformer-block#sdpa-heads-first-contract|cross-operator",
+   "path": "records/anti-strategy/apple/m-series/metal-cpp/any/apple.m-series.metal-cpp.pitfalls.transformer-block.sdpa-heads-first-contract.json",
+   "title": "Avoid a known trap in mlx fast::scaled_dot_product_attention",
+   "retrieval": {
+    "scope": {
+     "vendor": "apple",
+     "arch": "m-series",
+     "architectures": [
+      "m-series"
+     ],
+     "product": "any",
+     "dsl": "metal",
+     "operator_family": null,
+     "operators": [],
+     "shape_signature": {}
+    },
+    "generality": {
+     "arch": "m-series",
+     "language": "mlx-cpp",
+     "workload_family": "any"
+    },
+    "signals": {
+     "metrics": {},
+     "shape_regime": {
+      "predicate": "*",
+      "var_axes": []
+     },
+     "symptoms": []
+    },
+    "technique_tags": [
+     "sdpa",
+     "api-contract"
+    ],
+    "triggers": [
+     "mlx fast::scaled_dot_product_attention output looks like attention is a no-op or overflows to -inf"
+    ]
+   },
+   "worth_score": 0.6,
+   "tier": "provisional",
+   "gain_pct": null,
+   "page_path": null,
+   "search_text": "apple.m-series.metal-cpp.pitfalls.transformer-block.sdpa-heads-first-contract {\"goal\": \"Avoid a known trap in mlx fast::scaled_dot_product_attention: the axis contract\", \"problem\": {\"target\": \"Apple Silicon (M-series), mlx 0.32 C++/Python API\", \"statement\": \"mlx fast::scaled_do"
   }
  ]
 }
