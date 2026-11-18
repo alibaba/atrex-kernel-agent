@@ -39,7 +39,9 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
 - Direction lifecycle is `proposed --start--> in_progress`. Only `in_progress` may be completed,
   abandoned, deferred, or blocked. Direction records an optimization objective, not a single
   supported/refuted hypothesis; concrete falsifiable work and outcomes belong in Experiments.
-- `propose` runs admission Review without requiring an Experiment or prior measurement. Every
+- `propose` runs admission Review without requiring an Experiment or prior measurement. State the
+  objective and plan without measured numeric claims when evidence is not yet recorded; do not wait
+  for another probe to complete the proposal narrative. Every
   `revise` and closure is reviewed; `start` only changes lifecycle and retains the prior review.
   `start` requires only `action` and `direction_id`; optional `analysis` replaces the current
   assessment, and omitting it preserves that assessment.
@@ -48,10 +50,14 @@ Evaluates. Accepted submissions and winners therefore include their complete Eva
   `in_progress` and the Review is returned for correction.
   Every archived state is published to peers with its actual review quality; only eligible evidence
   may support research conclusions.
-- Record an Experiment when measured results determine whether to keep or discard a candidate,
-  select a parameter or workload strategy, rule out a branch, or switch paths. Related trials can be
-  recorded together; do not wait for a mechanism proof or Direction closure. Not every Evaluate needs
-  an Experiment. Record observations, their measured scope, and the
+- Record an Experiment at a decision boundary: when you use measured results to keep or discard a
+  candidate, select a parameter or workload strategy, rule out a branch, or switch paths. Record the
+  observations and chosen next action before pursuing that action. Combine completed trials that
+  inform this same decision; once the decision is made, do not postpone recording for the next
+  probe, a complete implementation, full Evaluate, mechanism proof, or Direction closure. Revise the
+  Experiment when later evidence updates the same conclusion; use a new Experiment for a different
+  question. Not every Command or Evaluate needs an Experiment.
+  Record observations, their measured scope, and the
   next action; the mechanism may remain unknown. Cite relevant Records or archived references,
   including regressions that limit the conclusion. Runtime retains each measurement and its source
   identity. Disposable probes that change no decision need not be recorded. Use `name`, concrete

@@ -211,10 +211,14 @@ changes the claim or remaining plan, submit a complete `action=revise` Direction
 
 ## Record an Experiment
 
-Record an Experiment when measured results determine whether to keep or discard a candidate,
-select a parameter or workload strategy, rule out a branch, or switch paths. Related trials can be
-recorded together; do not wait for a mechanism proof or Direction closure. Not every Evaluate needs
-an Experiment. Record observations, their measured scope, and the
+Record an Experiment at a decision boundary: when you use measured results to keep or discard a
+candidate, select a parameter or workload strategy, rule out a branch, or switch paths. Record the
+observations and chosen next action before pursuing that action. Combine completed trials that
+inform this same decision; once the decision is made, do not postpone recording for the next probe,
+a complete implementation, full Evaluate, mechanism proof, or Direction closure. Revise the
+Experiment when later evidence updates the same conclusion; use a new Experiment for a different
+question. Not every Command or Evaluate needs an Experiment.
+Record observations, their measured scope, and the
 next action; the mechanism may remain unknown. Cite all relevant Records or archived references,
 including regressions that limit the conclusion. Runtime retains each measurement and its source
 identity. A disposable probe that changes no decision need not be recorded:
@@ -232,6 +236,24 @@ identity. A disposable probe that changes no decision need not be recorded:
 ```bash
 python3 tools/sandbox.py --kind record-experiment --request-file scratch/experiment.json
 ```
+
+A hardware capability probe also merits an Experiment when its result selects an implementation
+path. For example, after checking an MMA instruction's output and throughput, record the bounded
+observation before starting the Kernel that uses it; no full Evaluate is needed for this probe record:
+
+```json
+{
+  "name": "FP8 MMA probe selects the next implementation path",
+  "intent": "Determine whether FP8 MMA is usable for the next GEMM candidate",
+  "gateway_record_ids": ["gateway-<actual-probe-record-id>"],
+  "interpretation": "The tested FP8 MMA configuration passed the probe's output check and ran faster than its BF16 counterpart. Next implement an FP8 MMA candidate. This establishes only the tested probe behavior, not full-Kernel correctness, workload latency, or an architectural peak.",
+  "references": ["scratch/probe_mma.py"]
+}
+```
+
+Use the actual Record ID and observations. With Directions enabled, add the appropriate
+`direction_id` as described below. A follow-up probe may revise this conclusion; it need not delay
+recording the decision already made.
 
 When Directions are enabled, Runtime infers `direction_id` only when exactly one local Direction is
 active. With zero or multiple active Directions, include the ID explicitly. An explicitly named
