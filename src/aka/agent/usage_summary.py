@@ -59,3 +59,22 @@ def summarize_usage(rows: list[dict], *, missing_expected: bool = False) -> dict
         "usage_available_invocations": available,
         "usage": usage,
     }
+
+
+def session_usage(value: Mapping) -> dict:
+    """Prefer live main counters; reject a zero settlement contradicted by them.
+
+    Positive provider settlements retain their billing scope. Child counters
+    are not added to the main Agent, and a conflicting zero is only a partial
+    response-based observation, never an exact provider receipt.
+    """
+    total = usage(value.get("total"))
+    if value.get("backend") == "claude":
+        main = usage((value.get("by_agent") or {}).get("main"))
+        if main["total_tokens"] is not None and (
+            value.get("state") == "running"
+            or total["total_tokens"] is None
+            or (total["total_tokens"] == 0 and main["total_tokens"] > 0)
+        ):
+            return main | {"measurement": "partial"}
+    return total

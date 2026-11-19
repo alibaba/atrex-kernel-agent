@@ -26,16 +26,7 @@ from observability._internal.common import (
 from aka.workflow.light.long_horizon.review_usage import REVIEW_KINDS
 
 
-from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage
-
-
-def session_usage(value: dict) -> dict:
-    """Use deduplicated main-response counters until Claude has finished."""
-    if value.get("backend") == "claude" and value.get("state") == "running":
-        main = (value.get("by_agent") or {}).get("main")
-        if isinstance(main, dict) and type(main.get("total_tokens")) is int:
-            return _usage(main) | {"measurement": "partial"}
-    return _usage(value.get("total"))
+from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage, session_usage
 
 
 def _summed_session_usage(rows: list[dict]) -> dict:
