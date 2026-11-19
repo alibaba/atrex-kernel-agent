@@ -1420,19 +1420,10 @@ class Campaign:
     ) -> list[str]:
         """Bound timeout retries across sessions and supervisor restarts."""
         from aka.workflow.light.orchestration.infrastructure_retry import retry_review
-        from aka.task.source.formats import seed_baseline_metadata
 
-        # Open-DSL single-file workspaces are initialized before the Agent has
-        # selected a DSL. Refresh Supervisor-owned solution.json from the
-        # finished candidate so the fail-closed Production review sees the
-        # implementation's real language and dependencies.
-        seed_baseline_metadata(
-            workspace,
-            framework,
-            self.campaign_name,
-            native_eval=bool(self.atrex_bench_root),
-        )
-
+        # Review the exact submitted source. In particular, do not synthesize
+        # solution.json from a configured DSL: it is not part of that commit
+        # and could invent dependencies or conceal a submitted manifest error.
         digest = _production_review_digest(
             workspace,
             framework,

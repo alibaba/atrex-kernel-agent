@@ -323,7 +323,6 @@ def initial_snapshot(options, *, state_root, seed=None):
 
 
 class SourceTree:
-    def seed_metadata(self, workspace, framework, name, *, native_eval):pass
     def prepare_source(self, request, source_provider, *, options, state_root, native_eval):
         if request.initial.kind == 'sol' or not native_eval:
             raise ValueError('Source trees require native Atrex-Bench Eval; select single_file explicitly for SOL')

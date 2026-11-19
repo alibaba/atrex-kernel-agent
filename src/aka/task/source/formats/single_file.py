@@ -27,8 +27,8 @@ class SingleFile:
         return (
             "\n## Single-file Kernel\n"
             "Editable `kernel.py` is the complete candidate and evaluator entry point. "
-            "Keep the implementation self-contained in that file; do not add auxiliary candidate "
-            "sources or edit `solution.json`, which is Supervisor-owned metadata in this layout. "
+            "Keep the implementation self-contained in that file; no `solution.json` is required. "
+            "Do not add auxiliary candidate sources. "
             "Evaluate, Profile, Check, Disassemble, reports and broadcasts bind the committed "
             "`kernel.py`.\n"
         )
@@ -76,40 +76,6 @@ class SingleFile:
             if module in imports:
                 return selected
         return ''
-
-    def seed_metadata(self, workspace, framework, name, *, native_eval):
-        """Synchronize Supervisor-owned metadata with the current Python candidate."""
-        path = workspace / 'solution.json'
-        language = self._selected_language(workspace, framework)
-        if not native_eval:
-            return
-        if language == 'cuda':
-            path.unlink(missing_ok=True)
-            return
-        dependencies = {
-            'triton': ['torch', 'triton'],
-            'gluon': ['torch', 'triton', 'gluon'],
-            'cutedsl': ['torch', 'nvidia-cutlass-dsl'],
-            'flydsl': ['torch', 'flydsl'],
-        }.get(language, ['torch'])
-        languages = ['python', language] if language else ['python']
-        reference = workspace / 'reference.py'
-        symbol = 'Model' if reference.is_file() and 'class Model' in reference.read_text() else 'run'
-        suffix = language or 'python'
-        roles = {
-            'torch': 'Tensor interface and candidate entry-point plumbing.',
-            'triton': 'Selected DSL and compiler for the candidate kernel.',
-            'gluon': 'Selected DSL and compiler for the candidate kernel.',
-            'nvidia-cutlass-dsl': 'Selected DSL and compiler for the candidate kernel.',
-            'flydsl': 'Selected DSL and compiler for the candidate kernel.',
-        }
-        value = {'name': f'{name}_v1_{suffix}',
-                 'spec': {'languages': languages, 'dependencies': dependencies, 'entry_point': f'kernel.py::{symbol}'},
-                 'sources': [{'path': 'kernel.py', 'role': 'Self-contained candidate implementation and framework loader.'}],
-                 'dependency_roles': {dependency: roles[dependency] for dependency in dependencies}}
-        contents = json.dumps(value, indent=2) + '\n'
-        if not path.is_file() or path.read_text() != contents:
-            path.write_text(contents)
 
     def typed_limitation(self, workspace, policy):
         entry = self.layout.python_entrypoint

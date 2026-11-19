@@ -83,7 +83,6 @@ def editable(name):
 
 
 class CudaManifest:
-    def seed_metadata(self, workspace, framework, name, *, native_eval):pass
     def prepare_source(self, request, source_provider, *, options, state_root, native_eval):
         if request.initial.kind == 'sol' or not native_eval:
             raise ValueError('CUDA manifests require native Atrex-Bench Eval')
