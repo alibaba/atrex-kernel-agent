@@ -40,3 +40,5 @@ python3 tools/sandbox.py --kind record-experiment --request-file scratch/experim
 Do this before the next implementation or probe that relies on that decision. To update the same
 conclusion later, submit the required fields with the returned `experiment_id`.
 Supply `direction_id` when you intend a specific local Direction; do not delay an unassociated Experiment to create one.
+
+Claim Review is disabled by default unless explicitly enabled for this Campaign. If Runtime returns `review_skipped: true`, it was skipped. Its `supported` label is configured acceptance, not independent verification; continue recording decisions normally.

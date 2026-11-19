@@ -202,7 +202,10 @@ def _review_projection(review: Mapping[str, object] | None) -> dict[str, object]
     quality = canonical_review_quality(quality)
     if quality is None:
         return {}
-    projected: dict[str, object] = {"claim_review_quality": quality}
+    projected: dict[str, object] = {
+        "claim_review_quality": quality,
+        "review_skipped": review.get("review_skipped") is True,
+    }
     for source, target in (
         ("scope_safe_interpretation", "scope_safe_interpretation"),
         ("scientific_next_check", "scientific_next_check"),
@@ -217,6 +220,8 @@ def _review_projection(review: Mapping[str, object] | None) -> dict[str, object]
 def _durable_review_fields(value: Mapping[str, object]) -> dict[str, object]:
     """Canonicalize durable Review fields while reading pre-rename history."""
     result: dict[str, object] = {}
+    if value.get("review_skipped") is True:
+        result["review_skipped"] = True
     quality = canonical_review_quality(
         value.get("claim_review_quality", value.get("review_quality"))
     )
@@ -3509,7 +3514,10 @@ def record_experiment(
         ):
             review = dict(review)
             review["direction_status"] = direction_status
-            review["runtime_action"] = _ACTIVE_DIRECTION_EXPERIMENT_RUNTIME_ACTION
+            review["runtime_action"] = (
+                (str(review["runtime_action"]) + " " if review.get("review_skipped") else "")
+                + _ACTIVE_DIRECTION_EXPERIMENT_RUNTIME_ACTION
+            )
     else:
         review = None
     experiment.update(_review_projection(review))
@@ -3585,6 +3593,7 @@ class SupervisorJournalService:
         session_capture_root: Path | None = None,
         origin: Mapping[str, object] | None = None,
         claim_reviewer: Callable[..., Mapping[str, object]] | None = None,
+        claim_review_enabled: bool = False,
     ) -> None:
         self.workspace = workspace
         self.git_workspace = git_workspace or workspace
@@ -3606,6 +3615,9 @@ class SupervisorJournalService:
                 "tool_modules may contain only unique directions and experiments"
             )
         self.origin = dict(origin or {"trajectory": 1})
+        if type(claim_review_enabled) is not bool:
+            raise ValueError("claim_review_enabled must be boolean")
+        self.claim_review_enabled = claim_review_enabled
         self.claim_reviewer = claim_reviewer
         self.measurement_root = (
             measurement_root or campaign_root.parent / "measurements"
@@ -4751,6 +4763,20 @@ class SupervisorJournalService:
         target: Mapping[str, object],
     ) -> dict[str, object]:
         """Review one validated claim before it becomes canonical research state."""
+        if not self.claim_review_enabled:
+            message = (
+                "Claim Review skipped because workflow.claim_review=false. "
+                "This record is treated as supported by configuration; no independent review was performed."
+            )
+            return {
+                "archive_status": "archived",
+                "claim_review_quality": "supported",
+                "evidence_eligible": True,
+                "review_skipped": True,
+                "primary_issue": message,
+                "scope_safe_interpretation": message,
+                "runtime_action": message,
+            }
         if self.claim_reviewer is None:
             return {}
         identity = self._reviewed_claim_identity(claim_type, target)
@@ -5002,7 +5028,7 @@ class SupervisorJournalService:
                     measurement_root=self.measurement_root,
                     review_claim=(
                         self._review_claim_before_mutation
-                        if self.claim_reviewer is not None else None
+                        if self.claim_reviewer is not None or not self.claim_review_enabled else None
                     ),
                 )
                 direction_id = str(result["direction_id"])
@@ -5121,7 +5147,7 @@ class SupervisorJournalService:
                     ),
                     review_claim=(
                         self._review_claim_before_mutation
-                        if self.claim_reviewer is not None else None
+                        if self.claim_reviewer is not None or not self.claim_review_enabled else None
                     ),
                 )
                 experiment_id = str(result["experiment_id"])

@@ -604,6 +604,7 @@ class SupervisorRuntime:
                 tool_modules=self.journal_factory.tool_modules, research_root=lineage_root / "research",
                 research_synchronization=self.config.research_synchronization,
                 session_capture_root=session_capture_root, origin=origin,
+                claim_review_enabled=getattr(self, "claim_review_enabled", False),
                 claim_reviewer=getattr(self, "research_claim_reviewer", None)),
                 view=view, require_gluon=require_gluon, baseline_kernel_commit_id=baseline)
             self.journals[workspace] = binding

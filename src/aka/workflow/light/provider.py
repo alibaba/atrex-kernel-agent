@@ -18,6 +18,7 @@ class WorkflowOptions:
     output_limit_recovery_retries: int = 2
     dependency_policy_recovery_retries: int = 2
     search: SearchOptions | dict | None = None
+    claim_review: bool = False
     wiki: bool = True
     wiki_options: dict | None = None
     tool_modules: tuple[str, ...] | list[str] = ()
@@ -37,7 +38,7 @@ class WorkflowOptions:
         if self.file_system is not None:
             from aka.task.source.formats import select
             select(self.file_system)
-        for name in ("wiki", "inherit_state", "goal_episodes"):
+        for name in ("wiki", "inherit_state", "goal_episodes", "claim_review"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be boolean")
         for name in ("request_timeout", "queue_timeout"):

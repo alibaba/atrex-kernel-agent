@@ -471,6 +471,7 @@ class Campaign:
         self._supervisor_runtime.production_review_required = (
             self.source_checks_enabled
         )
+        self._supervisor_runtime.claim_review_enabled = self.module_options.claim_review
         self._supervisor_runtime.research_claim_reviewer = self.review_research_claim
 
     def review_research_claim(

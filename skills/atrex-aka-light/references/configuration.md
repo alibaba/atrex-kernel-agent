@@ -146,3 +146,28 @@ compute implementations, PyTorch/ATen compute fallback, or a different Ultra DSL
 Full Evaluate and correctness requirements are unchanged. Do not enable this
 exception without explicit user authorization; do not edit an existing Campaign's
 source contract or permission to retrofit it.
+
+
+## Independent Claim Review switch
+
+Workflow `claim_review` defaults to `false`: Direction/Experiment recording, revision,
+attachments and sharing remain enabled without invoking their Reviewer. Explicitly set
+`claim_review: true` to enable independent Claim Review. For example, the default behavior is:
+
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "workflow", "config": {
+    "tool_modules": ["directions", "experiments"],
+    "claim_review": false
+  }}]
+}
+```
+
+Save as `research-no-review.json` and pass `--patch research-no-review.json` when launching.
+Include other required workflow settings in the same patch. Applies to every lineage.
+Every operation that would request Claim Review instead returns `claim_review_quality: supported`,
+`evidence_eligible: true`, `review_skipped: true`, and an explicit skipped-review explanation.
+The annotation persists in research versions and private audit; no Reviewer Session or token usage
+is created. Schema, ownership, lifecycle and attachment checks remain enforced.
+This switch does not change `submit-kernel` source review or Evaluate requirements.

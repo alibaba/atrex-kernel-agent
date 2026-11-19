@@ -45,6 +45,16 @@ def _correctness_shape(value: dict) -> dict:
     return result
 
 
+def public_correctness_shape(value: dict) -> dict:
+    """Omit mutation inventories from Agent feedback, preserving the verdict."""
+    result = _correctness_shape(value)
+    if "runs" in result:
+        result["runs"] = [public_correctness_shape(run) for run in result["runs"]]
+    for case in result.get("cases", []):
+        case.pop("unexpected_mutations", None)
+    return result
+
+
 def _merge_correctness(target: dict, source: dict) -> None:
     for sid, value in source.items():
         if not isinstance(value, dict):
@@ -299,7 +309,7 @@ def merge_feedback(values: Iterable[object]) -> dict[str, JsonValue]:
     )
 
 
-def project_feedback(value: dict) -> dict:
+def project_feedback(value: dict, *, agent_visible: bool = False) -> dict:
     """Validate public feedback again when reading stored/remote result markers."""
     diagnostics = []
     for row in value.get("diagnostics", []) if isinstance(value.get("diagnostics"), list) else []:
@@ -322,7 +332,8 @@ def project_feedback(value: dict) -> dict:
     correctness = value.get("correctness_by_shape")
     if isinstance(correctness, dict):
         projected["correctness_by_shape"] = {
-            sid: _correctness_shape(item) for sid, item in correctness.items()
+            sid: (public_correctness_shape(item) if agent_visible else _correctness_shape(item))
+            for sid, item in correctness.items()
             if isinstance(item, dict)
         }
     projected["diagnostics"] = diagnostics

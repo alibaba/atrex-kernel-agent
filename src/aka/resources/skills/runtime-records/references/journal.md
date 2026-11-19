@@ -20,6 +20,12 @@ trusted, not whether its cited Record can be inspected. There is no Agent operat
 arbitrary local evidence. Synchronous search uses the lineage's current Epoch watermark; asynchronous
 search uses its live visible revision set. Every immutable Record remains stored once in the Campaign Store.
 
+Claim Review is disabled by default unless explicitly enabled for the Campaign.
+When disabled, mutations that normally request it return
+`review_skipped: true`, `claim_review_quality: supported`, and `evidence_eligible: true`
+with an explicit explanation. This is configured acceptance, not independent verification;
+recording, revisions and attachment validation still apply.
+
 Claim-bearing mutations return `review` once. Its workflow fields are deliberately distinct:
 
 - `archive_status`: whether Runtime stored the submitted claim;

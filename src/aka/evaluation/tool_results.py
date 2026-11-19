@@ -13,6 +13,7 @@ from .result_json import (
 from aka.evaluation.correctness_summary import correctness_summary, finite_number
 from .response_policy import INFORMATION_CATEGORIES, known_gateway_error, execution_error, upstream_error
 from .objectives import latency_only_result
+from .feedback import public_correctness_shape
 
 PREFIXES = {
     "evaluate": LEGACY_TEST_RESULT_PREFIX,
@@ -75,6 +76,19 @@ def compact_receipt(agent_result: dict) -> dict:
     receipt = deepcopy(agent_result)
     if receipt.get("operation") in {"evaluate", "same_allocation_abba"}:
         receipt = latency_only_result(receipt)
+        result = receipt.get("result")
+        values = [receipt, result]
+        if isinstance(result, dict):
+            values.extend(result.get(side) for side in ("baseline", "candidate"))
+        for value in values:
+            if not isinstance(value, dict):
+                continue
+            correctness = value.get("correctness_by_shape")
+            if isinstance(correctness, dict):
+                value["correctness_by_shape"] = {
+                    sid: public_correctness_shape(item)
+                    for sid, item in correctness.items() if isinstance(item, dict)
+                }
     record_id = receipt.get("gateway_record_id")
     if isinstance(record_id, str):
         receipt["record_path"] = f"records/{record_id}.json"

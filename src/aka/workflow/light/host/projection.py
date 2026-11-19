@@ -771,7 +771,7 @@ def evaluation(result: dict) -> dict:
     if result.get("error") is not None:
         value["error"] = bounded_error(result["error"])
     if any(key in result for key in ("diagnostics", "correctness_by_shape", "performance_by_shape")):
-        feedback = project_feedback(result)
+        feedback = project_feedback(result, agent_visible=True)
         # The conversion and native Eval feedback can expose the same compiler
         # text under two schemas.  Keep one complete copy rather than shortening
         # both copies to fit a response budget.

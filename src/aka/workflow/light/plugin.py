@@ -17,6 +17,7 @@ Config = {"type": "object", "properties": {
     "dependency_policy_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
     "goal_episodes": {"type": "boolean"},
     "output_limit_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
+    "claim_review": {"type": "boolean"},
     "wiki": {"type": "boolean"},
     "wiki_options": {"type": "object"},
     "tool_modules": {"type": "array", "items": {"type": "string", "enum": ["directions", "experiments"]}},
@@ -32,7 +33,7 @@ Config = {"type": "object", "properties": {
         "max_parallel_episodes": {"type": "integer", "minimum": 1, "maximum": 64},
     }, "additionalProperties": False},
 }, "additionalProperties": False}
-Defaults = {"startup": True,
+Defaults = {"startup": True, "claim_review": False,
             "wiki": True, "tool_modules": [], "inherit_state": True, "queue_timeout": 60,
             "output_limit_recovery_retries": 2, "search": {}}
 
