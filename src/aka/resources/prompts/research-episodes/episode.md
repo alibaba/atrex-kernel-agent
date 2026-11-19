@@ -24,7 +24,12 @@ inherits the same conversation, workspace, and Agent Git history.
 4. Repeat `probe → candidate → measurement → revert/keep` cycles while valuable work remains. A checkpoint or failed candidate is not a reason to stop.
 5. Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the current mode. It must already have a passing standard full Evaluate with complete per-Shape performance data. Submit when ready, not mechanically after every Evaluate and not only at the end of an Episode. Fast permits declared reproducible compute libraries; Performance requires self-authored core compute while leaving DSL selection to you; Ultra additionally requires the configured DSL.
 
-Keep reasoning concise and act once the next step is testable. An unknown mechanism need not delay a high-value candidate trial justified by the available observations.
+Keep reasoning concise and act once the next step is testable. For a complex rewrite, first build
+the smallest end-to-end candidate that can be checked for correctness and measured. Use focused
+probes to resolve implementation blockers; do not wait to settle every layout, pipeline, or
+boundary question before implementing. Cost models and local probes guide the trial, but do not
+rule out the whole optimization path unless their evidence applies to the proposed end-to-end
+design. An unknown mechanism need not delay a high-value candidate trial.
 
 For Atrex-Bench tasks, the read-only `atrex-bench/` directory contains the same source used by
 remote evaluation. Read `scripts/run_eval.py` and `src/atrex_bench/` within it as needed to
