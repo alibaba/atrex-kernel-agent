@@ -772,6 +772,11 @@ class SupervisorRuntime:
         Agent filesystem grants omit its launcher's implicit installation mounts.
         The local executor therefore needs an explicit Python/CLI closure too.
         """
+        # Tool grants also describe authorized paths in native mode. Their
+        # presence does not select OS isolation: Wiki follows the Agent's
+        # explicit sandbox selection, including when bwrap is installed.
+        if not self.agent.capabilities.filesystem_isolation:
+            return None
         access = self._request_access(capability, staged)
         if access is None:
             return None
