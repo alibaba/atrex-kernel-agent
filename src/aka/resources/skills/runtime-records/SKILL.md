@@ -17,6 +17,11 @@ decision. Gateway Records are measurement authority. The greatest visible `vN` i
 Revise only `local_writable` identities. Extend peer evidence with a new local record.
 Synchronous peers see revisions at Epoch boundaries; asynchronous peers see revisions immediately.
 
+Before abandoning or deferring a high-upside path, search mounted `references/` for related
+implementations and mechanism aliases, and inspect the relevant code. Wiki misses or truncated
+directory listings are insufficient. Use findings to bound the next trial; no match need not
+delay it. See the reference-search guidance in `.agents/skills/gpu-measurement/SKILL.md`.
+
 ## Directions
 
 A Direction is a durable program around a bottleneck, workload regime, or architecture objective,
