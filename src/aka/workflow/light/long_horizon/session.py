@@ -125,6 +125,7 @@ class LongSessionRunner:
         access=None,
         active_budget=None,
         record_usage: Callable[[int], None] | None = None,
+        record_session: Callable[[str], None] | None = None,
         output_limit_recovery_retries: int = DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES,
         dependency_policy_recovery_retries: int = 2,
         remaining_token_budget: int | None = None,
@@ -193,6 +194,7 @@ class LongSessionRunner:
             # command on its first invocation. Supplying the old id to a fresh
             # command would silently create a disconnected conversation.
             retry_resume = resume_session
+            recorded_session_id = ""
 
             while True:
                 if active_budget.remaining() <= 0:
@@ -238,6 +240,16 @@ class LongSessionRunner:
                     environment["ATREX_TELEMETRY_ATTEMPT_ID"] = (
                         f"{telemetry_attempt_prefix}-{attempt + 1}"
                     )
+                # Claude/Pi/Qoder identities are assigned before the process starts.
+                # Persist here on EVERY invocation: recovery can replace the Session
+                # inside an Episode too. Never persist a placeholder for provider-
+                # assigned Codex/DSH identities.
+                identity = getattr(native, "session_id", "") or (
+                    active_session_id if resume or assigns_session_id else ""
+                )
+                if record_session is not None and identity and identity != recorded_session_id:
+                    record_session(identity)
+                    recorded_session_id = identity
                 turn = native.invoke(
                     turn_prompt,
                     resume=resume,
@@ -251,6 +263,10 @@ class LongSessionRunner:
                 stdout_parts.append(stdout)
                 stderr_parts.append(stderr)
                 active_session_id = turn.session_id or active_session_id
+                if (record_session is not None and turn.session_id
+                        and turn.session_id != recorded_session_id):
+                    record_session(turn.session_id)
+                    recorded_session_id = turn.session_id
                 output_limit_recoveries = max(
                     output_limit_recoveries,
                     output_limit_recovery_count(workspace, session_id),

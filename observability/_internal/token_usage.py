@@ -29,6 +29,15 @@ from aka.workflow.light.long_horizon.review_usage import REVIEW_KINDS
 from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage
 
 
+def session_usage(value: dict) -> dict:
+    """Use deduplicated main-response counters until Claude has finished."""
+    if value.get("backend") == "claude" and value.get("state") == "running":
+        main = (value.get("by_agent") or {}).get("main")
+        if isinstance(main, dict) and type(main.get("total_tokens")) is int:
+            return _usage(main) | {"measurement": "partial"}
+    return _usage(value.get("total"))
+
+
 def _summed_session_usage(rows: list[dict]) -> dict:
     return summarize_usage(rows)["usage"]
 
@@ -165,7 +174,7 @@ def _session_rows(scope) -> list[dict]:
                 "started_at": value.get("started_at"),
                 "finished_at": value.get("finished_at"),
                 "wall_seconds": elapsed_seconds(value.get("started_at"), value.get("finished_at")),
-                "usage": _usage(value.get("total")),
+                "usage": session_usage(value),
                 "accounting_basis": value.get("accounting_basis"),
                 "warnings": value.get("warnings") if isinstance(value.get("warnings"), list) else [],
                 "capture_errors": value.get("capture_errors") if isinstance(value.get("capture_errors"), list) else [],
@@ -197,7 +206,7 @@ def _session_rows(scope) -> list[dict]:
                 "started_at": value.get("started_at"),
                 "finished_at": value.get("finished_at"),
                 "wall_seconds": elapsed_seconds(value.get("started_at"), value.get("finished_at")),
-                "usage": _usage(value.get("total")),
+                "usage": session_usage(value),
                 "accounting_basis": value.get("accounting_basis"),
                 "warnings": value.get("warnings") if isinstance(value.get("warnings"), list) else [],
                 "capture_errors": value.get("capture_errors") if isinstance(value.get("capture_errors"), list) else [],

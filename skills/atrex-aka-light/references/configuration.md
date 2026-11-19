@@ -122,3 +122,27 @@ Runtime discovers supported safe options from the installed Agate SDK. Consult
 Env, Dev and Evaluate options. Credentials, endpoint authority and source selection
 remain Supervisor-owned; an option supported by one kind is not automatically
 valid for another.
+
+### Explicitly permitted supplied Bootstrap
+
+For a new Campaign, `workflow.config.source_tree` can select a pinned initial
+source using `{ "manifest": "/path/manifest.json", "directory": "/path/source" }`.
+This changes the initial candidate, not the evaluator Reference or Shapes.
+Imported helper files are placed under `impl/`; the adapter must import from that
+location.
+
+Ultra/Performance normally require self-authored compute. A launch owner may
+explicitly grant `workflow.config.provided_bootstrap` with `name`, `provenance`
+(repository and exact upstream revision), and `files` (the complete normalized
+`kernel.py` / `impl/**` path-to-SHA256 map). Startup rejects a hash or file-set
+mismatch. This permission is frozen in the Campaign launch composition and is
+shown to both Agent and final-source Reviewer. The Reviewer also receives the
+original source snapshot for comparison and reports `provided_source_compute`
+when applicable. Without that launch-owner permission the category is invalid.
+
+The exception covers only this supplied source and in-candidate modifications.
+It does not permit installed prebuilt operator libraries, other downloaded
+compute implementations, PyTorch/ATen compute fallback, or a different Ultra DSL.
+Full Evaluate and correctness requirements are unchanged. Do not enable this
+exception without explicit user authorization; do not edit an existing Campaign's
+source contract or permission to retrofit it.

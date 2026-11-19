@@ -597,11 +597,11 @@ class UsageAccumulator:
             total = self.terminal
             basis = "provider_result_usage"
             exact = finished and not self.missing and total.measurement == "exact"
-            if total.total_tokens is None:
+            if not finished or total.total_tokens is None:
                 total = main
                 exact = False
                 basis = "main_response_fallback"
-                warnings.append("claude_result_usage_unavailable")
+                warnings.append("claude_result_usage_unavailable" if finished else "claude_live_response_usage")
             if not _same(main, self.terminal):
                 # Response attribution and provider billing are different
                 # observations. Do not inflate or downgrade result.usage just

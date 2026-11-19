@@ -114,6 +114,7 @@ def _validate_production_review(
     payload: object,
     *,
     candidate_files: frozenset[str] = frozenset({"kernel.py", "solution.json"}),
+    allow_provided_bootstrap: bool = False,
 ) -> tuple[list[str], str]:
     """Validate a complete candidate verdict and translate rejections into errors."""
     if not isinstance(payload, dict):
@@ -147,7 +148,8 @@ def _validate_production_review(
         decision, _category, reason = _validate_review_item(
             item,
             label=f"check {check_id}",
-            allow_categories=categories["allow"],
+            allow_categories=categories["allow"] | ({"provided_source_compute"}
+                if allow_provided_bootstrap and check_id == "compute_provenance" else set()),
             reject_categories=categories["reject"],
             candidate_files=candidate_files,
         )
@@ -179,7 +181,8 @@ def _validate_production_review(
         decision, _category, reason = _validate_review_item(
             item,
             label=f"dependency {name.strip()}",
-            allow_categories=_DEPENDENCY_ALLOW_CATEGORIES,
+            allow_categories=_DEPENDENCY_ALLOW_CATEGORIES | ({"provided_source_compute"}
+                if allow_provided_bootstrap else set()),
             reject_categories=_DEPENDENCY_REJECT_CATEGORIES,
             candidate_files=candidate_files,
         )

@@ -43,6 +43,19 @@ class CampaignStore:
     def save_state(self, state: SupervisorState) -> None:
         durable_write_json(self.state_path, state.as_dict())
 
+    def record_session(self, state: SupervisorState, *, session_id: str, backend: str) -> None:
+        """Persist native identity before invocation, independently of segment completion."""
+        if not session_id or not backend:
+            raise ValueError("Native Session identity and backend must be non-empty")
+        if state.session_id == session_id and state.session_backend == backend:
+            return
+        updated = SupervisorState.from_dict(state.as_dict())
+        updated.session_id = session_id
+        updated.session_backend = backend
+        self.save_state(updated)
+        state.session_id = session_id
+        state.session_backend = backend
+
     def record_usage(
         self, state: SupervisorState, receipt_id: str, cumulative_tokens: int
     ) -> None:

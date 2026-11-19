@@ -9,6 +9,7 @@ def validate_light_production_review(
     *,
     candidate_files: frozenset[str],
     dsl_policy: str,
+    allow_provided_bootstrap: bool = False,
 ) -> tuple[list[str], str, dict[str, object]]:
     """Validate upstream schema v2, then apply Light's DSL applicability.
 
@@ -22,7 +23,8 @@ def validate_light_production_review(
         )
 
     # This is the authoritative upstream schema/category/evidence validator.
-    _validate_production_review(payload, candidate_files=candidate_files)
+    _validate_production_review(payload, candidate_files=candidate_files,
+                                allow_provided_bootstrap=allow_provided_bootstrap)
     assert isinstance(payload, dict)
 
     applicable_check_ids = {

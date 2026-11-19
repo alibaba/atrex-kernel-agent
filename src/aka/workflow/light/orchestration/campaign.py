@@ -130,6 +130,7 @@ class Campaign:
     agent_read_only_paths: tuple[str, ...] = ()
     agent_reference_paths: tuple[tuple[str, str], ...] = ()
     optimization_mode: str = "fast"
+    provided_bootstrap: dict | None = None
     verify_repeats: int = DEFAULT_VERIFY_REPEATS
     # One Runtime-owned per-Shape budget shared by Eval and ABBA. The legacy
     # ``verify_run_timeout`` accessor below remains a structural compatibility
@@ -454,7 +455,7 @@ class Campaign:
                 self.framework,
                 source_checks_enabled=self.source_checks_enabled,
                 specify_dsl=self.specify_dsl,
-            ),
+            ) + self._bootstrap_directive(),
             workspace=self.workspace,
             measurement_root=self._measurement_store_root,
             research_synchronization=(
@@ -1164,6 +1165,10 @@ class Campaign:
                     destination.read_bytes()
                 ).hexdigest()
 
+            for name, data in getattr(self, "_provided_bootstrap_files", {}).items():
+                original = review_workspace / "bootstrap" / name
+                original.parent.mkdir(parents=True, exist_ok=True)
+                original.write_bytes(data)
             request = {
                 "schema_version": DEPENDENCY_REVIEW_SCHEMA_VERSION,
                 "framework": framework if pinned_dsl else None,
@@ -1173,7 +1178,8 @@ class Campaign:
                     else None
                 ),
                 "dsl_policy": effective_dsl_policy,
-                "compute_policy": "self_authored_only",
+                "compute_policy": "provided_bootstrap_or_self_authored" if self.provided_bootstrap else "self_authored_only",
+                "provided_bootstrap": self.provided_bootstrap,
                 "required_phase": (
                     "gluon"
                     if require_gluon and pinned_dsl
@@ -1315,6 +1321,7 @@ class Campaign:
                         review_payload,
                         candidate_files=frozenset(source_hashes),
                         dsl_policy=effective_dsl_policy,
+                        allow_provided_bootstrap=bool(self.provided_bootstrap),
                     )
             except (
                 OSError,
@@ -1360,7 +1367,8 @@ class Campaign:
             "candidate_digest": candidate_digest,
             "framework": framework if pinned_dsl else None,
             "dsl_policy": effective_dsl_policy,
-            "compute_policy": "self_authored_only",
+            "compute_policy": "provided_bootstrap_or_self_authored" if self.provided_bootstrap else "self_authored_only",
+            "provided_bootstrap": self.provided_bootstrap,
             "required_phase": (
                 "gluon"
                 if require_gluon and pinned_dsl
@@ -1589,10 +1597,14 @@ class Campaign:
         return directive + "\nEnabled Runtime tools: " + ", ".join(available) + ". Use python3 tools/sandbox.py --help for discovery.\n"
 
 
+    def _bootstrap_directive(self) -> str:
+        from aka.workflow.light.provided_bootstrap import directive
+        return directive(self.provided_bootstrap)
+
     def _mode_directive(self) -> str:
         return optimization_mode_directive(self.optimization_mode, self.framework,
                                            source_checks_enabled=self.source_checks_enabled,
-                                           specify_dsl=self.specify_dsl)
+                                           specify_dsl=self.specify_dsl) + self._bootstrap_directive()
 
     def run(self) -> str:
         """Run the native long-horizon episode supervisor for this campaign."""

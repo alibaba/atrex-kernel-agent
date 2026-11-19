@@ -505,6 +505,9 @@ class LongHorizonCampaign:
                     output_directory=store.episode_dir(episode),
                     telemetry_environment=grant.environment,
                     access=grant.filesystem_access,
+                    record_session=lambda identity: store.record_session(
+                        state, session_id=identity, backend=agent_cli
+                    ),
                     record_usage=lambda tokens: store.record_usage(
                         state, usage_receipt, tokens
                     ),

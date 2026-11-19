@@ -13,6 +13,7 @@ Config = {"type": "object", "properties": {
     "file_system": {"type": "string", "enum": ["single_file", "source_tree", "cuda_manifest"]},
     "startup": {"type": "boolean"},
     "source_tree": {"type": "object"},
+    "provided_bootstrap": {"type": "object"},
     "dependency_policy_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},
     "goal_episodes": {"type": "boolean"},
     "output_limit_recovery_retries": {"type": "integer", "minimum": 0, "maximum": 10},

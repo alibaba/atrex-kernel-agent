@@ -70,6 +70,8 @@ class ManagedCampaign(Campaign):
             native_eval=native_eval,
         )
         files = cls._content_files(content)
+        from .provided_bootstrap import validate_permission
+        validate_permission(workflow.options.provided_bootstrap, files)
         if system.name == "source_tree":
             try:
                 snapshot = json.loads(
@@ -160,6 +162,9 @@ class ManagedCampaign(Campaign):
         campaign.source_provider = workflow.source
         campaign.candidate_workspace = workflow.candidate
         campaign.module_options = workflow.options
+        campaign.provided_bootstrap = workflow.options.provided_bootstrap
+        campaign._provided_bootstrap_files = (cls._content_files(initial_content)
+                                              if campaign.provided_bootstrap else {})
         from .runtime import ManagedRuntimeFactory
         from .runtime_resources import runtime_resource_registry
         campaign.tool_runtime = ManagedRuntimeFactory(workflow, campaign)

@@ -13,6 +13,7 @@ from .search import SearchOptions
 class WorkflowOptions:
     file_system: str | None = None
     source_tree: dict | None = None
+    provided_bootstrap: dict | None = None
     goal_episodes: bool = False
     output_limit_recovery_retries: int = 2
     dependency_policy_recovery_retries: int = 2
@@ -29,6 +30,8 @@ class WorkflowOptions:
         return bool(self.tool_modules)
 
     def __post_init__(self):
+        from .provided_bootstrap import validate_permission
+        validate_permission(self.provided_bootstrap)
         from .journal import JournalFactory
         object.__setattr__(self, "tool_modules", JournalFactory(self.tool_modules).tool_modules)
         if self.file_system is not None:
