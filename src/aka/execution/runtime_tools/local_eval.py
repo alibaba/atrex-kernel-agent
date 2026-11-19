@@ -20,6 +20,13 @@ import tarfile
 MAX_BYTES = 24 * 1024 * 1024
 
 
+def _target_spec(spec):
+    # SDK upload reservations contain allocation fields only. Eval additionally
+    # declares candidate languages, and may spell out the single-GPU default.
+    # Language metadata does not change which allocation owns uploaded bytes.
+    return {"num_gpus": 1, **{key: value for key, value in spec.items() if key != "languages"}}
+
+
 def relative_path(value):
     if not isinstance(value, str) or not value or "\\" in value:
         raise ValueError("source path must be a relative POSIX path")
@@ -92,7 +99,7 @@ class UploadStore:
                 metadata = json.loads(self._path(item["upload_ref"], ".json").read_text())
             except (FileNotFoundError, KeyError) as exc:
                 raise ValueError("source archive reservation is unavailable") from exc
-            if (metadata["path"], metadata["kind"], metadata["spec"]) != (item["path"], kind, request["spec"]):
+            if (metadata["path"], metadata["kind"], _target_spec(metadata["spec"])) != (item["path"], kind, _target_spec(request["spec"])):
                 raise ValueError("source archive does not belong to this request")
             identity = metadata.get("job_id")
             prefix = {"eval": "ev", "profile": "pf"}.get(kind)
@@ -118,7 +125,7 @@ class UploadStore:
 
     def read(self, token, name, kind, spec):
         metadata = json.loads(self._path(token, ".json").read_text())
-        if (metadata["path"], metadata["kind"], metadata["spec"]) != (name, kind, spec):
+        if (metadata["path"], metadata["kind"], _target_spec(metadata["spec"])) != (name, kind, _target_spec(spec)):
             raise ValueError("source archive does not belong to this request")
         data = self._path(token, ".data").read_bytes()
         if len(data) != metadata["bytes"] or hashlib.sha256(data).hexdigest() != metadata["sha256"]:
