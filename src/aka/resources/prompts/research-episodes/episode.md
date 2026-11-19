@@ -32,10 +32,12 @@ rule out the whole optimization path unless their evidence applies to the propos
 design. An unknown mechanism need not delay a high-value candidate trial.
 
 Before abandoning or deferring a high-upside path because of complexity, risk, or estimated low
-benefit, search any mounted `references/` for related implementations and mechanism aliases,
-then inspect the relevant code. Wiki misses and truncated directory listings do not establish
-that no reference exists. Use what you find to bound the smallest end-to-end trial; if nothing
-relevant is found, proceed from available evidence rather than waiting for a reference.
+benefit, search the workspace's optional `references/` knowledge and `reference-projects/` source
+mounts for the mechanism and related implementations, including alternate names. Inspect relevant
+code and its applicability; Wiki misses or truncated directory listings do not establish absence.
+Use findings to bound a small end-to-end trial. If no reference is supplied or relevant, continue
+from available evidence. These workspace paths are distinct from each Skill's own `references/`
+documentation links.
 
 For Atrex-Bench tasks, the read-only `atrex-bench/` directory contains the same source used by
 remote evaluation. Read `scripts/run_eval.py` and `src/atrex_bench/` within it as needed to

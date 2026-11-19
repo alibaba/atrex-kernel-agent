@@ -26,7 +26,7 @@ from observability._internal.common import (
 from aka.workflow.light.long_horizon.review_usage import REVIEW_KINDS
 
 
-from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage, session_usage
+from aka.agent.usage_summary import TOKEN_KEYS, usage as _usage, summarize_usage, select_session_usage
 
 
 def _summed_session_usage(rows: list[dict]) -> dict:
@@ -152,6 +152,10 @@ def _session_rows(scope) -> list[dict]:
             episode = int(path.parents[2].name[1:])
         except (ValueError, IndexError):
             episode = None
+        selection = select_session_usage(value)
+        warnings = list(value.get("warnings")) if isinstance(value.get("warnings"), list) else []
+        if selection["fallback_reason"] and selection["fallback_reason"] not in warnings:
+            warnings.append(selection["fallback_reason"])
         rows.append(
             {
                 "scope": scope.label,
@@ -165,9 +169,9 @@ def _session_rows(scope) -> list[dict]:
                 "started_at": value.get("started_at"),
                 "finished_at": value.get("finished_at"),
                 "wall_seconds": elapsed_seconds(value.get("started_at"), value.get("finished_at")),
-                "usage": session_usage(value),
-                "accounting_basis": value.get("accounting_basis"),
-                "warnings": value.get("warnings") if isinstance(value.get("warnings"), list) else [],
+                "usage": selection["usage"],
+                "accounting_basis": selection["accounting_basis"],
+                "warnings": warnings,
                 "capture_errors": value.get("capture_errors") if isinstance(value.get("capture_errors"), list) else [],
             }
         )
@@ -184,6 +188,10 @@ def _session_rows(scope) -> list[dict]:
                     continue
             except OSError:
                 continue
+        selection = select_session_usage(value)
+        warnings = list(value.get("warnings")) if isinstance(value.get("warnings"), list) else []
+        if selection["fallback_reason"] and selection["fallback_reason"] not in warnings:
+            warnings.append(selection["fallback_reason"])
         rows.append(
             {
                 "scope": scope.label,
@@ -197,9 +205,9 @@ def _session_rows(scope) -> list[dict]:
                 "started_at": value.get("started_at"),
                 "finished_at": value.get("finished_at"),
                 "wall_seconds": elapsed_seconds(value.get("started_at"), value.get("finished_at")),
-                "usage": session_usage(value),
-                "accounting_basis": value.get("accounting_basis"),
-                "warnings": value.get("warnings") if isinstance(value.get("warnings"), list) else [],
+                "usage": selection["usage"],
+                "accounting_basis": selection["accounting_basis"],
+                "warnings": warnings,
                 "capture_errors": value.get("capture_errors") if isinstance(value.get("capture_errors"), list) else [],
             }
         )
