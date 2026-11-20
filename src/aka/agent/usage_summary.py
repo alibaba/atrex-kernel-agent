@@ -85,7 +85,8 @@ def select_session_usage(value: Mapping) -> dict:
     basis = value.get("accounting_basis")
     reason = None
     if value.get("backend") == "claude":
-        main = usage((value.get("by_agent") or {}).get("main"))
+        by_agent = value.get("by_agent")
+        main = usage(by_agent.get("main") if isinstance(by_agent, Mapping) else None)
         if main["total_tokens"] is not None:
             reason = claude_usage_fallback_reason(
                 total["total_tokens"], main["total_tokens"],

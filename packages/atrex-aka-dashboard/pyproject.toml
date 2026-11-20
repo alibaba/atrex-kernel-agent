@@ -4,10 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-dashboard"
-version = "0.2.0"
+version = "0.3.0"
 description = "Optional read-only AKA optimization progress dashboard"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-framework==0.2.0", "atrex-aka-light==0.2.0"]
+dependencies = ["atrex-aka-framework==0.3.0", "atrex-aka-light==0.3.0"]
 
 
 [project.entry-points."aka.tokens"]

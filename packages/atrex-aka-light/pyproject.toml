@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-light"
-version = "0.2.0"
+version = "0.3.0"
 description = "AKA Light persistent-session kernel optimization"
 requires-python = ">=3.10"
 dependencies = [
-    "atrex-aka-framework==0.2.0",
+    "atrex-aka-framework==0.3.0",
     "atrex-gateway-client>=0.14.30,<0.15",
 ]
 
