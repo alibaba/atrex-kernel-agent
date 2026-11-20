@@ -96,8 +96,3 @@ def select_session_usage(value: Mapping) -> dict:
                 total = main | {"measurement": "partial"}
                 basis = "main_response_fallback"
     return {"usage": total, "accounting_basis": basis, "fallback_reason": reason}
-
-
-def session_usage(value: Mapping) -> dict:
-    """Return selected counters for callers that only need usage totals."""
-    return select_session_usage(value)["usage"]

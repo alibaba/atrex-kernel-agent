@@ -47,7 +47,7 @@ python -m pip install --force-reinstall /tmp/aka-dist/*.whl
 
 The installed packages require a **matching resource checkout** for declared external resources.
 Keep the packages and checkout from the same source
-revision; the `0.2.0` package version alone does not identify a source revision or repository release.
+revision; the `0.3.0` package version alone does not identify a source revision or repository release.
 Launch reconstruction checks the recorded implementation and explicitly declared resource
 identities. Normal startup does not initialize every submodule; initialize only selected resource
 submodules before exporting a checkout without Git metadata.
@@ -259,36 +259,25 @@ resource locks likewise require their original identities; do not rewrite them t
 
 | Distribution | Ownership | Python |
 | --- | --- | --- |
-| `atrex-aka-framework` | `aka`, neutral dispatcher, `aka.core`, `aka.contracts`, `aka.bootstrap`, generic `aka run` command | 3.10+ |
-| `atrex-aka-legacy` | Shared business providers, explicit Legacy Workflow, `optimize` / `workflow` / `execution` commands | 3.10+ |
-| `atrex-aka-light` | Light Workflow, orchestration and default Light profiles; common services come from Legacy | 3.10+ |
-| `atrex-aka-dashboard` | `aka.dashboard`, read-only observer and independent startup profile | 3.10+ |
-| `atrex-aka-observation-long-horizon` | `aka.observation.long_horizon`, workflow-specific observation adapter | 3.10+ |
+| `atrex-aka-framework` | Neutral dispatcher, Core, Contracts, Bootstrap and shared Agent, Execution, Evaluation, Experiment, Task and Resources services | 3.10+ |
+| `atrex-aka-light` | Light Workflow, orchestration, profiles and runtime assets | 3.10+ |
+| `atrex-aka-dashboard` | `aka.dashboard`, Light observability tools and the read-only viewer | 3.10+ |
 
-Framework has no runtime package dependencies. Light depends on `atrex-aka-legacy==0.2.0`.
-Legacy and both dashboard/observation distributions depend on `atrex-aka-framework==0.2.0`; Dashboard's `long-horizon` extra adds
-`atrex-aka-observation-long-horizon==0.2.0`. Neither optional distribution requires
-Legacy. Although the observation adapter imports only Contracts interfaces, its
-installation includes the full Framework distribution, including Core, Bootstrap and
-the CLI. This larger install footprint is a consequence of consolidating the base
-packages into Framework and Legacy; module interfaces remain separate within them.
+The current release is `0.3.0`. Light pins `atrex-aka-framework==0.3.0`;
+Dashboard pins both `atrex-aka-framework==0.3.0` and `atrex-aka-light==0.3.0`.
+Framework also requires `packaging>=23`, and Light requires
+`atrex-gateway-client>=0.14.30,<0.15`.
 
-The consolidated packages replace the old Core, Contracts, Bootstrap and Optimization
-distributions. Remove the old distributions before installing their replacements to
-avoid overlapping files. The five current distributions own disjoint files and pin
-matching dependency versions. Distribution boundaries define installation ownership;
-they do not require a separate distribution for every future module. Build tooling
-stages owned files, builds sdists, then builds wheels from those sdists.
+These three distributions replace the former Core, Contracts, Bootstrap, Optimization,
+Legacy and long-horizon observation distributions. Remove the old distributions before
+installing their replacements to avoid overlapping files. Current distributions own
+disjoint files. Build tooling stages owned files, builds sdists, then builds wheels
+from those sdists.
 
-`aka.observation` deliberately uses an implicit namespace package. Each observation
-adapter distribution owns its leaf package, such as `aka.observation.long_horizon`;
-there is no shared parent `__init__.py` for independently installed adapters to overwrite.
-The long-horizon package's discovery include and the build tool's `OWNERS` entry both
-select that leaf. The `aka.contracts` module package belongs to the Framework distribution.
-
-Dashboard injects the versioned `observation_source` seam. Its default profile combines
-the viewer with the separately packaged long-horizon adapter, without importing the
-optimizer. The optimization profile does not load either plugin. See the
+Dashboard is an independent application, launched with
+`python -m aka.dashboard <campaign-or-snapshot>`. It reads Light Campaign evidence
+through the packaged observability tools; it is not a Bootstrap plugin and does not
+provide an `observation_source` token or startup profile. See the
 [dashboard guide](optimization-dashboard.md) for source and installed launch commands.
 
 The native command constructs a public Workflow request once, then dispatches the

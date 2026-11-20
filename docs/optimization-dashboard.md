@@ -23,6 +23,17 @@ including the shared HTTP server and bundled fonts; it does not require the remo
 workflow, observation adapter, or an additional Dashboard wheel. The Campaign must contain
 `campaign.json`. A lineage's `agent-workspace/` is not the Campaign root.
 
+From an installed release, use the same viewer through its module entry point:
+
+```bash
+python -m pip install atrex-aka-dashboard==0.3.0
+python -m aka.dashboard /path/to/campaign --port 8765
+```
+
+The Dashboard package installs matching `0.3.0` Framework and Light packages,
+including the observability modules, HTML and fonts. No Dashboard plugin,
+`observation_source` provider, or separate startup profile is needed.
+
 | Option | Default | Meaning |
 |---|---|---|
 | `source` | Required | Campaign root, or a previously captured dashboard JSON |
