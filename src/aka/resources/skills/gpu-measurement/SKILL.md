@@ -10,15 +10,6 @@ timeouts, retries, and result persistence. Local development and import/API insp
 use Runtime for target-GPU work and official measurements. Do not invoke Agate directly. Initial bring-up uses these same Runtime operations before
 the Supervisor performs independent submission review.
 
-## Reference search before ruling out a path
-
-Before abandoning or deferring a high-upside path on complexity, risk, or estimated benefit,
-search mounted `references/` filenames and source contents for the mechanism and its aliases
-(e.g. `V-split`, `dvsplit`, `value_split_idx`), not only the operator name. Inspect relevant
-implementations and their applicability. Use `rg`, or `grep`/`find` when unavailable; do not treat
-a Wiki miss or a `head`-truncated listing as proof that no implementation exists. Use the findings
-to design a small end-to-end trial. No match is not a blocker; continue from available evidence.
-
 ## Measurement loop
 
 1. State the uncertainty and the observation that would resolve it.

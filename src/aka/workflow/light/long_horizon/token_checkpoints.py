@@ -12,7 +12,7 @@ from aka.agent.execution.home import open_private_directory
 from aka.agent.session_tail import read_regular_bytes
 
 
-from aka.agent.usage_summary import usage as _usage, summarize_usage as _summary, session_usage
+from aka.agent.usage_summary import usage as _usage, summarize_usage as _summary, select_session_usage
 
 MAX_USAGE_BYTES = 64 * 1024 * 1024
 
@@ -54,9 +54,9 @@ def _main_rows(session_capture_root: Path | None, occurred_at: datetime) -> tupl
             continue
         if path.parent.parent == session_capture_root:
             current_seen = True
-        selected_usage = session_usage(value)
-        if (value.get("total") or {}).get("total_tokens") == 0 and (selected_usage.get("total_tokens") or 0) > 0:
-            warnings.append(f"main_agent_zero_total_conflicts_with_responses:{path.parent.name}")
+        selection = select_session_usage(value)
+        if selection["fallback_reason"]:
+            warnings.append(f"main_agent_usage_fallback:{selection['fallback_reason']}:{path.parent.name}")
         rows.append({
             "episode": path.parents[2].name,
             "run": path.parent.name,
@@ -64,8 +64,8 @@ def _main_rows(session_capture_root: Path | None, occurred_at: datetime) -> tupl
             "started_at": value.get("started_at"),
             "finished_at": value.get("finished_at"),
             "state": value.get("state"),
-            "usage": selected_usage,
-            "accounting_basis": value.get("accounting_basis"),
+            "usage": selection["usage"],
+            "accounting_basis": selection["accounting_basis"],
             "source": str(path),
         })
     if not current_seen:

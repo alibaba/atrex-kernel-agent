@@ -123,6 +123,12 @@ With `sandbox: none`, the Reviewer runs natively in that workspace without a Bub
 A separate directory organizes inputs and outputs; it is not an OS access boundary in native mode.
 Final-source reviews and preprocessing also use declared auxiliary workspace roles.
 
+The local Wiki worker also follows the selected Agent sandbox. With `sandbox: none`, it runs
+with the launching user's host filesystem authority and no OS filesystem confinement, even if
+Bubblewrap is installed. Its prepared request directory is not an access boundary. Installing
+Bubblewrap alone does not change native execution. With `sandbox: bwrap`, the worker uses scoped
+filesystem grants and the selected proc mode; unavailable isolation fails instead of running natively.
+
 Public problem preprocessing can read detailed inputs to create the generalized contract.
 Optimization Sessions do not inherit that private input view.
 
@@ -188,7 +194,7 @@ on the selected worker and their recorded evidence. Agent-owned source and Git r
 Revoking Runtime access still stops its bound Agent invocation; it does not leave an Agent
 running with unusable tools.
 
-The Wiki worker receives the selected Wiki resources and configuration, the read-only AKA
+In sandbox mode, the Wiki worker receives the selected Wiki resources and configuration, the read-only AKA
 package, and the interpreter/CLI installations and DNS/TLS files needed to run them. Those
 installation mounts can include shared Python dependencies; this is not per-import isolation.
 Native execution does not enforce these filesystem grants in the OS.

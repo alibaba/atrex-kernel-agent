@@ -61,20 +61,42 @@ def summarize_usage(rows: list[dict], *, missing_expected: bool = False) -> dict
     }
 
 
-def session_usage(value: Mapping) -> dict:
-    """Prefer live main counters; reject a zero settlement contradicted by them.
+def claude_usage_fallback_reason(
+    provider_total: int | None, main_total: int | None, *, finished: bool
+) -> str | None:
+    """Explain why main responses replace a Claude provider settlement."""
+    if provider_total == 0 and main_total is not None and main_total > 0:
+        return "claude_zero_result_conflicts_with_responses"
+    if not finished:
+        return "claude_live_response_usage"
+    if provider_total is None:
+        return "claude_result_usage_unavailable"
+    return None
+
+
+def select_session_usage(value: Mapping) -> dict:
+    """Select counters and their accounting provenance together.
 
     Positive provider settlements retain their billing scope. Child counters
     are not added to the main Agent, and a conflicting zero is only a partial
     response-based observation, never an exact provider receipt.
     """
     total = usage(value.get("total"))
+    basis = value.get("accounting_basis")
+    reason = None
     if value.get("backend") == "claude":
         main = usage((value.get("by_agent") or {}).get("main"))
-        if main["total_tokens"] is not None and (
-            value.get("state") == "running"
-            or total["total_tokens"] is None
-            or (total["total_tokens"] == 0 and main["total_tokens"] > 0)
-        ):
-            return main | {"measurement": "partial"}
-    return total
+        if main["total_tokens"] is not None:
+            reason = claude_usage_fallback_reason(
+                total["total_tokens"], main["total_tokens"],
+                finished=value.get("state") != "running",
+            )
+            if reason:
+                total = main | {"measurement": "partial"}
+                basis = "main_response_fallback"
+    return {"usage": total, "accounting_basis": basis, "fallback_reason": reason}
+
+
+def session_usage(value: Mapping) -> dict:
+    """Return selected counters for callers that only need usage totals."""
+    return select_session_usage(value)["usage"]

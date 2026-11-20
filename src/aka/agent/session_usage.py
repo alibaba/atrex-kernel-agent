@@ -22,6 +22,7 @@ from aka.agent.model import (
     subtract_token_usage,
     sum_token_usages,
 )
+from aka.agent.usage_summary import claude_usage_fallback_reason
 
 COMPONENTS = (
     "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
@@ -597,16 +598,14 @@ class UsageAccumulator:
             total = self.terminal
             basis = "provider_result_usage"
             exact = finished and not self.missing and total.measurement == "exact"
-            zero_conflict = total.total_tokens == 0 and (main.total_tokens or 0) > 0
-            if not finished or total.total_tokens is None or zero_conflict:
+            fallback_reason = claude_usage_fallback_reason(
+                total.total_tokens, main.total_tokens, finished=finished,
+            )
+            if fallback_reason:
                 total = main
                 exact = False
                 basis = "main_response_fallback"
-                warnings.append(
-                    "claude_zero_result_conflicts_with_responses" if zero_conflict
-                    else "claude_result_usage_unavailable" if finished
-                    else "claude_live_response_usage"
-                )
+                warnings.append(fallback_reason)
             if not _same(main, self.terminal):
                 # Response attribution and provider billing are different
                 # observations. Do not inflate or downgrade result.usage just

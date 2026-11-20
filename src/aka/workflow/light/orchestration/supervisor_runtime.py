@@ -767,10 +767,10 @@ class SupervisorRuntime:
         return process
 
     def _wiki_access(self, capability, staged, command, environment):
-        """Restore the trusted Wiki worker's runtime, not the host workspace.
+        """Follow the Agent's sandbox selection for the local Wiki worker.
 
-        Agent filesystem grants omit its launcher's implicit installation mounts.
-        The local executor therefore needs an explicit Python/CLI closure too.
+        Native mode retains host-user authority, even with bwrap installed.
+        Sandbox mode needs an explicit Python/CLI closure in its filesystem grants.
         """
         # Tool grants also describe authorized paths in native mode. Their
         # presence does not select OS isolation: Wiki follows the Agent's
