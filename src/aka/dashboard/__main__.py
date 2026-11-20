@@ -1,11 +1,5 @@
-"""Source-checkout launcher using the same Bootstrap profile as aka run."""
-import sys
-from pathlib import Path
-
-from aka.bootstrap.host import run_profile
-from aka.contracts.startup import Invocation
-from .tokens import OBSERVATION_SOURCE
+"""Launch the read-only Light dashboard from a checkout or installed wheel."""
+from observability.light_dashboard import main
 
 if __name__ == "__main__":
-    raise SystemExit(run_profile(Path(__file__).parent / "profiles/dashboard.json",
-                                Invocation(tuple(sys.argv[1:])), tokens=(OBSERVATION_SOURCE,)))
+    raise SystemExit(main())

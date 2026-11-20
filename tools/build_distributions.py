@@ -45,7 +45,20 @@ def owned(distribution: str) -> tuple[Path, ...]:
             files.extend(p for p in runtime.rglob('*') if p.is_file()
                 and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
                 and p.suffix not in {'.pyc', '.pyo'})
+    if distribution == 'atrex-aka-dashboard':
+        files.extend(p for p in (ROOT / 'observability').rglob('*') if p.is_file()
+            and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
+            and p.suffix in {'.py', '.html'})
     return tuple(dict.fromkeys(files))
+
+
+def package_path(source: Path) -> Path:
+    """Map a declared owner file to its installed package-relative location."""
+    if source.is_relative_to(ROOT / 'src'):
+        return source.relative_to(ROOT / 'src')
+    if source.is_relative_to(ROOT / 'observability'):
+        return source.relative_to(ROOT)
+    raise ValueError(f'Not a package source: {source}')
 
 
 def build_wiki_resources(output: Path) -> None:
@@ -81,7 +94,7 @@ def build(distribution: str, output: Path) -> None:
         for legal in ('LICENSE', 'NOTICE'):
             shutil.copy2(ROOT / legal, stage / legal)
         for source in owned(distribution):
-            target = stage / 'src' / source.relative_to(ROOT / 'src')
+            target = stage / 'src' / package_path(source)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
         # The default `build` operation deliberately builds a wheel from the sdist.
