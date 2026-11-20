@@ -32,7 +32,7 @@ from .model import (
     TokenUsage,
     sum_token_usages,
 )
-from aka.agent.process import ProcessRunner, run_bounded
+from .execution.process import ProcessRunner, run_bounded
 
 SESSION_SHELL_GUARD = None  # Resource selection belongs to the constructing host.
 PYPI_MIRROR = "https://pypi.tuna.tsinghua.edu.cn/simple"

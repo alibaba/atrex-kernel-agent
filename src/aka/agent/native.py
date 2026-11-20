@@ -69,6 +69,16 @@ def session_id_from_stream(
     if agent_cli == "dsh":
         from .dsh import session_id_from_stream as dsh_session_id
         return dsh_session_id(stdout)
+    if agent_cli == "pi":
+        import json
+        for line in stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            if isinstance(event, dict) and event.get("type") == "session" and isinstance(event.get("id"), str):
+                return event["id"]
+        return ""
     if agent_cli != "codex":
         return requested_session_id
     return codex_thread_id_from_stream(stdout)
@@ -157,6 +167,7 @@ class NativeSession:
         release_environment=None,
         cancel_environment=None,
         session_hooks=None,
+        reopen=False,
     ):
         from .session_hooks import SessionHooks
         self._hooks = session_hooks or SessionHooks()
@@ -202,11 +213,19 @@ class NativeSession:
             "PI_CODING_AGENT_DIR", "XDG_CONFIG_HOME", "XDG_CACHE_HOME",
             "XDG_DATA_HOME", "XDG_STATE_HOME", "ATREX_AGENT_SANDBOX",
         )}
+        if reopen and is_codex and codex_observer is not None:
+            from .codex_ledger import CodexLedgerError
+            try:
+                codex_observer.observe(session_id)
+            except CodexLedgerError as error:
+                if str(error) != "Codex ledger exposed no new token_count delta":
+                    raise
+                codex_ledger_usable = False
         self._observer = codex_observer
         self._setup_errors = codex_setup_errors
         self._ledger_usable = codex_ledger_usable
         self._stdout_usage = codex_stdout_session_usage
-        self._session_id = "" if runtime_id in {"codex", "dsh"} else session_id
+        self._session_id = "" if not reopen and runtime_id in {"codex", "dsh", "pi"} else session_id
         if runtime_id == "dsh":
             from .dsh import native_session_files
             try:

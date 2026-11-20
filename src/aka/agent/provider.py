@@ -427,6 +427,9 @@ class Agent:
                     raise RuntimeError("Agent session has been cancelled")
                 context.control = control
             owned_control.callback(control.kill)
+            if values.get("AKA_TASK_ENDPOINT"):
+                from aka.light.tasks.runtime import attach_task_control
+                owned_control.callback(attach_task_control(values, control))
             if TOKEN_ENV in context.authority:
                 owned_control.enter_context(self._tool_host.bind_control(cwd, values, control))
             if self._process_runner is not None:
@@ -487,6 +490,7 @@ class Agent:
         environment=None,
         output_directory=None,
         access=None,
+        reopen=False,
     ):
         from .native import NativeSession
 
@@ -503,6 +507,7 @@ class Agent:
                 self._check_open,
                 runtime=self.runtime(runtime_id),
                 output_directory=output_directory,
+                reopen=reopen,
                 prepare_environment=self._prepare,
                 access=access,
                 release_environment=self._release,

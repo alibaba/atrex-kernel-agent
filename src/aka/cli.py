@@ -1,33 +1,17 @@
-"""Dispatch explicitly named commands contributed by installed packages."""
-from __future__ import annotations
-
+"""Commands for submitting tasks and running task-bound experiments."""
 import sys
-from importlib.metadata import entry_points
-from typing import Sequence
-
-from .core.effects import call_sync
 
 
-def main(argv: Sequence[str] | None = None) -> int:
+def main(argv=None):
     args = list(sys.argv[1:] if argv is None else argv)
-    available = entry_points()
-    entries = (available.select(group="aka.commands") if hasattr(available, "select")
-               else available.get("aka.commands", ()))
-    commands = {}
-    for entry in entries:
-        if entry.name in commands:
-            print(f'Duplicate AKA command contribution: "{entry.name}".', file=sys.stderr)
-            return 2
-        commands[entry.name] = entry
-    if not args or args == ["--help"] or args == ["-h"]:
-        print("usage: aka COMMAND [ARGS ...]")
-        print("Commands: " + (", ".join(sorted(commands)) or "none installed"))
+    if not args or args[0] in ("-h", "--help"):
+        print("usage: aka {task,execution} [ARGS ...]")
         return 0
-    command = commands.get(args[0])
-    if command is None:
-        print(f'Unknown AKA command: "{args[0]}". Run aka --help.', file=sys.stderr)
+    if args[0] == "task":
+        from .light.tasks.cli import main as command
+    elif args[0] == "execution":
+        from .light.execution.command_cli import main as command
+    else:
+        print(f"Unknown AKA command: {args[0]}", file=sys.stderr)
         return 2
-    result = call_sync(command.load(), args[1:])
-    if type(result) is not int:
-        raise TypeError("AKA command must return an integer exit code")
-    return result
+    return command(args[1:])
