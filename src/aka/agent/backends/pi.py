@@ -49,6 +49,19 @@ class PiAdapter(AgentBackendAdapter):
     def __init__(self, runtime_assets_dir: Path | None = None) -> None:
         del runtime_assets_dir
 
+    supports_resume = True
+
+    def resume_command(self, command, session_id):
+        return [*command[:-1], "--session", session_id, command[-1]]
+
+    def validated_exit_status(self, stdout, exit_status):
+        failed = False
+        for event in _json_events(stdout):
+            message = event.get("message")
+            if event.get("type") == "message_end" and isinstance(message, Mapping) and message.get("role") == "assistant":
+                failed = message.get("stopReason") in {"error", "aborted"}
+        return exit_status or int(failed)
+
     def build_command(
         self,
         prompt: str,
@@ -60,11 +73,9 @@ class PiAdapter(AgentBackendAdapter):
             "pi",
             "--mode",
             "json",
-            "--session-id",
-            session_id,
-            "--approve",
+            "--print",
             "--thinking",
-            reasoning_effort,
+            "xhigh" if reasoning_effort == "max" else reasoning_effort,
         ]
         command += pi_settings_args(settings)
         command.append(prompt)
