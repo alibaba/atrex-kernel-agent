@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "atrex-aka-light"
+version = "0.2.1"
+description = "Contract-bound kernel optimization tasks and execution backends"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {file = "LICENSE"}
+
+[project.scripts]
+aka = "aka.cli:main"
+aka-kubectl-transport = "aka.light.execution.kubectl:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["aka", "aka.*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+"aka.agent" = ["dsh_runtime.yml"]
+"aka.agent.execution" = ["proc_maps.c"]
+"aka.light.acceptance" = ["dependency_review.md"]

@@ -1,0 +1,4 @@
+include LICENSE NOTICE
+include docs/task-execution.md
+recursive-include examples/task-contracts *.py *.json
+include tests/test_*.py

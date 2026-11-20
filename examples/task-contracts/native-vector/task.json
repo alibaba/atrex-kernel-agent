@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "adapter": "atrex-bench",
+  "contract": "contract",
+  "seed": "source",
+  "target": {"backend": "agate", "gpu": "H100", "profile": "prod", "timeout_s": 600},
+  "config": {"name": "vector-double", "runner_overrides": {"warmup_iters": 5}},
+  "objective": {"metrics": [{"name": "latency_geomean", "unit": "us", "direction": "minimize"}]},
+  "budget": {"evaluations": 4}
+}
