@@ -20,6 +20,7 @@ from ..model import (
 
 class PiAdapter(AgentBackendAdapter):
     id = "pi"
+    supports_resume = True
     settings_variable = "ATREX_PI_SESSION_SETTINGS"
     environment_variables = (
         "ANTHROPIC_API_KEY",
@@ -68,6 +69,14 @@ class PiAdapter(AgentBackendAdapter):
         ]
         command += pi_settings_args(settings)
         command.append(prompt)
+        return command
+
+    def resume_command(self, command, session_id):
+        # --session-id creates a new session when its history is missing.
+        # --session opens existing native history; --resume is an interactive picker.
+        command = list(command)
+        index = command.index("--session-id")
+        command[index:index + 2] = ["--session", session_id]
         return command
 
     def normalize_stream(
@@ -139,3 +148,18 @@ class PiAdapter(AgentBackendAdapter):
 
     def configure_environment(self, environment):
         return dict(environment, PI_SKIP_VERSION_CHECK="1", PI_TELEMETRY="0")
+
+
+def pi_event_usage(event: Mapping[str, object]) -> TokenUsage:
+    """Return billable Pi terminal-event usage for live capture reconciliation."""
+    if event.get("type") == "message_end":
+        message = event.get("message")
+        if isinstance(message, Mapping) and message.get("role") in {
+            "assistant", "toolResult",
+        }:
+            return token_usage_from_mapping(message.get("usage"))
+    elif event.get("type") == "compaction_end":
+        result = event.get("result")
+        if isinstance(result, Mapping):
+            return token_usage_from_mapping(result.get("usage"))
+    return TokenUsage.unavailable()

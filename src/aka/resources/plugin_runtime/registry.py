@@ -24,6 +24,7 @@ RESERVED_MOUNTS = frozenset(
         "reference",
         "skills",
         "reference-projects",
+        "references",
         "atrex-bench",
         "memory",
         "plans",
@@ -77,7 +78,7 @@ class Plugin:
 
 
 class PluginRegistry:
-    def __init__(self, plugin_dir: Path | str | None = None, *, plugins=()):
+    def __init__(self, plugin_dir: Path | str | None = None, *, plugins=(), excluded_plugins=()):
         self.plugin_dir = Path(plugin_dir).expanduser().resolve() if plugin_dir else None
         if self.plugin_dir is not None and not self.plugin_dir.is_dir():
             raise PluginError(
@@ -88,6 +89,7 @@ class PluginRegistry:
         ):
             raise PluginError("invalid_config", "plugins must be explicit plugin directories")
         self.plugin_paths = tuple(Path(path).expanduser().resolve() for path in plugins)
+        self.excluded_plugins = tuple(excluded_plugins)
         if any(not path.is_dir() for path in self.plugin_paths):
             raise PluginError("invalid_config", "selected plugin is not a directory")
         self.plugins: list[Plugin] = []
@@ -102,10 +104,17 @@ class PluginRegistry:
                     "invalid_manifest",
                     f"cannot read local plugin {manifest.parent}: {exc}",
                 ) from exc
+            if plugin.id in self.excluded_plugins:
+                continue
             if plugin.id in seen:
                 raise PluginError("invalid_config", f"duplicate plugin id: {plugin.id}")
             seen.add(plugin.id)
             self.plugins.append(plugin)
+        if self.excluded_plugins:
+            # Freeze the selected plugins, not an unfiltered catalog that a
+            # child process or retained snapshot could discover again.
+            self.plugin_dir = None
+            self.plugin_paths = tuple(plugin.root for plugin in self.plugins)
         self.mounts()  # Fail before installing anything on conflicting resources.
         self.environment(Path("/workspace"))
 
@@ -330,13 +339,8 @@ class PluginRegistry:
         if not lock.exists():
             lock.write_text(json.dumps(self.snapshot(), indent=2) + "\n")
         (state / "instructions.md").write_text(self.instructions("common"))
-        ignore = workspace / ".gitignore"
-        existing = ignore.read_text() if ignore.exists() else ""
-        additions = [f"/{STATE_DIR}/", *(f"/{name}" for name in mounts)]
-        missing = [line for line in additions if line not in existing.splitlines()]
-        if missing:
-            with ignore.open("a") as stream:
-                stream.write("\n# Plugin runtime\n" + "\n".join(missing) + "\n")
+        # Candidate initialization installs a source-only ignore policy.
+        # Installing runtime resources must not dirty Agent-owned Git.
 
     def catalog(self) -> list[dict]:
         return [

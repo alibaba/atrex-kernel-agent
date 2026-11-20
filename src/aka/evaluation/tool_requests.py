@@ -21,16 +21,20 @@ class _Parser(argparse.ArgumentParser):
         raise ValueError(message)
 
 
-def parse_tool_arguments(argv):
+def tool_argument_parser(*, enabled_kinds=None):
     parser = _Parser(add_help=False, allow_abbrev=False)
-    parser.add_argument("--kind", choices=("auto", "run", "profile", "dev", "check", "disassemble", "env",
-        "record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier"), default="auto")
-    for flag in ("--record-id", "--kernel-id", "--output-path", "--version", "--baseline-path", "--input-path", "--shapes-path",
-                 "--kernel-name", "--kernel-regex", "--profile-shape-id", "--arch", "--sanitize", "--deps-mode", "--env-gpu"):
+    kinds = (("auto", "evaluate", "profile", "dev", "command", "check", "disassemble", "env")
+             if enabled_kinds is None else tuple(enabled_kinds))
+    parser.add_argument("--kind", choices=kinds, default="auto")
+    for flag in ("--version", "--baseline-commit", "--input-path", "--shapes-path",
+                 "--kernel-name", "--kernel-regex", "--profile-shape-id", "--arch", "--sanitize", "--deps-mode"):
         parser.add_argument(flag)
+    parser.add_argument("--env-gpu", help="GPU product token; omitted uses the Campaign hardware (for example L20N).")
     parser.add_argument("--mode", dest="evaluation_mode", choices=("full", "correctness_only"))
     parser.add_argument("--correctness-max-rel-l2", type=float)
-    for flag in ("--multi-seed", "--timed-runs", "--warmup", "--shape-batch-size", "--comparison-repeats", "--comparison-run-timeout",
+    parser.add_argument("--comparison-repeats", type=int,
+        help="ABBA comparison sample count: an even integer from 2 through 16 (2 samples per ABBA block).")
+    for flag in ("--multi-seed", "--timed-runs", "--warmup", "--shape-batch-size", "--comparison-run-timeout",
                  "--launch-skip", "--launch-count", "--top-kernels"):
         parser.add_argument(flag, type=int)
     for flag in ("--candidate-timeout-s", "--perf-timeout-s"):
@@ -52,6 +56,11 @@ def parse_tool_arguments(argv):
     parser.add_argument("command", nargs=argparse.REMAINDER)
     from aka.execution.gateway.native_options import extend_parser
     extend_parser(parser)
+    return parser
+
+
+def parse_tool_arguments(argv, *, enabled_kinds=None):
+    parser = tool_argument_parser(enabled_kinds=enabled_kinds)
     args = parser.parse_args(list(argv))
     if args.command[:1] == ["--"]:
         args.command = args.command[1:]
@@ -66,7 +75,7 @@ def _relative(name):
 
 
 def request_from_argv(argv, *, workspace, evaluation_input, configuration, workspace_provider,
-                      defaults=None, filesystem_access=None):
+                      defaults=None, filesystem_access=None, baseline_source=None):
     """Use only host-selected configuration and the supplied composition policy.
 
     Evaluation supplies shared timing defaults; explicit controls take precedence.
@@ -78,8 +87,14 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     from .gateway_request import prepare_request, _candidate_languages
     from .private_inputs import selected_content
     args = parse_tool_arguments(argv)
+    if args.kind == "command":
+        args.kind = "dev"
+        from aka.execution.input_snapshot import snapshot_command_inputs
+        # Runtime staging is a closed view of the Agent workspace.
+        if not args.input:
+            args.input = [p.name for p in Path(workspace).iterdir() if not p.name.startswith(".")]
     from aka.execution.gateway.native_options import values as native_values, apply_request
-    selected_kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
+    selected_kind = "run" if args.kind == "auto" and not args.command else requested_operation("run" if args.kind == "evaluate" else args.kind, args.command)
     native = native_values(args, selected_kind)
     from aka.execution.configuration import selected_ssh
     if selected_ssh():
@@ -87,9 +102,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         validate_native(native, selected_kind)
     if selected_kind != "env" and any((args.env_force, args.frameworks, args.counters, args.limits)):
         raise ValueError("environment capability options require --kind env")
-    if selected_kind == "env" and any((args.env_capabilities, args.frameworks, args.counters, args.limits)) and not args.env_gpu:
-        raise ValueError("environment capability options require --env-gpu")
-    if args.kind in {"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier", "env"}:
+    if args.kind == "env":
         return ToolRequest(args.kind, None, args)
     if args.no_sync and args.sync:
         raise ValueError("--no-sync and --sync are mutually exclusive")
@@ -97,17 +110,17 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
         import math
         if not math.isfinite(args.correctness_max_rel_l2) or args.correctness_max_rel_l2 <= 0:
             raise ValueError("correctness threshold must be finite and positive")
-        if args.kind not in {"auto", "run"} or args.command:
+        if args.kind not in {"auto", "evaluate"} or args.command:
             raise ValueError("correctness threshold requires an implicit Evaluate request")
     workspace = Path(workspace)
     defaults = dict(defaults or {})
-    kind = "run" if args.kind == "auto" and not args.command else requested_operation(args.kind, args.command)
-    if args.baseline_path and (kind != "run" or args.evaluation_mode == "correctness_only"):
-        raise ValueError("baseline comparison requires full run")
+    kind = "run" if args.kind == "auto" and not args.command else requested_operation("run" if args.kind == "evaluate" else args.kind, args.command)
+    if args.baseline_commit and (kind != "run" or args.evaluation_mode == "correctness_only"):
+        raise ValueError("baseline comparison requires full Evaluate")
     if args.command and (any(value is not None for value in (args.version, args.multi_seed, args.timed_runs, args.warmup, args.candidate_timeout_s, args.perf_timeout_s)) or args.shape_id):
         raise ValueError("top-level evaluator controls require an implicit canonical command")
     if kind != "run" and any(value is not None for value in (args.warmup, args.candidate_timeout_s, args.perf_timeout_s)):
-        raise ValueError("timing controls require a Run request")
+        raise ValueError("timing controls require an Evaluate request")
     command = tuple(args.command)
     sol = evaluation_input is not None and evaluation_input.adapter == "legacy-sol-v1"
     if not command and kind == "run" and sol:
@@ -144,7 +157,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     provisional = CommandSpec(workspace, command, timeout=configuration.timeout, environment=explicit,
         hardware=configuration.hardware, artifacts=artifacts, operation=kind, filesystem_access=filesystem_access, output_options=output)
     environment = workload_environment(provisional)
-    if sol and kind == "run" and not args.baseline_path:
+    if sol and kind == "run" and not args.baseline_commit:
         if native:
             raise UnsupportedExecution("native Agate controls require typed evaluation")
         return ToolRequest(kind, provisional, args)
@@ -189,7 +202,7 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
     request = prepare_request(workspace, configuration.hardware, configuration.timeout, [f"{key}={value}" for key, value in environment.items()],
         list(command), "run" if kind == "run" and args.evaluation_mode != "correctness_only" else "profile", reference_dir=evaluation_input.directory if evaluation_input is not None else workspace,
         reference_content=references, requirements=requirements, candidate_source=candidate.decode(), candidate_solution=solution,
-        runtime_version=host_environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", ""), profiler=args.profiler,
+        profiler=args.profiler,
         profile_level=args.profile_level, counters=args.profile_counter, kernel_regex=args.kernel_regex, top_kernels=args.top_kernels)
     if args.deps_mode is not None:
         request["deps_mode"] = args.deps_mode
@@ -237,23 +250,16 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             request["options"]["correctness_max_rel_l2"] = args.correctness_max_rel_l2
         from .measurement_policy import runner_overrides
         request["runner_overrides"].update(runner_overrides(command, explicit, defaults.get("runner_overrides")))
-        if "lock_clocks" in defaults:
-            request["options"]["lock_clocks"] = defaults["lock_clocks"]
-        if args.baseline_path:
-            baseline_path = _relative(args.baseline_path)
-            baseline = (workspace_provider.read_source(workspace / baseline_path) if (workspace / baseline_path).is_dir()
-                        else workspace_provider.read_working(workspace, (baseline_path,)))
-            if (workspace / baseline_path).is_dir():
-                baseline_bytes = baseline.files.get('kernel.py') or baseline.files.get('solution.json')
-            else:
-                baseline_bytes = baseline.files[baseline_path]
-            if not isinstance(baseline_bytes, bytes) or not baseline_bytes.strip():
-                raise ValueError("baseline comparison requires nonempty frozen source")
+        if args.baseline_commit:
+            if baseline_source is None:
+                raise ValueError("ABBA baseline commit must be resolved from the bound Agent Git repository")
+            baseline_bytes = baseline_source.files.get("kernel.py") or baseline_source.files.get("solution.json")
+            if not baseline_bytes:
+                raise ValueError("ABBA baseline commit has no candidate source")
             repeats = args.comparison_repeats if args.comparison_repeats is not None else configuration.repeats
             if type(repeats) is not int or not 2 <= repeats <= 16 or repeats % 2:
                 raise ValueError("comparison repetitions must be even, in 2..16")
             from aka.contracts.workspace import RevisionContent
-            baseline_source = baseline if (workspace / baseline_path).is_dir() else RevisionContent({"kernel.py": baseline_bytes})
             baseline_descriptor, baseline_archive, _, _ = prepare_source(baseline_source, role="baseline")
             if baseline_archive is not None:
                 archives = (*archives, baseline_archive)
@@ -288,6 +294,9 @@ def request_from_argv(argv, *, workspace, evaluation_input, configuration, works
             else:
                 request["fmt"] = args.disassembly_format
     request = apply_request(request, args, kind)
+    if kind == "run":
+        from .measurement_policy import agate_managed_clocks
+        request = agate_managed_clocks(request)
     submission = json.dumps({"schema_version": 1, "kind": kind, "request": request,
         "reference_files": {name: item.decode() for name, item in references.items() if Path(name).name == name}}, allow_nan=False).encode()
     return ToolRequest(operation, replace(provisional, operation=operation, submission=submission,

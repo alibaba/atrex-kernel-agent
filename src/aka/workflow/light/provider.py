@@ -1,39 +1,44 @@
-"""Bridge public Task/Workflow requests to the retained managed implementation.
-
-No global adapter is replaced. The selected Agent is borrowed and remains owned
-by its composition; this Workflow owns only Campaigns and their private servers.
-"""
+"""Light orchestrates shared owners around persistent Agent workspaces."""
 from dataclasses import dataclass
 from types import SimpleNamespace
 from weakref import WeakSet
+import math
 
 from aka.contracts.problem import LoadedProblem
-from aka.contracts.workflow import CampaignRequest, ProblemSource, DEFAULT_LIGHT_EPISODE_TIMEOUT
+from aka.contracts.workflow import CampaignRequest, ProblemSource
 from .search import SearchOptions
 
 
 @dataclass(frozen=True)
 class WorkflowOptions:
     file_system: str | None = None
-    numerical_validation: bool = False
+    source_tree: dict | None = None
+    provided_bootstrap: dict | None = None
     goal_episodes: bool = False
-    generate_memory: bool = False
     output_limit_recovery_retries: int = 2
-    episode_timeout_seconds: float | None = DEFAULT_LIGHT_EPISODE_TIMEOUT
+    dependency_policy_recovery_retries: int = 2
     search: SearchOptions | dict | None = None
-    wiki: bool = False
+    claim_review: bool = False
+    wiki: bool = True
     wiki_options: dict | None = None
-    research_records: bool = False
+    tool_modules: tuple[str, ...] | list[str] = ()
     inherit_state: bool = True
     request_timeout: float | None = None
     queue_timeout: float = 60
 
+    @property
+    def research_records(self):
+        return bool(self.tool_modules)
+
     def __post_init__(self):
-        import math
+        from .provided_bootstrap import validate_permission
+        validate_permission(self.provided_bootstrap)
+        from .journal import JournalFactory
+        object.__setattr__(self, "tool_modules", JournalFactory(self.tool_modules).tool_modules)
         if self.file_system is not None:
             from aka.task.source.formats import select
             select(self.file_system)
-        for name in ("wiki", "research_records", "inherit_state"):
+        for name in ("wiki", "inherit_state", "goal_episodes", "claim_review"):
             if type(getattr(self, name)) is not bool:
                 raise ValueError(f"{name} must be boolean")
         for name in ("request_timeout", "queue_timeout"):
@@ -42,42 +47,36 @@ class WorkflowOptions:
                 continue
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
                 raise ValueError(f"{name} must be positive finite seconds")
-        from aka.resources.wiki.config import WikiConfig
-        WikiConfig(**(self.wiki_options or {}))
-        from .deadline import episode_timeout
-        if self.episode_timeout_seconds is not None:
-            episode_timeout(self.episode_timeout_seconds)
-        if (type(self.output_limit_recovery_retries) is not int
-                or not 0 <= self.output_limit_recovery_retries <= 10):
-            raise ValueError("output_limit_recovery_retries must be an integer from 0 to 10")
+        for name in ("output_limit_recovery_retries", "dependency_policy_recovery_retries"):
+            if type(getattr(self, name)) is not int or not 0 <= getattr(self, name) <= 10:
+                raise ValueError(f"{name} must be an integer from 0 to 10")
+        if self.source_tree is not None:
+            from aka.task.source.formats.source_tree import validate_import_options
+            validate_import_options(self.source_tree)
         if isinstance(self.search, dict):
             object.__setattr__(self, "search", SearchOptions(**self.search) if self.search else None)
         if self.search is not None and not isinstance(self.search, SearchOptions):
-            raise ValueError("search must be an Epoch search configuration or empty")
+            raise ValueError("search must be a pooled-search configuration or empty")
 
 
 class LightWorkflow:
     def __init__(self, agent, problem, source, candidate, *, executor, execution_context,
                  experiment_factory, evaluator_factory, evaluation_defaults,
-                 measurement_parallelism=4, workflow_observer=None, options=WorkflowOptions(),
-                 episode_evidence_reader=None, episode_evidence_interpreter=None):
+                 measurement_parallelism=4, workflow_observer=None, options=WorkflowOptions()):
         if not agent.capabilities.tool_runtime:
-            raise ValueError("light Workflow requires an Agent with scoped tool sessions")
-        if any(not callable(getattr(candidate, method, None)) for method in (
-                "read_source", "record", "restore_sealed_candidate",
-                "snapshot_files", "restore_files", "clear_paths")):
-            raise ValueError("light Workflow requires public source, sealed-candidate and file transactions")
-        self.agent, self.problem, self.source, self.candidate = agent, problem, source, candidate
-        self.options = options
+            raise ValueError("Light requires an Agent with scoped tool sessions")
+        for method in ("read_source", "read_revision", "initialize_agent", "bind_source_contract"):
+            if not callable(getattr(candidate, method, None)):
+                raise TypeError(f"Light requires Task capability: {method}")
         if not callable(getattr(evaluator_factory, "create_command", None)):
             raise TypeError("Selected Evaluation does not provide command preparation")
+        self.agent, self.problem, self.source, self.candidate = agent, problem, source, candidate
+        self.options = options
         self.executor, self.execution_context = executor, execution_context
         self.experiment_factory, self.evaluator_factory = experiment_factory, evaluator_factory
         self.evaluation_defaults = evaluation_defaults
         self.measurement_parallelism = measurement_parallelism
         self.workflow_observer = workflow_observer
-        self.episode_evidence_reader = episode_evidence_reader
-        self.episode_evidence_interpreter = episode_evidence_interpreter
         self._closed = False
         self._campaigns = WeakSet()
 
@@ -117,21 +116,24 @@ class LightWorkflow:
 
     @staticmethod
     def _evaluation_settings(request):
-        from aka.execution.configuration import legacy_settings
+        from aka.execution.configuration import connection_settings
         from aka.execution.selection import selected_execution
 
-        connection = (legacy_settings()
-                      if selected_execution().get("profile", "legacy") == "legacy"
+        connection = (connection_settings()
+                      if selected_execution().get("profile", "remote") == "remote"
                       else SimpleNamespace(profile="", url="", ssh="", ssh_init="",
                                            ssh_gpu=None, health_command=""))
         runtime = request.runtime
+        hardware = runtime.hardware or request.settings.platform
         return SimpleNamespace(
-            hardware=runtime.hardware or request.settings.platform,
+            hardware=hardware,
             profile=connection.profile,
             url=connection.url,
             timeout=runtime.timeout,
             verify_repeats=runtime.verify_repeats,
-            verify_run_timeout=runtime.verify_run_timeout,
+            evaluation_step_timeout=runtime.evaluation_step_timeout,
+            shape_batch_size=runtime.shape_batch_size,
+            gpu_clock_mhz=None,
             min_improvement_pct=runtime.min_improvement_pct,
             ssh=connection.ssh,
             ssh_init=connection.ssh_init,
@@ -145,11 +147,9 @@ class LightWorkflow:
         if not isinstance(problem, LoadedProblem) or problem.agent is None or problem.initial_source is None or problem.evaluation is None:
             raise TypeError("light Workflow requires explicit public, initial-source and evaluator Problem roles")
         if problem.initial_source.kind != "sol" and problem.evaluation.runtime_root is None:
-            raise ValueError("light Workflow deterministic V0 requires native Atrex-Bench or SOL; use legacy for custom setup")
+            raise ValueError("Light requires a Native Atrex-Bench or SOL evaluation contract")
         evaluation = self._evaluation_settings(request)
         campaign = ManagedCampaign.create(request, problem, self, evaluation)
-        from aka.workflow.legacy.campaign_execution import CampaignExecution
-        campaign.execution = CampaignExecution(evaluation)
         if self.workflow_observer is not None:
             try:
                 self.workflow_observer.campaign_started(request)

@@ -1,13 +1,15 @@
 ---
 name: atrex-gpu-gateway
 version: 0.15.0
-description: Use the agate CLI to submit GPU operator evaluations, compilation checks, profiling, disassembly and controlled development commands to atrex-gpu-gateway, and query environments and asynchronous results. Covers CUDA solution.json configuration and AKA candidate file management and troubleshooting. Read operations references when managing gateway deployment or capacity.
+description: Understand Atrex Gateway formats and behavior. In an AKA-managed workspace, submit only through tools/sandbox.py; direct agate CLI examples are for standalone use.
 ---
 
 # atrex-gpu-gateway
 
-A stateless GPU gateway routes jobs over HTTP to GPU workers. Query and cancel jobs by `job_id`.
-The local machine needs neither a GPU nor Ray or profiling tools. Consult `agate <command> --help` for exact options.
+A stateless GPU gateway routes jobs over HTTP to GPU workers. Standalone operators can query and
+cancel jobs by `job_id` and consult `agate <command> --help`. In an AKA-managed Agent workspace,
+do not invoke `agate` directly; use the Supervisor Runtime contract below. The local machine needs
+neither a GPU nor Ray or profiling tools.
 
 ## Use within AKA
 
@@ -15,9 +17,14 @@ In an AKA-managed workspace, organize candidates according to the selected file 
 Read [AKA file organization and invocation](reference/aka-workspace.md) first, then
 [manifest fields, CUDA ABI and repository dependencies](reference/eval-manifest.md) as needed.
 Submit jobs through the workspace's `tools/sandbox.py`; the Supervisor owns environment selection, authentication, uploads and records.
-The direct agate CLI installation and configuration instructions below are for standalone use, not for bypassing AKA Runtime.
+**Stop here for invocation syntax in AKA:** use `skills/gpu-measurement/SKILL.md` and its
+`tools/sandbox.py` examples. The direct `agate` commands, credentials, endpoint selection, job
+queries and capacity operations below are standalone/operator documentation only. They are not
+available Agent operations and must not be used to bypass AKA Runtime. Native Agate options are
+subcommand-specific and must not be copied into a different `tools/sandbox.py --kind`; notably,
+raw Dev's `--intent` and `--note` are never Evaluate/Profile options.
 
-## Choose a command
+## Choose a standalone Gateway command
 
 | Purpose | Command | Inputs and boundaries |
 |---|---|---|
@@ -37,7 +44,7 @@ Use `eval` and `env` for new commands; legacy aliases `test`, `run`, `sol` and `
 ## Installation and authentication
 
 ```bash
-pip install -U atrex-gateway-client \
+pip install -U 'atrex-gateway-client>=0.14.30,<0.15' \
   --index-url http://artlab.alibaba-inc.com/1/pypi/pypi-releases \
   --trusted-host artlab.alibaba-inc.com
 export AGATE_AK='<ak>'
@@ -51,7 +58,7 @@ Alternatively, store `ak`/`sk` in `~/.atrex/config.json`. The CLI uses AK/SK sig
 Do not configure `AGATE_TOKEN`, which the server does not accept. `author` and a self-reported employee ID confer no permissions.
 Switch to preproduction only when the user explicitly requests it. Examples here use production.
 
-Use `agate update --check` to check for updates and `agate update` to install them. Older clients without this subcommand can use the pip command above.
+Use `agate update --check` to check for updates and `agate update` to install them. Older clients without this subcommand can use the pip command above. Atrex AKA Light rejects Agate SDK versions older than 0.14.30 before submitting any Gateway operation.
 
 ## From compilation to evaluation
 

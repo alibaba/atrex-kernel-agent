@@ -330,4 +330,3 @@ def install_inputs(namespace, case, seeds, receipts):
         return inputs
 
     namespace["_make_inputs"] = make_inputs
-

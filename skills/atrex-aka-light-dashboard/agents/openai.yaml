@@ -1,0 +1,4 @@
+interface:
+  display_name: "AKA Light Dashboard"
+  short_description: "View local Campaign progress, performance and evidence"
+  default_prompt: "Use $atrex-aka-light-dashboard to open a read-only dashboard for my local AKA Light Campaign using its observability data."

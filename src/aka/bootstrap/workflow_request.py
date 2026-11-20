@@ -26,13 +26,29 @@ def register_request_options(parser):
             if type(None) in get_args(annotation):
                 annotation = next(value for value in get_args(annotation) if value is not type(None))
             options = {"dest": field.name, "default": argparse.SUPPRESS}
-            if annotation is bool:
+            if field.name == "agate_tools":
+                from aka.contracts.agate_tools import AGATE_TOOLS
+                options.update(nargs="+", choices=(*AGATE_TOOLS, "all"),
+                    help="Agent-visible Agate Runtime tools (default: env evaluate command); all enables every kind. Wiki/research/submission tools are independent.")
+            elif annotation is bool:
                 options["action"] = argparse.BooleanOptionalAction
             elif annotation in (str, int, float):
                 options["type"] = annotation
             else:
                 options["action"] = "append"
+                if field.name == "agent_reference_paths":
+                    options["type"] = _reference_path
+                    options["metavar"] = "[NAME=]DIRECTORY"
+                    options["help"] = "reference directory; repeat for multiple mounts"
             parser.add_argument(flag, **options)
+
+
+def _reference_path(value):
+    name, separator, directory = value.partition("=")
+    path = Path(directory if separator else value).expanduser().resolve()
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"reference directory does not exist: {path}")
+    return (name if separator else path.name, str(path))
 
 
 def _object(value):
@@ -79,7 +95,7 @@ def request_arguments(options, parser):
         parser.error("new requests require --platform or settings.platform")
     provided_settings = tuple(sorted(settings))
     settings.setdefault("framework", "")
-    from aka.workflow.legacy.requests import create_launch
+    from .launch import create_launch
     launch = create_launch(options.problem, workspace_base=options.workspace_base or Path.cwd(),
                            workspace_suffix=options.workspace_suffix or "",
                            settings=WorkflowSettings(**settings), runtime=CampaignRuntimeSettings(**runtime),

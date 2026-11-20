@@ -8,7 +8,7 @@ authentication, Gateway operations, parameters, file transfer, and client limits
 Load only the references required by the request, such as custom SOL problems or
 multi-GPU configuration. This Skill does not duplicate that manual.
 
-The selected legacy plugin contributes the complete Gateway Skill tree when its
+The selected remote plugin contributes the complete Gateway Skill tree when its
 `gateway_skill_path` configuration names an existing resource directory. The
 application installs it into this optimization workspace alongside `aka-execution`
 and publishes both entry points in the Skill catalog and prompt instructions.
@@ -42,7 +42,7 @@ To supply Gateway guidance, prepare an execution patch in the host environment:
 }
 ```
 
-Pass that file with `aka optimize --execution-patch /path/to/patch.json` or the
+Pass that file with `aka optimize --patch /path/to/patch.json` or the
 matching application's execution configuration. Use a resource path supplied
 by the deployment. The selected Skill's files and source path are locked for
 workspace recovery; restore those resources or use a new workspace if they
@@ -51,7 +51,7 @@ change.
 ## SSH and Local
 
 The current Execution implementation supplies no separate SSH or direct Local
-Skill. Use [Legacy requests](legacy-request.md) and the matching guidance
+Skill. Use [Remote requests](remote-request.md) and the matching guidance
 provided by this run. When a backend supplies its own Skill, resource selection
 must publish its actual catalog name and entry point.
 

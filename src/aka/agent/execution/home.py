@@ -8,6 +8,9 @@ import subprocess
 from pathlib import Path
 from aka.core.filesystem import open_private_directory
 
+SESSION_HOME_ROOT_ENV = "ATREX_SESSION_HOME_ROOT"
+SESSION_HOME_ID_ENV = "ATREX_SESSION_HOME_ID"
+
 PREPARED_ENV = "ATREX_AGENT_PREPARED_HOME"
 
 
@@ -40,16 +43,21 @@ def read_regular_bytes(path, limit=8 * 1024 * 1024):
     return read_regular_file(path, limit)[0]
 
 
-def prepare_home(workspace, session_id, backend, environment, *, state_root=None):
+def prepare_home(workspace, session_id, backend, environment, *, state_root=None, home_id=None):
     host = Path(environment.get("HOME") or Path.home()).expanduser().resolve()
     state = (
         Path(state_root)
         if state_root is not None
         else workspace.parent / ".aka-agent-homes"
     )
-    key = hashlib.sha256(
-        (str(workspace) + "\0" + backend.id + "\0" + session_id).encode()
-    ).hexdigest()
+    # Auxiliary sessions may get a provider-assigned thread ID and a new
+    # evidence workspace on resume. Their host-owned identity must not change.
+    identity = (str(workspace) + "\0" + backend.id + "\0" + session_id)
+    if home_id is not None:
+        if not isinstance(home_id, str) or not home_id or "\0" in home_id:
+            raise ValueError("Agent Home identity must be non-empty text")
+        identity = "persistent\0" + backend.id + "\0" + home_id
+    key = hashlib.sha256(identity.encode()).hexdigest()
     state = Path(os.path.abspath(state))
     if state.resolve() != state or state in {
         Path("/"),

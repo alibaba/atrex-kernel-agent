@@ -25,8 +25,7 @@ evaluator reads the live `kernel.py` from disk each run — `kernel.py` is the
 single source of truth. Optimization iterations edit `kernel.py` only (and
 `solution.json` itself only when languages / dependencies / entry_point change).
 
-OPTIMIZATION GOAL = maximize the arithmetic mean of per-workload speedups
-against SOL's reference baseline (recorded as `performance.performance_score`).
+OPTIMIZATION GOAL = minimize geometric mean workload latency.
 The harness also records latency diagnostics, including the per-workload latency
 (`performance.latency_us_by_shape`, keyed by the workload `uuid`).
 
@@ -52,7 +51,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 
 
 def _sol_execbench_cmd() -> list[str]:
@@ -123,7 +121,6 @@ def _summarize(traces: list[dict]) -> dict:
     total = len(traces)
     per_shape: dict[str, float] = {}      # uuid -> latency_us
     lat_us: list[float] = []
-    speedups: list[float] = []
     max_abs = 0.0
     max_rel = 0.0
     failures: list[str] = []
@@ -141,33 +138,16 @@ def _summarize(traces: list[dict]) -> dict:
         if status == "PASSED":
             perf = ev.get("performance") or {}
             us = float(perf.get("latency_ms") or 0.0) * 1000.0
-            spd = perf.get("speedup_factor")
-            if us <= 0:
+            if not math.isfinite(us) or us <= 0:
                 failures.append(f"{uuid[:8]}=missing positive latency ({wl.get('axes')})")
-                continue
-            if (
-                isinstance(spd, bool)
-                or not isinstance(spd, (int, float))
-                or spd <= 0
-                or not math.isfinite(float(spd))
-            ):
-                failures.append(
-                    f"{uuid[:8]}=missing reference speedup ({wl.get('axes')})"
-                )
                 continue
             per_shape[uuid] = us
             lat_us.append(us)
-            speedups.append(float(spd))
         else:
             failures.append(f"{uuid[:8]}={status or 'NO_EVAL'} ({wl.get('axes')})")
 
     passed = total - len(failures)
     all_pass = total > 0 and passed == total
-    performance_score = (
-        sum(speedups) / len(speedups)
-        if all_pass and len(speedups) == total and speedups
-        else None
-    )
     return {
         "total": total,
         "passed": passed,
@@ -176,10 +156,6 @@ def _summarize(traces: list[dict]) -> dict:
         "latency_us_by_shape": per_shape,
         "latency_us_geomean": _geomean(lat_us),
         "latency_us_arith_mean": (sum(lat_us) / len(lat_us)) if lat_us else 0.0,
-        "speedup_vs_ref_mean": performance_score,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": performance_score,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max_abs,
         "max_rel_err": max_rel,
     }
@@ -216,15 +192,11 @@ def _record_memory(workspace: Path, version: str, s: dict) -> Path:
     mem["timestamp"] = datetime.now(timezone.utc).isoformat()
 
     perf = mem.setdefault("performance", {})
-    # Keep latency for diagnostics; performance_score is the optimization objective.
+    # Official measurements expose latency only.
     perf["latency_us"] = s["latency_us_geomean"]
     perf["latency_us_geomean"] = s["latency_us_geomean"]
     perf["latency_us_arith_mean"] = s["latency_us_arith_mean"]
     perf["latency_us_by_shape"] = s["latency_us_by_shape"]
-    perf["speedup_vs_ref_mean"] = s["speedup_vs_ref_mean"]
-    perf["speedup_vs_ref_geomean"] = None
-    perf["performance_score"] = s["performance_score"]
-    perf["performance_objective"] = s["performance_objective"]
 
     corr = mem.setdefault("correctness", {})
     corr["status"] = "PASS" if s["all_pass"] else "FAIL"
@@ -296,8 +268,6 @@ def main(argv: list[str] | None = None) -> int:
     print(f"  workloads PASSED         : {s['passed']}/{s['total']}")
     print(f"  GEOMEAN kernel latency   : {s['latency_us_geomean']:.1f} us")
     print(f"  arith-mean kernel latency: {s['latency_us_arith_mean']:.1f} us")
-    score = s["performance_score"] or 0.0
-    print(f"  mean speedup vs ref      : {score:.3f}x   <-- OPTIMIZATION GOAL (maximize)")
     print(f"  worst abs / rel error    : {s['max_abs_err']:.2e} / {s['max_rel_err']:.2e}")
     if s["failures"]:
         print(f"  FAILURES                 : {'; '.join(s['failures'])}")

@@ -382,6 +382,14 @@ class NativeSession:
             )
         ):
             self._stdout_usage = stream_session_usage
+        from .session_capture import captured_observation
+        captured = captured_observation(stdout, events, capabilities)
+        if captured is not None:
+            from aka.contracts.agent import merge_token_usage_evidence
+            events = captured.events
+            terminal_usage = merge_token_usage_evidence(terminal_usage, captured.terminal_usage)
+            capabilities = captured.capabilities
+            observation_errors += captured.errors
         self._invoked = True
         from .public_output import record_invocation
 

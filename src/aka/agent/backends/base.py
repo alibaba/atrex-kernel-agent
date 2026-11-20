@@ -302,7 +302,7 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
     )
 
     def normalize_stream(
-        self, stdout: str
+        self, stdout: str, *, settled_usage: Mapping[str, TokenUsage] | None = None
     ) -> tuple[tuple[NormalizedAgentEvent, ...], TokenUsage]:
         normalized: list[NormalizedAgentEvent] = []
         terminal = TokenUsage.unavailable()
@@ -334,6 +334,11 @@ class ClaudeLikeAdapter(AgentBackendAdapter):
                 if isinstance(message, Mapping) and isinstance(message.get("id"), str)
                 else None
             )
+            # Stream events may carry provisional counters. Native capture has
+            # the settled response, but its usage belongs at the same position
+            # in the event stream and must still be counted only once.
+            if settled_usage and message_id in settled_usage:
+                parsed = settled_usage[message_id]
             duplicate_usage = bool(message_id and message_id in seen_usage_message_ids)
             if parsed.total_tokens is not None and not duplicate_usage:
                 normalized.append(

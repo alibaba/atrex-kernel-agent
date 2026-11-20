@@ -9,6 +9,25 @@ from .drivers.native_harness import (
 )
 
 
+def agate_managed_clocks(request):
+    """Request best-effort Agate clock locking without prescribing a frequency.
+
+    Normalize before freezing measurement identities, for both Eval and ABBA.
+    Do not mutate a caller's request or its nested option dictionaries.
+    """
+    result = dict(request)
+    for field in ("gpu_clock_mhz", "graphics_mhz"):
+        result.pop(field, None)
+    result["lock_clocks"] = True
+    for section in ("options", "runner_overrides"):
+        if section in result:
+            values = dict(result[section])
+            for field in ("lock_clocks", "gpu_clock_mhz", "graphics_mhz"):
+                values.pop(field, None)
+            result[section] = values
+    return result
+
+
 def warmup_overrides(environment=None):
     """Resolve explicit warmup, including zero, or Evaluation's shared default."""
     raw = (environment or {}).get("AKA_GATEWAY_WARMUP_ITERS")

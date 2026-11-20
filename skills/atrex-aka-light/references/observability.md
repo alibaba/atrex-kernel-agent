@@ -1,139 +1,204 @@
 # AKA Light observability
 
-Read this file for live status, diagnosis, metrics, or reproducibility. Use the `observability/` directory from a checkout compatible with the campaign. These scripts are read-only and must not submit, cancel, or mutate Agate work.
+Use this file for live status, diagnosis, metrics and reproducibility. Run read-only tools from a checkout compatible with the campaign. Never submit, cancel or mutate Agate work during a status-only request.
 
-Current module campaigns use shared Experiment records and public Agent session
-facts. The readers retain read-only compatibility with upstream v1 measurement
-records. Missing raw Agate responses remain unavailable; recorded execution facts
-are identified separately and are not presented as a raw backend response.
-
-Set paths once:
+For the complete option matrix, expected JSON examples and field-by-field semantics, use the
+dedicated `atrex-aka-light-observability` skill and read the matching guide from the same checkout
+as the Campaign tooling: `observability/USAGE.md` for Chinese or
+`observability/USAGE.en.md` for English.
 
 ```bash
 export AKA_REPO=/path/to/atrex-kernel-agent
 export CAMPAIGN=/path/to/light-campaign-workspace
 ```
 
-Status commands accept a top-level campaign workspace, automatically discover pooled-search trajectory scopes, print tables by default, and support `--json` or `--compact`.
-
-## First-pass status
-
-Run these in order for a general “how is it running?” request:
+## First pass
 
 ```bash
-python3 "$AKA_REPO/observability/light_runtime_status.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_performance.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_agate_status.py" "$CAMPAIGN" --json
-python3 "$AKA_REPO/observability/light_token_time.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_lineage_status.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_history.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_kernel_best.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_runtime_calls.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_agate_calls.py" "$CAMPAIGN" --json
+python3 "$AKA_REPO/observability/light_gateway_jobs.py" "$CAMPAIGN" \
+  --gateway-record-id gateway-0123456789abcdef0123456789abcdef --json
 ```
 
-Summarize per scope/trajectory: current stage and Episode, health and active Session phase, accepted and measured best latency, candidate state, pending/failed Agate jobs, token totals, and newest durable timestamp.
+For a continuously refreshed local view of the same snapshots:
 
-## Command map
+```bash
+python3 "$AKA_REPO/observability/light_dashboard.py" "$CAMPAIGN" --port 8765
+```
 
-| Question | Command |
+The Light dashboard is loopback-only and read-only. It has no workflow, Runtime, Agate, submission,
+retry, cancellation, or cleanup controls.
+
+`light_runtime_calls.py` and `light_agate_calls.py` retain a Campaign-wide
+summary by kind while `--kind`, `--status` and `--last N` select bounded
+details. Agate waiting averages use only durable `created_at -> started_at`
+timing. Use `light_gateway_jobs.py` for every physical submission belonging
+to one logical Gateway Record.
+
+Use `--help` before optional filters or watch flags. Status scripts are convenience projections; immutable Gateway Records, Runtime audit, Campaign `submissions/`, MeasurementStore, Agent Git, search checkpoint, and current `PROGRESS.md`/`frontier.json` are the authority for their respective facts.
+
+Pooled Campaigns have one private state tree and one canonical MeasurementStore. Research,
+submission, Session, and Runtime-audit facts carry a lineage namespace; Gateway Record bytes do
+not. Attribute a Record to its originating lineage from the Runtime audit rather than looking for
+or creating trajectory-local copies.
+
+Current Runtime receipts are written at request start and finalized in place. Their stable
+`runtime_request_id` is also retained by the Gateway Record and physical Job checkpoint. Kernel history,
+winner and export commands expose `evidence_health`; never interpret a missing/corrupt Record or
+token checkpoint as an empty result.
+
+Live execution and scheduler state are separate. `light_lineage_status.py` treats the
+nonblocking writer-lock observation as live execution authority. Its
+`scheduler_checkpoint` is only the last persisted scheduling fact and must never make a
+trajectory appear active by itself.
+
+## Current winner model
+
+Current Light has no Supervisor promotion state. A winner candidate must satisfy:
+
+```text
+accepted submit-kernel receipt for exact Agent commit
+∩ passing standard full Evaluate for that commit
+∩ complete per-Shape performance evidence
+```
+
+- `PROGRESS.md` shows the compact Agent-facing state and best accepted submission for its lineage.
+- `frontier.json` contains the accepted-submission Pareto/frontier projection.
+- Multi-trajectory search may additionally show a global best accepted submission after sharing; a single trajectory need not repeat a separate global row.
+- An unsubmitted full Evaluate remains valid measurement evidence in `records/`, but it is not a lineage/global winner and is not broadcast as one.
+- `submit-kernel` acceptance should refresh the local winner/frontier promptly; cross-trajectory global state follows the configured synchronization point.
+
+Do not use old fields named `promoted`, `incumbent`, canonical `vN`, or Episode `attempt.json.accepted` as current winner authority. `light_kernel_history.py` joins Campaign Submission Store records to exact MeasurementStore evidence, and `light_kernel_best.py` selects only verified accepted submissions.
+
+## State boundaries
+
+Keep these independent:
+
+| Layer | Meaning |
 |---|---|
-| Campaign, trajectory, Episode, Session and Agent phase | `light_runtime_status.py` |
-| Performance, correctness, baselines, per-Episode and per-Shape results | `light_performance.py` |
-| Accepted best versus best passing full Evaluate | `light_latency_status.py` |
-| Correctness gates, rejections, promotion and evidence | `light_acceptance.py` |
-| Agate calls/jobs, retries, batches, timeouts and error classes | `light_agate_status.py` |
-| Session/Episode tokens, wall time and token efficiency | `light_token_time.py` |
-| Runtime Tool calls, outcomes, durations and attribution | `light_tool_usage.py` |
-| GPU Wiki queries, results, latency and adoption | `light_wiki_usage.py` |
-| Exact measured source plus raw/Agent-visible evidence | `export_light_evidence.py` |
-| Source package by Git commit, Kernel ID or Gateway Record ID | `export_light_source.py` |
+| Agent Session | Thinking, shell/file tool, Runtime tool, or waiting state |
+| Episode | Audit segment of one persistent trajectory Session; not a candidate version |
+| Agent Git | Public Kernel identity and engineering history |
+| Runtime request | Evaluate, explicit ABBA, Profile, Check, Disassemble, Env, Dev, Command, Wiki or research mutation |
+| Gateway Record | Immutable normalized request/result and Agent-visible receipt |
+| Physical Agate job | Queue/execution terminal state; one Gateway Record may reference multiple jobs/batches |
+| Kernel submission | Review receipt for one exact evaluated Agent Git commit |
+| Search | Trajectory/Epoch scheduling, peer publication and accepted-submission winners |
 
-Use `--help` on the selected script before relying on optional filters or watch flags.
+`light_gateway_jobs.py` expands one logical Gateway Record into every durably
+captured physical submission, including failed attempts that were later
+retried. Each row reports the Job ID, normalized status, error class/reason,
+Shape IDs, checkpoint, and submission number. Physical Job IDs remain
+Supervisor-private and are not projected into the Agent workspace.
 
-## Interpret runtime state
+`waiting_agate` does not prove the remote job is currently running. Correlate the logical Runtime call with saved physical job records. A transport timeout, queue timeout, Ray failure or missing terminal response is infrastructure evidence, not candidate correctness failure.
 
-`light_runtime_status.py` reports Workflow phase and health separately from active Agent Sessions. Common Agent phases are:
-
-- `thinking`: no pending tool result;
-- `executing_tool`: a normal shell/file tool is pending;
-- `executing_runtime_tool`: a local Runtime Tool is pending;
-- `waiting_agate`: an Evaluate, ABBA, Profile, Check, Disassemble, or Dev request is pending;
-- `waiting_wiki`: a GPU Wiki request is pending.
-
-`waiting_agate` does not prove the remote job is running; correlate its Job ID with `light_agate_status.py`. `stalled` is based on durable update age and threshold, not proof of deadlock.
-
-## Interpret performance and promotion
-
-- `accepted_best` is the lowest latency already accepted by Workflow state.
-- `best_passing_full_eval` is the lowest passing standard full Evaluate, even if it was never promoted.
-- A passing or faster ordinary Evaluate does not replace the incumbent without terminal verification and promotion.
-- Read `State` together with `Promoted`: `pass`, `correctness_failure`, `rejected`, `infrastructure_error`, `interrupted`, and `unmeasured` describe candidate Workflow outcome, not Agent or Agate state.
-- Use `light_acceptance.py` for `decision_reason`, incumbent/candidate comparison, and evidence identities.
-
-Do not combine per-Shape winners into a synthetic Kernel. Use a single measured source identity for any reported whole-workload latency.
+In Agate summaries, `queue_seconds` is only `created_at → started_at`, `execution_seconds` is
+`started_at → finished_at`, and `total_seconds` is `created_at → finished_at`. Runtime end-to-end
+duration is reported separately. Ray Data backend IDs may only have an outer-job response; check
+`response_scope` and `raw_backend_response_available` before treating an export as the raw
+backend response.
 
 ## Diagnose slow or failed progress
 
-1. Use runtime status to identify the exact scope, stage, Episode, Session, Agent phase, pending tool, and staleness.
-2. If waiting on Agate, inspect logical calls and physical jobs. Report queue, execution and total time separately when persisted.
-3. Classify failures as `infrastructure`, `candidate`, `policy`, `protocol`, or `unknown`. Do not count infrastructure failure as correctness failure.
-4. Inspect batch fields before claiming a retry reran everything; Evaluate and ABBA may reuse completed Shape batches.
-5. If the Agent is thinking or repeatedly restarting, inspect Session token/incidents and the corresponding conversation trace without exposing secrets.
-6. If Campaign state is inactive or stalled, inspect the owning Supervisor process and logs; do not restart until the failure boundary is understood.
+1. Identify scope, trajectory, Epoch, Episode audit segment, Session, pending tool and newest durable timestamp.
+2. If Runtime is pending, inspect the request receipt and whether the Agent was paused during it.
+3. If Agate is involved, separate queue time, execution time, polling/transport failure and retry delay.
+4. Classify as `infrastructure`, `candidate`, `policy`, `protocol`, or `unknown`; preserve the original error and do not relabel infrastructure as correctness.
+5. Inspect `shape_ids`, outer batch identity and reuse fields before claiming all Shapes reran.
+6. For a rejected submission, distinguish missing/failed Evaluate evidence from final-source review rejection.
+7. For research friction, inspect Direction/Experiment request, inline Review result and private audit; do not infer that a Review state changed the Kernel.
+8. For pooled search, inspect each lineage independently and the last completed sharing boundary.
 
-Current main does not durably persist every fact. Exact reasoning-token splits, Agent active time, Agate wait time, retry sleep duration, live lock/slot occupancy, and lossless audit-to-Session joins may be unavailable. Preserve `null` and the availability reason rather than estimating.
+Do not estimate missing token splits, active time, queue time or retry sleep from wall-clock
+timestamps alone. Default status output omits facts that are not durably available instead of
+inventing values or returning explanatory placeholder fields.
+
+## Research and sharing
+
+`PROGRESS.md` is a compact projection, not the complete Research Store. Use `light_lineage_status.py` to inspect:
+
+- local Direction queue, focus and lifecycle;
+- shared discovery pool and source trajectory;
+- Experiment records and associated Gateway Record IDs;
+- claim-review quality and evidence eligibility;
+- peer Git refs and sharing boundary;
+- accepted-submission lineage/global winners.
+
+Eligible shared records are read-only evidence. A trajectory must explicitly absorb or derive peer work; sharing never overwrites local HEAD. Conversations and scratch are not shared.
+
+## Runtime output and Records
+
+Runtime terminal output is the complete canonical `operation/status/result` receipt, including correctness, performance, diagnostics and complete streams where applicable. The same result is saved in `records/<gateway-id>.json`; no second read is required to recover omitted fields.
+
+Dev/Command streams are in `result.stdout` and `result.stderr`. For later inspection, read only the needed fields from the saved Record. Env also returns its complete redacted observation; it creates no GPU Job.
+
+Gateway Record IDs use the public `gateway-...` identity. Physical `ev_...` job IDs remain private transport evidence and must not be substituted into Agent-facing research records.
 
 ## Token and tool analysis
 
-Use `light_token_time.py` for Session, startup, trajectory and Episode totals, average tokens per Attempt, incidents, and latency improvement per million tokens. Bootstrap and Framework Baseline belong to startup totals and should not be folded into ordinary Attempt averages.
+Use `light_lineage_status.py` for per-lineage main-Agent and independent-Review totals.
+Use `light_kernel_history.py` for immutable cumulative token snapshots at each passing full
+Evaluate and accepted submission. Review tokens remain separate from main-Agent totals.
+Every managed main-Agent or Review invocation also archives a complete `conversation.jsonl` and
+`token-usage.json` under Supervisor-private Campaign state. These raw Review transcripts are not
+projected into the optimizer workspace; only bounded verdicts and explicitly selected historical
+main-Agent evidence may be Agent-visible.
+Review archives live at `measurements/reviews/<submission-id|direction-id|experiment-id>/vN/`.
+The same Review directory owns persistent `home/` and `workspace/` siblings for native CLI resume;
+versioned audit files are never used as a substitute for native resume state. `captures/` retains
+failed and successful invocations. 审查结论、对话、token 及原生恢复状态统一存储在 Measurement
+Store 的对应 Review 目录，失败和重试同样归档，且不向优化 Agent 暴露原生 Session 文件。
+Input, output, cache, total, and reasoning tokens are shown separately. When all Provider counters
+are absent, finalized conversation text supplies a best-effort `estimated` input/output/reasoning
+total while cache fields remain null. A missing reasoning counter is not inferred when other native
+Provider counters are available. Use `light_runtime_calls.py` for
+Runtime audit counts, outcomes and durations. It includes running calls and validation/lifecycle
+rejections for current receipts, plus p50/p95/max, coverage and error breakdowns. Filter Runtime or
+Agate calls with repeatable `--kind`, `--status`, `--lineage`, optional `--since/--until`, and
+`--last`. Do not join old independent logs by timestamp when no stable request identity exists.
+The JSON `all_paths_totals` object adds main-Agent and every Review total, while keeping reasoning
+as a non-additive breakdown. Its measurement distinguishes `exact`, `estimated`, `partial`, and
+`unavailable` coverage.
 
-Use `light_tool_usage.py` for authoritative Runtime audit counts and durations. Session attribution is a separate source; do not join it to audit receipts by timestamp when the checkout lacks a stable identity.
+Long provider calls can cross the shell frontend's 600-second foreground boundary while the actual Light/Reviewer process continues. Treat backgrounding or `exit 143` as a separate frontend/process issue; inspect the captured Session and private Review receipt before declaring the Review failed.
 
-## Continuous latency sampling
+## Export source and evidence
+
+Export one commit with its source, exact bound measurements, Gateway IDs and
+physical Agate IDs:
 
 ```bash
-python3 "$AKA_REPO/observability/light_latency_status.py" \
-  "$CAMPAIGN" --watch 30 --compact
+python3 "$AKA_REPO/observability/export_light_kernel.py" "$CAMPAIGN" \
+  --kernel-commit-id 0123456789abcdef0123456789abcdef01234567 \
+  --output /path/to/new-kernel-evidence
 ```
 
-Use a normal one-shot `--json` query for reports. Watch mode is for external collection and does not mutate the Campaign.
-
-## Export exact source and evidence
-
-Export a complete measurement evidence bundle:
+Export one logical Gateway Record with its audited Runtime request, every raw Agate
+attempt and exact Agent-visible response:
 
 ```bash
-python3 "$AKA_REPO/observability/export_light_evidence.py" "$CAMPAIGN" \
+python3 "$AKA_REPO/observability/export_light_gateway_record.py" "$CAMPAIGN" \
   --gateway-record-id gateway-0123456789abcdef0123456789abcdef \
-  --output /path/to/new-evidence-directory
+  --output /path/to/new-gateway-evidence
 ```
 
-The output contains the exact source package, physical Agate Job IDs, the response
-Light exposed to the Agent, and a provenance manifest. Raw Agate responses are
-included when retained. Shared records may provide only `recorded_execution_facts`;
-`agate_response` then remains null and `evidence_source` identifies the available
-evidence. The output path must not already exist.
-
-Export only source by accepted Git revision or measured identity:
-
-```bash
-python3 "$AKA_REPO/observability/export_light_source.py" "$CAMPAIGN" \
-  --git-commit 0123456789abcdef0123456789abcdef01234567 \
-  --output /path/to/new-source-directory
-
-python3 "$AKA_REPO/observability/export_light_source.py" "$CAMPAIGN" \
-  --gateway-record-id gateway-0123456789abcdef0123456789abcdef \
-  --output /path/to/new-source-directory
-```
-
-Use evidence export before destructive cleanup or when comparing Agate's raw response with Agent-visible projection.
+The output path must not exist. Export before destructive cleanup or when comparing raw Agate output with the Agent-visible projection.
 
 ## Reporting checklist
 
-For a status response, include only supported facts:
+Report only supported facts:
 
 - checkout commit and campaign workspace;
-- per-scope stage, Episode, health, Session phase and staleness;
-- accepted best and best passing full-Eval latency with source/Record identity;
-- promotion/rejection state and reason;
-- pending or failed Agate jobs, error class, retries and batch reuse;
-- token totals and per-Attempt figures requested by the user;
-- whether fields are unavailable, incomplete, or derived from a fallback.
+- per-lineage Epoch/Episode segment, writer liveness, Session phase and staleness;
+- best accepted submission and best measured passing full Evaluate, clearly distinguished;
+- exact Agent commit and Gateway Record identities;
+- pending/failed Agate batches, error class, retries and reuse;
+- token totals requested by the user;
+- material missing evidence only when its absence changes the conclusion.
 
-Anchor conclusions to the newest durable timestamps. Do not describe an old snapshot as current.
+Anchor all conclusions to the newest durable timestamp. A read-only inspection does not authorize restart, retry, cleanup or deletion.

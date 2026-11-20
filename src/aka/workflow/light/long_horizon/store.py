@@ -1,59 +1,25 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any
 
 from aka.core.filesystem import durable_write_json
 
-import aka.workflow.light.long_horizon.main_adapter as main_adapter
 from aka.workflow.light.long_horizon.models import SupervisorState
 from aka.workflow.light.long_horizon.protocol import atomic_write_json, atomic_write_text
 from aka.workflow.light.long_horizon.telemetry import render_episode_brief
 
-RUNTIME_DIR = ".atrex_long_horizon"
-VERIFY_DIR = "verification_artifacts/.atrex_long_horizon_verify"
-LIVE_MEMORY_FILE = "memory/live.json"
-
-
 class CampaignStore:
-    def __init__(self, workspace: Path, *, candidate_workspace):
-        self.candidate_workspace = candidate_workspace
+    def __init__(self, workspace: Path):
         self.workspace = workspace.resolve()
-        self.root = self.workspace / RUNTIME_DIR
+        from aka.workflow.light.support.paths import supervisor_campaign_root
+
+        # Segment state is Supervisor-private.  It must not appear in the
+        # Agent repository or rely on Git ignore rules for isolation.
+        self.root = supervisor_campaign_root(self.workspace) / "segments"
         self.root.mkdir(parents=True, exist_ok=True)
-        self.ensure_excluded(self.workspace, candidate_workspace=candidate_workspace)
-
-    @staticmethod
-    def ensure_excluded(workspace: Path, *, candidate_workspace, wiki_trace_only: bool = False) -> None:
-        """Install supervisor excludes, or only the early Wiki trace subset.
-
-        Workspace setup happens before the framework baseline commit.  At that
-        point only consumer-owned Wiki telemetry may be excluded; installing
-        the complete supervisor set would also hide baseline plans.
-        """
-        wiki_trace_rules = (
-            "/.gpu_wiki_profile/",
-            "/trace-retention-manifest.json",
-            "/.aka-agent-observations/",
-        )
-        supervisor_rules = (
-            f"/{RUNTIME_DIR}/",
-            f"/{VERIFY_DIR}/",
-            f"/{main_adapter.STALL_STATE_FILE}",
-            f"/{LIVE_MEMORY_FILE}",
-            *wiki_trace_rules,
-            # Episode evidence is archived by the supervisor and must never
-            # become part of the candidate commit.
-            "/plans/",
-            "/profiles/",
-            "/.humanize/",
-        )
-        rules = wiki_trace_rules if wiki_trace_only else supervisor_rules
-        from aka.contracts.workspace import WorkspaceExclusion
-        candidate_workspace.exclude_runtime_paths(workspace, tuple(
-            WorkspaceExclusion(rule.removeprefix('/').removesuffix('/'), subtree=rule.endswith('/'))
-            for rule in rules))
 
     @property
     def state_path(self) -> Path:
@@ -62,11 +28,6 @@ class CampaignStore:
     @property
     def active_path(self) -> Path:
         return self.root / "active_episode.json"
-
-    @property
-    def live_memory_path(self) -> Path:
-        """Uncommitted, best-effort progress for the currently active episode."""
-        return self.workspace / LIVE_MEMORY_FILE
 
     def episode_dir(self, episode: int) -> Path:
         path = self.root / "episodes" / f"e{episode:04d}"
@@ -81,6 +42,19 @@ class CampaignStore:
 
     def save_state(self, state: SupervisorState) -> None:
         durable_write_json(self.state_path, state.as_dict())
+
+    def record_session(self, state: SupervisorState, *, session_id: str, backend: str) -> None:
+        """Persist native identity before invocation, independently of segment completion."""
+        if not session_id or not backend:
+            raise ValueError("Native Session identity and backend must be non-empty")
+        if state.session_id == session_id and state.session_backend == backend:
+            return
+        updated = SupervisorState.from_dict(state.as_dict())
+        updated.session_id = session_id
+        updated.session_backend = backend
+        self.save_state(updated)
+        state.session_id = session_id
+        state.session_backend = backend
 
     def record_usage(
         self, state: SupervisorState, receipt_id: str, cumulative_tokens: int

@@ -1,81 +1,82 @@
 # Session observability
 
-The shared Agent publishes normalized invocation observations through
-`aka.agent.public_output`. The public Agent interface exposes session history and
-conversation events without requiring consumers to parse provider-specific transcript trees.
+Every managed Agent invocation writes its conversation and token receipts to Supervisor-private
+storage. Same-Session continuation creates a new invocation archive without discarding earlier
+history. These observations do not change Agent Git or decide submission acceptance.
 
-## Current configuration
+## Archives
 
-`aka.agent.plugin` accepts `session_name`, `sandbox`, `bwrap_executable`, `proc_mode`,
-`timeout_seconds`, and `state_directory`. There is no `capture` flag or
-`ATREX_SESSION_CAPTURE_DIR` configuration in the current shared Agent.
+Main Agent invocations live below the lineage's `segments/episodes/eNNNN/sessions/`.
+Each invocation keeps `conversation.jsonl`, `token-usage.json`, and captured provider streams.
+Review families use `measurements/reviews/<submission-id|direction-id|experiment-id>/` with:
 
-```json
-{"api_version":1,"patches":[{"id":"agent","config":{
-  "sandbox":"none","proc_mode":"private","session_name":"optimization"
-}}]}
-```
+- `home/`: native provider state used to resume the reviewer.
+- `workspace/`: current evidence and output directory.
+- `vN/result.json`, `conversation.jsonl`, `token-usage.json`: immutable revision evidence.
+- `vN/captures/`: complete per-attempt captures, including failed attempts.
 
-Use the patch with the [native launch arguments](quickstart.md#launch-light).
-For Bubblewrap, retain `sandbox: bwrap` explicitly. Use `state_directory` only for an
-operator-selected persistent Agent state root; it is not an arbitrary transcript export.
+Unsupported attempts remain private. Agent-visible research contains the bounded review conclusion,
+not reviewer conversations. A transcript export is audit evidence; native provider state is still
+required for resume. An unavailable native Session causes a fresh-Session retry, not silent reuse
+of another conversation.
 
-## Durable observations
+## Token accounting
 
-Each invocation records a schema-1 JSON observation under `.aka-agent-observations` in
-its observation workspace. It contains runtime/session identity, usage, normalized events,
-resume support and observation errors. Files are private, atomically published, and read
-with no-follow and hardlink checks. Consumers should use the Agent's observation methods,
-not infer a completed session from directory contents or provider log filenames.
+Main-Agent usage and Review usage are separate. Reviews are broken down by Review kind; total
+all-path usage sums disjoint invocation receipts. A centrally archived Review discovered through
+multiple lineage scopes is counted once. `reasoning_tokens` is reported separately and is normally
+already included in output/total tokens; it is not added to the total again.
 
-Usage and conversation coverage depend on the backend's available output. Missing events
-or usage are not evidence of zero work. Observation errors remain visible separately from
-the primary invocation result. Workflow history and optional dashboard publication consume
-these observations; measurements, source identity and candidate promotion are separate.
+`exact` means the provider receipts cover the observed invocation. `partial` retains known counters
+when evidence is incomplete or contradictory. `estimated` indicates a best-effort transcript
+estimate; `unavailable` means no usable total. Unknown counters are `null`, not invented zeroes.
+Identical duplicate receipts preserve exactness. Conflicting overlapping receipts select one whole
+observation (the larger reported total) and mark it partial; they are neither added nor combined
+with component-wise maxima into a synthetic bill.
 
-## Historical capture and validation
+Provider accounting rules differ: Claude root response usage already includes its known tool/model
+path and exported child rows must not be added twice. Codex cumulative counters require an invocation
+baseline. Pi stream/native copies are reconciled rather than summed; DSH native/stream identities
+prevent repeated response accounting. Per-provider diagnostics remain in the archived receipt.
+Accepted submissions and passing full Evaluates retain token checkpoints at their result time.
 
-The former capture toggles, transcript archive layout, kill switch, provider-specific
-reconciliation rules and validation reports are preserved in the
-[pre-migration observability guide](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md).
-They describe that implementation and are not current configuration or promises about
-all provider-native transcripts. Retain a matching old installation to reproduce those
-runs. This documentation update validates CLI/configuration contracts; it does not run
-paid coding agents or establish all-provider transcript completeness.
+## Capture and liveness
 
-## Historical topic index
+Capture drains stdout/stderr while the process runs. Heartbeats report live pipe byte counts even
+when `Popen.wait()` raises a timeout without buffered output. Process-tree termination snapshots
+its tracked process groups under a lock so concurrent child discovery cannot interrupt revocation.
 
-The links below preserve the earlier documentation text and saved section links.
-`1abdf3f3` identifies the documentation snapshot, not a compatible runtime for the
-removed commands. Historical behavior predates the shared-module refactor; use the
-implementation revision named in each validation record when reproducing evidence.
+Native transcripts are read incrementally with no-follow regular-file checks. Resume uses an
+in-process cache of compact response IDs/cumulative counters and an inode/offset cursor. Only the
+new suffix is scanned on later invocations; a controller restart or cache eviction rebuilds the
+index. An old malformed line or interrupted suffix does not poison a later invocation's quality.
+An incomplete history scan is explicitly partial, so missing IDs cannot silently double-count usage.
 
-<a id="motivation-users-and-observable-benefit"></a>
-- [Motivation, users, and observable benefit](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#motivation-users-and-observable-benefit) (historical).
+Capture limits are 64 MiB per file, 128 MiB per invocation, 2 MiB per line, 4,096 files and 200,000
+records. Limits constrain observability only: exceeding one marks capture incomplete and does not
+terminate the Agent. Native capture may be incomplete despite functional command stdout being
+available. No Episode active-time limit is imposed by capture.
 
-<a id="capture-lifecycle"></a>
-- [Capture lifecycle](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#capture-lifecycle) (historical).
+## Configuration and compatibility
 
-<a id="codex-reconciliation-and-failure-paths"></a>
-- [Codex reconciliation and failure paths](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#codex-reconciliation-and-failure-paths) (historical).
+Capture is built into shared execution; there is no Workflow capture-off option. Standalone
+invocations can use `ATREX_SESSION_CAPTURE_DIR` to select an archive directory. Managed Light
+chooses private invocation roots. Old capture-off recipes are historical; keep their corresponding
+checkout to reproduce them. A missing/unwritable archive is reported and does not fabricate usage.
 
-<a id="code-map"></a>
-- [Code map](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#code-map) (historical).
+## Code map
 
-<a id="where-records-live"></a>
-- [Where records live](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#where-records-live) (historical).
+| Responsibility | Owner |
+|---|---|
+| Invocation ownership, cancellation and optional provider timeout | [`provider.py`](../src/aka/agent/provider.py) |
+| Process streams, heartbeat and termination | [`execution/process.py`](../src/aka/agent/execution/process.py) |
+| Live archive and resume index | [`session_capture.py`](../src/aka/agent/session_capture.py) |
+| Bounded no-follow reads | [`session_tail.py`](../src/aka/agent/session_tail.py) |
+| Provider counters and resume baselines | [`session_usage.py`](../src/aka/agent/session_usage.py) |
+| Token evidence merge | [`contracts/agent.py`](../src/aka/contracts/agent.py) |
+| Shared disjoint-usage rollup | [`usage_summary.py`](../src/aka/agent/usage_summary.py) |
+| Point-in-time checkpoints | [`token_checkpoints.py`](../src/aka/workflow/light/long_horizon/token_checkpoints.py) |
 
-<a id="disable-capture-and-roll-back"></a>
-- [Disable capture and roll back](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#disable-capture-and-roll-back) (historical).
-
-<a id="conversation"></a>
-- [Conversation](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#conversation) (historical).
-
-<a id="usage"></a>
-- [Usage](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#usage) (historical).
-
-<a id="failure-and-privacy-boundaries"></a>
-- [Failure and privacy boundaries](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#failure-and-privacy-boundaries) (historical).
-
-<a id="verification"></a>
-- [Verification](https://github.com/alibaba/atrex-kernel-agent/blob/1abdf3f36cbb7797fdedec7924ff40431975df7b/docs/session-observability.md#verification) (historical).
+Use the [observability Skill](../skills/atrex-aka-light-observability/SKILL.md) for current state,
+Kernel history, Runtime/Agate calls and evidence export. Historical capture-performance reports
+remain version-specific measurements, not performance claims about this implementation.

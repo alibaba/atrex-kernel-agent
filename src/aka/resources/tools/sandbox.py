@@ -1,21 +1,8 @@
 #!/usr/bin/env python3
-"""Session-scoped Agent tool client; GPU/Wiki authority stays in the Supervisor.
-
-Existing GPU command syntax is preserved, for example:
-  python3 tools/sandbox.py --kind run --no-sync -- python3 test_kernel.py --no-memory
-  python3 tools/sandbox.py --kind profile --no-sync -- python3 profile_driver.py
-  python3 tools/sandbox.py --kind dev --input scratch/probe.py -- python3 scratch/probe.py
-Additional typed operations: check, disassemble, env; Wiki: wiki-query, wiki-search,
-wiki-hardware. Use --kind OPERATION --help for the operation's request options.
-Read saved results with --kind record-read --record-id gateway-...;
-copy source with --kind kernel-read --kernel-id kernel-... --output-path scratch/kernel.py;
-list a Kernel's measurements with --kind kernel-records --kernel-id kernel-....
-Find each Shape's fastest measured Kernel with --kind kernel-pareto-frontier (no GPU job).
-Journal writes: update-direction, record-experiment, episode-report --request-file FILE.
-Journal indexes: list-directions, list-experiments --output-path scratch/FILE.
-Journal reads: load-direction, load-experiment --record-id ID.
-Journal tools require a registered Long Horizon Episode; see skills/runtime-records/.
-No direct Agate fallback is performed when the Runtime is unavailable.
+"""Session-scoped Runtime client. Use --help for this Campaign's enabled tools,
+and --kind OPERATION --help for its request schema. Wiki, research and submission
+operations follow their independently installed Skills. Runtime returns the full
+canonical receipt and saves observations in records/. No direct Agate fallback.
 """
 from __future__ import annotations
 
@@ -29,12 +16,13 @@ from pathlib import Path
 # Wire contract with the Supervisor; keep this client independent of its modules.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024
 MAX_REQUEST_FILE_BYTES = MAX_REQUEST_BYTES - 4 * 1024
-# Canonical result payload limit, matching the Supervisor's compact ASCII JSON.
-MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 WIKI_KINDS = {"wiki-query": "query_nl", "wiki-search": "query_wiki", "wiki-hardware": "query_hardware"}
-REQUEST_KINDS = {"update-direction": "direction_update", "record-experiment": "experiment_record", "episode-report": "episode_report"}
-LIST_KINDS = {"list-directions": "directions_list", "list-experiments": "experiments_list"}
-LOAD_KINDS = {"load-direction": ("direction_load", "direction_id"), "load-experiment": ("experiment_load", "experiment_id")}
+REQUEST_KINDS = {
+    "update-direction": "direction_update",
+    "prioritize-direction": "direction_prioritize",
+    "record-experiment": "experiment_record",
+    "submit-kernel": "kernel_submit",
+}
 
 
 def client_error(code: str, message: str, instruction: str, *, repairable=False, path="$", **details) -> None:
@@ -43,7 +31,6 @@ def client_error(code: str, message: str, instruction: str, *, repairable=False,
         "ok": False, "repairable": repairable, "detail": message,
         "error": {"code": code, "message": message, "next_action": instruction, **details},
         "issues": [{"path": path, "code": code, "message": message}],
-        "recovery": [{"instruction": instruction}],
     }), file=sys.stderr)
 
 
@@ -51,51 +38,41 @@ class _ClientParser(argparse.ArgumentParser):
     def error(self, message):
         client_error("invalid_request", message,
                      "Correct the CLI arguments or JSON request file and retry; no request was sent. "
-                     "Use --kind OPERATION --help and skills/runtime-records/references/journal.md.",
+                     "Use --kind OPERATION --help and .agents/skills/runtime-records/references/journal.md.",
                      repairable=True)
         raise SystemExit(2)
 
 
 def journal_request(kind: str, argv: list[str]) -> dict:
-    parser = _ClientParser(allow_abbrev=False, description="Runtime Journal; request schemas: skills/runtime-records/references/journal.md")
-    parser.add_argument("--kind", choices=[*REQUEST_KINDS, *LIST_KINDS, *LOAD_KINDS], required=True)
-    if kind in REQUEST_KINDS:
-        parser.add_argument(
-            "--request-file",
-            required=True,
-            help=(
-                f"JSON object; at most {MAX_REQUEST_FILE_BYTES} bytes "
-                "(2 MiB minus 4 KiB envelope reserve)"
-            ),
-        )
-    elif kind in LIST_KINDS:
-        parser.add_argument("--output-path", required=True, help="Workspace-relative scratch/ destination")
-    else:
-        parser.add_argument("--record-id", required=True)
+    parser = _ClientParser(allow_abbrev=False, description="Runtime research and submission mutations; request schemas: .agents/skills/runtime-records/references/journal.md")
+    parser.add_argument("--kind", choices=[kind], required=True)
+    parser.add_argument(
+        "--request-file",
+        required=True,
+        help=(
+            f"JSON object; at most {MAX_REQUEST_FILE_BYTES} bytes "
+            "(2 MiB minus 4 KiB envelope reserve)"
+        ),
+    )
     args = parser.parse_args(argv)
-    if kind in REQUEST_KINDS:
-        try:
-            with Path(args.request_file).open("rb") as source:
-                raw = source.read(MAX_REQUEST_FILE_BYTES + 1)
-            if len(raw) > MAX_REQUEST_FILE_BYTES:
-                raise ValueError(
-                    f"request file exceeds {MAX_REQUEST_FILE_BYTES} bytes "
-                    "(2 MiB minus 4 KiB reserved for the request envelope). "
-                    "Shorten request text or lists before retrying; no request was sent"
-                )
-            value = json.loads(raw)
-            if not isinstance(value, dict):
-                raise ValueError("request file must contain one JSON object")
-        except (OSError, ValueError) as error:
-            parser.error(str(error))
-        return {"operation": REQUEST_KINDS[kind], "request": value}
-    if kind in LIST_KINDS:
-        return {"operation": LIST_KINDS[kind], "file": args.output_path}
-    operation, field = LOAD_KINDS[kind]
-    return {"operation": operation, field: args.record_id}
+    try:
+        with Path(args.request_file).open("rb") as source:
+            raw = source.read(MAX_REQUEST_FILE_BYTES + 1)
+        if len(raw) > MAX_REQUEST_FILE_BYTES:
+            raise ValueError(
+                f"request file exceeds {MAX_REQUEST_FILE_BYTES} bytes "
+                "(2 MiB minus 4 KiB reserved for the request envelope). "
+                "Shorten request text or lists before retrying; no request was sent"
+            )
+        value = json.loads(raw)
+        if not isinstance(value, dict):
+            raise ValueError("request file must contain one JSON object")
+    except (OSError, ValueError) as error:
+        parser.error(str(error))
+    return {"operation": REQUEST_KINDS[kind], "request": value}
 
 
-def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
+def proxy_command(path: str, payload: dict) -> int:
     client_path = os.environ.get("AKA_AGENT_TOOL_CLIENT_PATH")
     if client_path:
         sys.path.insert(0, client_path)
@@ -128,22 +105,16 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
         if status >= 400:
             print(json.dumps(result), file=sys.stderr)
             return 2 if status in {400, 404, 413, 422} else 75
-        raw = json.dumps(result, ensure_ascii=True, allow_nan=False, separators=(",", ":")).encode()
+        json.dumps(result, ensure_ascii=True, allow_nan=False, separators=(",", ":"))
     except (ValueError, UnicodeError):
         client_error("invalid_runtime_response", "The operation reply is invalid.",
                      "Inspect saved records; do not resubmit blindly.")
         return 75
     try:
-        if len(raw) > MAX_RESPONSE_BYTES:
-            raise ValueError("response exceeds limit")
-        result = json.loads(raw)
         if (isinstance(result, dict) and isinstance(result.get("operation"), str)
                 and result.get("status") in {"completed", "failed", "cancelled", "unknown"}
                 and isinstance(result.get("result"), dict)):
             print(json.dumps(result, ensure_ascii=False, allow_nan=False, sort_keys=True))
-            # Reading a failed measurement succeeds; it is not a failed query.
-            if record_read:
-                return 0
             if result["status"] == "unknown" or result["result"].get("outcome") == "unknown":
                 return 75
             # Preserve the executor's tempfail/candidate exit classification
@@ -160,17 +131,7 @@ def proxy_command(path: str, payload: dict, *, record_read=False) -> int:
             ):
                 return 75
             return 0 if result["status"] == "completed" and detail.get("correct") is not False else 1
-        if not isinstance(result, dict) or type(result.get("exit_code")) is not int:
-            raise ValueError("response omitted exit_code")
-        for key, stream in (("stdout", sys.stdout), ("stderr", sys.stderr)):
-            value = result.get(key, "")
-            if not isinstance(value, str):
-                raise ValueError(f"invalid {key}")
-            if value:
-                print(value, end="" if value.endswith("\n") else "\n", file=stream)
-        if result.get("truncated"):
-            print("[sandbox] output shortened by Supervisor; ask the operator to inspect request diagnostics.", file=sys.stderr)
-        return result["exit_code"]
+        raise ValueError("response omitted the canonical operation/status/result receipt")
     except (ValueError, UnicodeError) as error:
         client_error("invalid_runtime_response", f"Invalid Runtime response ({error}); outcome may be unknown.",
                      "Inspect saved records and ask the operator to reconcile the request. Do not resubmit blindly.")
@@ -183,26 +144,31 @@ def proxy_wiki(tool: str, argv: list[str]) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
+    kinds = json.loads(os.environ.get("AKA_RUNTIME_TOOLS",
+        os.environ.get("AKA_AGATE_TOOLS", '["env", "evaluate", "command"]')))
     if args in (["--help"], ["-h"]):
-        print(__doc__)
+        print("Enabled Runtime tools: " + ", ".join(kinds))
+        print("Use --kind OPERATION --help for enabled tool options. "
+              "Research and submit-kernel use --request-file; read the runtime-records Skill for JSON fields.")
         return 0
     # Only recognize the full client-side dispatcher; the Supervisor validates
     # every argument using parsers with allow_abbrev=False.
-    record_read = False
     for index, value in enumerate(args):
         if value == "--":
             break
         kind = args[index + 1] if value == "--kind" and index + 1 < len(args) else (
             value.split("=", 1)[1] if value.startswith("--kind=") else None
         )
-        if kind is not None:
-            record_read = kind == "record-read"
-        if kind in {*REQUEST_KINDS, *LIST_KINDS, *LOAD_KINDS}:
+        if kind and "AKA_RUNTIME_TOOLS" in os.environ and kind not in kinds:
+            client_error("runtime_tool_disabled", f"Runtime tool {kind!r} is not enabled.",
+                         "Use python3 tools/sandbox.py --help for enabled tools.", available_kinds=kinds)
+            return 2
+        if kind in REQUEST_KINDS:
             return proxy_command("/v1/journal/execute", journal_request(kind, args))
         if kind in WIKI_KINDS:
             count = 2 if value == "--kind" else 1
             return proxy_wiki(WIKI_KINDS[kind], args[:index] + args[index + count:])
-    return proxy_command("/v1/gateway/execute", {"argv": args}, record_read=record_read)
+    return proxy_command("/v1/gateway/execute", {"argv": args})
 
 
 if __name__ == "__main__":

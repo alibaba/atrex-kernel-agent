@@ -27,8 +27,16 @@ class InfrastructureUnavailable(RuntimeError):
     pass
 
 
-class ReviewerExecutionTimeout(RuntimeError):
-    """A completed review session explicitly exceeded its execution deadline."""
+class ReviewerRetryableFailure(RuntimeError):
+    """A fresh isolated review did not produce a usable terminal verdict."""
+
+
+class ReviewerExecutionTimeout(ReviewerRetryableFailure):
+    """A completed review session reported an external execution timeout."""
+
+
+class ReviewerOutputUnavailable(ReviewerRetryableFailure):
+    """A completed review session omitted or corrupted its required verdict."""
 
 
 class RetryStateError(ValueError):
@@ -78,7 +86,7 @@ def _load_retry_state(path: Path, stage: str, category: str) -> dict:
 def check_review_service(result) -> None:
     """Classify execution timeouts separately from explicit service outages."""
     if result.timed_out:
-        raise ReviewerExecutionTimeout("reviewer exceeded its configured execution timeout")
+        raise ReviewerExecutionTimeout("reviewer reported an external execution timeout")
     if result.exit_status == 0:
         return
     for line in getattr(result, "stdout_tail", "").splitlines():
@@ -145,7 +153,7 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
             durable_write_json(path, record, indent=2, ensure_ascii=False)
             print(f"[infrastructure] {stage}: {reason}; retry in {POLL_SECONDS} seconds; "
                   f"candidate and episode preserved; state={path}", flush=True)
-        except ReviewerExecutionTimeout:
+        except ReviewerRetryableFailure:
             # retry_review owns this expected outcome and its durable budget.
             # Preserve any prior outage record; this is not a failed service step.
             raise
@@ -166,10 +174,10 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None)
 
 
 def retry_review(workspace: Path, stage: str, operation, *, cancel: Event | None = None):
-    """Allow one fresh review after a classified execution timeout, durably bound to its evidence.
+    """Allow one fresh review after a classified retryable failure.
 
     The operation must create a fresh isolated session and restore its inputs.
-    Only ReviewerExecutionTimeout consumes this budget; OS/socket timeouts propagate.
+    Only ReviewerRetryableFailure consumes this budget; OS/socket timeouts propagate.
     Explicit service outages retain their separate infrastructure retry policy.
     """
     key = hashlib.sha256(stage.encode()).hexdigest()[:24]
@@ -179,15 +187,19 @@ def retry_review(workspace: Path, stage: str, operation, *, cancel: Event | None
     while timeout_count < 2:
         try:
             result = retry_infrastructure(workspace, stage, operation, cancel=cancel)
-        except ReviewerExecutionTimeout:
+        except ReviewerRetryableFailure as exc:
             timeout_count += 1
             durable_write_json(path, {
                 "schema_version": 1, "stage": stage,
                 "timeout_count": timeout_count,
                 "last_timeout_at": time.time(),
+                "reason": str(exc)[:2000],
             })
             if timeout_count < 2:
-                print(f"[review] {stage}: execution timed out; retrying in a fresh session", flush=True)
+                print(
+                    f"[review] {stage}: {exc}; retrying in a fresh session",
+                    flush=True,
+                )
         else:
             if timeout_count:
                 durable_write_json(path, {
@@ -195,6 +207,7 @@ def retry_review(workspace: Path, stage: str, operation, *, cancel: Event | None
                 })
             return result
     raise ValueError(
-        "reviewer execution timed out twice for this evidence; "
-        "validation blocked (increase the reviewer timeout to retry)"
+        "reviewer failed to produce a usable verdict twice for this evidence; "
+        "validation blocked (inspect the reviewer session diagnostics and output contract "
+        "before retrying)"
     )

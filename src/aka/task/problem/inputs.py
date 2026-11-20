@@ -170,8 +170,7 @@ class BenchInputs:
         """Return evaluator-only native inputs behind a generalized public problem."""
         op_dir = self.operator_dir
         use_generalized = (
-            self.optimization_mode == "production"
-            and not is_sol_op(op_dir)
+            not is_sol_op(op_dir)
             and (op_dir / "shapes.json").is_file()
         )
         if not self.bench_root or not use_generalized:
@@ -228,7 +227,7 @@ class BenchInputs:
             ) from exc
         leaked = [
             name
-            for name in ("shapes.json", "metadata.json", "roofline.json", "valid.py")
+            for name in ("shapes.json", "roofline.json", "valid.py")
             if (self.workspace / name).exists()
         ]
         if leaked:
@@ -240,9 +239,9 @@ class BenchInputs:
 
 
     def prepare_public(self) -> PublicInputContent:
-        """Describe the public contract before any production optimization session.
+        """Describe the public contract before any native optimization session.
 
-        A user-authored contract is copied verbatim. When production receives only detailed
+        A user-authored contract is copied verbatim. When a campaign receives only detailed
         evaluator shapes, a dedicated clean AKA session derives the public contract in a temporary
         directory; the later baseline/optimization sessions never receive ``shapes.json``.
         """
@@ -273,12 +272,6 @@ class BenchInputs:
                 flush=True,
             )
             return PublicInputContent(True)
-        if self.optimization_mode != "production":
-            raise RuntimeError(
-                "a generalized non-production campaign requires a user-provided "
-                f"{AGENT_PROBLEM_FILENAME}"
-            )
-
         return PublicInputContent(False)
 
     def operator_files(self) -> tuple[WorkspaceFile, ...]:

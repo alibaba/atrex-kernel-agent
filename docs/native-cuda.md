@@ -33,10 +33,9 @@ gateway-owned source; English documentation is checked against its reviewed
 upstream and translation digests. `<gpu_arch>` preproduction exercised native CUDA Evaluate,
 multi-file CUTLASS, targeted numerical inputs, Profile, two-shape native ABBA and a
 deliberately incorrect candidate. One ABBA allocation encountered repository networking
-failure; the existing infrastructure retry recovered it and both shapes passed.
-Agate Check/Disassemble and SOL do not accept native manifests. The
-[SSH backend](ssh-backend.md) supports native manifests with provisioned dependencies
-and worker-supported diagnostics. Unsupported requests stop without a Dev fallback.
+failure; the existing infrastructure retry recovered it and both shapes passed. Gateway and
+explicit SSH support native manifests and typed diagnostics; SOL does not. Unsupported
+native requests stop without a Dev fallback.
 
 
 Final-package preproduction validation (2026-10-27): `ev_9403730bedb7`
@@ -62,7 +61,7 @@ it never parses source declarations or chooses source filenames.
 | Selection | Independent implementation | Managed candidate |
 | --- | --- | --- |
 | `single_file` | `sources/single_file.py` | One Python source file |
-| `source_tree` | `sources/source_tree.py` | Editable `kernel.py` plus optional implementation sources |
+| `source_tree` | `sources/source_tree.py` | One editable `kernel.py + impl/` source tree |
 | `cuda_manifest` | `sources/cuda_manifest.py` | CUDA sources, headers and `solution.json` |
 
 Implementations now live in `aka.task.source.formats`; the old import path is removed.
@@ -74,15 +73,17 @@ codec and Git transaction, and `artifacts.py` exposes format-independent operati
 Changing one format belongs in its implementation file.
 
 When `file_system` is omitted, new tasks use `source_tree`, including CUDA tasks.
-Without import configuration, the SourceProvider's initial `kernel.py` remains the
-editable evaluator entry point. It may contain the complete implementation, and the
-Agent may optionally create helper sources under `impl/`; no `impl/` directory or
-import manifest is required. Source trees require native Atrex-Bench Eval; SOL
-tasks must explicitly select `single_file`. Select `cuda_manifest` explicitly to use
-worker-generated CUDA bindings. Existing campaigns retain their format and must resume
-with that explicit selection if it differs from the new default.
-The selected implementation is pinned in `.atrex_file_system.json` after the
-framework baseline. A resumed task must match it. A missing or invalid file fails
+Without import configuration, the file system keeps the SourceProvider's initial editable
+`kernel.py`; optional `impl/` is created only when the Agent needs additional files. The Agent may
+keep a single-file implementation or edit/add/delete helpers, host code, CUDA and headers below
+`impl/`. No import manifest is needed.
+Source trees use native Atrex-Bench Eval. Select `single_file` only for retained compatibility
+contracts that cannot submit a source tree, or `cuda_manifest` to use Agate-generated CUDA
+bindings. Existing campaigns retain their format and must resume with that explicit selection if
+it differs from the new default.
+The selected implementation and its complete contract are pinned once in the top-level
+`campaign.json`; trajectories do not copy a detached `source/` state directory. A resumed task
+must match this Campaign-wide binding. A missing or invalid file fails
 within that implementation; execution never retries through another file system.
 Historical workspaces without a selector are recognized on import. The V0 Python
 reference is an evaluator-owned bootstrap input, before the selected V1 candidate.
@@ -203,8 +204,8 @@ acceptance decisions. Validation harnesses remain outside the PR.
 
 The selected file-system marker is included in managed sessions' read-only
 assets. The native evaluator also passes the workspace directory to its child
-process through `PYTHONPATH`, so editable `kernel.py` can import optional candidate
-packages such as `impl.model`. Existing `PYTHONPATH` entries remain available.
+process through `PYTHONPATH`, so the editable `kernel.py` entry point can import
+candidate packages such as `impl.model`. Existing `PYTHONPATH` entries remain available.
 
 Run 83968987 exposed both integration gaps after passing V1 standard correctness.
 MI308X stopped before its next managed session; PPU supplemental

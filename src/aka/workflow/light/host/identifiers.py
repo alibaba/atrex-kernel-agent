@@ -2,7 +2,7 @@
 
 import re
 
-from aka.workflow.light.measurements import KERNEL_ID, RECORD_ID
+from aka.experiment.measurement_store import KERNEL_ID, RECORD_ID
 
 DIRECTION_ID_RE = re.compile(r"direction_[0-9a-f]{32}")
 EXPERIMENT_ID_RE = re.compile(r"experiment_[0-9a-f]{32}")

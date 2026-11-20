@@ -4,7 +4,7 @@ from aka.core.keys import ServiceKey
 SOURCE = ServiceKey("source", "SourceProvider", module="aka.contracts.workspace")
 name = "source"
 provide = ("source",)
-identity_files = ("plugin.py", "kernel.py", "sol/source.py", "sol/render.py", "legacy.py", "manifest.py")
+identity_files = ("plugin.py", "kernel.py", "sol/source.py", "sol/render.py", "provider.py", "manifest.py")
 identity_packages = ("aka.contracts.content", "aka.contracts.workspace")
 Config = {"type": "object", "properties": {
     "kind": {"type": "string", "enum": ["kernel", "sol"]},
@@ -27,8 +27,8 @@ def validate_config(config):
 
 def apply(ctx, config):
     if not config:
-        from .legacy import LegacySourceProvider
-        ctx.provide(SOURCE, LegacySourceProvider())
+        from .provider import SourceProvider
+        ctx.provide(SOURCE, SourceProvider())
         return
     if config["kind"] == "kernel":
         from .kernel import KernelSourceProvider

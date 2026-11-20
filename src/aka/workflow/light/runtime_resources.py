@@ -5,57 +5,81 @@ from aka.contracts.content import WorkspaceFile
 from aka.contracts.workspace import WorkspaceExclusion
 
 
+def runtime_resource_registry(campaign_root: Path, *, agate_tools, wiki: bool, research_modules=()):
+    """Adapt shared contributions to Light's Agent-facing Runtime interface."""
+    from aka.resources.contributions import selected_resources
+    from aka.resources.plugins import PluginRegistry
+    from aka.resources.runtime_measurement import scoped_measurement_skill
+    from aka.resources.runtime_research import scoped_research_skill
+
+    resources, skills = selected_resources()
+    # These are host/operator manuals, not the Session's callable interface.
+    excluded = ("aka-execution", "atrex-gpu-gateway") + (() if wiki else ("kernel-wiki",))
+    selected = []
+    for skill in skills:
+        if skill.name in excluded:
+            continue
+        if skill.name == "gpu-measurement":
+            skill = scoped_measurement_skill(skill, campaign_root / "resources", agate_tools)
+        if skill.name == "runtime-records":
+            skill = scoped_research_skill(skill, campaign_root / "resources", research_modules)
+        selected.append(skill)
+    return PluginRegistry(resources=resources, agent_skills=tuple(selected),
+        excluded_plugins=() if wiki else ("gpu-wiki",), excluded_skills=excluded)
+
+
 def install_runtime_resources(campaign, workspace: Path) -> None:
+    """Refresh non-source inputs without changing the Agent's index or ignore file."""
     owner = campaign.candidate_workspace
-    revision = owner.current_revision(workspace)
-    original = owner.read_working(workspace, (".gitignore",)).files[".gitignore"]
-    if revision:
-        recorded = owner.read_revision(workspace, revision, [".gitignore"]).files[".gitignore"]
-        if recorded is None or original != recorded:
-            raise ValueError("recorded workspace .gitignore is missing or changed")
-    text = original.decode("utf-8") if original is not None else ""
-    runtime = campaign.problem_provider.runtime_files(campaign.problem)
-    owner.install_files(workspace, runtime, immutable=True)
-    exclusions = (
-        WorkspaceExclusion("tools", subtree=True),
-        WorkspaceExclusion("skills", subtree=True),
-        WorkspaceExclusion("reference", subtree=True),
-        WorkspaceExclusion("reference-projects", subtree=True),
-        WorkspaceExclusion("gpu-wiki", subtree=True),
-        *(WorkspaceExclusion(name, subtree=True) for name in (".claude", ".qoder", ".agents")),
-        WorkspaceExclusion(".orchestrator_state.json"),
-        WorkspaceExclusion(".orchestrator_mode.json"),
-        *((WorkspaceExclusion("atrex-bench", subtree=True),) if runtime else ()),
-    )
-    resources = campaign._module_resources
-    try:
-        resources.install(workspace)
-        if revision:
-            installed = resources.installed_paths(workspace)
-            owner.exclude_runtime_paths(workspace, (*exclusions, *(
-                WorkspaceExclusion(path, subtree=(workspace / path).is_dir()) for path in installed)))
-        else:
-            # New V0 records the ignore choices with its first source commit.
-            selected = owner.read_working(workspace, (".gitignore",)).files[".gitignore"]
-            text = selected.decode("utf-8") if selected is not None else text
-            lines = text.splitlines()
-            missing = ["/" + value.path for value in exclusions if "/" + value.path not in lines]
-            if missing:
-                owner.install_files(workspace, (WorkspaceFile(".gitignore",
-                    text=text.rstrip() + "\n" + "\n".join(missing) + "\n"),))
-    finally:
-        if revision:
-            # Resources owns discovery and locks; Workflow keeps recorded Git
-            # rules stable and supplies local additions through Workspace.
-            owner.install_files(workspace, (WorkspaceFile(".gitignore", text=original.decode("utf-8")),))
+    # Peer Git contains only candidate source. Every lineage also needs the
+    # public Task contract, including on resume; private evaluator files are
+    # deliberately absent from problem.agent.files.
+    owner.install_files(workspace, campaign.problem.agent.files, immutable=True)
+    owner.install_files(workspace, campaign.problem_provider.runtime_files(campaign.problem), immutable=True)
+    campaign._module_resources.install(workspace)
+    install_reference_knowledge(workspace, campaign.agent_reference_paths)
 
 
-def agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = False) -> str:
+def install_reference_knowledge(workspace: Path, references) -> None:
+    """Link configured knowledge without replacing Agent files or following links."""
+    import os
+    from aka.core.filesystem import open_private_directory
+
+    if not references:
+        return
+    with open_private_directory(workspace.resolve(strict=True) / "references") as directory:
+        for name, configured in references:
+            source = Path(configured).resolve(strict=True)
+            if not source.is_dir() or Path(name).name != name or name in {".", ".."}:
+                raise ValueError("Invalid reference knowledge directory")
+            try:
+                os.symlink(str(source), name, dir_fd=directory, target_is_directory=True)
+            except FileExistsError:
+                if os.readlink(name, dir_fd=directory) != str(source):
+                    raise ValueError(f"Reference knowledge link changed: references/{name}")
+
+
+def reference_knowledge_access(workspace: Path, references):
+    """Use the public Agent access contract for both native and sandbox Sessions."""
+    from aka.contracts.filesystem import FilesystemAccess, FilesystemMount
+
+    mounts = []
+    for name, configured in references:
+        source = Path(configured).resolve(strict=True)
+        link = workspace / "references" / name
+        if not source.is_dir() or not link.is_symlink() or link.resolve(strict=True) != source:
+            raise ValueError(f"Reference knowledge link changed: references/{name}")
+        mounts.append(FilesystemMount(source, source, origin=f"Reference knowledge:{name}"))
+    return FilesystemAccess(tuple(mounts), read_only_paths=(workspace / "references",) if references else ())
+
+
+def agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = True) -> str:
     root = ".agents" if agent_cli in {"codex", "pi"} else ".qoder" if agent_cli == "qodercli" else ".claude"
+    wiki_policy = "" if wiki else "GPU Wiki queries are disabled for this Campaign; use the supplied reference directories instead. "
     return (f"- `{root}/skills/` contains the selected module Skills. "
-            "Use `python -m aka.resources.cli list` to discover installed tools, "
-            "measurement methods and optional knowledge/profiling capabilities. "
+            "Use `python3 tools/sandbox.py --help` to discover enabled Runtime tools. "
             "Read their supplied Skills for request schemas and examples. "
+            + wiki_policy +
             "Before choosing DSL imports, run `python3 tools/sandbox.py --kind env`. "
             "Its `task_worker_requirements` field lists the selected Task's per-Job dependency pins "
             "and API compatibility notes; these may differ from the base image or local Python. "

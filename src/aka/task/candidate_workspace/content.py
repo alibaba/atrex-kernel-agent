@@ -44,14 +44,7 @@ def selected_file_bytes(workspace, files, *, reserved=()):
 
 
 def install_files(workspace, files, *, immutable=False):
-    from .context import MANIFEST, install_context, load_context, uses_context
-    files = tuple(files)
-    if uses_context(workspace):
-        if immutable:
-            return install_context(workspace, files)
-        value = load_context(workspace)
-        selected_file_bytes(workspace, files, reserved=(MANIFEST, *value["context"], *value.get("namespaces", {})))
-    return _install_files(workspace, files, immutable=immutable)
+    return _install_files(workspace, tuple(files), immutable=immutable)
 
 
 def _install_files(workspace, files, *, immutable=False):

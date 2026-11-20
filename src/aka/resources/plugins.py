@@ -15,8 +15,17 @@ _selected_plugins = ContextVar("aka_explicit_tool_plugins", default=None)
 
 
 class PluginRegistry(AgentSkillsRegistryMixin, Registry):
-    def __init__(self, plugin_dir: Path | str | None = None, *, plugins=None, resources=None, agent_skills=None):
+    def __init__(self, plugin_dir: Path | str | None = None, *, plugins=None, resources=None, agent_skills=None,
+                 excluded_plugins=None, excluded_skills=None):
         scoped = _selected_scope.get() is not None
+        if excluded_plugins is None:
+            excluded_plugins = () if scoped else decode_json(os.environ.get("ATREX_PLUGIN_EXCLUDES", "[]"))
+        if excluded_skills is None:
+            excluded_skills = () if scoped else decode_json(os.environ.get("ATREX_SKILL_EXCLUDES", "[]"))
+        if any(not isinstance(values, (tuple, list)) or any(not isinstance(value, str) for value in values)
+               for values in (excluded_plugins, excluded_skills)):
+            raise ValueError("Resource exclusions require lists of names")
+        self.excluded_skills = tuple(excluded_skills)
         if plugin_dir is None:
             plugin_dir = _selected_catalog.get() if scoped else os.environ.get("ATREX_PLUGIN_DIR")
         if plugins is None:
@@ -26,16 +35,16 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
         plugins = tuple(plugins or ())
         if self.wiki_provider is not None:
             plugins = (*plugins, self.wiki_provider.catalog_root)
-        super().__init__(plugin_dir, plugins=plugins)
+        super().__init__(plugin_dir, plugins=plugins, excluded_plugins=excluded_plugins)
         if resources is None or agent_skills is None:
             selected, skills = selected_resources()
             resources = selected if resources is None else resources
             agent_skills = skills if agent_skills is None else agent_skills
-        self.bind_agent_skills(agent_skills)
+        self.bind_agent_skills(tuple(skill for skill in agent_skills if skill.name not in self.excluded_skills))
         self.bind_workspace_resources(resources)
 
     def instructions(self, phase: str, **values: str) -> str:
-        return ("Use `python -m aka.resources.cli list` to discover enabled tools and Skills. "
+        return ("For additional plugin tools and their Skills, use `python -m aka.resources.cli list`. "
                 "Invoke `python -m aka.resources.cli call <plugin.tool> --input <request.json>`.\n\n"
                 + super().instructions(phase, **values))
 
@@ -71,6 +80,8 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
         reserved = {"ATREX_PLUGIN_WORKSPACE": str(workspace.resolve()),
                     "ATREX_PLUGIN_DIR": str(self.plugin_dir) if self.plugin_dir else "",
                     "ATREX_PLUGIN_PATHS": json.dumps([str(p) for p in self.plugin_paths]),
+                    "ATREX_PLUGIN_EXCLUDES": json.dumps(self.excluded_plugins),
+                    "ATREX_SKILL_EXCLUDES": json.dumps(self.excluded_skills),
                     SELECTION_ENV: selection_environment(self._workspace_resources, self._agent_skills)}
         if environment.keys() & reserved.keys():
             raise PluginError("invalid_manifest", "plugin environment conflicts with AKA context")

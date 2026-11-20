@@ -89,7 +89,8 @@ def _snapshot(backend, endpoint, query, detail, capabilities, errors, operations
     source = str(capabilities.get("source", detail.get("source", "unknown")))
     return EnvironmentSnapshot(backend, safe_endpoint(endpoint), str(detail.get("gpu", capabilities.get("gpu", query.hardware))),
         identity, declarations, observed, source,
-        capabilities.get("probed_at", detail.get("probed_at")), tuple(dict.fromkeys(errors)))
+        capabilities.get("probed_at", detail.get("probed_at")), tuple(dict.fromkeys(errors)),
+        raw={"environment": detail, "capabilities": capabilities})
 
 
 class BackendEnvironment:
@@ -146,60 +147,32 @@ class BackendEnvironment:
             return snapshot
         from .gateway import sandbox
         errors, detail, capabilities = [], {}, {}
-        from .gateway.native_options import request_arguments
-        native = request_arguments(environment_document(query.parameters), "env")
-        executable = sandbox._find_agate() if not self.url or native else None
+        from .gateway.sdk import route
+        endpoint = route(self.url, self.profile, self.environment)
         encoded = quote(query.hardware, safe="")
         suffix = "?force=true" if query.fresh else ""
-        if self.url and executable is None:
-            if native:
-                raise UnsupportedExecution("native environment options require the installed Agate CLI")
+        if True:
             for path, destination in ((f"/v1/env/{encoded}" if query.hardware else "/v1/env", detail),
                                       (f"/v1/env/{encoded}/capabilities", capabilities)):
                 if destination is capabilities and not query.hardware:
                     continue
                 try:
                     options = {"allow_list": True} if not query.hardware else {}
-                    value = sandbox._gateway_json(self.url, "GET", path + suffix, None, 30, **options)
+                    value = sandbox._gateway_json(endpoint, "GET", path + suffix, None, 30, environment=self.environment, **options)
                     if isinstance(value, list):
                         destination["environments"] = value
                     else:
                         destination.update(value)
                 except Exception as error:
+                    if isinstance(error, sandbox.GatewayHTTPError):
+                        try:
+                            body = json.loads(error.detail)
+                        except (TypeError, ValueError):
+                            body = error.detail
+                        destination.update(error=body.get("error", body) if isinstance(body, dict) else body,
+                                           http_status=error.status)
                     errors.append("environment-http-" + str(error.status) if isinstance(error, sandbox.GatewayHTTPError)
                                   else "environment-discovery-" + type(error).__name__)
-        else:
-            try:
-                if executable is None:
-                    raise FileNotFoundError("agate")
-                base = [executable, "env"]
-                if self.url:
-                    base += ["--url", self.url]
-                elif self.profile:
-                    base += ["--profile", self.profile]
-                if query.hardware:
-                    base += [query.hardware]
-                base += ["--http-timeout", "30", "--json"]
-                if query.fresh:
-                    base += ["--force"]
-                base += native
-                for flags, destination in (([], detail), (["--frameworks", "--limits"], capabilities)):
-                    if destination is capabilities and not query.hardware:
-                        continue
-                    completed = subprocess.run([*base, *(flag for flag in flags if flag not in base)], capture_output=True, text=True,
-                                               env=self.environment, timeout=60)
-                    if completed.returncode:
-                        errors.append("environment-cli-rejected")
-                        continue
-                    value = json.loads(completed.stdout)
-                    if isinstance(value, list) and not query.hardware:
-                        destination["environments"] = value
-                        continue
-                    if not isinstance(value, dict):
-                        raise ValueError("environment response must be an object")
-                    destination.update(value)
-            except Exception as error:
-                errors.append("environment-discovery-" + type(error).__name__)
         snapshot = _snapshot(self.backend, self.endpoint, query, detail, capabilities, errors, self.operations)
         # An unknown observation stays unknown when cached; explicit fresh queries
         # refresh it without repeating discovery for every candidate submission.

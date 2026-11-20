@@ -203,13 +203,10 @@ def mount_path(argv, source, target, *, writable=False):
 
 class BubblewrapExecution:
     def __init__(self, bwrap="bwrap", *, proc_mode="private"):
-        if proc_mode not in {"private", "projected"}:
-            raise ValueError("Agent proc_mode must be private or projected")
+        if proc_mode not in {"private", "host"}:
+            raise ValueError("Agent proc_mode must be private or host")
         self.proc_mode = proc_mode
         self.executable = executable(bwrap)
-        if proc_mode == "projected":
-            from .proc_view import validate_runtime
-            validate_runtime()
 
     def launch(self, command, workspace, environment, backend, host_home, access):
         if not command:
@@ -224,7 +221,6 @@ class BubblewrapExecution:
             "--new-session",
             "--die-with-parent",
             "--unshare-user",
-            "--unshare-pid",
             "--unshare-ipc",
             "--unshare-uts",
             "--unshare-cgroup-try",
@@ -238,12 +234,10 @@ class BubblewrapExecution:
             if path.exists():
                 mount_path(argv, path.resolve(), path)
         argv.extend(("--dev", "/dev", "--tmpfs", "/tmp", "--tmpfs", "/run"))
-        if self.proc_mode == "projected":
-            from .proc_view import projected_mounts, SHIM_SOURCE, SHIM_TARGET
-            argv.extend(projected_mounts())
-            argv.extend(("--dir", "/run/aka-proc", "--ro-bind", SHIM_SOURCE, SHIM_TARGET))
+        if self.proc_mode == "host":
+            argv.extend(("--bind", "/proc", "/proc"))
         else:
-            argv.extend(("--proc", "/proc"))
+            argv.extend(("--unshare-pid", "--proc", "/proc"))
         mount_path(argv, home, home, writable=True)
         mount_path(argv, workspace, workspace, writable=True)
         for path in read_only:
@@ -280,8 +274,4 @@ class BubblewrapExecution:
         values.update(PWD=str(workspace), TMPDIR="/tmp")
         argv.extend(("--chdir", str(workspace)))
         # Preserve Light's current networking behavior. This backend does not promise network isolation.
-        if self.proc_mode == "projected":
-            from .proc_view import prepare_launch
-            provider = shutil.which(command[0], path=values.get("PATH"))
-            return prepare_launch(argv, command, values, workspace, provider_executable=provider)
         return SandboxLaunch.with_bwrap_environment(argv, command, values)

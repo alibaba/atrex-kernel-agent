@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from aka.workflow.light.host.errors import AgentRequestError
 from aka.workflow.light.host.identifiers import DIRECTION_ID_RE
 
 DIRECTION_STATUS = {
@@ -13,22 +12,28 @@ DIRECTION_STATUS = {
     "block": "blocked",
     "defer": "deferred",
 }
+DIRECTION_REVISION_ACTION = "revise"
+DIRECTION_ACTIONS = frozenset({*DIRECTION_STATUS, DIRECTION_REVISION_ACTION})
 CLOSURES = {"complete", "abandon", "block", "defer"}
-CLOSED_STATUSES = {"completed", "abandoned", "blocked", "deferred"}
+PAUSED_STATUSES = {"blocked", "deferred"}
+TERMINAL_STATUSES = {"completed", "abandoned"}
+# Compatibility export for consumers that accept evidence after execution has
+# stopped. Lifecycle transitions below deliberately distinguish paused from
+# terminal states.
+CLOSED_STATUSES = PAUSED_STATUSES | TERMINAL_STATUSES
 
 
 def advance_direction(
     statuses: dict[str, str],
-    started: set[str],
     direction_id: str,
     action: str,
 ) -> None:
-    """Apply one legal event; ``started`` is reset at each Episode boundary."""
+    """Apply one legal Direction event."""
     if not isinstance(direction_id, str) or DIRECTION_ID_RE.fullmatch(direction_id) is None:
         raise ValueError("Direction ID has an invalid format")
-    if not isinstance(action, str) or action not in DIRECTION_STATUS:
+    if not isinstance(action, str) or action not in DIRECTION_ACTIONS:
         raise ValueError(
-            "Direction action must be propose, start, complete, abandon, block, or defer"
+            "Direction action must be propose, revise, start, complete, abandon, block, or defer"
         )
     status = statuses.get(direction_id)
     if action == "propose":
@@ -36,40 +41,25 @@ def advance_direction(
             raise ValueError(f"Direction {direction_id} was already proposed")
     elif status is None:
         raise ValueError(f"Direction ID is outside visible history: {direction_id}")
+    elif action == DIRECTION_REVISION_ACTION:
+        if status not in {"proposed", "in_progress"}:
+            recovery = (
+                "start it before revising"
+                if status in PAUSED_STATUSES
+                else "it is terminal; propose a derived Direction instead"
+            )
+            raise ValueError(f"Direction cannot revise from status {status}; {recovery}")
+        return
     elif action == "start":
-        active = [
-            key for key, value in statuses.items() if value == "in_progress" and key != direction_id
-        ]
-        if active:
-            raise AgentRequestError(
-                "only one Direction may be in progress; close or defer "
-                f"{active[0]} before starting another",
-                code="direction_in_progress",
-                direction_id=active[0],
-                next_action=(
-                    "Use update-direction to complete, abandon, block, or defer that Direction "
-                    "before starting another. Every closure requires supporting_experiment_ids "
-                    "and hypothesis_status; record real Gateway evidence first."
-                ),
-            )
-        if direction_id not in started and len(started) >= 3:
-            raise AgentRequestError(
-                "Direction advancement limit exceeded: at most three Directions "
-                "may be started in one Episode",
-                code="direction_limit_exceeded",
-                started_direction_ids=sorted(started),
-                next_action=(
-                    "Do not start a fourth Direction. Continue an already-started Direction "
-                    "if it is in_progress, or explicitly restart it if closed; "
-                    "otherwise close remaining "
-                    "in_progress Directions and submit episode-report. You may still propose "
-                    "new Directions for later Episodes."
-                ),
-            )
-        if status not in {"proposed", *CLOSED_STATUSES}:
+        if status not in {"proposed", *PAUSED_STATUSES}:
             raise ValueError(f"Direction cannot start from status {status}")
-    elif status not in {"in_progress", *CLOSED_STATUSES}:
-        raise ValueError(f"Direction cannot {action} from status {status}")
+    elif status != "in_progress":
+        recovery = (
+            f"submit action=start for {direction_id} first, then retry action={action}"
+            if status in {"proposed", *PAUSED_STATUSES}
+            else "the Direction is terminal; propose a derived Direction instead"
+        )
+        raise ValueError(
+            f"Direction cannot {action} from status {status}; {recovery}"
+        )
     statuses[direction_id] = DIRECTION_STATUS[action]
-    if action == "start":
-        started.add(direction_id)

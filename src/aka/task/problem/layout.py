@@ -220,12 +220,11 @@ def has_agent_problem(op_dir: Path) -> bool:
 def should_use_generalized_problem(op_dir: Path, optimization_mode: str, *, expose_evaluator_shapes=True) -> bool:
     """Return whether an operator must expose a generalized public contract.
 
-    Private exact-case handling is a production policy, not an operator-layout side effect.
-    Production uses a supplied contract when present and otherwise generates one from
-    ``shapes.json`` before setup. Leaderboard always keeps its detailed shapes public.
+    Performance/Ultra may request a generalized public contract. Fast keeps
+    exact Shapes visible; incompatible requests are rejected by the provider.
     """
     return (
-        optimization_mode == "production"
+        optimization_mode in {"performance", "ultra"}
         and not expose_evaluator_shapes
         and not is_sol_op(op_dir)
         and (op_dir / "shapes.json").is_file()

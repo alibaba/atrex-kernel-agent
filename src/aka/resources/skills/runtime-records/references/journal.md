@@ -1,28 +1,76 @@
-# Journal and worked Episode example
+# Direction and Experiment requests
 
-Use Runtime Journal in a controller-managed Episode; do not mix legacy local append/finalize commands with these tools. Plans and conclusions belong in Directions and Experiments, not mandatory separate files. Every report must satisfy the lifecycle and evidence checks; `blocked` also requires a nonempty blocker. Framework Baseline follows its own finish procedure.
+All commands use the Session-scoped Runtime client. Put mutation requests below `scratch/`.
+Requests must fit the documented 2 MiB envelope.
 
-This example links one exploration to its measured Kernel and terminal report. It is not a mandatory
-optimization strategy or permission to run operations forbidden by the phase. Create request files
-under `scratch/`; replace the illustrative IDs below with the values returned in your session.
+## Inspect progress and research files
 
-Request files may contain at most 2,093,056 bytes (2 MiB minus 4 KiB for the envelope).
-The complete encoded HTTP body must also fit within 2 MiB. If either limit is exceeded,
-shorten text or lists and retry; the client sends no request on a size rejection.
+Read `PROGRESS.md` and relevant `records/<gateway_record_id>.json` files. Enabled research modules
+project immutable versions under `research-library/`; the highest visible `vN` is current.
+Use file reads for inspection and Runtime mutations for updates. Each version retains its
+`owner_lineage`, access, claim, and compact Review. Full receipts remain Supervisor-private.
+Read `frontier.json` only when the complete accepted-submission Pareto is needed.
 
-## Propose a Direction
+## Cross-trajectory measurement visibility
 
-Save as `scratch/direction.json`:
+Each lineage sees Records cited by the Direction/Experiment revisions currently visible in that
+lineage's projection, plus passing standard full Evaluates. Accepted submissions and winners therefore
+publish their complete Evaluate evidence automatically. Review quality controls whether a claim is
+trusted, not whether its cited Record can be inspected. There is no Agent operation for publishing
+arbitrary local evidence. Synchronous search uses the lineage's current Epoch watermark; asynchronous
+search uses its live visible revision set. Every immutable Record remains stored once in the Campaign Store.
+
+Claim Review is disabled by default unless explicitly enabled for the Campaign.
+When disabled, mutations that normally request it return
+`review_skipped: true`, `claim_review_quality: supported`, and `evidence_eligible: true`
+with an explicit explanation. This is configured acceptance, not independent verification;
+recording, revisions and attachment validation still apply.
+
+Claim-bearing mutations return `review` once. Its workflow fields are deliberately distinct:
+
+- `archive_status`: whether Runtime stored the submitted claim;
+- `claim_review_quality`: `supported`, `partially_supported`, `unsupported`, or `review_unavailable`;
+- `evidence_eligible`: whether the claim has established evidential support; it does not control visibility;
+- `runtime_action`: how to repair or continue the Runtime workflow;
+- `scientific_next_check`: an advisory decision-relevant check, or `No additional check needed for the next decision.`
+
+The projected record retains only `claim_review_quality`, `scope_safe_interpretation`, and
+`scientific_next_check`; full Review receipts and reviewer conversations remain private.
+
+Partial reviews do not require immediate repair or resubmission. Use observations within
+`scope_safe_interpretation` for further candidate trials; unresolved claims remain uncertain.
+Perform the suggested check or revise only when the uncertainty affects the next implementation
+choice or lifecycle decision. Do not repeat measurements or submissions merely to obtain `supported`.
+An unknown mechanism can coexist with a supported observation and next trial; excluding high-upside
+paths, generalizing beyond measured workloads, or declaring a program exhausted needs stronger support.
+
+## Propose and select a Direction
+
+A Direction is a durable optimization program organized around a bottleneck, workload regime, or
+architecture objective and should normally span multiple candidates and Experiments. A single
+implementation, parameter sweep, capability probe, or mechanism test is an Experiment under an
+existing Direction, not a new Direction. Generic exploration, Runtime/evaluator maintenance,
+infrastructure operation, and unrelated documentation do not belong in the Direction queue. `change_scope` is `incremental` or
+`major_redesign` and describes the breadth of the intended Kernel architecture work.
 
 ```json
 {
   "action": "propose",
-  "name": "Fuse the elementwise stages",
-  "hypothesis": "One GPU launch can reduce intermediate memory traffic",
-  "rationale": "The current source materializes an intermediate tensor",
-  "plan": ["Implement one fused path", "Check correctness and compare with the incumbent"],
-  "success_criteria": ["All cases pass", "Performance improves under the required evaluator"],
-  "stop_conditions": ["No gain after a bounded implementation repair"]
+  "name": "Decode parallelism and KV-traffic architecture",
+  "change_scope": "major_redesign",
+  "objective": "Remove repeated KV work and expose enough parallelism across decode regimes",
+  "applicability": "Short-query, long-KV and GQA-dominated workloads",
+  "expected_benefit": "Reduce decode-side full-workload latency",
+  "plan": [
+    "Measure GQA packing",
+    "Explore split-KV and combine families",
+    "Compare inline decode with KV materialization",
+    "Determine workload-regime dispatch"
+  ],
+  "stop_conditions": [
+    "All viable architecture families are measured",
+    "Remaining variants have insufficient expected full-workload impact"
+  ]
 }
 ```
 
@@ -30,72 +78,130 @@ Save as `scratch/direction.json`:
 python3 tools/sandbox.py --kind update-direction --request-file scratch/direction.json
 ```
 
-Response:
+`objective` states the bottleneck or architecture outcome that unifies the work. `applicability`
+states the workload, Shape regime, semantic case or hardware condition covered by the Direction.
+`expected_benefit` states the predicted observable Kernel improvement; avoid unsupported precision,
+but name the affected metric, bottleneck, or branch in the implementation strategy. `stop_conditions`
+is an optional array of non-empty strings, not one string.
+`relationship`, `derived_from_direction_ids`, and
+`derived_from_experiment_ids` may describe `refinement`, `correction`, `combination`, `alternative`,
+`reimplementation`, or `contradiction`. Reuse the existing ID while objective and applicability are unchanged. Propose a
+new idea only after refreshing the catalog and checking likely matches. These fields record
+genealogy only. A derived Direction receives its own lifecycle, plan, owner and queue position; it
+does not inherit parent status, Experiments, Gateway evidence, Kernel source or priority. Materialize
+and switch to an imported parent Git ref separately when the new work actually continues that source.
+Runtime validates visible parents, parent counts and cycles, but not whether the chosen relationship
+label is scientifically correct.
+
+When Experiment recording is disabled, a Direction may cite its measurement evidence directly with
+`gateway_record_ids`. Include relevant IDs on `propose`, `revise`, or a terminal action; Runtime
+preserves draft citations and supplies them to the admission or terminal Review. When Experiment
+recording is enabled, keep measurement citations in Experiments: a derived Direction cites
+`derived_from_experiment_ids`, while a terminal conclusion cites `supporting_experiment_ids`.
+
+Correct an existing open local Direction without inventing a replacement identity:
 
 ```json
-{"status":"recorded","direction_id":"direction_11111111111111111111111111111111"}
+{
+  "action": "revise",
+  "direction_id": "direction_11111111111111111111111111111111",
+  "name": "Decode parallelism and KV-traffic architecture",
+  "change_scope": "major_redesign",
+  "objective": "Remove repeated KV work and expose enough parallelism across decode regimes",
+  "applicability": "Short-query, long-KV and GQA-dominated workloads",
+  "expected_benefit": "Reduce decode-side full-workload latency",
+  "plan": ["Measure GQA packing", "Evaluate KSPLIT=1/2/4", "Compare combine families"],
+  "analysis": "Packing improved the measured long-KV regimes; split and combine variants remain open."
+}
 ```
 
-All shown fields are required. `name`, `hypothesis`, and `rationale` are non-empty strings;
-`plan`, `success_criteria`, and `stop_conditions` are lists of non-empty strings. A proposal records
-the idea but does not start it. Propose any number of useful, nonduplicate directions.
+`revise` keeps `direction_id`, lifecycle status and genealogy and increments `revision`. Optional `analysis`
+updates the current assessment or interim findings; omitting it preserves the previous value.
+Supply non-empty text when updating it. The assessment is included in the revision,
+Review, shared projection and `PROGRESS.md`; no close/restart is needed. Every revision is reviewed,
+including revisions while still proposed. It replaces the objective,
+scope and plan in the latest projection. Only `proposed` or
+`in_progress` local Directions can be revised; restart a deferred or blocked Direction first.
+Completed and abandoned Directions are terminal, so continued work uses a new derived Direction.
+Shared peer Directions remain read-only. Prior submissions and Reviews remain in
+the private Supervisor audit. The reviewer resumes the latest valid Review Session for this
+Direction so it can compare the correction with its previous critique; if that native Session is
+unavailable, Runtime retries once in a fresh Session.
 
-## Start or resume exploration
-
-Save as `scratch/start.json`:
+Start selected work:
 
 ```json
 {
   "action": "start",
-  "direction_id": "direction_11111111111111111111111111111111",
-  "analysis": "Begin implementing the fused path"
+  "direction_id": "direction_11111111111111111111111111111111"
 }
 ```
 
-```bash
-python3 tools/sandbox.py --kind update-direction --request-file scratch/start.json
-```
+`propose` runs admission Review of the optimization objective, applicability, and strategy space;
+it requires no Experiment or prior measurement. Supported and partially supported proposals are
+archived; unsupported proposals are rejected before mutation. `start` changes lifecycle without
+another Review and retains the prior review quality. Optional `analysis` replaces the current
+assessment; omitting it preserves that assessment. Partial or reviewer-unavailable state remains
+shared context rather than established supporting evidence.
+The lifecycle is `proposed --start--> in_progress`. Only `in_progress` may `complete`, `abandon`,
+`defer`, or `block`; restart `deferred` or `blocked` work with `start`. `completed` and `abandoned`
+are terminal and continued work requires a derived Direction.
 
-Response is `{"status":"recorded","direction_id":"..."}`. `start` accepts exactly these three
-fields; closure actions also require `hypothesis_status` and `supporting_experiment_ids` below.
-At most one Direction can be `in_progress`; at most three distinct Directions can be
-started in an Episode, including inherited ones. Restarting an already-started Direction in
-the same Episode does not consume another slot.
+`start` accepts a partially supported Direction without another Review. `defer` and `block`
+also accept partially supported Review and require `reopen_condition`. Only `complete` and
+`abandon` require a `supported` Review of that submission. A partial or unavailable terminal
+Review leaves the Direction `in_progress`, returns `archive_status=not_archived`, and preserves
+the attempted update and Review in the private audit. Prior supported Reviews do not satisfy
+this terminal gate; proposing and starting work still require no Experiment.
 
-| Action | Allowed prior status | New status | Extra condition |
-| --- | --- | --- | --- |
-| `start` | `proposed` or closed | `in_progress` | No other active Direction; advancement limit |
-| `complete` | `in_progress` or closed | `completed` | Explicit evidence selection and hypothesis assessment |
-| `abandon` | `in_progress` or closed | `abandoned` | Explicit evidence selection and hypothesis assessment |
-| `block` | `in_progress` or closed | `blocked` | Evidence-backed blocker; assessment can remain unresolved |
-| `defer` | `in_progress` or closed | `deferred` | Evidence-backed pause; assessment can remain unresolved |
+A trajectory may own multiple local active Directions. The most recently started Direction is the
+focus; queue reordering does not change it. Runtime infers an omitted Experiment `direction_id` only
+when exactly one local Direction is active; with zero or multiple active Directions, it remains unassociated.
+An explicitly named local proposed Direction may also own an Experiment. It is optional:
+proposing and starting work do not require one. A later `revise` Review receives the visible
+Experiments already bound to that Direction when assessing its interim findings.
+Keep concurrent work intentional, address updates by Direction ID, and leave new ideas proposed until work actually starts. Continue each
+selected redesign through bounded edit/measurement cycles instead of reporting its first promotable checkpoint.
 
-Closed means completed, abandoned, blocked, or deferred. Restarting resets the current assessment
-to unresolved and clears selected support; prior events remain immutable. Reuse the ID only for the
-same hypothesis; propose a derived Direction when the hypothesis changes.
-
-## Measure and record an Experiment
-
-Edit `kernel.py`, then run the evaluator prescribed by the current phase. For an ordinary full
-evaluation where no additional options are required:
-
-```bash
-python3 tools/sandbox.py --kind run --no-sync
-```
-
-The response contains `gateway_record_id` and `kernel_id`; see [result formats](records.md).
-Use the Gateway ID in `scratch/experiment.json`:
+Reorder the durable queue:
 
 ```json
 {
   "direction_id": "direction_11111111111111111111111111111111",
-  "name": "Fused candidate measurement",
-  "hypothesis": "Removing the intermediate reduces traffic",
-  "change": "Replaced the two stages with one fused implementation",
-  "gateway_record_ids": ["gateway-11111111111111111111111111111111"],
-  "evidence": "Full evaluation passed; per-Shape latency is recorded in the cited result",
-  "analysis": "Keep this candidate for independent verification; the result supports the hypothesis",
-  "action": "keep_after"
+  "before_direction_id": "direction_22222222222222222222222222222222",
+  "reason": "The profile makes this the highest-information structural experiment"
+}
+```
+
+```bash
+python3 tools/sandbox.py --kind prioritize-direction --request-file scratch/priority.json
+```
+
+Use `after_direction_id` instead of `before_direction_id`, or omit both to move the Direction to the
+end. Routine completion of plan steps does not require a Runtime mutation. If evidence materially
+changes the claim or remaining plan, submit a complete `action=revise` Direction instead.
+
+## Record an Experiment
+
+Record an Experiment at a decision boundary: when you use measured results to keep or discard a
+candidate, select a parameter or workload strategy, rule out a branch, or switch paths. Record the
+observations and chosen next action before pursuing that action. Combine completed trials that
+inform this same decision; once the decision is made, do not postpone recording for the next probe,
+a complete implementation, full Evaluate, mechanism proof, or Direction closure. Revise the
+Experiment when later evidence updates the same conclusion; use a new Experiment for a different
+question. Not every Command or Evaluate needs an Experiment.
+Record observations, their measured scope, and the
+next action; the mechanism may remain unknown. Cite all relevant Records or archived references,
+including regressions that limit the conclusion. Runtime retains each measurement and its source
+identity. A disposable probe that changes no decision need not be recorded:
+
+```json
+{
+  "name": "KSPLIT=2 complete-workload measurement",
+  "intent": "Determine whether split KV pays for its reduction cost",
+  "gateway_record_ids": ["gateway-0123456789abcdef0123456789abcdef"],
+  "interpretation": "The measured long-KV regimes improved while short-KV regressed. The mechanism is unknown; next test workload dispatch and measure its full-workload effect.",
+  "references": ["scratch/ksplit-analysis.md", "profiles/ksplit2"]
 }
 ```
 
@@ -103,219 +209,143 @@ Use the Gateway ID in `scratch/experiment.json`:
 python3 tools/sandbox.py --kind record-experiment --request-file scratch/experiment.json
 ```
 
-Response:
-
-```json
-{"status":"recorded","experiment_id":"experiment_22222222222222222222222222222222"}
-```
-
-All shown fields are required; textual fields must be non-empty. Optional `wiki_usage`, `wiki_query_ids`, and `wiki_usage_status` record knowledge attribution. Invalid attribution rejects the request before an Experiment is recorded; correct the returned field issues and resubmit with the same Gateway Record IDs, without repeating GPU work. Previously stored malformed attribution remains diagnostic on read. Copy the provider's returned `query_id` verbatim. Each usage row needs `query_id`, `disposition`, `use`, `evidence`, and either an emitted `wiki_id` (`store::record`) or `cite` (`wiki@version relative-path:start-end`); both may be retained. Query IDs are bounded opaque tokens, not restricted to one backend's prefix. Attribution arrays contain at most 64 entries. `declared` requires non-empty valid usage; `wiki_query_ids` must include every query ID appearing in `wiki_usage`, including `reference_only` and `rejected` rows. For `no_material_use`, include the queries considered without usage rows; for `not_queried`, omit both. The Direction must be in progress or closed;
-not merely proposed. Late records can attach already obtained evidence after closure, even while
-another Direction is active. This does not restart exploration or change previous closure support.
-`gateway_record_ids` is a non-empty, duplicate-free list of visible Kernel-bound Gateway IDs: Evaluate, ABBA, Profile, Dev,
-Check, and Disassemble are all valid evidence. The record must belong to this Campaign; corrupted private records are infrastructure blockers. It may span different Kernels; order does not mean
-before/after. Do not submit Kernel IDs, Job IDs, digests, or result payloads instead of these IDs.
-When asserting improvement over another measurement, cite that result too and explain the comparison.
-
-| Wiki `disposition` | Meaning |
-| --- | --- |
-| `applied` | Applied the guidance to this implementation |
-| `partially_applied` | Applied only part of the guidance |
-| `reference_only` | Considered the guidance as context without applying it |
-| `rejected` | Evaluated and rejected the guidance |
-
-Do not use `used`, `material_use` or `considered`; these are not enum values.
-Add the following fields to the Experiment request, copying IDs and citations from actual responses:
+A hardware capability probe also merits an Experiment when its result selects an implementation
+path. For example, after checking an MMA instruction's output and throughput, record the bounded
+observation before starting the Kernel that uses it; no full Evaluate is needed for this probe record:
 
 ```json
 {
-  "wiki_usage_status": "declared",
-  "wiki_query_ids": ["wiki-query-0123456789abcdef0123456789abcdef"],
-  "wiki_usage": [{
-    "query_id": "wiki-query-0123456789abcdef0123456789abcdef",
-    "wiki_id": "gpu_wiki::example.record",
-    "disposition": "applied",
-    "use": "Fused the two memory passes described by the record",
-    "evidence": "The cited Gateway evaluation measured lower latency"
-  }]
+  "name": "FP8 MMA probe selects the next implementation path",
+  "intent": "Determine whether FP8 MMA is usable for the next GEMM candidate",
+  "gateway_record_ids": ["gateway-<actual-probe-record-id>"],
+  "interpretation": "The tested FP8 MMA configuration passed the probe's output check and ran faster than its BF16 counterpart. Next implement an FP8 MMA candidate. This establishes only the tested probe behavior, not full-Kernel correctness, workload latency, or an architectural peak.",
+  "references": ["scratch/probe_mma.py"]
 }
 ```
 
-For a path-based provider, use its emitted `cite`, such as `gpu@v1 docs/a.md:3-5`,
-instead of inventing a `wiki_id`. Choose the disposition from the actual experiment,
-not from whether the query returned records. Omit attribution entirely if not recording research.
+Use the actual Record ID and observations. A follow-up probe may revise this conclusion;
+it need not delay recording the decision already made.
 
-| Experiment `action` | Meaning |
-| --- | --- |
-| `baseline` | First measured anchor; at most once per Episode, not a request to register V0 |
-| `keep_after` | Keep the tested implementation |
-| `restore_before` | Restore an earlier implementation |
-| `adopt` | Reuse an existing implementation |
-| `abandon_direction` | Document an investigation or blocker using actual Gateway records; no performance claim is required |
+<!-- directions:start -->
+When Directions are enabled, Runtime infers `direction_id` only when exactly one local Direction is
+active. With zero or multiple active Directions, omission records an unassociated Experiment. An explicitly named
+local proposed Direction is valid, but is never selected implicitly. When Directions are disabled,
+omit `direction_id`.
 
-No action permits an empty record list. Failed diagnostics may document an unresolved blocker;
-Env/Health/Wiki responses, unbound Dev outputs and transport errors without a saved Gateway Record
-are not Experiment evidence. An Experiment action records your decision;
-it does not copy source or update Direction lifecycle. Restore source yourself through the Kernel
-reader when needed, and call `update-direction` separately to close the Direction.
+<!-- directions:end -->
 
-## Close the Direction
+Runtime validates every cited ID; its standardized public result is available under root `records/`.
+Direction and Experiment citations may include Records without a Kernel binding, including Env
+and self-contained probes. Review assesses the evidence within its actual scope: an Env Record
+can establish environment facts, but does not establish a candidate's correctness or latency.
+Correctness, latency, failure, operation and Kernel commit identity remain authoritative in those
+records. Use Git to inspect source changes between cited commits. Summarize only the observations
+needed for the decision in `interpretation`, rather than duplicating complete result tables.
 
-Save as `scratch/close.json`:
+`gateway_record_ids` and `references` are independent optional arrays. Either may be omitted or
+empty. An Experiment without Gateway Records remains a useful research note, but cannot by itself
+establish measured correctness or performance. `submit-kernel` independently checks the
+exact commit's full Evaluate and final-source policy; it does not require an Experiment.
+
+<!-- directions:start -->
+An Experiment does not require an immediate Direction revision. Continue the highest-value branch;
+revise the Direction when its assessment or remaining plan changes materially.
+<!-- directions:end -->
+
+Revise a `local_writable` Experiment by resubmitting its required fields plus the `experiment_id` shown in
+the greatest visible `research-library/experiments/<experiment_id>/vN/experiment.json`. Runtime
+keeps that identity, increments `revision`, reruns independent Review, and writes a new immutable
+version. Omitted optional evidence is
+preserved; explicit empty arrays clear it.
+<!-- directions:start -->
+A revision may add a local `direction_id` to an unassociated Experiment; an existing association is immutable.
+<!-- directions:end -->
+Extend a `peer_read_only`
+Experiment with a new local record rather than revising it. Prior submissions, Review receipts, conversations, and referenced bytes
+remain available to the Supervisor's private audit even though the Agent sees only the latest revision.
+The reviewer resumes that Experiment's latest valid Review Session; if native resume is unavailable,
+Runtime falls back to one fresh Review Session without discarding the earlier audit records.
+
+Every non-empty `references` entry must already exist and name a regular file or directory inside the Agent
+workspace. Paths may not overlap or traverse links. Runtime snapshots at most 32 roots, 256 files,
+16 MiB per file and 64 MiB total. It rejects the Experiment without mutation when a path is missing
+or unsafe. On success, that version's `experiment.json` contains rewritten paths such as
+`research-library/experiments/<experiment_id>/vN/references/scratch/ksplit-analysis.md`; these archived bytes are
+independent of later edits to the originals and are versioned once in the Campaign Library. Every
+lineage receives a visibility-filtered copy; synchronous peers see the revision at the next Epoch watermark and asynchronous peers
+see it with the live revision.
+
+Optional Wiki attribution retains `wiki_usage_status`, `wiki_query_ids`, and `wiki_usage`. Each usage
+row has `query_id`, `disposition`, and the returned `wiki_id` or `cite`. Do not invent identifiers.
+
+## Close, defer, or preserve a Direction
+
+Close only when the research state is truly terminal:
 
 ```json
 {
   "action": "complete",
   "direction_id": "direction_11111111111111111111111111111111",
-  "analysis": "The measured candidate is ready for verification",
-  "hypothesis_status": "supported",
+  "analysis": "The planned KSPLIT family was implemented and measured",
   "supporting_experiment_ids": ["experiment_22222222222222222222222222222222"]
 }
 ```
 
+`complete`, `abandon`, `block`, and `defer` use the same lifecycle fields. There is no
+`hypothesis_status`: a Direction is an optimization program, not one supported/refuted proposition.
+`supporting_experiment_ids` optionally identifies measured work that informs the lifecycle decision.
+Direction-only mode always omits `supporting_experiment_ids`.
+Use `defer` for a deliberate strategic pause or lower-priority path that can be resumed by the Agent;
+use `block` only for a concrete technical or external dependency that currently prevents progress.
+`defer` or `block` also requires a non-empty `reopen_condition` describing what evidence or
+capability should reactivate it. `abandon` and `complete` are terminal. Active Directions may cross
+an Episode boundary; close them only when their own objective and remaining variants are genuinely
+exhausted. The Research Catalog publishes every archived revision according to the configured
+visibility mode; Epoch sharing still imports peer Git refs and seals synchronous watermarks.
+
+## Continue a measured peer Kernel
+
+Epoch sharing imports exact peer Git history through remote-tracking refs such as
+`atrex/T2`. Keep or commit local work before switching. Inspect or continue the
+peer source with normal Git:
+
 ```bash
-python3 tools/sandbox.py --kind update-direction --request-file scratch/close.json
+git log --oneline --decorate atrex/T2
+git diff HEAD atrex/T2
+git switch -c explore/t2 atrex/T2
 ```
 
-Response is `{"status":"recorded","direction_id":"..."}`. Use `abandon`, `block`, or `defer`
-instead when that describes the outcome. All four closure actions require exactly these five fields.
-Select 1–32 unique Experiment IDs from this Direction's visible history. `hypothesis_status` means:
+The checked-out commit is the Kernel ID. Switching source does not assert correctness, performance,
+or acceptance; evaluate the resulting clean HEAD normally. Legacy evidence whose original Git object
+is unavailable stays private to Supervisor recovery and is not projected as reusable Agent evidence.
 
-- `unresolved`: evidence is insufficient to settle the hypothesis; use this for untested claims or infrastructure failures.
-- `supported`: the cited evidence supports your hypothesis.
-- `refuted`: the cited evidence contradicts your hypothesis.
+## Review an exact Kernel commit
 
-Lifecycle does not imply a verdict: completing work is not proving a hypothesis, and abandoning it
-is not refuting it. For supported/refuted, every selected Experiment must cite at least one completed
-Gateway observation. A completed correctness failure can refute a correctness claim; a failed job
-cannot settle a performance claim. Runtime verifies records and Kernel bindings, not the scientific
-truth or relevance of your interpretation. Do not use unrelated measurements to justify a claim.
+```json
+{"kernel_commit_id":"0123456789abcdef0123456789abcdef01234567"}
+```
 
-`associated_experiment_ids` includes all linked Experiments; `supporting_experiment_ids` is only the
-latest explicit closure selection. Late records extend associations without rewriting that selection.
-To revise a conclusion, explicitly submit another closure with its assessment and selected evidence.
-No in-progress Direction may remain at terminal handoff;
-proposed/deferred Directions may remain for later exploration.
+```bash
+python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-submit.json
+```
 
-## Candidate report
+The commit may be current HEAD or another commit reachable from local/imported Agent refs. Run a
+standard full Evaluate for that exact commit first. The response contains the stable
+`submission_id`, immutable `revision`, `accepted`, `evaluation_evidence`, per-policy status and
+actionable diagnostics. Submission reuses the saved result and launches no new evaluation.
 
-Leave the selected measurement's exact source in `kernel.py`. The Supervisor reuses matching six-case correctness evidence, or performs the missing check, before sealing that source into a candidate Commit. Do not run Git or supply a Commit ID. Save as `scratch/episode-report.json`:
+The first call creates `v1`. Rejection does not alter Git or roll back source. Repair and fully
+evaluate a new commit, then revise the same Submission with:
 
 ```json
 {
-  "status": "candidate_ready",
-  "summary": "The fused implementation passes evaluation and is ready for independent verification",
-  "selected_experiment_id": "experiment_22222222222222222222222222222222"
+  "submission_id": "submission-0123456789abcdef0123456789abcdef",
+  "kernel_commit_id": "fedcba9876543210fedcba9876543210fedcba98"
 }
 ```
 
-```bash
-python3 tools/sandbox.py --kind episode-report --request-file scratch/episode-report.json
-```
-
-Response:
-
-```json
-{"status":"accepted","message":"Report accepted; Supervisor committed the measured Kernel for verification"}
-```
-
-The selected Experiment must belong to this Episode, use `baseline`, `keep_after`, or `adopt`, and
-cite a passing Evaluate record for byte-identical current `kernel.py`. Profile/Dev/Check/Disassemble
-or ABBA alone cannot satisfy this report binding; custom-input or correctness-only diagnostics are
-not substitutes for standard performance evidence. Before accepting `candidate_ready`, the Supervisor
-reuses a matching successful full or correctness-only Evaluate with the base case plus five additional
-seeds. Ordinary Atrex-Bench Evaluate already checks these six cases. If evidence is missing or does
-not match the complete contract, the Supervisor performs a correctness-only check without timing.
-You need not submit or cite an extra check yourself. `candidate_correctness_failed` returns a Record
-ID and repair instructions: fix the Kernel, update its full Evaluate/Experiment evidence and resubmit.
-No report is finalized or Supervisor candidate commit created on failure. Infrastructure/unknown
-outcomes are blockers, not evidence that the Kernel is incorrect. Pivot/blocked reports do not trigger
-this check; replaying an accepted report republishes handoff without rerunning it.
-Do not submit `candidate_commit` in a managed Episode. Do not write canonical `memory/vN.json`. `accepted` confirms handoff, not that
-the candidate has won the Supervisor's independent gates. Stop after successful handoff.
-
-## Pivot report
-
-If exploration found no candidate to advance, use:
-
-```json
-{"status":"pivot","summary":"The explored change did not improve the incumbent; try a different direction"}
-```
-
-Omit `selected_experiment_id`, `candidate_commit`, and `blocker`. Journals may be empty if no Direction needs closing; do not invent experiments to satisfy a count.
-Save to the same report path and call `episode-report` as above; the response is
-`{"status":"accepted","message":"Report accepted and recorded"}`.
-
-## Blocked report
-
-If infrastructure or missing authority prevents progress:
-
-```json
-{"status":"blocked","summary":"Cannot obtain the required measurement","blocker":"The Runtime reports that the GPU service is unavailable"}
-```
-
-Both text fields must be non-empty; omit `selected_experiment_id` and `candidate_commit`. A blocked report can be submitted
-without an Experiment only if no Direction needs closing. Otherwise record actual Kernel-bound
-diagnostic evidence, then block/defer with an unresolved assessment. If no Gateway Record exists,
-closure remains blocked and normal session recovery handles the failure; never fabricate evidence.
-Use the same report command and acknowledgement as for pivot. For all statuses, malformed reports
-can be corrected and resubmitted; do not mistake a rejected report for a completed Episode.
-
-For a report validation error (`repairable:true`), use `error.message` and `error.next_action`
-to fix the indicated fields or prerequisites, then call `episode-report` again in this Session.
-Field errors also identify missing/unexpected fields and allowed fields. This does not apply to
-`journal_protocol_conflict`: finish that Episode with the legacy commands in its prompt instead.
-
-The other optional report field is `accepted_ppu_diagnostics`; use its schema in the mounted
-`ppu-acu-joint-profile` Skill when applicable. Do not invent additional fields.
-
-## List and load history
-
-```bash
-python3 tools/sandbox.py --kind list-directions --output-path scratch/directions.json
-python3 tools/sandbox.py --kind list-experiments --output-path scratch/experiments.json
-```
-
-Each command returns an acknowledgement, not the index itself:
-
-```json
-{"status":"written","file":"scratch/experiments.json","count":1}
-```
-
-Read the named local file. It contains `{"directions":[...]}` or `{"experiments":[...]}` across the
-current and visible earlier Episodes, not just this Episode. A Direction index entry has
-`direction_id`, `name`, `status`, `hypothesis_status`, and any declared ancestry. An Experiment index entry has
-`experiment_id`, `name`, `hypothesis`, `change`, `gateway_record_ids`, `evidence`, `analysis`, `action`.
-These exports do not update automatically; invoke list again when you need a fresh snapshot.
-
-```bash
-python3 tools/sandbox.py --kind load-direction --record-id direction_11111111111111111111111111111111
-python3 tools/sandbox.py --kind load-experiment --record-id experiment_22222222222222222222222222222222
-```
-
-Load returns the record directly as JSON, not a file or `result` wrapper. A loaded Direction includes
-the proposal, current `status`/`analysis`/`hypothesis_status`, timestamps, declared ancestry,
-all `associated_experiment_ids`, and explicitly selected `supporting_experiment_ids`.
-Old closures without an explicit assessment read as unresolved; their old automatic support is
-association only. Old unmeasured notes remain readable but cannot support new closures.
-A loaded Experiment contains its submitted fields plus `experiment_id`
-and `recorded_at`; no `sequence`. Use its `gateway_record_ids` with `record-read` for measurements
-and exact Kernel identity. Subsequent reads of a Direction include newly associated Experiments.
-
-## Derived Directions
-
-Reuse the same ID for an unchanged hypothesis; use `start` to resume a closed Direction. A new
-implementation of that hypothesis is an Experiment, not a new ancestry kind. For a changed
-hypothesis, a proposal may add one of these `relationship` values:
-
-- `refinement`: narrow or extend a parent hypothesis, such as focusing a tiling idea on register pressure.
-- `correction`: revise a mistaken parent hypothesis while preserving the original record.
-- `combination`: combine ideas from two or more distinct parent Directions, such as fusion and layout changes.
-
-Add `derived_from_direction_ids` and/or `derived_from_experiment_ids` from visible history. Each list
-allows at most 32 unique IDs. Explain the derivation in `rationale`; these labels do not establish
-that a hypothesis is correct. Cross-Campaign/DSL porting is not supported by this Journal.
-
-A relationship needs a parent; `combination` needs two distinct parent Directions, directly or via
-Experiments. A `correction` may set `supersedes_direction_id` to one parent; this does not change that
-parent's lifecycle. Ancestry is immutable; lifecycle updates must not include these extra fields.
+Each revision receives a fresh immutable `vN`; the independent Reviewer resumes its prior Session
+while rechecking the complete current candidate. An accepted older revision remains accepted if a
+later revision fails. Replaying the same commit with unchanged evidence and decision is idempotent.
+Omit `submission_id` only to create a distinct Submission. The Supervisor retains every revision,
+Review conversation and token receipt privately for audit. A normal Session exit ends the Episode.

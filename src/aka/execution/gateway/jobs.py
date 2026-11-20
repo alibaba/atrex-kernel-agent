@@ -28,11 +28,18 @@ from .diagnostics import causes_from_job, recovery_diagnostics, remote_terminati
 
 
 def causes_from_error(error):
+    if getattr(error, "upstream_error", None) is not None:
+        return causes_from_error(error.upstream_error)
     try:
         value = json.loads(getattr(error, "detail", ""))
     except (TypeError, ValueError):
-        return (ExecutionCause("infrastructure", type(error).__name__, str(error)),)
-    return causes_from_job({"error": value.get("error", value) if isinstance(value, dict) else value})
+        value = getattr(error, "payload", None)
+        if value is None and hasattr(error, "detail"):
+            value = error.detail
+        if value is None:
+            return (ExecutionCause("infrastructure", getattr(error, "code", type(error).__name__), str(error)),)
+    return causes_from_job({"error": value.get("error", value) if isinstance(value, dict) else value,
+                            "http_status": getattr(error, "status", None)})
 
 
 def client_wait_budget(scope, requested, effective):
@@ -68,15 +75,8 @@ def selected_route(endpoint="", profile="", *, environment=None, executable=None
         profile = ""
     elif not profile:
         endpoint = environment.get("AGATE_URL") or config.get("url", "")
-    if not endpoint and executable:
-        argv = [executable, "config"] + (["--profile", profile] if profile else [])
-        try:
-            resolved = subprocess.run(argv, env=environment, capture_output=True, text=True, timeout=10)
-            value = json.loads(resolved.stdout)
-            if not resolved.returncode and isinstance(value, dict):
-                endpoint = value.get("url", "")
-        except (OSError, ValueError, subprocess.SubprocessError):
-            pass  # Unknown route remains unknown; never guess a production endpoint.
+    from .sdk import route
+    endpoint = route(endpoint, profile, environment)
     if endpoint:
         JobReference("gateway", "route-validation", endpoint=endpoint)
     return endpoint, profile or "", environment
@@ -108,7 +108,7 @@ def result_from_job(job, reference, *, operation="query", diagnostics=(), cancel
     observed = ExecutionAttempt(operation, "terminal" if terminal else "unknown", resource,
                                 termination, exit_code, tuple(diagnostics), causes=causes,
                                 idempotency_key=reference.idempotency_key,
-                                request_identity=reference.request_identity)
+                                request_identity=reference.request_identity, backend_response=job)
     facts = ExecutionFacts(
         "terminal" if terminal else "unknown", termination,
         cancellation_requested=cancellation_requested, local_stopped=True,
@@ -116,10 +116,11 @@ def result_from_job(job, reference, *, operation="query", diagnostics=(), cancel
         basis=("confirmed-job-query",) + (("backend-job-terminal",) if terminal else ()),
         remote_cleanup="unknown",
     )
-    return JobResult(0 if status == "succeeded" else 75 if status == "infrastructure" else 1,
+    from .environment import with_job_environment
+    return with_job_environment(JobResult(0 if status == "succeeded" else 75 if status == "infrastructure" else 1,
         stdout=json.dumps(job), exit_code=exit_code, resource=resource,
         transport_status=status, facts=facts, attempts=(observed,), diagnostics=tuple(diagnostics),
-        causes=causes, job_references=(reference,))
+        causes=causes, job_references=(reference,)))
 
 
 def unknown_result(reference, code, *, operation="query", cancellation_requested=False):
@@ -174,7 +175,7 @@ class GatewayJobs:
     def __init__(self, *, endpoint="", profile="", executable=None,
                  http=None, runner=None, clock=time.monotonic, sleep=time.sleep,
                  idempotent_replay=False, environment=None):
-        self.endpoint, self.profile, self.executable = endpoint, profile, executable
+        self.endpoint, self.profile, self.executable = endpoint, profile, None
         if http is None:
             from .sandbox import _gateway_json
             frozen = dict(os.environ if environment is None else environment)
@@ -196,19 +197,7 @@ class GatewayJobs:
     def _read(self, reference, timeout):
         if self.endpoint and not self.executable:
             return self.http(self.endpoint, "GET", "/v1/jobs/" + quote(reference.identifier, safe=""), None, timeout)
-        argv = [self.executable, "get"]
-        if self.endpoint:
-            argv += ["--url", self.endpoint]
-        elif self.profile:
-            argv += ["--profile", self.profile]
-        argv += ["--http-timeout", str(timeout), reference.identifier]
-        result = self.runner(argv, env=self.environment, capture_output=True, text=True, timeout=timeout)
-        # agate get exits nonzero for failed jobs and unsuccessful dev commands;
-        # its stdout still contains the original structured JobView.
-        job = json.loads(result.stdout)
-        if not isinstance(job, dict) or not isinstance(job.get("job_id"), str):
-            raise RuntimeError("original-job-query-failed")
-        return job
+        raise UnsupportedExecution("Gateway recovery requires its saved SDK endpoint")
 
     def query(self, reference, *, timeout, retry=InfrastructureRetryPolicy()):
         self._require(reference)
@@ -270,18 +259,7 @@ class GatewayJobs:
         request_diagnostics = ()
         request_causes = ()
         try:
-            if self.endpoint and not self.executable:
-                self.http(self.endpoint, "POST", "/v1/jobs/" + quote(reference.identifier, safe="") + "/cancel", {}, timeout)
-            else:
-                argv = [self.executable, "cancel"]
-                if self.endpoint:
-                    argv += ["--url", self.endpoint]
-                elif self.profile:
-                    argv += ["--profile", self.profile]
-                argv += ["--http-timeout", str(timeout), reference.identifier]
-                result = self.runner(argv, env=self.environment, capture_output=True, text=True, timeout=timeout)
-                if result.returncode:
-                    raise RuntimeError("cancel-request-failed")
+            self.http(self.endpoint, "POST", "/v1/jobs/" + quote(reference.identifier, safe="") + "/cancel", {}, timeout)
         except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as error:
             request_diagnostics = (ExecutionDiagnostic("cleanup", type(error).__name__),)
             request_causes = causes_from_error(error)
@@ -369,11 +347,14 @@ class GatewayJobs:
                     attempts=(attempt,), diagnostics=(diag, *budget_diagnostics), causes=native_causes, budgets=budgets)
                 if command.on_observation is not None:
                     command.on_observation(last)
-                if category != "infrastructure" or index == len(retry.delays):
+                from .admission_retry import retry_delay
+                # Use the same explicit infra override as ordinary SDK admission.
+                delay = retry_delay(error, index, retry) if hasattr(error, "status") else (
+                    retry.delays[index] if category == "infrastructure" and index < len(retry.delays) else None)
+                if delay is None:
                     break
                 if recovery_deadline is None:
                     recovery_deadline = self.clock() + retry.max_elapsed_s
-                delay = retry.delays[index]
                 if delay >= min(deadline, recovery_deadline) - self.clock():
                     break
                 self.sleep(delay)
@@ -395,7 +376,23 @@ class GatewayJobs:
                 last = replace(queried, budgets=(*budgets, *queried.budgets),
                                diagnostics=(*budget_diagnostics, *queried.diagnostics))
                 attempts.extend(last.attempts)
-            break  # Confirmed IDs proceed exclusively to original-job GET.
+            from .admission_retry import infrastructure_failure
+            latest_job = next((item.backend_response for item in reversed(last.attempts)
+                               if item.backend_response is not None), None)
+            if (last.facts.disposition == "terminal" and not last.facts.cancellation_requested
+                    and infrastructure_failure(latest_job)
+                    and index < len(retry.delays)):
+                if recovery_deadline is None:
+                    recovery_deadline = self.clock() + retry.max_elapsed_s
+                delay = retry.delays[index]
+                if delay < min(deadline, recovery_deadline) - self.clock():
+                    self.sleep(delay)
+                    import uuid
+                    idempotency_key = uuid.uuid4().hex
+                    payload["idempotency_key"] = idempotency_key
+                    identity = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+                    continue
+            break
         if last is None:
             raise ValueError("replay budget exhausted before submission")
         last = replace(last, attempts=tuple(attempts), diagnostics=tuple(diagnostics) + last.diagnostics,

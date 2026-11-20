@@ -25,8 +25,9 @@ scratch/episode_N/timeline/attempt-N/
 └── evidence/
 ```
 
-The source entries may be files instead of directories for a single-file kernel. The harness must
-open only declared attempt files and skill resources; do not depend on an undeclared local checkout.
+Legacy raw Campaigns may use files instead of directories; new managed Kernels use source-tree
+directories. The harness must open only declared attempt files and skill resources; do not depend on
+an undeclared local checkout.
 Artifact descriptors must use paths relative to their containing JSON file, not remote absolute
 paths. Keep all transitive evidence in this tree so the synchronized files remain verifiable after
 the Supervisor publishes `scratch/` to the controller workspace.
@@ -38,19 +39,21 @@ harness needs the adapter, header, decoder, and possibly ACU extraction:
 
 ```bash
 ATTEMPT=scratch/episode_N/timeline/attempt-N
-python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
-  --input skills/ppu-acu-joint-profile \
+python3 tools/sandbox.py --kind profile \
+  --input .agents/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
-      PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
+      PPU_PROFILE_SKILL=.agents/skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_ppu.py"
 ```
 
 Custom `--input` selects the sandbox's isolated dev-compatible transport. It packages the explicitly
 named skill and attempt command inputs, chooses inline or OSS transport according to payload size,
-and synchronizes only the declared attempt directory. Keep raw captures below the attempt; raise
-`--max-output-file-mb` only when an expected evidence file exceeds the default bound.
+and synchronizes only the declared attempt directory. Keep raw captures below the attempt. Hardware,
+endpoint, transport limits and output-file limits are Supervisor-owned; if an expected artifact
+exceeds the configured bound, report that concrete requirement to the operator instead of adding
+authority flags to the Agent request.
 
 When the decision needs A/B perturbation, keep capture and measurement in one sandbox allocation.
 The wrapper first runs capture/decode, then invokes `timeline.py measure` with a predeclared
@@ -59,12 +62,12 @@ instrumented commands before returning:
 
 ```bash
 ATTEMPT=scratch/episode_N/timeline/attempt-N
-python tools/sandbox.py --kind profile --hardware <PPU_HARDWARE> \
-  --input skills/ppu-acu-joint-profile \
+python3 tools/sandbox.py --kind profile \
+  --input .agents/skills/ppu-acu-joint-profile \
   --input "$ATTEMPT" \
   --sync "$ATTEMPT" -- \
   env PPU_DEVICE="${PPU_DEVICE:?set PPU_DEVICE}" \
-      PPU_PROFILE_SKILL=skills/ppu-acu-joint-profile \
+      PPU_PROFILE_SKILL=.agents/skills/ppu-acu-joint-profile \
       python "$ATTEMPT/harness/capture_and_measure_ppu.py" \
         --baseline-command '["python","scratch/episode_N/timeline/attempt-N/harness/run_a.py"]' \
         --instrumented-command '["python","scratch/episode_N/timeline/attempt-N/harness/run_b.py"]' \
@@ -89,7 +92,7 @@ The attempt harness performs these operations inside the remote environment:
    uploaded backend header through a native include.
 4. Pass the device buffer through the existing launch interface without changing useful-work
    predicates, barriers, waits, or control flow.
-5. Follow the [timer contract](recorder.md#timer-contract-and-correctness-evidence), including the declared bound and raw
+5. Follow the timer contract in the selected backend documentation, including the declared bound and raw
    artifact when an environment sanity experiment is run.
 6. Warm up and validate the representative output, write the accepted correctness artifact, then
    capture one identified target launch, synchronize, and save the entire raw buffer with
@@ -111,9 +114,10 @@ dictionary, canonical events, Perfetto trace, summary, and accepted receipt
 in the attempt directory. Preserve failed attempt diagnostics under a new attempt number rather than
 overwriting prior evidence.
 
-Before `episode-report`, verify that the receipt and all referenced files were synchronized into
-the local `scratch/` tree. Report `evidence.artifact` as a workspace-relative `scratch/...` path;
-leave that tree intact for the controller's terminal revalidation.
+Before recording the Experiment or ending the Session, verify that the receipt and all referenced
+files were synchronized into the local `scratch/` tree. Report `evidence.artifact` as a
+workspace-relative `scratch/...` path; leave that tree intact so an Experiment can archive and
+audit the exact evidence.
 
 Restore the probe-free source after the attempt. ACU collection remains a separate probe-free launch
 and is not part of this remote timeline command unless a later, optional joint-analysis decision

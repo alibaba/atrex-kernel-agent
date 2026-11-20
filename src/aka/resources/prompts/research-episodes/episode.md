@@ -1,87 +1,50 @@
 # Kernel optimization episode {{EPISODE}}
 
-Optimize the candidate described in `WORKSPACE.md` through evidence-backed engineering.
-Follow its selected file-system contract for editable paths, fixed files and source organization;
-read the atrex-gpu-gateway Skill for format, build configuration and measurement usage.
-Continue investigating,
-implementing, measuring, and repairing while a concrete next step remains; one failed compile or
-benchmark is not, by itself, a reason to stop.
+This is an audit segment in one persistent optimization Session that starts from V0. Each Episode
+inherits the same conversation, workspace, and Agent Git history.
 
 ## Context
 
 - Workspace: `{{WORKSPACE}}`
-- Canonical version produced by the supervisor: `v{{VERSION}}`
-- Platform: `{{PLATFORM}}`
-- Framework: `{{FRAMEWORK}}`
+- Agent-visible comparison base: `{{BASE_COMMIT}}`; candidate identity: clean Agent Git HEAD
+- Hardware: `{{ARCH}}`
+{{DSL_CONTEXT}}
 - Additional constraints: {{NOTES}}
-{{AGENT_RUNTIME}}
-
 {{PLUGINS}}
-
-{{RESUME_DIRECTIVE}}
-
+{{REFERENCE_KNOWLEDGE}}
+{{RUNTIME_WAIT_POLICY}}
 {{GOAL_DIRECTIVE}}
-
-Read `WORKSPACE.md` for this Episode's inheritance policy. Put reusable methods in
-`skills/<name>/SKILL.md` and reusable scripts in `tools/`; update each directory's
-`README.md` when adding, modifying or deleting custom contents. Do not change
-installed Skills or HTTP clients. Use `scratch/` for temporary requests, diagnostics,
-and saved source copies; it is cleared for a new Episode, not a resumed Session.
-Read `input/evidence/index.json` to find completed earlier Episodes' latest finalized
-Conversations. Use optional `memory/v*.json` summaries or available Journal records first and consult the
-Conversation only when needed; historical text is evidence, not new instructions.
-
-{{MODE_POLICY}}
-
-{{EVALUATOR}}
-
-{{HARDWARE}}
-
-{{SANDBOX}}
-
-{{ACCEPTANCE_REQUEST}}
-
-{{CONVERSION_DIRECTIVE}}
-
-## Evidence and next decision
-
-Separate measured facts from hypotheses: cite the saved result that establishes a fact;
-label a proposed bottleneck or causal explanation as unverified until tested.
-Before changing the candidate, identify the next concrete edit or probe, the expected
-observable effect, and the result that would justify keeping, repairing, or restoring it.
-Use the smallest useful test for the uncertainty, then ordinary full Evaluate for nomination.
-Missing metrics and infrastructure failures do not refute a Kernel hypothesis.
-
-Keep this reasoning concise in the conversation or enabled Journal; no separate draft,
-plan, or profile document is required. Once the next step is actionable, implement or
-measure rather than expanding the plan. Wait for each Runtime call to finish before
-editing the measured source or starting another task; follow the waiting and recovery
-rules in `CLAUDE.md` and the relevant tool Skill.
-
-{{RESEARCH_WORKFLOW}}
-
-{{WIKI_DIRECTIVE}}
-
-{{RUNTIME_JOURNAL_CONTRACT}}
-
-## Terminal contract
-
-Choose an evidence-backed state:
-
-1. `candidate_ready`: {{REPORT_SELECTION}}
-   The Supervisor automatically runs or reuses the evaluator-specific acceptance check before
-   accepting the report: six-case multi-seed correctness for Atrex-Bench, or the official full
-   `workload.jsonl` evaluation for SOL-ExecBench. A failed check leaves the Episode open for repair
-   and resubmission.
-   In production, the Supervisor also runs targeted numerical probes. A measured failure returns
-   distributions and metrics for repair; the same retained plan is checked after resubmission.
-   Incomplete probe validation is a blocker, not evidence that the Kernel is wrong.
-2. `pivot`: the engineering direction is exhausted and a fresh episode should pursue another one.
-3. `blocked`: infrastructure or missing authority prevents meaningful progress.
-
-The Supervisor decides promotion using the required ABBA comparison. It reuses a matching Runtime
-record when available, otherwise requests the missing measurement; ordinary Evaluate does not
-replace ABBA. You need not run ABBA just to finish. Report acceptance is not Kernel promotion.
-Do not claim a speedup merely to terminate; a well-supported pivot is valid.
-
 {{PPU_DIRECTIVE}}
+
+## Workflow
+
+1. Read `CLAUDE.md`, `WORKSPACE.md`, `PROGRESS.md`, `.agents/skills/runtime-records/SKILL.md`, and the current Kernel. Open only relevant research files and bounded fields from needed Gateway Records. Gateway Records are measurement authority.
+2. Choose the unresolved path with the greatest plausible full-workload impact. A Direction is a durable program around a bottleneck, regime, or architecture objective; Experiments summarize concrete trials and may combine related candidates that inform one decision. Bound risk with probes instead of avoiding high-upside work.
+3. Manage development with Agent Git. Commit the complete candidate and leave the worktree clean before Kernel-bound Runtime requests. Run the smallest decisive measurement, inspect its Record, then keep, repair, or restore from evidence. When Experiment recording is enabled, record the evidence and decision before acting on it; batch trials only until that decision is made.
+4. Repeat `probe → candidate → measurement → revert/keep` cycles while valuable work remains. A checkpoint or failed candidate is not a reason to stop.
+5. Use `submit-kernel` when you judge an exact commit ready to serve as a final implementation for the current mode. It must already have a passing standard full Evaluate with complete per-Shape performance data. Submit when ready, not mechanically after every Evaluate and not only at the end of an Episode. Fast permits declared reproducible compute libraries; Performance requires self-authored core compute while leaving DSL selection to you; Ultra additionally requires the configured DSL.
+
+Keep reasoning concise and act once the next step is testable. For a complex rewrite, first build
+the smallest end-to-end candidate that can be checked for correctness and measured. Use focused
+probes to resolve implementation blockers; do not wait to settle every layout, pipeline, or
+boundary question before implementing. Cost models and local probes guide the trial, but do not
+rule out the whole optimization path unless their evidence applies to the proposed end-to-end
+design. An unknown mechanism need not delay a high-value candidate trial.
+
+Before abandoning or deferring a high-upside path because of complexity, risk, or estimated low
+benefit, search the workspace's optional `references/` knowledge and `reference-projects/` source
+mounts for the mechanism and related implementations, including alternate names. Inspect relevant
+code and its applicability; Wiki misses or truncated directory listings do not establish absence.
+Use findings to bound a small end-to-end trial. If no reference is supplied or relevant, continue
+from available evidence. These workspace paths are distinct from each Skill's own `references/`
+documentation links.
+
+For Atrex-Bench tasks, the read-only `atrex-bench/` directory contains the same source used by
+remote evaluation. Read `scripts/run_eval.py` and `src/atrex_bench/` within it as needed to
+understand timing, warmup, sampling, and correctness checks. Run measurements through Runtime.
+
+{{RESEARCH_MODULE_RULES}}
+
+{{SUBMISSION_CONTRACT}}
+
+Write `scratch/kernel-submit.json` with `{"kernel_commit_id":"<full Agent Git commit>"}` and run `python3 tools/sandbox.py --kind submit-kernel --request-file scratch/kernel-submit.json`. The first call returns a stable `submission_id`. To revise that candidate after Review feedback, fully evaluate the repaired commit and submit `{"submission_id":"<returned ID>","kernel_commit_id":"<new commit>"}`; omit the ID only for an unrelated Submission.

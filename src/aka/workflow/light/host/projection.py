@@ -1,17 +1,19 @@
 """Compact Agent projections adapted from simplified; no Record/Journal changes."""
 from __future__ import annotations
+from copy import deepcopy
 import json
 import math
 import re
 import subprocess
 from typing import Any
 
-from aka.workflow.light.host.errors import error_response
-from dataclasses import dataclass
-from aka.contracts.execution import JobResult
-from aka.evaluation.feedback import project_feedback, merge_feedback, bound_performance_feedback
+from aka.execution.gateway.sdk import submission_rejection
+from aka.evaluation.feedback import project_feedback, merge_feedback, bound_feedback
 from aka.evaluation.tool_results import correctness_summary
-from aka.evaluation.response_policy import KNOWN_GATEWAY_ERROR_CLASSES, known_gateway_error, SOURCE_VIOLATION
+from aka.evaluation.result_json import (
+    LEGACY_TEST_RESULT_PREFIX,
+    parse_evaluation_result_line,
+)
 
 MAX_AGENT_PROFILE_KERNELS = 32
 MAX_AGENT_EVALUATION_SHAPES = 4096
@@ -23,133 +25,63 @@ GATEWAY_ERROR_PREFIX = "[sandbox] GATEWAY_ERROR_JSON="
 _SECRET_KEY = re.compile(
     r"(?:authorization|password|ak|sk|atrex_aka_identity_key|agate[_-]?(?:ak|sk|token)|"
     r"(?:.*[_-])?(?:api|access|secret)[_-]?key(?:[_-]?id)?|"
-    r".*(?:token|password|secret|credential).*)", re.I
+    r"(?:.*[_-])?(?:token|password|secret|credentials?)|"
+    r"(?:access|refresh|session|security|auth|id)[_-]?token|.*(?:password|secret).*)", re.I
 )
 _SECRET_TEXT = re.compile(
     r"(?i)(\b(?:AGATE_AK|AGATE_SK|AGATE_TOKEN|API_KEY|ACCESS_KEY|SECRET_KEY|PASSWORD)"
     r"\s*[=:]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;\"'\]}]+)"
     r"|(\b(?:Authorization\s*:\s*)?Bearer\s+)[A-Za-z0-9._~+/-]+=*"
 )
-_SOURCE_VIOLATION = SOURCE_VIOLATION
+_URL_SECRET = re.compile(
+    r"(?i)([?&](?:access[_-]?token|api[_-]?key|token|signature|sig|"
+    r"x-amz-(?:credential|signature|security-token)|x-oss-(?:credential|signature|security-token)|"
+    r"ossaccesskeyid|securitytoken)=)[^&\s\"'<>]+"
+)
+_URL_USERINFO = re.compile(r"(?i)(https?://)[^/\s@]+:[^/\s@]+@")
+
+
+def runtime_environment_result(facts: dict[str, Any], enabled_kinds, *, runtime_kinds=None) -> dict[str, Any]:
+    """Expose the Campaign's Runtime tools, not the Executor's operation catalog.
+
+    Keep full hardware/provider facts and opaque errors. Raw operation catalogs
+    also occur in nested capability documents; they belong in private audit.
+    Never mutate the cached EnvironmentSnapshot used for execution matching.
+    """
+    from aka.contracts.agate_tools import normalize_agate_tools
+
+    def project(value):
+        if isinstance(value, dict):
+            return {
+                key: deepcopy(item) if key in {"error", "errors"} else project(item)
+                for key, item in value.items()
+                if key not in {"operations", "backend_operations"}
+            }
+        if isinstance(value, list):
+            return [project(item) for item in value]
+        return value
+
+    result = project(facts)
+    result.setdefault("declarations", {})["operations"] = list(
+        normalize_agate_tools(enabled_kinds) if runtime_kinds is None else runtime_kinds)
+    return result
+
 
 def source_error_result(value: dict[str, Any]) -> dict[str, Any]:
-    """Only public candidate-source rules, never raw validation/evaluator text."""
-    error = value.get("error")
-    if (not isinstance(error, dict) or error.get("code") != "candidate_source_rejected"
-            or error.get("job_submitted") is not False):
-        raise ValueError("not a candidate source rejection")
-    raw_violations = error.get("violations", [])
-    if not isinstance(raw_violations, list):
-        raise ValueError("source violations must be a list")
-    violations = []
-    for item in raw_violations[:MAX_AGENT_DIAGNOSTICS]:
-        if (isinstance(item, str) and len(item) <= 256
-                and _SOURCE_VIOLATION.fullmatch(item) and item not in violations):
-            violations.append(item)
-    return error_response(
-        "Agate rejected candidate source before GPU submission.",
-        code="candidate_source_rejected", error_class="code", reason="source_validation_failed",
-        job_submitted=False, violations=violations,
-        next_action=(
-            "Remove or replace the listed forbidden names, imports, attribute accesses or string literals "
-            "in the candidate, then retry the same operation with the repaired source. "
-            "Do not bypass source validation through Dev."
-        ),
-    )
-
-
-@dataclass(frozen=True)
-class _SubmissionRejection:
-    status: int
-
-
-def submission_rejection(process):
-    """Consume original public admission facts; streams do not prove dispatch safety."""
-    result = getattr(process, "execution_result", None)
-    if not isinstance(result, JobResult) or result.facts.disposition != "not_submitted" or result.job_references:
-        return None
-    for diagnostic in result.diagnostics:
-        status = diagnostic.details.get("http_status")
-        if type(status) is int and 400 <= status < 600:
-            return _SubmissionRejection(status)
-    return None
-
-
-def candidate_source_rejection(process: subprocess.CompletedProcess) -> dict[str, Any] | None:
-    """Only Evaluation/Execution's confirmed candidate-specific public admission facts."""
-    rejection = submission_rejection(process)
-    if rejection is None or rejection.status != 400:
-        return None
-    result = process.execution_result
-    if not any(diagnostic.details.get("source_validation_failed") and diagnostic.details.get("candidate_rejected")
-               and not diagnostic.details.get("reference_rejected") for diagnostic in result.diagnostics):
-        return None
-    from aka.evaluation.response_policy import execution_error
-    error = execution_error(result)
-    return source_error_result(error) if error is not None else None
-
-
-def source_error_from_stdout(stdout: str) -> dict[str, Any] | None:
-    for line in stdout.splitlines():
-        if line.startswith(SOURCE_ERROR_PREFIX):
-            try:
-                return source_error_result(json.loads(line[len(SOURCE_ERROR_PREFIX):]))
-            except (ValueError, TypeError, AttributeError):
-                continue
-    return None
+    """Read older source-error markers without reclassifying their contents."""
+    return gateway_error_result(value)
 
 
 def bounded_error(value: Any) -> Any:
-    """Retain complete error evidence, redacting credentials."""
+    """Retain the complete original JSON error after credential redaction."""
     return redact_diagnostics(value)
 
 
 def gateway_error_result(value: dict[str, Any]) -> dict[str, Any]:
-    """Apply known recovery policies; preserve unknown Agate errors verbatim."""
+    """Preserve every Agate error field; recovery policy is private state."""
     if "error" not in value:
         raise ValueError("Gateway error response omitted error")
-    if not known_gateway_error(value):
-        # Agate evolves independently of Runtime.  An unfamiliar error class or
-        # envelope must remain debuggable instead of being reduced to Runtime's
-        # current top-level allowlist.  The caller applies universal credential
-        # and controller-path redaction after this projection.
-        return dict(value)
-    result = {key: value[key] for key in (
-        "operation", "status", "job_id", "trace_id", "http_status", "batch", "outcome",
-    ) if key in value and (value[key] is None or type(value[key]) in {str, int})}
-    result["error"] = bounded_error(value["error"])
-    error = value["error"]
-    if value.get("outcome") == "unknown":
-        from aka.workflow.light.host.errors import UNKNOWN_OUTCOME
-        result["next_action"] = UNKNOWN_OUTCOME
-    elif isinstance(error, dict) and error.get("reason") == "ssh_gpu_busy":
-        result["next_action"] = (
-            "The assigned SSH GPU is busy. Retry after the current allocation releases it; "
-            "this is not a Kernel correctness verdict or an environment failure."
-        )
-    elif isinstance(error, dict) and error.get("error_class") == "infra":
-        result["next_action"] = (
-            "Infrastructure failure, not a Kernel correctness verdict. Supervisor recovery owns retries. "
-            "Read the saved Record; if recovery cannot complete, ask the operator to restore the service."
-        )
-    elif value.get("status") in {"cancelled", "canceled"}:
-        result["next_action"] = "The job was cancelled; no Kernel verdict is available. Inspect the Record before starting new work."
-    elif isinstance(error, dict) and error.get("error_class") in (
-        KNOWN_GATEWAY_ERROR_CLASSES - {"infra"}
-    ):
-        result["next_action"] = (
-            "Inspect the returned error and saved Record. Repair the candidate source, probe or "
-            "request identified by the diagnostic, then measure the changed task. "
-            "Do not treat this as a service outage or repeatedly submit the unchanged failing task."
-        )
-    else:
-        result["next_action"] = (
-            "Inspect the error and saved Record to determine the cause. This error alone is not "
-            "a Kernel correctness verdict. If the submission outcome is uncertain, ask the "
-            "operator to reconcile it; do not resubmit blindly."
-        )
-    result["recovery"] = [{"instruction": result["next_action"]}]
-    return result
+    return dict(value)
 
 
 def gateway_error_from_process(process: subprocess.CompletedProcess, operation: str) -> dict[str, Any] | None:
@@ -210,17 +142,7 @@ def gateway_http_error_result(status: int, detail: str, operation: str) -> dict[
         body = detail
     error = body.get("error", body.get("detail", body)) if isinstance(body, dict) else body
     envelope = dict(body) if isinstance(body, dict) else {}
-    envelope.update(
-        operation=operation,
-        http_status=status,
-        error=error,
-    )
-    envelope.setdefault(
-        "outcome",
-        "failed" if operation == "env" else (
-            "unknown" if status >= 500 and status != 503 else "rejected"
-        ),
-    )
+    envelope.update(operation=operation, http_status=status, error=error)
     return gateway_error_result(envelope)
 
 
@@ -238,16 +160,14 @@ def redact_diagnostics(value: Any, *, private_paths=(), private_values=()) -> An
         value = value.replace(secret, "<redacted>")
     for path in sorted(set(item for item in private_paths if item), key=len, reverse=True):
         value = value.replace(path, "<supervisor>")
+    value = _URL_SECRET.sub(lambda match: match[1] + "<redacted>", value)
+    value = _URL_USERINFO.sub(lambda match: match[1] + "<redacted>@", value)
     return _SECRET_TEXT.sub(lambda match: (match[1] or match[2]) + "<redacted>", value)
 
+
 _HIDDEN_SHAPE_KEYS = frozenset({
-    "shape",
-    "shapes",
-    "input_shape",
-    "output_shape",
-    "strides",
-    "init_kwargs",
-    "forward_kwargs",
+    "shape", "shapes", "input_shape", "output_shape", "strides",
+    "init_kwargs", "forward_kwargs",
 })
 
 
@@ -255,8 +175,6 @@ def _hidden_shape_key(value: object) -> bool:
     if not isinstance(value, str):
         return False
     key = value.lower()
-    # Shape IDs are opaque handles, and per-shape metric maps do not expose the
-    # dimensions themselves.  Keep both useful for debugging hidden workloads.
     if key.endswith(("shape_id", "shape_ids")) or key.endswith("_by_shape"):
         return False
     return key in _HIDDEN_SHAPE_KEYS or key.endswith(
@@ -280,19 +198,38 @@ def redact_hidden_shapes(value):
             return json.dumps(redact_hidden_shapes(json.loads(value)), ensure_ascii=False)
         except ValueError:
             pass
-    # Consume a full unbracketed dimension run before rewriting NxM fragments.
-    value = re.sub(r"(?i)(\b(?:shapes?|sizes?|strides?|dimensions?|dims?|numel|batch_size|seq_len)\s*(?:[=:]|of)?\s*)-?\d+(?:(?:[ \t]*[,x×][ \t]*|[ \t]+)-?\d+)*",
-                   r"\1<hidden shape>", value)
-    # Numeric dimension vectors and matmul's NxM notation, including torch.Size.
-    value = re.sub(r"torch\.Size\(\[[^\]]*\]\)|(?<![\w])([\[(])\s*-?\d+(?:\s*,\s*-?\d+)+\s*,?\s*[\])]",
-                   "<hidden shape>", value)
-    value = re.sub(r"(?<![\w])(?:\(\s*-?\d+\s*,\s*\)|\[\s*-?\d+\s*\])", "<hidden shape>", value)
+    value = re.sub(
+        r"(?i)(\b(?:shapes?|sizes?|strides?|dimensions?|dims?|numel|batch_size|seq_len)\s*(?:[=:]|of)?\s*)-?\d+(?:(?:[ \t]*[,x×][ \t]*|[ \t]+)-?\d+)*",
+        r"\1<hidden shape>",
+        value,
+    )
+    value = re.sub(
+        r"torch\.Size\(\[[^\]]*\]\)|(?<![\w])([\[(])\s*-?\d+(?:\s*,\s*-?\d+)+\s*,?\s*[\])]",
+        "<hidden shape>",
+        value,
+    )
+    value = re.sub(
+        r"(?<![\w])(?:\(\s*-?\d+\s*,\s*\)|\[\s*-?\d+\s*\])",
+        "<hidden shape>",
+        value,
+    )
     value = re.sub(r"\b\d+(?:\s*[x×]\s*\d+)+\b", "<hidden shape>", value)
-    value = re.sub(r"(\b(?:N|M|K|B|S|batch|seq|sequence_length|hidden_size|head_dim|num_heads)\s*[=:]\s*)\d+",
-                   r"\1<hidden shape>", value)
-    value = re.sub(r"(?i)(size of tensor [ab]\s*\()\d+(\))", r"\1<hidden shape>\2", value)
-    value = re.sub(r"(?i)(\b(?:expected|got)\s+(?:size\s+)?)-?\d+(?=\b)",
-                   r"\1<hidden shape>", value) if re.search(r"(?i)\b(shape|size|dimension)\b", value) else value
+    value = re.sub(
+        r"(\b(?:N|M|K|B|S|batch|seq|sequence_length|hidden_size|head_dim|num_heads)\s*[=:]\s*)\d+",
+        r"\1<hidden shape>",
+        value,
+    )
+    value = re.sub(
+        r"(?i)(size of tensor [ab]\s*\()\d+(\))",
+        r"\1<hidden shape>\2",
+        value,
+    )
+    if re.search(r"(?i)\b(shape|size|dimension)\b", value):
+        value = re.sub(
+            r"(?i)(\b(?:expected|got)\s+(?:size\s+)?)-?\d+(?=\b)",
+            r"\1<hidden shape>",
+            value,
+        )
     return value
 
 
@@ -556,7 +493,7 @@ def profile_result(result: dict[str, Any], *, generalized: bool = False) -> dict
 def _agent_diagnostic_item(value: object) -> object | None:
     """Project one compiler diagnostic without exposing request or worker state."""
     if isinstance(value, str):
-        return bounded_text(value, 2000)
+        return value
     if not isinstance(value, dict):
         return None
     projected: dict[str, object] = {}
@@ -584,7 +521,7 @@ def _agent_diagnostic_item(value: object) -> object | None:
     for key in text_fields:
         item = value.get(key)
         if isinstance(item, str) and item:
-            projected[key] = bounded_text(item, 2000 if key == "message" else 512)
+            projected[key] = item if key == "message" else bounded_text(item, 512)
     for key in numeric_fields:
         item = value.get(key)
         if (
@@ -790,10 +727,9 @@ def _positive_number(value: object) -> float | None:
 
 def evaluation(result: dict) -> dict:
     keys = {"all_pass", "latency_us_geomean", "latency_us_arith_mean",
-            "performance_score", "performance_objective", "max_abs_err", "max_rel_err", "rel_err",
+            "max_abs_err", "max_rel_err",
             "shape_ids_are_opaque", "hidden_case_details", "mode", "n_shapes",
-            "correctness_passed", "correctness_total", "speedup_vs_ref_geomean",
-            "speedup_vs_ref_mean", "kernel_sha256", "utilization_pct", "sol_utilization_pct"}
+            "correctness_passed", "correctness_total", "kernel_sha256"}
     value = {key: item for key, item in result.items()
              if key in keys and (item is None or isinstance(item, (str, int, float, bool)))
              and (not isinstance(item, float) or math.isfinite(item))}
@@ -812,22 +748,59 @@ def evaluation(result: dict) -> dict:
             str(key)[:128]: item for key, item in list(shapes.items())[:MAX_AGENT_EVALUATION_SHAPES]
             if _finite_number(item) is not None
         }
-    value["failures"] = [str(item) for item in (result.get("failures") or [])]
-    value["actionable_diagnostics"] = [
-        {key: str(item) for key, item in row.items() if key in {"stage", "shape_id", "message"}}
-        for row in (result.get("actionable_diagnostics") or []) if isinstance(row, dict)
-    ]
-    for key in ("stdout", "stderr", "traceback"):
-        if isinstance(result.get(key), str):
-            value[key] = result[key]
-    if isinstance(result.get("case_status"), dict):
-        value["case_status"] = {str(key)[:128]: status
-            for key, status in list(result["case_status"].items())[:MAX_AGENT_EVALUATION_SHAPES]
-            if status in ("passed", "failed", "not_run", "incomplete")}
+    value["failures"] = [str(item or "") for item in (result.get("failures") or [])]
+    actionable_diagnostics = []
+    for row in result.get("actionable_diagnostics") or []:
+        if not isinstance(row, dict):
+            continue
+        item = {
+            key: (
+                str(raw or "")
+                if key == "message"
+                else bounded_text(raw)
+            )
+            for key, raw in row.items()
+            if key in {"stage", "shape_id", "message"}
+        }
+        if isinstance(row.get("shape_ids"), list):
+            item["shape_ids"] = [
+                bounded_text(shape_id) for shape_id in row["shape_ids"]
+            ]
+        actionable_diagnostics.append(item)
+    value["actionable_diagnostics"] = actionable_diagnostics
     if result.get("error") is not None:
         value["error"] = bounded_error(result["error"])
-    if any(key in result for key in ("diagnostics", "performance_by_shape")):
-        value.update(project_feedback(result))
+    if any(key in result for key in ("diagnostics", "correctness_by_shape", "performance_by_shape")):
+        feedback = project_feedback(result, agent_visible=True)
+        # The conversion and native Eval feedback can expose the same compiler
+        # text under two schemas.  Keep one complete copy rather than shortening
+        # both copies to fit a response budget.
+        actionable_messages = {
+            row.get("message")
+            for row in value["actionable_diagnostics"]
+            if isinstance(row, dict) and isinstance(row.get("message"), str)
+        }
+        diagnostics = feedback.get("diagnostics")
+        if isinstance(diagnostics, list):
+            feedback["diagnostics"] = [
+                row
+                for row in diagnostics
+                if not (
+                    isinstance(row, dict)
+                    and row.get("error") in actionable_messages
+                    and not any(
+                        key in row
+                        for key in (
+                            "case_index",
+                            "check",
+                            "max_elementwise_abs_diff",
+                            "max_elementwise_rel_diff",
+                            "relative_l2",
+                        )
+                    )
+                )
+            ]
+        value.update(feedback)
     return value
 
 
@@ -835,7 +808,7 @@ NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
 
 
 def numerical_result(payload: dict) -> dict:
-    """Probe receipts plus original failure diagnostics, bounded for Agent feedback.
+    """Probe receipts plus complete redacted failure diagnostics for Agent feedback.
 
     Keep evaluator errors intact so the planner can repair the actual failure,
     rather than guessing from a missing-receipt summary. Request inputs and the
@@ -843,7 +816,7 @@ def numerical_result(payload: dict) -> dict:
     and controller paths as for other Gateway diagnostics.
     """
     public = {"schema_version": 1, "runs": [], "all_pass": payload.get("all_pass") is True}
-    for row in payload.get("runs", []):
+    for row in payload.get("runs", [])[:3]:
         item = {key: row.get(key) for key in (
             "case_id", "passed", "exit_code", "expected_probes", "observed_probes",
             "failed_probes", "shape_count", "seeds", "world_size", "selection_digest")}
@@ -869,7 +842,7 @@ def numerical_result(payload: dict) -> dict:
         failed = [row for row in diagnostics if isinstance(row, dict) and (
             row.get("exit_code") not in (None, 0) or row.get("timed_out") or row.get("diagnosis")
             or row.get("traceback") or row.get("capture_error"))]
-        for row in failed:
+        for row in failed[-3:]:
             item = {key: row[key] for key in (
                 "case_id", "shape_id", "seed", "stage", "exit_code", "timed_out",
                 "expected_probes", "observed_probes", "candidate_timeout_s") if key in row}
@@ -897,30 +870,20 @@ def numerical_result(payload: dict) -> dict:
 
 def project_response(process: subprocess.CompletedProcess, *, generalized=False, wiki=False,
                      private_paths=(), private_values=(), public_dev=False, operation=None) -> dict:
-    """Project known result types and pass unfamiliar Agate output through verbatim.
-
-    Credential and private controller-path redaction is universal.  Exposed mode
-    preserves unfamiliar Agate evidence verbatim after that redaction.  Hidden-
-    shape mode is an explicit privacy boundary, so every Agent-visible response
-    path is additionally shape-redacted even when Runtime does not understand
-    the response schema.
-    """
+    """Project known results and preserve unfamiliar Agate output after redaction."""
     stdout, stderr = process.stdout or "", process.stderr or ""
     hide_shapes = generalized and not wiki and not public_dev
-    numerical = any(line.startswith(NUMERICAL_RESULT_PREFIX) for line in stdout.splitlines())
     projected = []
     formatters = {
-        "[test_kernel] RESULT_JSON=": evaluation,
+        LEGACY_TEST_RESULT_PREFIX: evaluation,
         "[sandbox] PROFILE_JSON=": lambda value: profile_result(
             value, generalized=generalized
         ),
         "[sandbox] CHECK_JSON=": _agent_check_result,
         "[sandbox] DISASSEMBLE_JSON=": _agent_disassembly_result,
-        # compare() already emits abba()'s public metric projection.
         "[sandbox] ABBA_JSON=": lambda value: (
             dict(value, error=bounded_error(value["error"]))
-            if value.get("error")
-            else dict(value)
+            if value.get("error") else dict(value)
         ),
         "[sandbox] ENV_JSON=": dict,
         NUMERICAL_RESULT_PREFIX: numerical_result,
@@ -929,6 +892,22 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
     }
     json_marker = re.compile(r"^(\[[^\]\r\n]+\]\s+[A-Za-z0-9_]+_JSON=)")
     for line in stdout.splitlines():
+        direct_evaluation = (
+            parse_evaluation_result_line(line)
+            if operation in {"evaluate", "run", "dev"}
+            else None
+        )
+        if direct_evaluation is not None:
+            value = evaluation(direct_evaluation)
+            value = redact_diagnostics(
+                value,
+                private_paths=private_paths,
+                private_values=private_values,
+            )
+            if hide_shapes:
+                value = redact_hidden_shapes(value)
+            projected.append(json.dumps(value, ensure_ascii=False))
+            continue
         prefix = next(
             (candidate for candidate in formatters if line.startswith(candidate)),
             None,
@@ -951,11 +930,13 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                 )
                 if hide_shapes:
                     value = redact_hidden_shapes(value)
-                projected.append(prefix + json.dumps(value, ensure_ascii=False))
+                encoded = json.dumps(value, ensure_ascii=False)
+                projected.append(
+                    encoded
+                    if prefix == LEGACY_TEST_RESULT_PREFIX
+                    else prefix + encoded
+                )
             except (ValueError, TypeError, RecursionError, OverflowError):
-                # A known marker with a future schema is also unknown input to
-                # this Runtime version.  Preserve it rather than replacing the
-                # only evidence with a projection error.
                 line = redact_diagnostics(
                     line,
                     private_paths=private_paths,
@@ -963,26 +944,19 @@ def project_response(process: subprocess.CompletedProcess, *, generalized=False,
                 )
                 projected.append(redact_hidden_shapes(line) if hide_shapes else line)
         else:
-            line = redact_diagnostics(line, private_paths=private_paths, private_values=private_values)
+            line = redact_diagnostics(
+                line,
+                private_paths=private_paths,
+                private_values=private_values,
+            )
             projected.append(redact_hidden_shapes(line) if hide_shapes else line)
     stdout = "\n".join(projected) + ("\n" if projected else "")
-    structured_marker_present = any(line.startswith("[") for line in projected)
     # Structured lines were redacted before JSON encoding. Re-running free-form
     # regexes over encoded JSON can eat delimiters and corrupt result markers.
     if hide_shapes:
         stderr = redact_hidden_shapes(stderr)
     stderr = redact_diagnostics(stderr, private_paths=private_paths, private_values=private_values)
     result = {"exit_code": process.returncode, "stdout": stdout, "stderr": stderr}
-    for key, limit in (("stdout", 256 * 1024 if wiki else 384 * 1024), ("stderr", 16 * 1024)):
-        encoded = result[key].encode()
-        if len(encoded) > limit and not (operation in {"evaluate", "same_allocation_abba"}
-                or numerical or "[test_kernel] RESULT_JSON=" in stdout or "[sandbox] ABBA_JSON=" in stdout):
-            if key == "stdout" and structured_marker_present:
-                result[key] = json.dumps({"error": "Projected result exceeds context limit; narrow the request."}) + "\n"
-                result["exit_code"] = process.returncode or 2
-            else:
-                result[key] = encoded[:limit].decode("utf-8", "ignore") + "\n<output truncated>\n"
-            result["truncated"] = True
     from aka.evaluation.tool_results import bound_diagnostic_response
     return bound_diagnostic_response(result)
 
@@ -1017,12 +991,6 @@ def _abba_side_metrics(
         if len(valid_run_latencies) == repeats
         else None
     )
-    scores = [_positive_number(row["result"].get("performance_score")) for row in successful]
-    score = (
-        sum(value for value in scores if value is not None) / repeats
-        if len(scores) == repeats and all(value is not None for value in scores)
-        else None
-    )
     result = {
         "correct": (
             len(successful) == repeats and set(by_shape) == set(shape_ids)
@@ -1030,7 +998,6 @@ def _abba_side_metrics(
         ),
         "latency_us_geomean": latency,
         "latency_us_by_shape": by_shape,
-        "performance_score": score,
         "max_abs_err": max(
             (row["result"].get("max_abs_err") or 0 for row in successful), default=0,
         ),
@@ -1052,6 +1019,7 @@ def _abba_side_metrics(
             for key in ("failures", "actionable_diagnostics"):
                 if failure.get(key):
                     result.setdefault(key, []).extend(failure[key])
+                    result[key] = result[key][:MAX_AGENT_DIAGNOSTICS]
             if "error" in failure:
                 result["error"] = failure["error"]
     return result
@@ -1072,9 +1040,7 @@ def _agent_abba_public_result(
     # Both sides share one public response. Preserve errors instead of letting
     # two individually-valid feedback budgets overflow the transport projection.
     for side in (baseline, candidate):
-        side.update(bound_performance_feedback(side, max_performance_bytes=128 * 1024))
-    baseline_us = _positive_number(baseline.get("latency_us_geomean"))
-    candidate_us = _positive_number(candidate.get("latency_us_geomean"))
+        side.update(bound_feedback(side))
     terminal_failure = payload.get("terminal_failure")
     correct = (
         baseline["correct"] is True
@@ -1082,7 +1048,6 @@ def _agent_abba_public_result(
         and not payload.get("error")
         and not terminal_failure
     )
-    speedup = baseline_us / candidate_us if correct and baseline_us and candidate_us else None
     return {
         "status": "succeeded" if correct and payload.get("error") is None else "failed",
         "operation": "same_allocation_abba",
@@ -1097,8 +1062,6 @@ def _agent_abba_public_result(
         ],
         "baseline": baseline,
         "candidate": candidate,
-        "speedup": speedup,
-        "improvement_pct": (speedup - 1.0) * 100.0 if speedup is not None else None,
         "measurements": [
             {
                 "side": "A" if row.get("revision") == "incumbent" else "B",

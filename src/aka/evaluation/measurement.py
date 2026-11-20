@@ -35,7 +35,7 @@ def _content_inputs(workspace, reference, excluded=(), evaluation_input=None):
     content = {}
     skipped = {".git", ".atrex_verify", ".atrex_long_horizon", ".atrex_plugins",
                ".claude", ".agents", ".qoder", "__pycache__", "memory", "profiles",
-               "plans", "gpu-wiki", "reference-projects", "skills", "verification_artifacts",
+               "plans", "gpu-wiki", "reference-projects", "references", "skills", "verification_artifacts",
                "eval_output", "profile_output", ".mypy_cache", ".pytest_cache", ".ruff_cache",
                ".atrex_environment"}
     excluded = set(excluded)
@@ -82,7 +82,7 @@ def _requirements(configuration, evaluation_input=None):
 def _environment_parameters(environment):
     # Values identify potentially material runtime configuration without exposing
     # credentials or machine-local paths through an evidence document.
-    keys = ("ATREX_SANDBOX_ATREX_BENCH_VERSION", "AKA_GATEWAY_WARMUP_ITERS",
+    keys = ("AKA_GATEWAY_WARMUP_ITERS",
             "ATREX_SANDBOX_URL", "ATREX_SANDBOX_PROFILE", "ATREX_SANDBOX_SSH",
             "ATREX_SANDBOX_SSH_INIT", "ATREX_SANDBOX_SSH_GPU",
             "ATREX_CORRECTNESS_MAX_REL_L2", "AKA_GATEWAY_DEV_DEPENDENCIES")
@@ -153,7 +153,8 @@ def gateway_identity(request, reference_files, kind="run", *, full_request=None,
     candidate_checksum = source_parameters.get("candidate_source_sha256") or _bytes(request["candidate"].encode())
     input_digest = _digest({"request": frozen, "reference_files": reference_files,
         **({"sources": source_parameters} if source_parameters else {})})
-    shapes = tuple(str(value) for value in request.get("reference", {}).get("shapes", {})) or (None,)
+    from .shapes import request_shape_ids
+    shapes = (tuple(request_shape_ids(request)) if request.get("reference", {}).get("shapes") else ()) or (None,)
     candidate = "sha256:" + candidate_checksum
     abba = request.get("abba")
     if abba:
@@ -190,14 +191,14 @@ def gateway_identity(request, reference_files, kind="run", *, full_request=None,
     parameters["candidate_source_format"] = "raw-kernel/1"
     parameters.update(source_parameters)
     parameters["workload_scope"] = workload_scope
-    # Six complete typed correctness cases are the proved full/untimed
-    # equivalence. Other seed policies keep their identities but cannot reuse it.
+    # Full and untimed requests use the same five deterministic cases. The
+    # workload digest includes seed/case policy; only mode differs for reuse.
     parameters["correctness_digest"] = _digest({"workload": workload,
         "candidate_source_sha256": parameters["candidate_source_sha256"]})
-    parameters["correctness_reuse_policy"] = "typed-six-case/1" if (
+    parameters["correctness_reuse_policy"] = "typed-five-case/1" if (
         kind == "run" and not abba and workload_scope == "full-task"
         and full.get("mode") in {"full", "correctness_only"}
-        and type(options.get("num_correctness_cases")) is int and options["num_correctness_cases"] == 6) else "none"
+        and type(options.get("num_correctness_cases")) is int and options["num_correctness_cases"] == 5) else "none"
     requirements = tuple(request.get("requirements", ()))
     policy = str(request.get("deps_mode") or ("explicit-requirements" if requirements else "unknown"))
     method = "atrex-bench/" + kind if kind in {"profile", "check", "disassemble"} else "atrex-bench/abba" if abba else "atrex-bench/eval"
@@ -233,7 +234,7 @@ def portable_profile_identity(command, reference):
 
 def assess_payload(identity, result, payload=None):
     """Interpret one physical receipt without altering the incumbent/candidate score."""
-    from .abba import _result_latency, _result_performance_score
+    from .abba import _result_latency
     observed = []
     diagnostics = []
     rows = payload.get("runs", ()) if isinstance(payload, dict) else ()
@@ -284,8 +285,7 @@ def assess_payload(identity, result, payload=None):
         if correctness_only and passed:
             observed.extend(point for point in points if point not in observed)
             valid_rows.append(True)
-        elif passed and numeric and shape_numeric and _result_latency(measured) is not None and (
-                identity.parameters.get("comparison_method") == "native-abba" or _result_performance_score(measured) is not None):
+        elif passed and numeric and shape_numeric and _result_latency(measured) is not None:
             valid_rows.append(True)
         elif measured.get("all_pass") is False:
             invalid = True

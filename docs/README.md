@@ -12,12 +12,11 @@ describe the versions and environments identified in those documents.
 | --- | --- |
 | [Quick Start](quickstart.md) | Install matching packages, prepare an operator, launch Light, inspect outputs |
 | [Using DSH](dsh-harness-adapter.md) | Choose DSH as the coding agent, reuse a provider profile, and follow Session progress |
-| [Architecture Design](design.md) | Current modules, authority boundaries, Episode lifecycle, promotion |
+| [Architecture Design](design.md) | Current modules, authority boundaries, persistent Sessions, accepted submissions |
 | [Light modules and profiles](optional-light-modules.md) | Provider options, Wiki, search, source imports, budgets, recovery |
 | [Installed startup](application-plugin-migration.md) | CLI/profile selection, package ownership, frozen continuations |
 | [Native CUDA and source layouts](native-cuda.md) | Source trees, single-file and CUDA manifests, source identity |
-| [Agent workspace isolation](agent-workspace-isolation.md) | Native/Bubblewrap selection, Homes, mounts, projected proc |
-| [Supplemental numerical validation](numerical-validation.md) | Optional production risk probes and repair semantics |
+| [Agent workspace isolation](agent-workspace-isolation.md) | Native/Bubblewrap selection, Homes, mounts, private/host proc modes |
 
 ## Runtime and extensions
 
@@ -25,21 +24,14 @@ describe the versions and environments identified in those documents.
 | --- | --- |
 | [Tool Runtime](supervisor-runtime.md) | Agent-scoped tool authority, GPU/Wiki tools, public results and deadlines |
 | [Measurement records](measurement-records.md) | Source/task identity, deduplication, result queries and GPU recovery |
-| [Runtime Journal](runtime-journal.md) | Default report-only workflow and optional research annotations |
-| [Handoff and promotion](supervisor-promotion.md) | Source sealing, acceptance, ABBA, promotion-audit repair |
+| [Research and submissions](design.md) | Versioned Direction/Experiment records and exact-commit submission audit |
 | [Session observability](session-observability.md) | Shared Agent observations, current configuration and historical capture |
 | [Core plugin framework](plugin-framework.md) | Composition, service contracts, lifecycle and ownership |
-| [Local plugins](plugins.md) | Skill/tool extensions and distinct Light/Legacy invocation paths |
+| [Local plugins](plugins.md) | Skill/tool extensions and Runtime invocation paths |
 | [GPU Wiki](../gpu-wiki/README.md) | Current structured stores and standalone knowledge interfaces |
-| [Dashboard](optimization-dashboard.md) | Optional viewer, current memory-history and multi-file export limitations |
-| [Community local gateway](local_gateway.md) | Local source-archive Eval/ABBA and Legacy request compatibility |
+| [Dashboard](optimization-dashboard.md) | Optional viewer, lineage, Kernel, token and call evidence |
+| [Community local gateway](local_gateway.md) | Local source-archive Evaluate and ABBA |
 | [Light OpenSSH backend](ssh-backend.md) | Native Evaluate/ABBA, GPU diagnostics, vendor selection and isolation modes |
-
-## Legacy and compatibility
-
-| Guide | Scope |
-| --- | --- |
-| [Legacy workflow](legacy-workflow.md) | Explicit `--profile workflow`, Fast/Full stages, SOL, OpenSSH and recovery |
 
 ## Release and validation records
 
@@ -49,4 +41,4 @@ describe the versions and environments identified in those documents.
 - [Local source-tree evaluation and terminal evidence](local-gateway-source-evaluation.md)
 - [Historical Session capture cost](session-capture-performance.md)
 - [Source-layout GPU evidence](native-cuda.md#agent-optimization-evidence)
-- [Light implementation verification](optional-light-modules.md#verification-scope)
+- [Light implementation verification](optional-light-modules.md#research-and-parallel-search)

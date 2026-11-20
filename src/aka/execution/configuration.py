@@ -48,7 +48,7 @@ def client_wait_timeout(command_timeout, grace):
     return None if grace is None else command_timeout + grace
 
 
-def legacy_settings(environment=None):
+def connection_settings(environment=None):
     """Read connection and supervision settings inside Execution."""
     import os
     from types import SimpleNamespace
@@ -66,4 +66,4 @@ def legacy_settings(environment=None):
 def selected_ssh():
     """Expose the execution mode needed by immutable policy and recovery coordination."""
     from .selection import selected_execution
-    return selected_execution().get("profile", "legacy") == "legacy" and bool(legacy_settings().ssh)
+    return selected_execution().get("profile", "remote") == "remote" and bool(connection_settings().ssh)

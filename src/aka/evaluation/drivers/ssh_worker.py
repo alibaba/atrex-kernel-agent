@@ -51,10 +51,6 @@ def requirements(request):
 def evaluate(request, root):
     import local_eval
     requirements(request)
-    if request.get('atrex_bench_version'):
-        from atrex_bench import __version__
-        if __version__ != request['atrex_bench_version']:
-            raise RuntimeError(f'Provisioned Atrex-Bench version {__version__} does not match the requested pin')
     candidate = materialize(request['candidate'], request, root / 'candidate')
     def wrapper(entry, name):
         return write(root, name, 'import runpy, sys\n'

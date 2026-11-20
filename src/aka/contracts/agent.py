@@ -8,7 +8,7 @@ from typing import ContextManager, Literal, Protocol
 from .filesystem import FilesystemAccess as AgentAccess, FilesystemMount as AgentMount
 from .execution import Cancellation
 
-UsageMeasurement = Literal["exact", "partial", "unavailable"]
+UsageMeasurement = Literal["exact", "estimated", "partial", "unavailable"]
 NormalizedEventKind = Literal["usage_delta", "terminal_usage", "phase_marker"]
 PhaseMarkerAction = Literal["start", "end"]
 
@@ -21,6 +21,10 @@ class TokenUsage:
     cache_write_tokens: int | None
     total_tokens: int | None
     measurement: UsageMeasurement
+    # Provider-reported reasoning tokens are normally a subset of output
+    # tokens. Keep them as a separate diagnostic dimension and never add them
+    # to total_tokens a second time.
+    reasoning_tokens: int | None = None
 
     @classmethod
     def unavailable(cls) -> "TokenUsage":
@@ -31,11 +35,12 @@ class TokenUsage:
             cache_write_tokens=None,
             total_tokens=None,
             measurement="unavailable",
+            reasoning_tokens=None,
         )
 
     @classmethod
     def zero(cls) -> "TokenUsage":
-        return cls(0, 0, 0, 0, 0, "exact")
+        return cls(0, 0, 0, 0, 0, "exact", 0)
 
 
 def sum_token_usages(usages: Sequence[TokenUsage]) -> TokenUsage:
@@ -56,11 +61,17 @@ def sum_token_usages(usages: Sequence[TokenUsage]) -> TokenUsage:
         cache_write_tokens=component("cache_write_tokens"),
         total_tokens=sum(usage.total_tokens or 0 for usage in observed),
         measurement=(
-            "exact"
-            if len(observed) == len(usages)
-            and all(usage.measurement == "exact" for usage in observed)
-            else "partial"
+            "partial"
+            if len(observed) != len(usages)
+            or any(
+                usage.measurement not in {"exact", "estimated"}
+                for usage in observed
+            )
+            else "estimated"
+            if any(usage.measurement == "estimated" for usage in observed)
+            else "exact"
         ),
+        reasoning_tokens=component("reasoning_tokens"),
     )
 
 
@@ -71,6 +82,7 @@ def token_usage_exceeds(observed: TokenUsage, terminal: TokenUsage) -> bool:
         "cache_read_tokens",
         "cache_write_tokens",
         "total_tokens",
+        "reasoning_tokens",
     ):
         observed_value = getattr(observed, name)
         terminal_value = getattr(terminal, name)
@@ -103,8 +115,12 @@ def subtract_token_usage(total: TokenUsage, part: TokenUsage) -> TokenUsage:
         measurement=(
             "exact"
             if total.measurement == "exact" and part.measurement == "exact"
+            else "estimated"
+            if total.measurement in {"exact", "estimated"}
+            and part.measurement in {"exact", "estimated"}
             else "partial"
         ),
+        reasoning_tokens=component("reasoning_tokens"),
     )
 
 
@@ -158,6 +174,10 @@ class AgentProcessPolicy:
 class AgentCapabilities:
     filesystem_isolation: bool = False
     tool_runtime: bool = False
+    pause_agent_during_requests: bool = False
+    # Selected namespace policy for trusted auxiliary processes using the same
+    # host. Aone environments require host proc instead of mounting procfs.
+    proc_mode: str = "private"
 
 
 @dataclass(frozen=True)
@@ -183,6 +203,10 @@ class AgentToolSession(Protocol):
     environment: Mapping[str, str]
     filesystem_access: AgentAccess
 
+    def cancel(self) -> None:
+        """Revoke this grant, cancel its operations and stop its bound Agent invocation."""
+        ...
+
 
 @dataclass(frozen=True)
 class AgentObservation:
@@ -199,9 +223,10 @@ class AgentObservation:
 class AgentRunRequest:
     workspace: Path
     prompt: str
-    timeout_s: int
+    timeout_s: int | None
     reasoning_effort: str = "max"
     session_id: str | None = None
+    resume_session: bool = False
     environment: Mapping[str, str | None] | None = None
     observation_directory: Path | None = None
     access: AgentAccess | None = None
@@ -254,7 +279,7 @@ class Agent(Protocol):
     def validate_checkpoint(self, snapshot: AgentCheckpointSnapshot, *, check_destinations: bool = False) -> None: ...
     def restore_checkpoint(self, snapshot: AgentCheckpointSnapshot) -> None: ...
     def runtime(self, runtime_id: str) -> AgentRuntime:
-        """Borrow the selected backend; selection is stable for this owner lifetime."""
+        """Borrow a backend using the selected Agent execution boundary."""
         ...
 
     def open_session(
@@ -306,3 +331,26 @@ class AgentSession(Protocol):
         ...
 
     def close(self) -> None: ...
+
+
+def merge_token_usage_evidence(left: TokenUsage, right: TokenUsage) -> TokenUsage:
+    """Choose one coherent observation of overlapping provider usage.
+
+    Never synthesize a bill by adding maxima from incompatible partitions.
+    Identical evidence preserves its quality; divergent evidence is partial.
+    """
+    if left.total_tokens is None and right.total_tokens is None:
+        return TokenUsage.unavailable()
+    if left.total_tokens is None:
+        return right
+    if right.total_tokens is None:
+        return left
+    keys = (
+        "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
+        "reasoning_tokens", "total_tokens",
+    )
+    quality = {"exact": 3, "estimated": 2, "partial": 1, "unavailable": 0}
+    if all(getattr(left, key) == getattr(right, key) for key in keys):
+        return max((left, right), key=lambda row: quality.get(row.measurement, 0))
+    chosen = max((left, right), key=lambda row: (row.total_tokens, quality.get(row.measurement, 0)))
+    return TokenUsage(**{key: getattr(chosen, key) for key in keys}, measurement="partial")

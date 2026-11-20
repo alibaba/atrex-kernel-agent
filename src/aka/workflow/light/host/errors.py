@@ -29,7 +29,7 @@ def error_response(
 ) -> dict[str, Any]:
     issues = details.pop("issues", None)
     recovery = details.pop("recovery", None)
-    return {
+    response = {
         "ok": False,
         # Repairable means the Agent can fix its input/state, not automatic replay safety.
         "repairable": repairable,
@@ -37,7 +37,6 @@ def error_response(
         "issues": issues if issues is not None else [
             {"path": "$", "code": code, "message": message[:2000]}
         ],
-        "recovery": recovery if recovery is not None else [{"instruction": next_action}],
         "error": {
             "code": code,
             "message": message[:2000],
@@ -45,6 +44,19 @@ def error_response(
             **details,
         },
     }
+    if recovery is not None:
+        distinct_recovery = [
+            item for item in recovery
+            if isinstance(item, dict)
+            and item
+            and not (
+                set(item) == {"instruction"}
+                and item.get("instruction") == next_action
+            )
+        ]
+        if distinct_recovery:
+            response["recovery"] = distinct_recovery
+    return response
 
 
 class AgentRequestError(ValueError):

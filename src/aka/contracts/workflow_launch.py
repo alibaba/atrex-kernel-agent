@@ -31,29 +31,23 @@ class WorkflowLaunch:
         for name in ("hardware",):
             if not isinstance(getattr(runtime, name), str):
                 raise TypeError(f"{name} must be a string")
+        if type(settings.specify_dsl) is not bool:
+            raise TypeError("specify_dsl must be a boolean")
+        if type(settings.expose_evaluator_shapes) is not bool:
+            raise TypeError("expose_evaluator_shapes must be a boolean")
         for name, value in (("timeout", runtime.timeout), ("verify_repeats", runtime.verify_repeats),
                             ("shape_batch_size", runtime.shape_batch_size),
-                            ("verify_run_timeout", runtime.verify_run_timeout),
-                            ("fast_trials", settings.fast_trials),
-                            ("framework_baseline_timeout", settings.framework_baseline_timeout)):
+                            ("evaluation_step_timeout", runtime.evaluation_step_timeout)):
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
-        if settings.conversion_budget_action not in {"fail", "retain_verified"}:
-            raise ValueError("conversion_budget_action must be fail or retain_verified")
-        if settings.gateway_candidate_recovery not in {"disabled", "typed-once"}:
-            raise ValueError(
-                "gateway_candidate_recovery must be disabled or typed-once"
-            )
-        if type(settings.resume_framework_candidate) is not bool:
-            raise TypeError("resume_framework_candidate must be a boolean")
-        if 2 * runtime.verify_repeats * runtime.verify_run_timeout + 30 > runtime.timeout:
+        if runtime.gpu_clock_mhz is not None and (
+            type(runtime.gpu_clock_mhz) is not int or runtime.gpu_clock_mhz <= 0
+        ):
+            raise ValueError("gpu_clock_mhz must be a positive integer")
+        if 2 * runtime.verify_repeats * runtime.evaluation_step_timeout + 30 > runtime.timeout:
             raise ValueError("ABBA verification must fit the configured allocation timeout")
         if not 0 <= runtime.min_improvement_pct < 100:
             raise ValueError("min_improvement_pct must be in [0, 100)")
-        for name in ("convert_after", "fast_episodes", "handoff_resumes"):
-            value = getattr(settings, name)
-            if type(value) is not int or value < 0:
-                raise ValueError(f"{name} must be a non-negative integer")
         for name in ("restart_arguments",):
             values = getattr(self, name)
             if isinstance(values, (str, bytes)) or any(not isinstance(v, str) for v in values):
@@ -77,7 +71,7 @@ def encode_launch(launch: WorkflowLaunch) -> tuple[str, str]:
 
 def decode_launch(argv) -> WorkflowLaunch:
     if argv is None or len(argv) != 2 or argv[0] != "--workflow-request":
-        raise ValueError("Workflow startup requires --workflow-request JSON; adapt legacy CLI before Bootstrap")
+        raise ValueError("Workflow startup requires a serialized WorkflowLaunch")
     values = json.loads(argv[1])
     if not isinstance(values, dict) or values.pop("version", None) != 1:
         raise ValueError("unsupported Workflow launch version")
@@ -87,16 +81,12 @@ def decode_launch(argv) -> WorkflowLaunch:
     if source.get("snapshot_directory") is not None:
         source["snapshot_directory"] = Path(source["snapshot_directory"])
     settings = request.pop("settings")
-    serialized_settings = tuple(settings)
-    # Version-1 launches written before shape visibility became explicit used
-    # hidden shapes in production and exposed shapes in leaderboard.  False is
-    # therefore required for production compatibility and a no-op in leaderboard.
-    settings.setdefault("expose_evaluator_shapes", False)
-    values.setdefault("provided_settings", serialized_settings)
+    values.setdefault("provided_settings", tuple(settings))
     values.setdefault("provided_runtime", tuple(request.get("runtime", {})))
-    for name in ("framework_baseline_reviewers", "fast_episode_reviewers", "full_episode_reviewers"):
-        if name in settings:
-            settings[name] = tuple(settings[name])
+    if "agent_reference_paths" in settings:
+        settings["agent_reference_paths"] = tuple(
+            tuple(item) for item in settings["agent_reference_paths"]
+        )
     request["workspace"] = Path(request["workspace"])
     campaign = CampaignRequest(problem=ProblemSource(**source), settings=WorkflowSettings(**settings),
         runtime=CampaignRuntimeSettings(**request.pop("runtime", {})), **request)

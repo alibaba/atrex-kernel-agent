@@ -19,8 +19,8 @@ class GatewayRecoveryMixin:
         configuration = getattr(self, "configuration", {})
         request = getattr(self, "request", None)
         environment = request.environment if request is not None else getattr(self, "environment", None)
-        from .configuration import legacy_settings
-        settings = request if request is not None else legacy_settings(environment)
+        from .configuration import connection_settings
+        settings = request if request is not None else connection_settings(environment)
         if settings.ssh:
             raise UnsupportedExecution("SSH executor does not provide durable job queries")
         endpoint = configuration.get("url") or settings.url
@@ -29,8 +29,7 @@ class GatewayRecoveryMixin:
             profile = ""
         elif configuration.get("profile"):
             endpoint = ""
-        from .gateway.sandbox import _find_agate
-        executable = _find_agate()
+        executable = None
         endpoint, profile, environment = selected_route(endpoint, profile, environment=environment,
                                                         executable=executable)
         supported = configuration.get("idempotent_replay", False)
@@ -72,8 +71,8 @@ class GatewayRecoveryMixin:
         support = backend.check(command_query(command), discover=False)
         require_supported(support, require_known=command.operation == NATIVE_ABBA)
         def decorate(result):
-            return replace(result, environment_snapshot=support.environment,
-                           environment_identity=support.environment.identity, environment_support=support)
+            from .gateway.environment import with_job_environment
+            return with_job_environment(result, support=support)
         def observed(result):
             command.on_observation(decorate(result))
         bound = replace(command, environment=bound_limits(command.environment, support),

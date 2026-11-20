@@ -148,13 +148,18 @@ class WikiService:
         live = lambda: owner._live(capability)
         tool = Path(command[1]).stem
         normalized = list(command[2:])
+        option_args = normalized[:normalized.index("--")] if "--" in normalized else normalized
+        help_requested = any(arg in {"--help", "-h"} for arg in option_args)
         # Request-file identity binds frozen content, never the random staging path.
-        for i, word in enumerate(normalized):
+        for i, word in enumerate(normalized if not help_requested else []):
             if word == "--file" and i + 1 < len(normalized):
                 normalized[i + 1] = read_regular_bytes(Path(normalized[i + 1]), limit=128 * 1024).decode()
             elif word.startswith("--file="):
                 normalized[i] = "--file=" + read_regular_bytes(Path(word.split("=", 1)[1]), limit=128 * 1024).decode()
-        scope = str(capability.journal.service.path) if capability.journal else str(capability.workspace.resolve())
+        scope = (
+            str(capability.journal.service.campaign_root.resolve())
+            if capability.journal else str(capability.workspace.resolve())
+        )
         provider = {"model": policy.model or environment.get("ANTHROPIC_MODEL", ""),
                     "endpoint": policy.base_url or environment.get("ANTHROPIC_BASE_URL", "")}
         if policy.settings_file:
@@ -172,7 +177,8 @@ class WikiService:
             with self._reservation(key, min(deadline, started + policy.queue_timeout), live):
                 record["queue_latency_ms"] = round((time.monotonic() - started) * 1000, 3)
                 try:
-                    cached = json.loads(read_regular_bytes(self.root / "results" / (key + ".json"), limit=2 * 1024 * 1024))
+                    cached = None if help_requested else json.loads(read_regular_bytes(
+                        self.root / "results" / (key + ".json"), limit=2 * 1024 * 1024))
                 except FileNotFoundError:
                     cached = None
                 except (ValueError, OSError):
@@ -183,6 +189,14 @@ class WikiService:
                     if not live():
                         raise SessionRevokedError("Session revoked")
                     record.update(cache_hit=True, status="reused", query_id=cached.get("query_id"))
+                    owner.audit_service_exchange(
+                        service="wiki_cache",
+                        request={"tool": tool, "argv": normalized},
+                        response={
+                            "status": "reused",
+                            "query_id": cached.get("query_id"),
+                        },
+                    )
                     return cached["response"]
 
                 def acquire():
@@ -211,6 +225,25 @@ class WikiService:
                 request = {"tools": str(Path(command[1]).parent), "tool": tool,
                            "argv": command[2:], "config": asdict(policy)}
                 publish(staged, "wiki-request.json", json.dumps(request).encode())
+                from aka.workflow.light.host.projection import (
+                    credential_values,
+                    redact_diagnostics,
+                )
+                private_paths = (
+                    str(staged), str(owner.root), str(owner.audit_root or ""),
+                    policy.settings_file, policy.base_url,
+                )
+                private_values = credential_values(
+                    dict(environment, **redaction_values)
+                )
+                owner.audit_service_exchange(
+                    service="wiki",
+                    request=redact_diagnostics(
+                        request,
+                        private_paths=private_paths,
+                        private_values=private_values,
+                    ),
+                )
                 record["status"] = "running"
                 acquire()
                 try:
@@ -223,16 +256,30 @@ class WikiService:
                 finally:
                     self.slots.release()
                     self._timing(staged, record)
+                owner.audit_service_exchange(
+                    service="wiki",
+                    response=redact_diagnostics(
+                        {
+                            "returncode": process.returncode,
+                            "stdout": process.stdout,
+                            "stderr": process.stderr,
+                        },
+                        private_paths=private_paths,
+                        private_values=private_values,
+                    ),
+                )
                 if not live():
                     raise SessionRevokedError("Session revoked")
                 # Use a request-local identity; never mutate capability.deadline/request_id.
                 from dataclasses import replace
                 owner.audit_process(replace(capability, request_id=request_id), "wiki", argv, process)
-                from aka.workflow.light.host.projection import credential_values, project_response
+                from aka.workflow.light.host.projection import project_response
                 response = project_response(process, generalized=owner.config.private_reference_dir is not None,
-                    private_values=credential_values(dict(environment, **redaction_values)), wiki=True,
-                    private_paths=(str(staged), str(owner.root), str(owner.audit_root or ""), policy.settings_file, policy.base_url))
+                    private_values=private_values, wiki=True, private_paths=private_paths)
                 record["status"] = "failed" if process.returncode else "completed"
+                # argparse Help is text, not a query result or reusable research evidence.
+                if help_requested:
+                    return response
                 # Only successful, validated native JSON may become reusable evidence.
                 if process.returncode == 0:
                     try:
@@ -272,7 +319,10 @@ class WikiService:
         request_id = uuid.uuid4().hex
         live = lambda: owner._live(capability)
         revision = self.pinned_revision()
-        scope = str(capability.journal.service.path) if capability.journal else str(capability.workspace.resolve())
+        scope = (
+            str(capability.journal.service.campaign_root.resolve())
+            if capability.journal else str(capability.workspace.resolve())
+        )
         key = digest({"schema": 2, "scope": scope, "operation": operation, "payload": payload,
                       "policy": asdict(policy), "revision": self._identity()})
         record = {"request_id": request_id, "query_key": key, "tool": operation,
@@ -289,6 +339,15 @@ class WikiService:
                     if not query_id and isinstance(response, dict):
                         query_id = response.get("query_id")
                     record.update(cache_hit=True, status="reused", query_id=query_id)
+                    owner.audit_service_exchange(
+                        service="wiki_cache",
+                        request={
+                            "operation": operation,
+                            "payload": payload,
+                            "revision": revision,
+                        },
+                        response={"status": "reused", "query_id": query_id},
+                    )
                     return response
                 self._acquire_slot(started, deadline, live, record)
                 record["status"] = "running"
@@ -296,6 +355,14 @@ class WikiService:
                                 is_live=live, scratch=scratch, environment=environment,
                                 run=lambda argv, cwd, env: owner.run_executor(
                                     list(argv), cwd, dict(env), capability, deadline=deadline))
+                owner.audit_service_exchange(
+                    service="wiki",
+                    request=redact_error({
+                        "operation": operation,
+                        "payload": payload,
+                        "revision": revision,
+                    }),
+                )
                 try:
                     result = self.provider.invoke(call)
                 except WikiProviderError as error:
@@ -312,6 +379,17 @@ class WikiService:
                     public_error = WikiProviderError(
                         error.code, message, retryable=error.retryable,
                         repairable=error.repairable, next_action=next_action,
+                    )
+                    owner.audit_service_exchange(
+                        service="wiki",
+                        response={
+                            "status": "provider_error",
+                            "error": {
+                                "code": error.code,
+                                "message": message,
+                                "next_action": next_action,
+                            },
+                        },
                     )
                     raise _provider_failure(public_error) from error
                 except WikiUnavailable:
@@ -332,6 +410,10 @@ class WikiService:
                     record["status"] = "invalid_output"
                     raise WikiUnavailable("wiki_invalid_response",
                                           "Wiki returned an invalid result; no reusable response was saved.") from error
+                owner.audit_service_exchange(
+                    service="wiki",
+                    response=redact_error(result),
+                )
                 record["status"] = "invalid_output"
                 response = project(result)
                 record["status"] = "completed"

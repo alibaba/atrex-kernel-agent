@@ -35,7 +35,7 @@ def selected_execution():
         return value
     serialized = os.environ.get(SELECTION_ENV)
     if not serialized:
-        return {"profile": "legacy"}
+        return {"profile": "remote"}
     value = json.loads(serialized)
     if (not isinstance(value, dict) or set(value) - {"profile", "profiles_dir", "patches"}
             or not isinstance(value.get("profile"), str)
@@ -48,7 +48,7 @@ def selected_execution():
 def execution_environment(environment):
     environment = dict(environment)
     selection = selected_execution()
-    if selection != {"profile": "legacy"} or SELECTION_ENV in environment:
+    if selection != {"profile": "remote"} or SELECTION_ENV in environment:
         environment[SELECTION_ENV] = json.dumps(selection, sort_keys=True)
     return environment
 

@@ -22,7 +22,7 @@ def _digest(data):
 
 def capture_native_session(output, workspace, runtime, session_id, environment):
     """Called by Agent after its invocation has stopped, never by a consumer."""
-    if runtime not in {"claude", "codex", "dsh"} or not session_id:
+    if runtime not in {"claude", "codex", "dsh", "pi"} or not session_id:
         return
     if not re.fullmatch(r"[A-Za-z0-9_-]+", session_id):
         raise ValueError("invalid native session identity")
@@ -42,6 +42,25 @@ def capture_native_session(output, workspace, runtime, session_id, environment):
         session_root = codex_home(environment).expanduser().resolve()
         path = CodexSessionLedgerObserver(session_root)._find_rollout_path(session_id)
         files.append(path)
+    elif runtime == "pi":
+        from .session_tail import read_regular_bytes
+
+        session_root = Path(environment.get("PI_CODING_AGENT_DIR") or
+                            Path(environment.get("HOME") or Path.home()) / ".pi/agent").expanduser().resolve()
+        # Pi names native ledgers <timestamp>_<session-id>.jsonl. Check the
+        # header too; similarly named files are not proof of session identity.
+        for path in (session_root / "sessions").glob("**/*_" + session_id + ".jsonl"):
+            if path.is_symlink() or path.resolve() != path.absolute():
+                raise ValueError("native session path contains a symlink")
+            header = read_regular_bytes(path, limit=65536).split(b"\n", 1)[0]
+            try:
+                value = json.loads(header)
+            except ValueError:
+                continue
+            if isinstance(value, dict) and value.get("type") == "session" and value.get("id") == session_id:
+                files.append(path)
+        if len(files) != 1:
+            raise ValueError("closed Pi session ledger is missing or ambiguous")
     else:
         home = (
             Path(environment.get("CLAUDE_CONFIG_DIR") or Path(environment.get("HOME") or Path.home()) / ".claude")
@@ -153,7 +172,7 @@ def validate_checkpoint(snapshot, *, check_destinations=False):
         session_root = Path(row["root"])
         session = (row["runtime"], row["session_id"])
         if (
-            row["runtime"] not in {"claude", "codex", "dsh"}
+            row["runtime"] not in {"claude", "codex", "dsh", "pi"}
             or not isinstance(row["session_id"], str)
             or not re.fullmatch(r"[A-Za-z0-9_-]+", row["session_id"])
         ):

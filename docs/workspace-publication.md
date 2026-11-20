@@ -1,123 +1,74 @@
-# Workspace resource publication and recovery
+# Resource publication and persistent Agent workspaces
 
-Workspace initialization retains immutable context independently of the input
-installation. The retained object must remain a regular file with one link,
-mode `0444`, and the expected bytes. Those requirements also apply when a
-previous initialization is retried.
+Light uses persistent Agent-owned Git repositories. The public initializer is
+`GitCandidateWorkspace.initialize_agent`; resuming it preserves HEAD, the index,
+branches and uncommitted source. Context manifests, Episode worktrees and Git
+checkpoint capture/restore are not part of the current Light workflow.
 
-## Publication transaction
+## Immutable resource publication
 
-`aka.core.publication.publish_immutable(path, payload)` supplies the same
-publication implementation to Candidate Workspace context and Resources
-content objects. It stages in the destination directory, writes and flushes
-the complete payload, sets mode `0444`, fsyncs, and **closes the descriptor**
-before publishing with a non-replacing hard link. It removes the staging
-entry and fsyncs the directory before verifying the final single-link object.
-The destination is never replaced to resolve a content collision.
+`aka.core.publication.publish_immutable(path, payload)` is the shared publication
+primitive used by Resources content snapshots. It stages in the destination
+directory, writes the complete bytes, sets mode `0444`, fsyncs and closes the file
+before publishing with a non-replacing hard link. It then removes the staging
+alias and fsyncs the directory. The completed object must have one link and the
+expected bytes; a different existing object is never overwritten.
 
-Closing first matters on NFS: unlinking an open file can retain a hidden
-`.nfs*` alias and make the final file have two links. No retry or relaxation of
-the retained-object link count is used to hide that condition. Staging uses
-the destination filesystem regardless of `TMPDIR`; publication never requires
-a cross-filesystem link.
+Closing before link/unlink avoids retaining an NFS `.nfs*` alias. The persistent
+`.aka-publication.lock` serializes participating writers and is never unlinked.
+Process exit releases the lock. Storage must support the required advisory locks
+and file/directory fsync operations; this code does not bypass storage errors.
 
-The reserved staging name `.<destination-name>.aka-publish` expresses an
-intent for that destination. Cooperating writers serialize through a
-persistent `.aka-publication.lock`, opened without following links. The lock
-file is never unlinked: replacing it could give two processes independent
-locks. Kernel process termination releases the lock. NFS mounts must support
-the regular-file advisory locking and directory fsync operations used by the
-contract; failures are reported rather than bypassed. A mount configured with
-local-only locks (for example NFS `nolock`) only serializes writers on the
-same client. Cross-Task migration still requires the source process to stop
-and release its writer lease before another client resumes.
+The reserved `.<destination>.aka-publish` staging name identifies one transaction:
 
-The next call with the same requested bytes can reconcile these states:
-
-| Interrupted operation | Retry behavior |
+| Interrupted state | Retry with the same payload |
 | --- | --- |
-| Partial staging write | A single-link, ordinary staging file containing a prefix of the requested bytes can be discarded and rewritten. |
-| Staging complete, before link | Revalidate and fsync the complete readonly staging object, close its descriptor, then publish it. |
-| Link complete, before staging unlink | Require exactly two links, matching bytes and modes, and the same inode for the destination and its reserved staging name; fsync that verified inode, close its descriptor, then remove only that staging alias. |
-| Staging unlink complete | Verify and fsync the existing canonical single-link object, then reuse it. |
+| Partial staging write | Validate the ordinary single-link prefix, remove it and rewrite. |
+| Complete staging file before publication | Verify and fsync the file, close it, then publish. |
+| Destination and staging alias share two links | Verify bytes, modes and inode identity, fsync, close and remove only the staging alias. |
+| Destination already published with one link | Verify and fsync the existing object, then reuse it. |
 
-A different payload, unexpected mode, symlink, third link, or alias outside the
-reserved transaction name is an error. Recovery does not scan for arbitrary
-aliases or delete unknown files. Data from a rejected transaction is retained
-for diagnosis. Readonly mode does not prove a previous file fsync completed.
-Every recovered object and same-content collision is therefore file-fsynced
-before reuse or staging cleanup. Identity, mode and link count are rechecked
-across fsync; errors preserve the uncommitted recovery inputs. Every such file
-descriptor is closed before linking or unlinking, including recovery paths.
+Unexpected aliases, extra links, symlinks, modes or payloads are errors. A rejected
+transaction remains available for diagnosis. Read-only mode alone does not prove
+that a previous file fsync completed. Identity and metadata are checked across
+reads and fsync. Staging stays on the destination filesystem even when `TMPDIR`
+is on a different filesystem.
 
-`aka.core.publication.replace_bytes` supplies durable replacement for mutable
-management content. The Workspace context manifest keeps its existing
-`.atrex_context.json.tmp` staging name. A retry reconciles only a single-link,
-ordinary staging file whose bytes are a prefix of the current requested
-manifest, then writes the complete manifest and atomically replaces it. A
-different transaction is preserved and reported. Manifest locking is kept in
-Git management storage rather than the candidate source tree.
+`replace_bytes` provides the corresponding primitive for mutable management files.
+It reconciles only the reserved staging file containing the requested bytes or a
+prefix of them, then atomically replaces the destination. Its optional lock
+directory can keep management locks outside an Agent source tree. Light does not
+reintroduce the retired `.atrex_context.json` manifest to use this helper.
 
-Workspace initialization accepts aliases in the workspace's parent path, such
-as macOS `/var` or `/tmp`. It rejects workspace and descendant symlinks before
-canonicalizing the root for publication and source validation. Checkpoint
-destinations retain their separate original, absolute, canonical-path contract.
+## Installed package assets
 
-These are process-crash recovery rules. They do not make arbitrary concurrent
-mutation by non-cooperating processes safe, or promise recovery after storage
-corruption or unsupported filesystem durability semantics. A process killed
-between creation and permission normalization under an owner-restricting
-umask can leave an unrecognized mode; that state fails closed. Direct
-projection-copy interruption is also outside these retained-publication
-boundaries; this does not claim arbitrary workspace writes are transactional.
+`GitCandidateWorkspace.install_files` uses `independent_resources` before installing
+selected contributions. A wheel asset hardlinked to an installer cache is detached
+only after checking its declared package ownership, RECORD SHA-256/size, ordinary
+permissions and stable file identity. The copy preserves bytes and mode; installation
+and cache files are not modified. Copies exist only for the duration of the call.
 
-## Installed resources and workspace aliases
+The default owner is `atrex-aka-framework`. Applications may explicitly extend the
+helper's owner-to-resource-prefix mapping for separately packaged resources.
+Undeclared files and text contributions retain their existing Workspace copy and
+validation semantics; being below `site-packages` alone does not establish ownership.
+Leaf symlinks are not trusted package assets. Installation parent aliases may be
+resolved without weakening leaf validation.
 
-An installed wheel file may be hardlinked to an installer cache. A verified
-wheel-owned **input** can be copied to independent storage before passing it
-to the strict Workspace writer. This preserves the original bytes and modes
-without changing the installation or cache. It is a different boundary from
-retained and candidate files: an unknown caller input or an alias already in
-the Workspace still fails the original validation.
+`initialize_agent` likewise validates the workspace leaf and selected descendants
+before resolving parent aliases such as macOS `/tmp` or `/var`. Existing repositories
+are resumed without restoring seed source or changing Agent Git state.
 
-The public materialization helper verifies declared distribution ownership,
-wheel RECORD hash and size, ordinary modes, and a stable bounded read. It
-does not treat every file under `site-packages` as trusted. Claude and Codex
-use the same Workspace resource boundary; no installer flag or agent-specific
-link-count exception is required.
+## Scope and verification
 
-## Existing workspaces
+The upstream publication and package-resource fixes are retained, but their callers
+are adapted to Light's current `install_files` and `initialize_agent` interfaces.
+The deleted `initialize_kernel`, `prepare_sol`, Context and checkpoint interfaces
+remain deleted. No Framework Baseline, Journal, promotion or Supervisor Git workflow
+is restored.
 
-Successful existing manifests and immutable objects keep their existing
-format, hashes and modes. A matching legacy manifest `.tmp` can be reconciled
-on the public initialization retry. A readonly object carrying an old random
-`.retain-*` alias is not automatically repaired: that name cannot prove the
-new transaction relationship. It continues to report invalid retained
-context, preserving the original files. This change does not authorize
-editing frozen Campaign state or provide a Campaign-version migration API.
-
-## Verification
-
-Downstream acceptance checks should exercise both source builds and isolated
-wheel installations through the public `GitCandidateWorkspace.initialize_kernel`
-entry point. This repository does not carry a standalone test suite for that
-matrix. A local descriptor-lifetime check is insufficient evidence of real NFS
-acceptance: the same checks must also run on an actual writable NFS mount.
-
-The filesystem acceptance matrix covers actual `SIGKILL` during partial writes,
-before and after data fsync, hard-link publication, staging unlink, and both the
-initial and post-runtime manifest replacements. It verifies retries preserve
-expected bytes, readonly permissions and single-link retained identities. It
-also covers concurrent same-content writers, unknown aliases, symlinks,
-restrictive umasks and content collisions.
-
-Durability fault injection must include a fully written readonly staging file
-whose data was never fsynced, an interrupted two-link publication, an existing
-canonical object and an unsynced same-content competing creator. Reuse requires
-a successful file fsync before any recovery cleanup or publication. An injected
-fsync failure must preserve the relevant staging or alias pair, and mutation
-during fsync must fail validation.
-
-Filesystem checks do not substitute for optimization, measured candidate
-results, full source export, cumulative/reset budgets or Campaign resume
-acceptance. Those require their own integration environment and evidence.
+Local regression tests cover interrupted publication, same-content concurrency,
+collision rejection, package RECORD verification, hardlinked resource installation,
+parent aliases and preservation of existing Agent Git state. Filesystem tests do
+not establish behavior on a real NFS mount or constitute a GPU optimization run;
+those require separate integration validation.

@@ -1,0 +1,3 @@
+## Commit review
+
+`submit-kernel` checks whether one evaluated, reachable Agent Git commit satisfies the selected final-source policy. Fast does not launch the independent final-source Reviewer. Performance reviews self-authored core compute while leaving DSL selection to the Agent. Ultra additionally reviews compliance with the configured DSL. The first call creates `v1` and returns a stable `submission_id`; after repairing and fully evaluating a new commit, include that ID to create the next immutable revision and continue the same Review. Omit it to start an unrelated Submission. Replaying an unchanged commit and decision is idempotent.

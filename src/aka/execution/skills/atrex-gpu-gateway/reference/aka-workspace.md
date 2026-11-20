@@ -1,28 +1,29 @@
 # AKA workspace file systems
 
-Use the file system pinned in `.atrex_file_system.json`. New tasks default to
+Use the candidate layout described in `WORKSPACE.md`. Runtime pins the actual file system
+and source contract in Supervisor-private Campaign state. New tasks default to
 `source_tree`; framework selection does not switch the file system.
 
 ## Source directory (default)
 
-`kernel.py` is the editable evaluator entry point. It may contain the complete
-implementation or import optional helper files under `impl/`; `impl/` does not need
-to exist. For an imported package, `kernel.py` and the additional `editable_roots` in
-`.atrex_source.json` are writable. All source files travel together in a source archive.
+The candidate is one editable source tree rooted at `kernel.py + impl/`. `kernel.py`
+is the evaluator entry point and may either contain the implementation or import it
+from files under `impl/`. Edit/add/delete both the entry point and implementation
+files as needed; all source files travel together in one source archive.
 
 CUDA implementations may use separate `.cu`, `.cpp` and header files with a
 Python loader in the editable directory. Compile through the supported Torch
 extension API on Agate; use paths relative to the loader's `__file__`.
 Do not import `pathlib` or `os`, which Agate source validation rejects.
-`kernel.py` supplies the Python `Model` entry point; an Agate native-CUDA manifest is
-not used in this mode.
-`kernel-read` exports the entire source directory for `--baseline-path`.
-Use the managed Evaluate/Profile tools and submit the usual episode report.
+`kernel.py` must continue to supply the evaluator's Python `Model` entry point; an
+Agate native-CUDA manifest is not used in this mode.
+ABBA accepts a reachable `--baseline-commit`; Runtime exports that entire source directory privately.
+Use the enabled Runtime tools for measurement. Use `submit-kernel` when the exact evaluated commit is ready for final-source review.
 
 ## Explicit CUDA manifest
 
 With `file_system=cuda_manifest` and `framework=cuda`, native Atrex-Bench campaigns
-on Agate use `.cu` files and `solution.json`. Keep V0's PyTorch reference as the baseline only. Do not embed
+on Agate use `.cu` files and `solution.json`. Keep evaluator reference code unchanged. Do not embed
 CUDA in kernel.py, generate Python bindings, run nvcc on the host, or change the
 reference/input/evaluator. Gateway and SSH support this manifest route; SOL does not.
 
@@ -63,12 +64,15 @@ fall back to the upstream repository. Do not put credentials in JSON.
 Use the normal managed measurement tool, for example:
 
 ```bash
-python3 tools/sandbox.py --kind run --no-sync
+python3 tools/sandbox.py --kind evaluate --no-sync
 ```
 
 The controller supplies the hardware, environment and evaluator. A full Evaluate
 covers correctness and performance. Change JSON and native sources together;
 any file, build option or dependency change creates a different Kernel identity.
-`kernel-read` exports a directory for a native Kernel, suitable for baseline-path.
+ABBA accepts a reachable `--baseline-commit`; Runtime exports its native source tree privately.
 Temporary experiments belong in scratch/, not source.files. Leave the final exact
-candidate in place and use the usual episode-report flow; the Supervisor owns Git.
+candidate in place and submit its exact Agent Git commit with `submit-kernel` when final-source
+policy feedback is useful, after a standard full Evaluate passes for that exact commit. The Agent
+owns engineering Git and commits; submission verifies saved evidence but launches no Evaluate or
+ABBA and performs no promotion, rollback, or handoff.

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from aka.contracts.evaluation import EvaluationRequest, Evaluator, VerificationResult
 
 
-class LegacyExperiment:
+class Experiment:
     def __init__(
         self, executor: Executor, evaluator: Evaluator | None = None, *,
         retry: Callable | None = None,
@@ -30,11 +30,13 @@ class LegacyExperiment:
         records=None,
         purpose: str = "development",
         command_evaluator=None,
-        episode_evidence=None,
+        submission_retry_policy=None,
+
     ):
         self.executor = executor
         self.evaluator = evaluator
         self.retry = retry
+        self.submission_retry_policy = submission_retry_policy
         self.check_result = check_result
         self.records = records
         self.purpose = purpose
@@ -42,7 +44,6 @@ class LegacyExperiment:
             from aka.evaluation.gateway_command import GatewayCommandEvaluator
             command_evaluator = GatewayCommandEvaluator(execution_capabilities=getattr(executor, "capabilities", None))
         self.command_evaluator = command_evaluator
-        self.episode_evidence = episode_evidence
         if purpose not in {"development", "formal"}:
             raise ValueError("unsupported experiment purpose")
 
@@ -83,9 +84,6 @@ class LegacyExperiment:
         from .queries import shape_minima
         return shape_minima(self._records(), identities, environment_identity)
 
-    def correctness_reuse(self, identities, *, environment_identity):
-        from .queries import correctness_reuse
-        return correctness_reuse(self._records(), identities, environment_identity)
 
     def _records(self):
         if self.records is None:
@@ -352,8 +350,12 @@ class LegacyExperiment:
             cached[index] = records.result_for(ref, attempt.attempt_id)
         return cached
 
-    @staticmethod
-    def _observed_command(command, records, ref, attempt_id):
+    def _observed_command(self, command, records, ref, attempt_id):
+        if self.submission_retry_policy is not None:
+            from aka.execution.gateway.admission_retry import POLICY_ENV
+            policy = self.submission_retry_policy
+            command = replace(command, environment={**command.environment, POLICY_ENV:
+                json.dumps({"delays": policy.delays, "max_elapsed_s": policy.max_elapsed_s})})
         if records is None:
             return command
         def observe(value):
@@ -439,7 +441,6 @@ class LegacyExperiment:
         if not isinstance(interpreted, CommandEvaluation):
             raise TypeError("CommandEvaluator.interpret must return CommandEvaluation")
         self._publish_files(command, interpreted.result.files, records, ref)
-        self._retain_episode(command.workspace, interpreted.episode_evaluations)
         return interpreted
 
     def _observe_command(self, evaluator, prepared, index, command, result, records, ref, *, archive_result=True):
@@ -456,12 +457,6 @@ class LegacyExperiment:
                 records.publish_content(ref, output.content, output.role)
         return observed
 
-    def _retain_episode(self, workspace, contents):
-        from .measurement_files import record_episode_evaluation
-        if self.episode_evidence is not None and Path(workspace).resolve() != self.episode_evidence.workspace.resolve():
-            raise ValueError("episode evidence scope differs from the operation workspace")
-        for content in contents:
-            record_episode_evaluation(self.episode_evidence, content)
 
     def _publish_files(self, request, files, records, ref):
         from aka.contracts.evaluation import PreparedEvaluation, PreparationFile
@@ -691,5 +686,4 @@ class LegacyExperiment:
         paths = self._write_outputs(request, prepared, result.artifacts, ref)
         if result.artifact in paths:
             result = replace(result, artifact=paths[result.artifact])
-        self._retain_episode(request.workspace, result.episode_evaluations)
         return result

@@ -19,7 +19,7 @@ from aka.contracts.execution import (
 )
 from aka.contracts.execution_recovery import ExecutionCause, JobReference
 from .gateway.protocol import classify_gateway_outcome, protocol_failure
-from .transport import INFRASTRUCTURE_EXIT_CODE, INFRASTRUCTURE_MARKER
+from .transport import INFRASTRUCTURE_EXIT_CODE
 
 FACTS_FD = "AKA_EXECUTION_FACTS_FD"
 _attempt = ContextVar("execution_backend_attempt", default=None)
@@ -101,9 +101,6 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
         native_diagnostics.append({"failure_class": category, "reason": causes[0].code})
     native_diagnostics.extend({"failure_class": item.category, "reason": item.code,
                               **item.details} for item in recovery_diagnostics(job))
-    def encode(cause):
-        return {"category": cause.category, "code": cause.code, "message": cause.message,
-                "details": _json(cause.details), "causes": [encode(item) for item in cause.causes]}
     emit_fact({
         **({"attempt_id": attempt_id} if attempt_id is not None else {}),
         "event": "attempt", "operation": operation, "backend": backend,
@@ -112,8 +109,9 @@ def observe_attempt(process, *, operation, backend="gateway", attempt_id=None):
         "termination": "cancelled" if status == "cancelled" else "exited" if terminal else None,
         "exit_code": code if type(code) is int else None,
         "diagnostics": native_diagnostics + ([record] if record else []),
-        "causes": [encode(item) for item in causes],
+        "causes": [_cause_record(item) for item in causes],
         "remote_terminated": remote_termination(job),
+        "backend_response": job or None,
     })
     return process
 
@@ -131,6 +129,12 @@ def _cause(value):
     data = dict(value)
     data["causes"] = tuple(_cause(item) for item in data.get("causes", ()))
     return ExecutionCause(**data)
+
+
+def _cause_record(cause):
+    return {"category": cause.category, "code": cause.code, "message": cause.message,
+            "details": _json(cause.details), "causes": [_cause_record(item) for item in cause.causes],
+            "raw_error": _json(cause.raw_error), "http_status": cause.http_status}
 
 
 class FactChannel:
@@ -249,6 +253,7 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
             tuple(_cause(item) for item in record.get("causes", ())),
             record.get("idempotency_key") or submission.get("idempotency_key") or intent.get("idempotency_key"),
             record.get("request_identity") or submission.get("request_identity") or intent.get("request_identity"),
+            record.get("backend_response"),
         ))
         records_diagnostics.extend(details)
     starts = {record["attempt_id"]: record for record in records if record.get("event") == "attempt_started"}
@@ -281,9 +286,20 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
         has_result = True
     disposition = "unknown"
     termination = None
-    if attempts and all(item.disposition != "unknown" for item in attempts):
-        disposition = "terminal" if any(item.disposition == "terminal" for item in attempts) else "not_submitted"
-        termination = attempts[-1].termination if disposition == "terminal" else None
+    # A confirmed submission resolves earlier HTTP failures only for the exact
+    # same keyed wire request. Keep every attempt in the audit, but do not let a
+    # recovered 503 make a later valid Job result permanently inconclusive.
+    accepted_keys = {(item.get("operation"), item.get("idempotency_key"), item.get("request_identity"))
+                     for item in submitted.values()
+                     if item.get("idempotency_key") and item.get("request_identity")}
+    resolved_attempts = {item.attempt_id for item in attempts
+        if item.attempt_id is not None and item.disposition == "unknown"
+        and not (item.resource and item.resource.identifier)
+        and (item.operation, item.idempotency_key, item.request_identity) in accepted_keys}
+    effective_attempts = [item for item in attempts if item.attempt_id not in resolved_attempts]
+    if effective_attempts and all(item.disposition != "unknown" for item in effective_attempts):
+        disposition = "terminal" if any(item.disposition == "terminal" for item in effective_attempts) else "not_submitted"
+        termination = effective_attempts[-1].termination if disposition == "terminal" else None
     if not attempts and diagnostics and all(item.category in {"request", "authentication"} for item in diagnostics):
         disposition = "not_submitted"
     if any(record.get("event") == "invalid" for record in records):
@@ -291,9 +307,8 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
         diagnostics += (ExecutionDiagnostic("protocol", "invalid-fact-channel"),)
     if status is None:
         status = "succeeded" if process.returncode == 0 else "failed"
-        if (process.returncode == INFRASTRUCTURE_EXIT_CODE and (
-                any(item.category == "infrastructure" for item in diagnostics)
-                or decode_output and INFRASTRUCTURE_MARKER in (process.stderr or "").splitlines())):
+        if process.returncode == INFRASTRUCTURE_EXIT_CODE and any(
+                item.category == "infrastructure" for item in diagnostics):
             status = "infrastructure"
         elif process.returncode and not has_result and diagnostics and diagnostics[0].category in {"request", "authentication"}:
             status = "rejected"
@@ -309,6 +324,8 @@ def captured_result(process, *, resource, hardware="", records=(), status=None,
     confirmations = {}
     for record in records:
         if record.get("event") != "attempt":
+            continue
+        if record.get("attempt_id") in resolved_attempts:
             continue
         if record.get("disposition") == "not_submitted":
             continue

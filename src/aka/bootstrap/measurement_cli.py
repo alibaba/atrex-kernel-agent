@@ -8,8 +8,6 @@ import sys
 from aka.core.keys import ServiceKey
 
 PROFILES_DIR = Path(__file__).with_name("profiles")
-CANONICAL_READER = ServiceKey("canonical_measurement_reader", "CanonicalMeasurementReader",
-    module="aka.contracts.workflow_records")
 
 
 def _composition_options(parser):
@@ -50,7 +48,7 @@ def main(argv=None):
     profile = options.composition_profile.expanduser().resolve()
     selected = compose(profile.stem, profiles_dir=profile.parent,
                        patch_files=options.composition_patch)
-    tokens = (EXECUTOR, EVALUATOR_FACTORY, EVALUATION_DEFAULTS, CANONICAL_READER, EXPERIMENT_FACTORY)
+    tokens = (EXECUTOR, EVALUATOR_FACTORY, EVALUATION_DEFAULTS, EXPERIMENT_FACTORY)
     report = boot(selected, tokens=(*tokens, EXECUTION_CONTEXT, MEASUREMENT_PARALLELISM),
                   required_services=tuple(token.name for token in tokens))
     try:
@@ -58,12 +56,10 @@ def main(argv=None):
         factory = report.service(EXPERIMENT_FACTORY.name)
         evaluator_factory = report.service(EVALUATOR_FACTORY.name)
         defaults = report.service(EVALUATION_DEFAULTS.name)
-        reader = report.service(CANONICAL_READER.name)
 
         def command_evaluator(command, capabilities):
             configuration = replace(defaults, timeout=command.timeout, hardware=command.hardware,
-                environment=command.environment, execution_capabilities=capabilities,
-                measurement_reader=reader)
+                environment=command.environment, execution_capabilities=capabilities)
             return evaluator_factory.create_command(configuration, evaluation_input=None)
 
         def run(bound, command):

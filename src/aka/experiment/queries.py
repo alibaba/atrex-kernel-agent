@@ -103,32 +103,3 @@ def shape_minima(records, identities, environment_identity):
             if shape not in winners or key < winners[shape][0]:
                 winners[shape] = (key, ShapeMinimum(shape, float(latency), source, record.ref))
     return tuple(winners[shape][1] for shape in sorted(winners))
-
-
-def correctness_reuse(records, identities, environment_identity):
-    def key(identity):
-        if not _ordinary(identity, correctness=True) or identity.parameters.get("correctness_reuse_policy") != "typed-six-case/1":
-            return None
-        digest = identity.parameters.get("correctness_digest")
-        if not _sha256(digest):
-            return None
-        return (identity.method, digest, identity.requirements, identity.dependency_policy)
-    if not isinstance(environment_identity, str) or not environment_identity or not identities:
-        return None
-    expected = {key(identity) for identity in identities}
-    if None in expected:
-        return None
-    shapes = {point.shape_id for identity in identities for point in identity.points}
-    candidates = []
-    for record in records.iter_records():
-        if not _eligible(record):
-            continue
-        measurements = _measurements(record)
-        observed = tuple(measurement.identity for measurement in measurements)
-        if (not observed or {key(identity) for identity in observed} != expected
-                or {measurement.environment_identity for measurement in measurements} != {environment_identity}
-                or {point.shape_id for identity in observed for point in identity.points} != shapes):
-            continue
-        if _source(records, record, observed) is not None:
-            candidates.append(record)
-    return max(candidates, key=lambda record: (record.created_at, record.ref.experiment_id)) if candidates else None

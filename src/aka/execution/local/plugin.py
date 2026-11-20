@@ -4,9 +4,10 @@ from .executor import LocalCommandExecutor
 name = "local"
 provide = ("executor",)
 identity_packages = ("aka.execution.local", "aka.execution.filesystem_scope", "aka.contracts.execution", "aka.contracts.filesystem", "aka.contracts.filesystem_access")
-Config = {"type": "object", "properties": {"bwrap": {"type": "string"}}, "additionalProperties": False}
-Defaults = {"bwrap": "bwrap"}
+Config = {"type": "object", "properties": {"bwrap": {"type": "string"},
+    "proc_mode": {"type": "string", "enum": ["private", "host"]}}, "additionalProperties": False}
+Defaults = {"bwrap": "bwrap", "proc_mode": "private"}
 
 
 def apply(ctx, config):
-    ctx.provide("executor", LocalCommandExecutor(bwrap=config["bwrap"]))
+    ctx.provide("executor", LocalCommandExecutor(bwrap=config["bwrap"], proc_mode=config["proc_mode"]))

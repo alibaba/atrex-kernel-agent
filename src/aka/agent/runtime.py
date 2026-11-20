@@ -169,7 +169,13 @@ class CliAgentRuntime:
         environment["ATREX_AGENT_CLI"] = self.id
         environment = self._adapter.configure_environment(environment)
         command = self.build_command(request.prompt, session_id, request.reasoning_effort, environment=environment)
-        if self._prepare_environment is not None and (self.id != "codex" or self._prepared_home):
+        if request.resume_session:
+            if not request.session_id:
+                raise ValueError("resume_session requires an existing session_id")
+            command = self._adapter.resume_command(command, session_id)
+        from .execution.home import SESSION_HOME_ID_ENV
+        prepare_early = self.id != "codex" or self._prepared_home or bool(environment.get(SESSION_HOME_ID_ENV))
+        if self._prepare_environment is not None and prepare_early:
             environment = self._prepare_environment(
                 request.workspace,
                 session_id,
@@ -210,7 +216,7 @@ class CliAgentRuntime:
                     pass
         # Native one-shot Codex owns its temporary observation home. Prepare only
         # after that choice so the Agent freezes the actual launch identity.
-        if self.id == "codex" and self._prepare_environment is not None and not self._prepared_home:
+        if self.id == "codex" and self._prepare_environment is not None and not prepare_early:
             try:
                 environment = self._prepare_environment(
                     request.workspace,
@@ -302,6 +308,13 @@ class CliAgentRuntime:
             cleanup_error = codex_temporary_home.close()
             if cleanup_error:
                 observation_errors += (cleanup_error,)
+        from .session_capture import captured_observation
+        captured = captured_observation(stdout, events, capabilities)
+        if captured is not None:
+            events = captured.events
+            terminal_usage = captured.terminal_usage
+            capabilities = captured.capabilities
+            observation_errors += captured.errors
         from .public_output import record_invocation
 
         observation_directory = request.observation_directory or request.workspace

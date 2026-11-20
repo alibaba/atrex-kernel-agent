@@ -1,154 +1,173 @@
-# AKA Light configuration
+# Light configuration reference
 
-This page describes the 0.2.0 shared-module request contract. Inspect
-`aka workflow --help` and the matching checkout before launch. All options use
-one parser. The alias `aka optimize` accepts the same request fields.
+Run the matching checkout's `aka optimize --repo-root /path/to/aka --help` first.
+The CLI creates a typed `WorkflowLaunch`. All flags use one parser; no `--` separator
+is required. Defaults below are implementation fallbacks, not user consent: a new
+Skill-driven launch still requires explicit GPU, mode, Agent and isolation choices.
 
-## Launch and continuation
+## Launch and identity
 
-```bash
-aka workflow --repo-root /path/to/atrex-kernel-agent \
-  --profile light-sandbox --problem /path/to/operator \
-  --workspace-base /path/to/campaigns --platform L20D \
-  --framework CuteDSL --agent-cli claude --optimization-mode production
+| Option | Default | Meaning |
+|---|---|---|
+| `--repo-root PATH` | required | Matching installed resources and plugins |
+| `--profile NAME` | `light` | `light`, `light-sandbox`, or an explicit composition file |
+| `--patch FILE` | none | Repeatable composition patch |
+| `--problem PATH` | required | Native Atrex-Bench or SOL problem |
+| `--workspace-base PATH` | cwd | Parent of named Campaign containers |
+| `--workspace-suffix NAME` | mode/DSL/GPU | Distinguish repeated Campaigns; lowercase letters, digits and underscores |
+| `--platform TOKEN` | required | User-selected GPU product |
+| `--hardware TOKEN` | platform | Agate hardware route, if different |
+| `--optimization-mode MODE` | `fast` | `fast`, `performance`, `ultra` |
+| `--framework DSL` | empty | Required for Ultra; Fast/Performance are open DSL |
+| `--agent-cli NAME` | `claude` | `claude`, `codex`, `qodercli`, `pi`, `dsh` |
+| `--max-iters N` | 20 | Maximum persistent Session audit segments |
+| `--token-budget N` | 0 | Main Agent token budget; zero means no token stop |
+| `--agent-reference-paths [NAME=]DIR` | none | Repeat per directory; projected as `references/NAME`, default basename |
+| `--[no-]expose-evaluator-shapes` | exposed | Hidden requests fail if a supported hidden projection cannot be created |
+| `--arch NAME` | queried | Explicit architecture override |
+| `--notes TEXT` | `none` | Task constraints; never put credentials here |
+
+The Campaign root is not Git. Only `lineages/tNNNN/agent-workspace` owns Agent Git.
+A new Campaign creates initial source without mandatory V0 Evaluate. Agent Sessions
+and Reviews have no active-time limit. Continuation restores the recorded launch
+selection; do not replace its profile or patch while resuming.
+
+## Agent-visible Agate tools
+
+`--agate-tools env evaluate command` is the default. Supply a replacement list, for example
+`--agate-tools env evaluate command profile`, or `--agate-tools all` for all seven kinds:
+`env`, `evaluate`, `command`, `profile`, `dev`, `check`, `disassemble`.
+The typed JSON equivalent is `--runtime '{"agate_tools":["env","evaluate","command"]}'`;
+an empty array exposes no Agate tools. `all` must appear alone. Unknown and duplicate names
+are rejected at launch. The selection persists in WorkflowLaunch and applies to every lineage.
+
+Agent help and Prompt identify the enabled kinds. Runtime rejects disabled kinds before staging
+or submitting a remote job. ABBA remains part of `evaluate`; internal evaluation implementation
+and Supervisor-owned checks are unaffected. Wiki, Direction/Experiment, and `submit-kernel`
+retain their independent enablement. Agent-side inspection uses `python3 tools/sandbox.py --help`.
+
+## Measurement defaults
+
+| Option | Default | Meaning |
+|---|---|---|
+| `--warmup-iters N` | 10 | Warmup iterations; zero allowed |
+| `--bench-iters N` | 20 | Positive benchmark iterations |
+| `--evaluation-step-timeout SECONDS` | 60 | Candidate and performance step budget |
+| `--shape-batch-size N` | 10 | Shapes per outer request |
+| `--verify-repeats N` | 2 | Explicit ABBA measurement repeats per side |
+| `--timeout SECONDS` | derived | Outer execution budget; separate from Session/Review lifetime |
+
+Explicit Agent request controls are preserved. Invalid budgets return their concrete
+reason rather than being silently clipped. All Agate calls use the SDK. Runtime
+polls a known Job with short reads within the budget; it does not blindly resubmit
+an ambiguous request without a Job ID or idempotency guarantee.
+
+Evaluate and ABBA use Ray Data with `shape_shards=1`. Both retain the
+full reference and pass selected `options.shape_ids`, without rebuilding batch-local references. Requests set `lock_clocks=true` without specific MHz.
+Aggregation follows `metadata.performance_objective` after all batches complete.
+
+## Composition patches
+
+Each patch replaces that module's configuration, then provider defaults apply.
+Research and pooled search belong to `workflow`:
+
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "workflow", "config": {
+    "tool_modules": ["directions", "experiments"],
+    "search": {
+      "epochs": 5,
+      "trajectories": 3,
+      "episodes_per_trajectory": 1,
+      "max_parallel_episodes": 3,
+      "synchronization": "asynchronous",
+      "role_specialization": false
+    }
+  }}]
+}
 ```
 
-`--repo-root` supplies matching checkout resources. `--profile` selects the
-Workflow composition; omit it for native Light. `--patch` replaces selected
-module configurations. There is no optimizer argument separator.
+`search: {}` is serial. Research defaults to `tool_modules: []`. For pooled runs,
+choose synchronous Epoch barriers or asynchronous publication. Role specialization
+is off by default. The old terminal numerical-planner option is not supported.
+`request_timeout` and `queue_timeout` control Runtime requests, not Reviewer active time.
 
-`--problem` selects a [supported operator](problem-inputs.md), not a candidate
-directory. `--workspace-base` is the parent of new child campaigns;
-`--workspace-suffix` adds a name suffix. Intentional changes to problem,
-framework, mode, visibility, layout or composition require a new campaign.
+Agent isolation is independent:
 
-Continuation uses the exact recorded `--workflow-request` value, with no new
-request fields, Profile override or patch. Do not reconstruct a frozen request
-from remembered flags.
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "agent", "config": {
+    "sandbox": "bwrap", "proc_mode": "host", "bwrap_executable": "bwrap"
+  }}]
+}
+```
 
-## Public request fields
+Aone Sandbox requires `host`; ordinary Linux/Lima can use `private`. Capture is built
+into the shared Agent execution path and is not a `capture` patch field. Claim
+Review follows the selected Agent sandbox mode. Bubblewrap makes supplied evidence read-only; native Review has a separate workspace and Home but no OS isolation boundary.
 
-Native flags map directly to
-`WorkflowSettings` and `CampaignRuntimeSettings` in `$AKA_REPO/src/aka/contracts/workflow.py`.
-Their dataclass defaults and the CLI help are authoritative. Alternatively pass
-`--settings` and `--runtime` JSON objects; specifying the same field in JSON
-and as a flag is rejected.
+## Environment and Runtime options
 
-| Purpose | Current flags and behavior |
-| --- | --- |
-| Target | Required `--platform`; optional `--hardware` for a distinct remote executor alias. `--arch` is an intentional runtime architecture override. |
-| Framework and policy | `--framework`, `--optimization-mode leaderboard\|production`, `--[no-]expose-evaluator-shapes`. Shapes default to exposed for new requests. |
-| Agent | `--agent-cli claude\|qodercli\|codex\|pi\|dsh`; configure provider authentication separately. |
-| Operator guidance | `--notes` injects constraints or known bottlenecks; keep credentials out. |
-| Framework baseline | `--framework-baseline auto\|always\|never` controls V1 after measured V0. `--framework-baseline-timeout` bounds its session; default eight hours. |
-| Independent baseline advice | Repeat `--framework-baseline-reviewers codex` or `qodercli`; these read-only reviewers do not edit or accept the candidate. |
-| Repair/setup/review | `--handoff-resumes`, `--setup-timeout`, `--production-review-timeout` configure separate phases. Defaults are 2 repair turns, 7200 and 600 seconds. |
-| Search | `--max-iters` is an inclusive canonical-version ceiling (20); `--token-budget` (0 disabled), `--target-util` (90), `--max-stall` (0 disabled), `--convert-after` (3) are independent admission/stop controls. |
-| Promotion | `--verify-repeats` (2 per side, even 2–16 in Light), `--verify-run-timeout` (300 seconds), `--min-improvement-pct` (0, strict improvement). Complete ABBA and correctness evidence remain required. |
-| Allocation | `--timeout` defaults to the derived enclosing Eval/ABBA allocation; an override must contain the complete schedule. It is separate from queue and stage limits. |
+Inject `AGATE_AK` / `AGATE_SK` securely into Supervisor environment. Keep credentials
+out of JSON patches, notes and argv. `AGATE_URL` or the SDK profile selects routing.
+Light leaves the Atrex-Bench worker version to Agate; it does not send a version pin.
+The resolved version remains in the archived Agate response.
+Explicit SSH is configured by the public Execution selection and its documented
+`ATREX_SANDBOX_SSH*` settings; see [SSH backend](../../../docs/ssh-backend.md).
 
-The old `--op-dir`, `--workspace`, `--sandbox-*`, `--v1-ask-*` and
-`--verify-shape-batch-size` launch flags are retired. Transport options in
-`tools/sandbox.py` belong to an Agent tool invocation, not this launch CLI.
+Runtime discovers supported safe options from the installed Agate SDK. Consult
+`tools/sandbox.py --help` in the live workspace for Profile, Check, Disassemble,
+Env, Dev and Evaluate options. Credentials, endpoint authority and source selection
+remain Supervisor-owned; an option supported by one kind is not automatically
+valid for another.
 
-Legacy-related fields still present in the shared DTO include `fast_episodes`,
-`fast_trials`, `fast_episode_reviewers`, `full_episode_reviewers`,
-`long_reviewer_session`, `review_trace_mode`, `gateway_candidate_recovery`,
-`resume_framework_candidate` and `conversion_budget_action`. Parser
-acceptance does not imply they configure Light's unified Episodes. Use the
-selected Workflow implementation to confirm consumption.
+### Explicitly permitted supplied Bootstrap
 
-## Measurement policy and wait limits
+For a new Campaign, `workflow.config.source_tree` can select a pinned initial
+source using `{ "manifest": "/path/manifest.json", "directory": "/path/source" }`.
+This changes the initial candidate, not the evaluator Reference or Shapes.
+Imported helper files are placed under `impl/`; the adapter must import from that
+location.
 
-Evaluation's shared defaults are `bench_iters=20`, `warmup_iters=10`,
-candidate timeout 600 seconds and performance timeout 300 seconds. The official
-evaluator defines units: eager/Triton uses millisecond duration budgets;
-CUDA-graph paths use replay counts. These values do not universally mean a
-number of test/warmup executions. Explicit and historical frozen requests keep
-their settings.
+Ultra/Performance normally require self-authored compute. A launch owner may
+explicitly grant `workflow.config.provided_bootstrap` with `name`, `provenance`
+(repository and exact upstream revision), and `files` (the complete normalized
+`kernel.py` / `impl/**` path-to-SHA256 map). Startup rejects a hash or file-set
+mismatch. This permission is frozen in the Campaign launch composition and is
+shown to both Agent and final-source Reviewer. The Reviewer also receives the
+original source snapshot for comparison and reports `provided_source_compute`
+when applicable. Without that launch-owner permission the category is invalid.
 
-Light selects native ABBA, one Shape per batch, one measurement repetition
-and bounded parallel batch workers (up to 16). The Runtime DTO's
-`shape_batch_size` is not a substitute for the selected Evaluation policy.
-Module options in `$AKA_REPO/docs/optional-light-modules.md`, section `light-measurement-policy`,
-describe the defaults and their ownership.
+The exception covers only this supplied source and in-candidate modifications.
+It does not permit installed prebuilt operator libraries, other downloaded
+compute implementations, PyTorch/ATen compute fallback, or a different Ultra DSL.
+Full Evaluate and correctness requirements are unchanged. Do not enable this
+exception without explicit user authorization; do not edit an existing Campaign's
+source contract or permission to retrofit it.
 
-`ATREX_SANDBOX_QUEUE_WAIT_GRACE` defaults to unset/`None`: no local client
-wait deadline. An explicit non-negative integer limits client waiting to the
-execution timeout plus the allowance and launcher cleanup slack; it never
-extends the server Job execution budget. Workflow queue/request limits and
-Agent active time are separate.
 
-## Execution endpoints and SSH
+## Independent Claim Review switch
 
-The default Legacy Execution provider can select Agate or SSH. Select endpoints
-through Execution configuration or its captured environment. Agate URL/profile
-and SSH are mutually exclusive. The Gateway provider rejects SSH settings.
+Workflow `claim_review` defaults to `false`: Direction/Experiment recording, revision,
+attachments and sharing remain enabled without invoking their Reviewer. Explicitly set
+`claim_review: true` to enable independent Claim Review. For example, the default behavior is:
 
-| Environment | Meaning |
-| --- | --- |
-| `ATREX_SANDBOX_URL`, `ATREX_SANDBOX_PROFILE` | Explicit Agate endpoint or profile; preserve authentication in the provider's configuration. |
-| `ATREX_SANDBOX_SSH` | Non-interactive OpenSSH host or config alias. Requires one explicit framework. |
-| `ATREX_SANDBOX_SSH_INIT` | Remote environment activation before jobs and health probes. |
-| `ATREX_SANDBOX_SSH_GPU` | Physical GPU index assigned to this campaign; MIG selectors are unsupported. |
-| `ATREX_SANDBOX_SSH_RUNTIME_BINDS` | JSON array of read-only remote directories, optionally `REMOTE=SANDBOX`. |
-| `ATREX_SANDBOX_SSH_BWRAP` | Absolute remote Bubblewrap executable if absent from PATH. |
-| `ATREX_SANDBOX_HEALTH_COMMAND` | Trusted readiness probe. |
-| `ATREX_ENVIRONMENT_POLL_INTERVAL` | Recovery probe interval. |
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "workflow", "config": {
+    "tool_modules": ["directions", "experiments"],
+    "claim_review": false
+  }}]
+}
+```
 
-The named Light profiles inherit these SSH configuration names from the Workflow
-environment allowlist. See `$AKA_REPO/docs/ssh-backend.md` for GPU
-isolation, explicit device maps and dependencies.
-
-SSH supports typed requests, source archives, explicit input files and
-same-allocation ABBA. It does not support closed `PreparedExecutionInputs`;
-whole-tree diagnostics, private portable Profile and authorized Dev snapshot
-conversion needing that transport reject before dispatch.
-
-## Composition options
-
-A patch supplies the whole configuration for the named module; omitted keys take
-provider defaults. Retain `startup: true` for a Workflow launched by
-`aka optimize`. Use current entries `workflow`, `agent`, `evaluation`,
-`execution`, `resources`, `problem`, `source`, `candidate` and
-`experiment`; the old `tool_runtime`, `light_journal` and `wiki` entries
-are retired. The matching
-module guide at `$AKA_REPO/docs/optional-light-modules.md` owns schemas and examples.
-
-| Module | Relevant controls |
-| --- | --- |
-| `workflow` | Episode active allowance (four hours), optional numerical validation, Goal Episodes, generated memory, research records, inherited reusable state, layout/search topology, output-limit recovery (2), routed Wiki and queue/request limits. |
-| `evaluation` | Shape batching, comparison method and measurement repetitions (1 or 3). |
-| `agent` | `sandbox`, `bwrap_executable`, `proc_mode`, `timeout_seconds`, `session_name`, `state_directory`. Retired `capture`/`read_only_paths` keys are rejected. |
-| `execution` | Backend profile and patches; physical dispatch and recovery configuration. |
-| `resources` | Explicit plugin catalogs and contributed resources; retain selected bundles when replacing configuration. |
-
-Pooled `workflow.search` controls epochs (10), trajectories (2),
-episodes_per_trajectory (1) and max_parallel_episodes (2, at most trajectories).
-Its schedule replaces the serial version budget. A shared token cap controls
-admission; in-flight Episodes may overshoot it. Bootstrap/auxiliary usage is
-excluded and missing provider usage cannot be fully enforced.
-
-Completed Epoch winners publish verified Kernel bytes and performance facts.
-Live drafts, tools, Skills, scratch, Conversation history and research state are
-not merged between trajectories.
-
-Routed Wiki is configured through `workflow.wiki`/`wiki_options`;
-`WikiConfig` in `$AKA_REPO/src/aka/resources/wiki/config.py` owns model, effort,
-settings_file, base_url, timeout, bridge_timeout, queue_timeout and concurrency.
-Wiki timeouts do not change GPU or Agent budgets.
-
-## Provider settings and Agent Runtime options
-
-`ATREX_CODEX_SESSION_SETTINGS` and `ATREX_PI_SESSION_SETTINGS` are JSON
-provider settings, falling back to `ATREX_SESSION_SETTINGS`. DSH uses its
-configured headless profile, private Home and JSON events/checkpoints.
-Native child-attempt accounting excludes seeded or resumed history.
-
-The Agent's `tools/sandbox.py` discovers safe, operation-specific options
-from the installed Agate client. Update the client and restart the Supervisor
-to refresh that catalog. Credentials, endpoints, uploads, source selection,
-timeouts and evaluator authority stay Supervisor-owned.
-
-Unknown submission or an explicit replay prohibition requires recovery through
-the original Job identity. Preserve its evidence and avoid blind resubmission.
+Save as `research-no-review.json` and pass `--patch research-no-review.json` when launching.
+Include other required workflow settings in the same patch. Applies to every lineage.
+Every operation that would request Claim Review instead returns `claim_review_quality: supported`,
+`evidence_eligible: true`, `review_skipped: true`, and an explicit skipped-review explanation.
+The annotation persists in research versions and private audit; no Reviewer Session or token usage
+is created. Schema, ownership, lifecycle and attachment checks remain enforced.
+This switch does not change `submit-kernel` source review or Evaluate requirements.

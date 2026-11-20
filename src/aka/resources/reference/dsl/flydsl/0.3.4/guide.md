@@ -562,4 +562,3 @@ gfx950 FP4、RDNA WMMA／TDM 等专用方案不能直接套用到 MI308X；
 [installation]: https://github.com/ROCm/FlyDSL/blob/6bb37ba4e23c3a2729e3af244251b55fc5938237/docs/installation.rst
 [vecadd]: https://github.com/ROCm/FlyDSL/blob/6bb37ba4e23c3a2729e3af244251b55fc5938237/examples/01-vectorAdd.py
 [testing]: https://github.com/ROCm/FlyDSL/blob/6bb37ba4e23c3a2729e3af244251b55fc5938237/docs/testing_benchmarking_guide.md
-

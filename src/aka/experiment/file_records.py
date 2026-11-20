@@ -177,17 +177,21 @@ class FileExperimentRecords:
     The public reader only consumes committed files. Incomplete operations are
     deliberately not resumed by this implementation: they remain queryable.
     """
-    def __init__(self, root: Path, run_id: str, *, create=True):
+    def __init__(self, root: Path, run_id: str, *, create=True, namespace_directory=True,
+                 artifact_root: Path | None = None):
         if not run_id:
             raise ValueError("experiment run_id is required")
         self.run_id = run_id
-        self.root = Path(root).resolve() / _digest(run_id)
+        root = Path(root).resolve()
+        self.root = root / _digest(run_id) if namespace_directory else root
         if create:
             self.root.mkdir(mode=0o700, parents=True, exist_ok=True)
         elif self.root.is_symlink() or not self.root.is_dir():
             raise LookupError("experiment namespace is unavailable")
         self._write_lock = RLock()
-        self._artifact_storage = ArtifactStorage(self.root.parent)
+        self._artifact_storage = ArtifactStorage(
+            Path(artifact_root).resolve() if artifact_root is not None else self.root.parent
+        )
 
     def _ref(self, request_id):
         if not isinstance(request_id, str) or not request_id:
@@ -441,11 +445,23 @@ class FileExperimentRecords:
         disposition = result.facts.disposition if result else "unknown"
         settled = {(item.resource.backend, item.resource.identifier) for item in result.attempts
                    if item.disposition == "terminal" and item.resource and item.resource.identifier} if result else set()
+        settled_submissions = {(item.resource.backend, item.operation, item.idempotency_key, item.request_identity)
+            for item in result.attempts if item.disposition == "terminal"
+            and item.resource and item.resource.identifier and item.idempotency_key and item.request_identity} if result else set()
+        def unresolved(item):
+            if item.disposition != "unknown":
+                return False
+            if item.resource and item.resource.identifier:
+                return (item.resource.backend, item.resource.identifier) not in settled
+            # The exact keyed admission was recovered; its failed HTTP attempts
+            # remain in result.attempts but no longer prevent terminal recording.
+            return (not item.resource or
+                (item.resource.backend, item.operation, item.idempotency_key, item.request_identity)
+                not in settled_submissions)
         if disposition not in {"terminal", "not_submitted"} or (result and any(
-            item.disposition == "unknown" and (not item.resource or not item.resource.identifier or (item.resource.backend, item.resource.identifier) not in settled)
-            for item in result.attempts)):
+            unresolved(item) for item in result.attempts)):
             disposition = "unknown"
-        failure = ExperimentFailure("execute", "execution_error", type(error).__name__) if error else None
+        failure = ExperimentFailure("execute", "execution_error", type(error).__name__, str(error)) if error else None
 
         def transform(old):
             if not any(item.attempt_id == attempt_id for item in old.attempts):
@@ -557,6 +573,6 @@ class FileExperimentRecords:
                 return  # Preserve previously committed execution snapshots.
         def transform(old):
             code = error.code if isinstance(error, ExperimentRecordError) else "experiment_error"
-            return replace(old, failure=ExperimentFailure(old.phase, code, type(error).__name__),
+            return replace(old, failure=ExperimentFailure(old.phase, code, type(error).__name__, str(error)),
                            lifecycle="terminal" if _settled(old) else "failed", outcome="inconclusive")
         return self._update(ref, transform)

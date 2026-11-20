@@ -9,7 +9,6 @@ from contextlib import contextmanager
 from dataclasses import asdict
 import json
 from pathlib import Path
-import re
 import uuid
 
 from aka.contracts.evaluation import EvaluationRequest
@@ -18,9 +17,6 @@ from aka.contracts.execution import CommandSpec
 from aka.contracts.experiment import ExperimentRecordError
 from aka.contracts.workspace import RevisionContent
 
-RECORD_ID = re.compile(r"gateway-[0-9a-f]{64}")
-KERNEL_ID = re.compile(r"kernel-[0-9a-f]{64}")
-QUERY_KINDS = frozenset({"record-read", "kernel-read", "kernel-records", "kernel-pareto-frontier"})
 _PREFIXES = {"run": "[test_kernel] RESULT_JSON=", "same_allocation_abba": "[sandbox] ABBA_JSON=",
              "profile": "[sandbox] PROFILE_JSON=", "check": "[sandbox] CHECK_JSON=",
              "disassemble": "[sandbox] DISASSEMBLE_JSON="}
@@ -134,14 +130,13 @@ class RecordedMeasurements:
             receipt = experiment.command_result(record.ref)
             operation_name = "evaluate" if operation == "run" else operation
             public = canonical_result(with_execution_error({"exit_code": receipt.returncode,
-                "stdout": receipt.stdout, "stderr": receipt.stderr}, receipt), {"operation": operation_name})["result"]
+                "stdout": receipt.stdout, "stderr": receipt.stderr}, receipt, operation=operation_name), {"operation": operation_name})["result"]
             feedback = {key: public[key] for key in ("failures", "actionable_diagnostics", "diagnostics",
                 "feedback_truncation", "diagnostic_truncation", "error", "next_action", "outcome") if key in public}
         result = {**feedback, "all_pass": passed, "correct": passed, "mode": mode,
                   "error": feedback.get("error") or (selected.error if selected is not None else None),
                   "latency_us_by_shape": dict(selected.candidate_latency_us_by_shape) if selected is not None else {},
-                  "latency_us_geomean": selected.candidate_latency_us if selected is not None else None,
-                  "performance_score": selected.candidate_performance_score if selected is not None else None}
+                  "latency_us_geomean": selected.candidate_latency_us if selected is not None else None}
         if selected is not None and selected.failure is not None:
             result["failure"] = asdict(selected.failure)
         native_incomplete = False
@@ -217,14 +212,13 @@ class RecordedMeasurements:
                 "gateway_kind": operation, **binding, "source_sha256": binding.get("sha256"), "result": result,
                 "execution_status": "completed" if completed else "failed" if failed else "unknown", "exit_code": exit_code,
                 "standard_full_evaluation": full_task and known,
-                "typed_six_case_correctness": known and bool(identities) and all(
-                    identity.method == "atrex-bench/eval" and identity.parameters.get("correctness_reuse_policy") == "typed-six-case/1"
-                    for identity in identities), "created_at": record.created_at}
+                "created_at": record.created_at}
 
 
 class SharedMeasurements(RecordedMeasurements):
     def __init__(self, *, factory, executor, evaluator, namespace_workspace, evaluation_input,
-                 workspace_provider, command_evaluator, environment_identity=None, query_request=None):
+                 workspace_provider, command_evaluator, store, environment_identity=None, query_request=None):
+        self.store = store
         self.factory = factory
         self.executor = executor
         self.evaluator = evaluator
@@ -245,58 +239,13 @@ class SharedMeasurements(RecordedMeasurements):
                                command_evaluator=self.command_evaluator) as experiment:
             yield experiment
 
-    def numerical(self, request, *, request_id):
-        """Run or resume the original public numerical experiment, then read its verdict."""
-        from aka.evaluation.numerical import decode_numerical_artifact
-        with self._open() as experiment:
-            try:
-                experiment.find(request_id)
-            except LookupError:
-                record = experiment.run_recorded(request, request_id=request_id)
-            else:
-                record = experiment.resume_recorded(request, request_id=request_id,
-                    recovery_timeout=request.numerical_probe.timeout, max_remeasurements=0)
-            if record.lifecycle != "terminal" or record.phase != "complete" or record.evaluation is None:
-                raise ValueError("original numerical experiment is pending")
-            artifacts = [item for item in record.artifacts if item.artifact_id == record.evaluation.artifact]
-            if len(artifacts) != 1:
-                raise ValueError("numerical experiment has no unique interpreted artifact")
-            value = decode_numerical_artifact(experiment.read_artifact(artifacts[0]))
-            return {**value['summary'], 'probes': value['probes'], 'experiment_ref': record.ref.as_dict()}
-
-    def _record(self, experiment, record_id):
-        if not isinstance(record_id, str) or RECORD_ID.fullmatch(record_id) is None:
-            raise ValueError("Record ID must be the full gateway-... ID returned by this Campaign")
-        # The namespace is selected by the host, never by an Agent argument.
-        records = tuple(experiment.iter_records())
-        found = [record for record in records if record.ref.experiment_id == record_id[len("gateway-"):]]
-        if len(found) != 1:
-            raise LookupError("Record is not available in this Campaign")
-        return found[0]
 
 
-    def read(self, record_id):
-        """Return Workflow facts from public owner DTOs, not a file record envelope."""
-        with self._open() as experiment:
-            return self._evidence(experiment, self._record(experiment, record_id))
 
-    evidence = read
 
-    def records(self):
-        with self._open() as experiment:
-            return tuple(self._evidence(experiment, record) for record in experiment.iter_records())
 
-    def read_kernel(self, kernel_id):
-        if not isinstance(kernel_id, str) or KERNEL_ID.fullmatch(kernel_id) is None:
-            raise ValueError("Kernel ID must be the full kernel-... ID returned by this Campaign")
-        with self._open() as experiment:
-            for record in experiment.iter_records():
-                source = self._source(experiment, record)
-                if source is not None and self.kernel(source)["kernel_id"] == kernel_id:
-                    return source
-        raise LookupError("Kernel is not available in this Campaign")
 
-    source = read_kernel
+
 
     def _response(self, experiment, record, *, reused=False):
         evidence = self._evidence(experiment, record)
@@ -316,35 +265,46 @@ class SharedMeasurements(RecordedMeasurements):
         else:
             latest = next((attempt.result for attempt in reversed(record.attempts) if attempt.result is not None), None)
             stdout, stderr = (latest.stdout, latest.stderr) if latest is not None else ("", "")
-        if stdout and not stdout.endswith("\n"):
-            stdout += "\n"
-        stdout += "[sandbox] RECORD_JSON=" + json.dumps({"gateway_record_id": evidence["gateway_record_id"],
-            **({"kernel_id": evidence["kernel_id"]} if evidence.get("kernel_id") else {})}) + "\n"
+        operation = "evaluate" if evidence["gateway_kind"] == "run" else evidence["gateway_kind"]
+        if operation not in {"dev", "command"}:
+            if stdout and not stdout.endswith("\n"):
+                stdout += "\n"
+            stdout += "[sandbox] RECORD_JSON=" + json.dumps({"gateway_record_id": evidence["gateway_record_id"],
+                **({"kernel_id": evidence["kernel_id"]} if evidence.get("kernel_id") else {})}) + "\n"
         response = {"exit_code": returned.returncode if returned is not None else evidence["exit_code"] if evidence["exit_code"] is not None else 2,
                     "stdout": stdout, "stderr": stderr, "reused": reused}
         from aka.evaluation.tool_results import canonical_result, with_execution_error
         if returned is not None:
-            response = with_execution_error(response, returned)
-        operation = "evaluate" if evidence["gateway_kind"] == "run" else evidence["gateway_kind"]
+            response = with_execution_error(response, returned, operation=operation)
         agent = canonical_result(response, {"operation": operation, "options": {"evaluation_mode": payload.get("mode")}},
             record_id=evidence["gateway_record_id"])
-        if operation in {"evaluate", "same_allocation_abba"} or evidence["execution_status"] == "unknown":
+        upstream_failed = response.get("error") is not None
+        if not upstream_failed and (operation in {"evaluate", "same_allocation_abba"} or evidence["execution_status"] == "unknown"):
             agent["status"] = evidence["execution_status"]
         agent["identity"] = {key: evidence[key] for key in ("gateway_record_id", "kernel_id") if key in evidence}
         for key in ("gateway_record_id", "kernel_id", "baseline_kernel_id"):
             agent.pop(key, None)
         if operation in {"evaluate", "same_allocation_abba"}:
-            agent["result"]["correct"] = evidence["result"]["correct"]
-            if "qualification" in evidence["result"]:
+            from aka.evaluation.tool_results import normal_evaluation_execution
+            latest = {attempt.task_id: attempt for attempt in record.attempts}
+            # A candidate rejection can finish evaluation before later planned
+            # steps run. Coverage is an acceptance concern, not a cache gate.
+            response["evaluation_response_received"] = (
+                record.lifecycle == "terminal" and record.phase == "complete" and bool(latest)
+                and all(attempt.result is not None and normal_evaluation_execution(attempt.result)
+                        for attempt in latest.values()))
+            if not upstream_failed:
+                agent["result"]["correct"] = evidence["result"]["correct"]
+            if not upstream_failed and "qualification" in evidence["result"]:
                 agent["result"]["qualification"] = evidence["result"]["qualification"]
                 agent["result"]["diagnostics"] = [*agent["result"].get("diagnostics", ()),
                     *(item for item in evidence["result"].get("diagnostics", ())
                       if item.get("category") == "qualification" and item not in agent["result"].get("diagnostics", ()))]
-            if evidence["result"]["correct"] is None:
+            if not upstream_failed and evidence["result"]["correct"] is None:
                 agent["result"]["correctness"] = None
         return {**response, "agent_result": agent}
 
-    def execute(self, request, *, request_id=None, reuse_completed=False, reuse_correctness=False):
+    def _execute(self, request, *, request_id=None, reuse_completed=False):
         if not isinstance(request, (CommandSpec, EvaluationRequest)):
             raise TypeError("Measurement requires public CommandSpec or EvaluationRequest")
         identities = ()
@@ -367,7 +327,7 @@ class SharedMeasurements(RecordedMeasurements):
                 else:
                     from .host.errors import AgentRequestError
                     record_id = "gateway-" + existing.ref.experiment_id
-                    if not (reuse_completed or reuse_correctness):
+                    if not reuse_completed:
                         raise AgentRequestError("This request_id already has a completed record.",
                             code="duplicate_request_id", gateway_record_id=record_id,
                             next_action="Read the existing record, or use a new request_id for a new measurement.")
@@ -379,13 +339,9 @@ class SharedMeasurements(RecordedMeasurements):
                             code="record_not_reusable", gateway_record_id=record_id,
                             next_action="Read the existing record; use a new request_id for a fresh measurement if needed.")
                     return self._response(experiment, record, reused=True)
-            if (reuse_correctness or reuse_completed) and self.environment_identity:
+            if reuse_completed and self.environment_identity:
                 prepared = (self.command_evaluator if isinstance(request, CommandSpec) else self.evaluator).prepare(request)
                 identities = prepared.measurement_identities
-            if reuse_correctness and self.environment_identity:
-                reused = experiment.correctness_reuse(identities, environment_identity=self.environment_identity)
-                if reused is not None:
-                    return self._response(experiment, reused, reused=True)
             if reuse_completed and self.environment_identity and identities:
                 for record in reversed(tuple(experiment.iter_records())):
                     if (experiment.reusable(record.ref, identities) and all(
@@ -394,37 +350,61 @@ class SharedMeasurements(RecordedMeasurements):
             record = experiment.run_recorded(request, request_id=identity)
             return self._response(experiment, record)
 
-    def query(self, args, workspace):
-        if args.kind not in QUERY_KINDS or getattr(args, "command", ()) or getattr(args, "input", ()) or getattr(args, "baseline_path", None):
-            raise ValueError("Record queries take IDs, not commands or GPU inputs")
-        with self._open() as experiment:
-            if args.kind == "record-read":
-                return self._response(experiment, self._record(experiment, args.record_id), reused=True)
-        if args.kind == "kernel-read":
-            path = Path(args.output_path or "")
-            if path.is_absolute() or ".." in path.parts or len(path.parts) < 2 or path.parts[0] != "scratch":
-                raise ValueError("Kernel output must be inside scratch/")
-            source = self.read_kernel(args.kernel_id)
-            # The Workspace owner decides file/tree installation and path policy.
-            destination = Path(workspace) / path
-            if len(source.files) > 1:
-                if destination.exists():
-                    if self.workspace_provider.source_identity(self.workspace_provider.read_source(destination)) != self.workspace_provider.source_identity(source):
-                        raise ValueError("Source output directory contains different content")
-                else:
-                    self.workspace_provider.install_source(destination, source)
-            else:
-                self.workspace_provider.install_files(Path(workspace), (WorkspaceFile(path.as_posix(), text=source.files["kernel.py"].decode()),), immutable=True)
-            result = {"ok": True, "kernel_id": args.kernel_id, "file": path.as_posix()}
-        elif args.kind == "kernel-records":
-            result = {"kernel_id": args.kernel_id, "gateway_records": [record for record in self.records() if record.get("kernel_id") == args.kernel_id]}
-        else:
-            if self.query_request is None:
-                raise ValueError("Per-Shape history requires the host's declared full Task measurement")
-            prepared = self.command_evaluator.prepare(self.query_request)
-            with self._open() as experiment:
-                minima = experiment.shape_minima(prepared.measurement_identities, environment_identity=self.environment_identity)
-                best = {item.shape_id: {"kernel_id": self.kernel(experiment.read_source(item.source))["kernel_id"],
-                    "gateway_record_id": "gateway-" + item.experiment.experiment_id, "latency_us": item.latency_us} for item in minima}
-            result = {"best_by_shape": best, "shape_count": len(best), "winner_kernel_ids": sorted({value["kernel_id"] for value in best.values()})}
-        return {"exit_code": 0, "stdout": json.dumps(result, allow_nan=False) + "\n", "stderr": ""}
+    def execute(self, request, *, request_id=None, reuse_completed=False,
+                identity, kernels, deadline=None, check_wait=None):
+        """Archive every typed execution once in the Campaign Measurement Store.
+
+        The public Experiment owns preparation, attempts, receipts and recovery.
+        The Campaign store owns the public Gateway ID, Git identity and deduplication.
+        """
+        from copy import deepcopy
+        from aka.experiment.measurement_store import DuplicateTask
+        # Only Evaluate (including ABBA) shares executions or completed results.
+        # Other tools may have side effects or intentionally repeat a probe. Give
+        # each invocation its own reservation, Record and physical execution key;
+        # retries within that invocation still use the normal Experiment policy.
+        deduplicate = identity.get("operation") in {"evaluate", "same_allocation_abba"}
+        if not deduplicate:
+            identity = {**identity, "invocation_id": uuid.uuid4().hex}
+        try:
+            with self.store.reserve(identity, kernels, deadline=deadline, request_id=request_id or "",
+                                    check_wait=check_wait, reusable=deduplicate) as task:
+                try:
+                    response = self._execute(request, request_id=task.record_id,
+                        reuse_completed=deduplicate)
+                except Exception as error:
+                    # Preparation/transport exceptions are auditable even without a Job.
+                    # Keep the exception class and message, never invent a GPU outcome.
+                    response = {"exit_code": 2, "stdout": "", "stderr": str(error),
+                        "agent_result": {"operation": identity["operation"], "status": "failed",
+                            "result": {"error": {"code": "execution_failed", "type": type(error).__name__,
+                                "message": str(error)}}}}
+                    from aka.contracts.execution import JobResult
+                    outcome = getattr(error, "outcome", None)
+                    if isinstance(outcome, JobResult):
+                        # require_transport() may raise after the public owner
+                        # has captured an exact upstream failure. Preserve that
+                        # receipt instead of replacing it with a generic outage.
+                        from aka.evaluation.tool_results import with_execution_error, canonical_result
+                        response = with_execution_error({"exit_code": outcome.returncode,
+                            "stdout": outcome.stdout, "stderr": outcome.stderr}, outcome, operation=identity.get("operation"))
+                        response["agent_result"] = canonical_result(response, identity)
+                agent = response.get("agent_result", {})
+                agent.pop("identity", None)
+                agent["gateway_record_id"] = task.record_id
+                agent["record_path"] = f"records/{task.record_id}.json"
+                if "candidate" in kernels:
+                    agent["kernel_commit_id"] = kernels["candidate"]["kernel_id"]
+                if "baseline" in kernels:
+                    agent["baseline_kernel_commit_id"] = kernels["baseline"]["kernel_id"]
+                    agent["candidate_kernel_commit_id"] = agent.pop("kernel_commit_id")
+                response["agent_result"] = agent
+                record = task.finish(response, cacheable=deduplicate)
+                return record["response"]
+        except DuplicateTask as duplicate:
+            from aka.evaluation.tool_results import canonical_result, cacheable_evaluation
+            response = deepcopy(self.store.read(duplicate.record_id)["response"])
+            response["agent_result"] = canonical_result(response, identity)
+            if cacheable_evaluation(response, identity):
+                response["agent_result"]["reused_gateway_record_id"] = duplicate.record_id
+            return {**response, "reused": True}

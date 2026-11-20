@@ -4,10 +4,20 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-light"
-version = "0.2.0"
-description = "Optional managed AKA workflows using the common module interfaces"
+version = "0.3.0"
+description = "AKA Light persistent-session kernel optimization"
 requires-python = ">=3.10"
-dependencies = ["atrex-aka-legacy==0.2.0"]
+dependencies = [
+    "atrex-aka-framework==0.3.0",
+    "atrex-gateway-client>=0.14.30,<0.15",
+]
+
+[project.entry-points."aka.commands"]
+optimize = "aka.bootstrap.workflow_cli:main"
+workflow = "aka.bootstrap.workflow_cli:main"
+
+[project.entry-points."aka.tokens"]
+workflow = "aka.workflow.light.plugin:WORKFLOW"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

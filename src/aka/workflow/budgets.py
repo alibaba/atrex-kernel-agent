@@ -73,18 +73,6 @@ def durable_budget(path, seconds, *, resumed=False):
         os.close(fd)
 
 
-@contextmanager
-def baseline_budget(campaign):
-    path = Path(campaign.workspace).resolve() / '.atrex_long_horizon/framework_baseline/deadline.json'
-    with durable_budget(path, campaign.framework_baseline_timeout) as budget:
-        budget.require_remaining()
-        token = _current.set(budget)
-        try:
-            yield budget
-            budget.require_remaining()
-        finally:
-            _current.reset(token)
-
 
 def remaining_timeout(requested):
     budget = _current.get()

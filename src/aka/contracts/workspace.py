@@ -163,13 +163,18 @@ class CandidateCheckpointState:
 
 
 class CandidateWorkspace(Protocol):
-    def prepare_draft(self, workspace: Path) -> None:
-        """Declare a Git-free draft; reject existing repository metadata and hide its marker."""
+    def bind_source_contract(self, namespace: Path, *, file_system: str, contract: dict | None) -> None:
+        """Bind host-persisted source structure for repositories in a namespace."""
         ...
-    def exclude_runtime_paths(self, workspace: Path,
-                              exclusions: tuple[WorkspaceExclusion, ...]) -> None:
-        """Append explicit owner runtime exclusions without changing tracked content/index."""
+
+    def initialize_agent(self, workspace: Path, content: SourceContent) -> str:
+        """Create the initial Agent Git root once; preserve an existing repository.
+
+        Only source and .gitignore enter the initial commit. This operation
+        neither evaluates the source nor changes an existing HEAD or draft.
+        """
         ...
+
     def current_revision(self, workspace: Path) -> str:
         """Return the opaque current revision, or an empty string before initialization."""
         ...
@@ -215,23 +220,6 @@ class CandidateWorkspace(Protocol):
                       include_untracked: bool = True) -> WorkingFacts:
         """Read changes and explicit content identities; tracked-only checks are explicit."""
         ...
-    def restore_revision(self, workspace: Path, *, expected_revision: str,
-                         revision: str, retain_working_files: bool) -> str:
-        """Restore an explicit revision with an incumbent check and transactional rollback.
-
-        Retaining working files restores only revision/index; otherwise the
-        implementation restores tracked files using its original untracked rules.
-        """
-        ...
-    def record(self, workspace: Path, *, expected_revision: str,
-               files: tuple[WorkspaceFile, ...], message: str,
-               deleted_paths: tuple[str, ...] = ()) -> str:
-        """Record explicit owner files while preserving unrelated working/index content.
-
-        Precommit failure restores partial writes; a committed result survives a
-        lost return and remains inspectable through the public revision methods.
-        """
-        ...
     def snapshot_files(self, workspace: Path, destination: Path, *,
                        directories: tuple[str, ...],
                        exclude_paths: tuple[str, ...] = ()) -> WorkspaceFilesSnapshot:
@@ -247,73 +235,9 @@ class CandidateWorkspace(Protocol):
     def filesystem_access(self, workspace: Path, *, include_git: bool = False) -> FilesystemAccess:
         """Describe immutable inputs; reject Git grants unsupported by this implementation."""
         ...
-    def export_checkpoint(self, workspace: Path, destination: Path, *,
-                          candidates: tuple[CandidateHandle, ...] = ()) -> CandidateWorkspaceSnapshot: ...
-    def validate_checkpoint(self, snapshot: CandidateWorkspaceSnapshot, *,
-                            check_destinations: bool = False) -> CandidateCheckpointState:
-        """Read-only validation of stopped Git/worktree bytes and original path bindings."""
-        ...
-    def checkpoint_files(self, snapshot: CandidateWorkspaceSnapshot, paths: tuple[str, ...]) -> dict[str, bytes]:
-        """Read validated canonical workspace files; reject traversal, Git metadata and symlinks."""
-        ...
-    def restore_checkpoint(self, snapshot: CandidateWorkspaceSnapshot) -> CandidateCheckpointState:
-        """Restore only original paths after all modules pass the caller's validation phase."""
-        ...
     def install_files(self, workspace: Path, files: tuple[WorkspaceFile, ...], *,
                       immutable: bool = False) -> SourceSnapshot:
         """Copy selected files; immutable preflights all targets and rejects changed bytes/modes."""
-        ...
-    def initialize_kernel(self, workspace: Path, content: SourceContent, *,
-                          runtime_files: tuple[WorkspaceFile, ...],
-                          context_directories: tuple[str, ...] = ()) -> int:
-        """Initialize explicit source and constraints; validate unchanged V0 on retry."""
-        ...
-    def prepare_sol(self, workspace: Path, content: SourceContent, *,
-                    problem_files: tuple[WorkspaceFile, ...], harness: WorkspaceFile,
-                    runtime_files: tuple[WorkspaceFile, ...],
-                    context_directories: tuple[str, ...] = ()) -> str:
-        """Install and commit V0, or validate unchanged V0 on measurement retry."""
-        ...
-    def baseline_changes(self, workspace: Path, baseline_commit: str, *,
-                         required_paths: tuple[str, ...] = ()) -> list[str]:
-        """Inspect immutable content; required paths must have baseline identities."""
-        ...
-    def restore_baseline(self, workspace: Path, baseline_commit: str) -> list[str]:
-        """Restore baseline content on request; return only successfully restored paths."""
-        ...
-    def plan(self, workspace: Path, episode: int, base_commit: str, root: Path | None = None) -> CandidateHandle: ...
-    def materialize(self, handle: CandidateHandle, workspace: Path) -> None: ...
-    def inspect_candidate(self, workspace: Path, handle: CandidateHandle) -> CandidateBindingFacts:
-        """Read actual registration, branch and revision; damaged bindings raise."""
-        ...
-    def validate_candidate(self, handle: CandidateHandle, candidate_commit: str) -> tuple[str, list[str]]: ...
-    def validate_candidate_source(self, handle: CandidateHandle, source: RevisionContent) -> None:
-        """Validate exact frozen source against the registered candidate without writes."""
-        ...
-    def seal_candidate(self, handle: CandidateHandle, source: RevisionContent) -> str:
-        """Revalidate and record exact measured source through the owner transaction.
-
-        Preserve unrelated exploration and staging; preparation failure changes
-        no revision. Confirmed commits remain inspectable after a lost return.
-        """
-        ...
-    def restore_sealed_candidate(self, handle: CandidateHandle, candidate_commit: str,
-                                 source: RevisionContent) -> tuple[str, list[str]]:
-        """Validate registered committed source, then restore only declared source members."""
-        ...
-    def archive(self, handle: CandidateHandle, destination: Path, candidate_commit: str = "HEAD") -> Path: ...
-    def remove(self, handle: CandidateHandle, workspace: Path) -> None: ...
-    def promote(self, workspace: Path, *, base_commit: str, candidate_commit: str, episode: int,
-                record_files: tuple[WorkspaceFile, ...] = (),
-                evidence: dict[str, Any] | None = None, memory_version: int | None = None,
-                memory_record: dict[str, Any] | None = None,
-                commit_message: str | None = None) -> str:
-        """Commit candidate and opaque owner-prepared files in one transaction.
-
-        Legacy record keywords are retained only by the compatibility adapter.
-        A selected Workflow may supply its opaque recovery message; None keeps
-        the implementation's existing English promotion message.
-        """
         ...
     def read_revision(self, workspace: Path, revision: str,
                       changed_paths: list[str]) -> RevisionContent:

@@ -23,11 +23,11 @@ structure remain comparable. Collect new evidence only when a change invalidates
 for the current decision, or when clean results expose a new ambiguity. Timeline is an escalation for
 a kernel-internal timing question, never a required per-round validation step.
 
-Across long-horizon episodes, read reusable evidence from
-`memory/vN.json.profile_evidence.accepted_ppu_diagnostics`; the raw episode archive is not a
-prerequisite. Compare every recorded identity and `invalidation_conditions` entry with the current clean
-kernel before reuse. A canonical evidence reference identifies the prior conclusion, but does not
-make it valid after specialization, workload, device, topology, or pipeline changes.
+Across long-horizon Episodes, prefer the hash-bound artifacts retained under trajectory-local
+`scratch/` and any Experiment that archives or cites them. Compare every recorded identity
+and `invalidation_conditions` entry with the current clean Kernel before reuse. A prior reference
+identifies the conclusion, but does not make it valid after specialization, workload, device,
+topology, or pipeline changes.
 
 ## Choose the evidence route
 
@@ -52,47 +52,19 @@ run remotely through `tools/sandbox.py`, not in the local Agent process.
 Keep receipts and every file they reference under `scratch/`, including source snapshots, raw
 captures, binaries, and correctness evidence. Use relative paths between these files so their
 bindings survive remote synchronization and publication to the controller workspace. Synchronize
-the complete evidence tree with `--sync scratch/...` before submitting `episode-report`, and do
-not delete or rewrite cited evidence afterward. `scratch/` is the only published diagnostics tree;
-top-level `profiles/` evidence will be missing during the controller's terminal revalidation.
+the complete evidence tree with `--sync scratch/...` before recording an Experiment or ending the
+Session, and do not delete or rewrite cited evidence afterward.
 
-## Persist only terminal-reusable evidence
+## Persist only reusable evidence
 
-In a long-horizon episode, add `accepted_ppu_diagnostics` to the terminal journal outcome only for
-ACU, timeline, joint, comparison, or envelope conclusions that still apply to the terminal probe-free kernel. Omit an
-invalidated intermediate capture. Each row records the question and finding, the exact comparison
-identity, how it affected the optimization decision, and the conditions that require collection of
-new evidence:
+In a long-horizon Episode, archive reusable ACU, timeline, joint, comparison, or envelope evidence
+through an Experiment `references` entry only when it still applies to the measured probe-free
+Kernel. Omit an invalidated intermediate capture. Record the question and finding, exact comparison
+identity, decision impact, and conditions that require new evidence in the referenced material.
 
-```json
-{
-  "accepted_ppu_diagnostics": [
-    {
-      "route": "timeline",
-      "question": "Does the tensor wait serialize the steady-state load pipeline?",
-      "kernel_specialization": "target kernel specialization and compile-time parameters",
-      "workload_identity": "representative shape, dtype, layout, and cache policy",
-      "device_identity": "physical device and PPU runtime architecture",
-      "launch_topology": "grid, block, selected writer roles, and relevant occupancy facts",
-      "control_pipeline_identity": "mainloop stages, waits, barriers, and epilogue structure",
-      "finding": "owner-local ranges show the wait on the measured critical path",
-      "decision_impact": "next edit targets the load/tensor handoff instead of the epilogue",
-      "evidence": {
-        "artifact": "scratch/episode_N/timeline/attempt-N/evidence/fine.timeline.receipt.json",
-        "sha256": "lowercase SHA-256 of that exact JSON artifact",
-        "schema": "ppu-fixed-slot-receipt/v5",
-        "evidence_id": "evidence_id read from the artifact"
-      },
-      "invalidation_conditions": [
-        "a change to the measured specialization or workload",
-        "a change to launch topology or mainloop synchronization"
-      ]
-    }
-  ]
-}
-```
-
-Allowed terminal schemas:
+The referenced evidence should identify the route, question, Kernel specialization, workload and
+device identity, launch topology, finding, decision impact, artifact hash/schema/evidence ID, and
+invalidation conditions. Supported evidence schemas are:
 
 | Route | Accepted schemas |
 | --- | --- |
@@ -102,13 +74,9 @@ Allowed terminal schemas:
 | `comparison` | `ppu-acu-comparison/v1` |
 | `envelope` | `ppu-envelope-measurement/v1` |
 
-The supervisor resolves each workspace-relative artifact, recomputes its outer and transitive hashes,
-and runs `profile_report.py validate` before accepting an `accepted`, decision-grade artifact whose
-schema, authoritative kernel, binding payload, and evidence id match the row. It writes stable
-`source_memory_version`, `source_episode`, `memory_ref`, and hash-bound `evidence_ref` fields into
-canonical memory. Diagnostic-grade or warning artifacts may guide the current investigation but
-must not enter terminal-reusable memory. An empty or omitted list is valid when profiling was
-skipped or all collected evidence was invalidated.
+Runtime archives Experiment references after verifying that the paths exist. Use
+`profile_report.py validate` before citing a decision-grade artifact. Diagnostic-grade or warning
+artifacts may guide the current investigation but should not be presented as reusable evidence.
 
 ## Shared evidence boundaries
 
@@ -117,7 +85,7 @@ skipped or all collected evidence was invalidated.
 - Collect ACU from a probe-free launch. Never run ACU collection and device timeline recording in
   the same launch or process.
 - Treat instrumented sources as temporary evidence snapshots. Restore a probe-free kernel before
-  correctness, benchmark, commit, promotion, or handoff.
+  correctness, benchmark, commit review, or subsequent measurement.
 - Report ACU claims as device-global and timeline claims as owner-local. Agreement strengthens a
   hypothesis; temporal overlap does not assign an ACU counter to one owner or range.
 
