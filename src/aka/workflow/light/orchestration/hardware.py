@@ -11,7 +11,7 @@ from .constants import (
     NVIDIA_FRAMEWORKS,
     PPU_FRAMEWORKS,
 )
-from .optimization_policy import source_uses_gluon
+from aka.task.source.inspection import source_uses_gluon
 
 
 def _hardware_token(value: object) -> str:
@@ -70,18 +70,10 @@ def _workspace_slug(value: str) -> str:
 
 
 def framework_workspace_suffix(
-    framework: str, platform: str, optimization_mode: str = "leaderboard"
+    framework: str, platform: str, optimization_mode: str = "fast"
 ) -> str:
-    """Flat suffix for one framework/hardware/policy campaign.
-
-    Leaderboard keeps its historical path for resume compatibility. Production
-    uses a distinct path so its immutable policy and Git history can coexist
-    with a prior leaderboard campaign under the same workspace root.
-    """
-    suffix = f"{_workspace_slug(framework)}_{_workspace_slug(platform)}"
-    if optimization_mode == "production":
-        suffix += "_production"
-    return suffix
+    """Flat suffix for one framework/hardware/submission-policy Campaign."""
+    return f"{_workspace_slug(framework)}_{_workspace_slug(platform)}_{_workspace_slug(optimization_mode)}"
 
 
 def _is_triton_family(framework: str) -> bool:
@@ -90,23 +82,28 @@ def _is_triton_family(framework: str) -> bool:
 
 
 def kernel_is_gluon(workspace: Path) -> bool:
-    """True once the working-tree kernel.py has a real Gluon import."""
-    k = workspace / "kernel.py"
-    return k.exists() and source_uses_gluon(
-        k.read_text(encoding="utf-8", errors="ignore")
-    )
+    """True once any working-tree Kernel source has a real Gluon import."""
+    try:
+        from aka.task.source.formats import collect, policy_at
+        policy = policy_at(workspace)
+        files = collect(workspace, policy) if policy is not None else {
+            "kernel.py": (workspace / "kernel.py").read_bytes()
+        }
+    except (OSError, ValueError):
+        return False
+    return any(source_uses_gluon(data.decode("utf-8", errors="ignore"))
+               for data in files.values())
 
 
 def head_kernel_is_gluon(workspace: Path) -> bool:
-    """True when the COMMITTED HEAD kernel.py is Gluon. Authoritative accept signal for a convert
-    session — more reliable than memory's git_commit_hash, which a session may leave unset even after
-    committing."""
+    """True when any source in the committed HEAD Kernel is Gluon."""
     try:
-        out = subprocess.run(["git", "show", "HEAD:kernel.py"], cwd=str(workspace),
-                             capture_output=True, text=True)
-    except OSError:
+        from aka.task.source.formats import from_git, unpack
+        _, files = unpack(from_git(workspace, "HEAD"))
+    except (OSError, RuntimeError, ValueError, subprocess.SubprocessError):
         return False
-    return out.returncode == 0 and source_uses_gluon(out.stdout)
+    return any(source_uses_gluon(data.decode("utf-8", errors="ignore"))
+               for data in files.values())
 
 
 def should_convert_to_gluon(
@@ -131,28 +128,6 @@ def should_convert_to_gluon(
 
 
 def hardware_directive(platform: str, arch: str) -> str:
-    """Authoritative, vendor-neutral hardware-identity block injected into every session.
-
-    Guards against desensitized boxes: the agent must target the real architecture from the
-    runtime API, not the (possibly faked) device name. Deliberately does NOT prescribe any
-    vendor's feature set — the agent maps the detected arch to its own codegen choices, so this
-    works on NVIDIA (Hopper/Blackwell/...) and AMD (CDNA/...) alike.
-    """
-    real = f"**{arch}**" if arch else "whatever the runtime GPU API reports"
-    return (
-        "## Hardware ground truth (authoritative — read before choosing an algorithm)\n\n"
-        f"- Intended target hardware: **{platform}**. Real runtime GPU architecture: {real} — from the "
-        "runtime API (`torch.cuda.get_device_capability()` on CUDA; the device gfx arch on ROCm). This is "
-        "the ONLY source to trust for the architecture.\n"
-        "- **The GPU *name* and vendor SMI (`nvidia-smi` / `rocm-smi`) on this box may be DESENSITIZED / "
-        "FAKED** — they can report an older or entirely different GPU than the real silicon. Do NOT infer "
-        "the architecture, vendor, or feature set from the device name; if it disagrees with the runtime "
-        "API, the runtime API wins.\n"
-        "- Design *and* build for the real architecture above: select the code paths, instructions, and "
-        "build/target flags your DSL/compiler exposes for THAT architecture and generation. Do NOT fall "
-        "back to an older-arch portable path because of the device name, and do NOT assume a different "
-        "vendor or generation than the detected one.\n"
-        "- Hardware facts must have auditable sources. State the exact true product and authoritative "
-        "runtime architecture in every hardware-knowledge request and when consulting primary specifications; never "
-        "substitute another hardware identity or guess missing limits.\n"
-    )
+    """Concise, vendor-neutral hardware identity injected into every session."""
+    del platform
+    return f"Hardware: **{arch or 'unknown'}**\n"

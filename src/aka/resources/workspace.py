@@ -20,7 +20,6 @@ from aka.core.filesystem import file_signature, open_regular_file
 
 _ASSETS = {
     "atrex-aka-framework": ("aka/resources/", "aka/evaluation/drivers/", "aka/evaluation/assets/", "aka/task/problem/"),
-    "atrex-aka-legacy": ("aka/evaluation/drivers/", "aka/evaluation/assets/", "aka/task/problem/"),
 }
 _MAX_BYTES = 16 * 1024 * 1024
 

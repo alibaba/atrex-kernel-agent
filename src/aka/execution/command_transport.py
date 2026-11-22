@@ -73,7 +73,7 @@ def validate_input_files(command):
     """An explicit input cannot replace existing or protected Task content."""
     workspace = command.workspace.resolve(strict=True)
     from aka.execution.gateway.sandbox import INPUT_SKIP_PATHS, INPUT_SKIP_SUFFIXES, build_parser
-    from aka.execution.legacy.runtime import current_transport_arguments
+    from aka.execution.remote.runtime import current_transport_arguments
     input_limit = build_parser().parse_args(list(current_transport_arguments())).max_input_file_mb * 1024 * 1024
     if input_limit <= 0:
         raise UnsupportedExecution("input file size limit must be positive")

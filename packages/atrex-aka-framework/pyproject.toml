@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "atrex-aka-framework"
-version = "0.2.0"
+version = "0.3.0"
 description = "AKA plugin framework, contracts and profile-selected startup"
 requires-python = ">=3.10"
 dependencies = ["packaging>=23"]
@@ -14,6 +14,7 @@ aka = "aka.cli:main"
 
 [project.entry-points."aka.commands"]
 run = "aka.bootstrap.cli:main"
+execution = "aka.bootstrap.measurement_cli:main"
 
 [project.entry-points."aka.tokens"]
 agent = "aka.agent.plugin:AGENT"
@@ -32,8 +33,6 @@ evaluator_factory = "aka.evaluation.plugin:EVALUATOR_FACTORY"
 evaluation_defaults = "aka.evaluation.plugin:EVALUATION_DEFAULTS"
 
 experiment_factory = "aka.experiment.plugin:EXPERIMENT_FACTORY"
-experiment_episode_evidence = "aka.contracts.experiment:EXPERIMENT_EPISODE_EVIDENCE"
-evaluation_episode_interpreter = "aka.contracts.evaluation:EVALUATION_EPISODE_INTERPRETER"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

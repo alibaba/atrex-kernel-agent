@@ -60,12 +60,12 @@ class ExecutionComposition:
         self.dispose()
 
 
-def compose_execution(*, profile: str = "legacy", profiles_dir: Path = PROFILES_DIR,
+def compose_execution(*, profile: str = "remote", profiles_dir: Path = PROFILES_DIR,
                       patch_files: Sequence[Path] = (),
                       patches: Sequence[Mapping[str, Any]] = ()) -> ExecutionComposition:
     if profile == "reliable" and Path(profiles_dir).resolve() == PROFILES_DIR.resolve():
         raise CompositionError("execution profile:reliable",
-            "The bundled reliable profile has been removed. Select legacy explicitly for new work "
+            "The bundled reliable profile has been removed. Select remote explicitly for new work "
             "and configure its supported recovery capabilities; restore frozen campaigns with their "
             "original installation instead of rewriting their selection.")
     composition = compose(profile, profiles_dir=profiles_dir,

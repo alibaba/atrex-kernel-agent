@@ -1,1 +1,1 @@
-"""Opt-in simplified Workflow using the selected Agent and Task services."""
+"""AKA Light orchestration over shared Agent, Task and measurement services."""

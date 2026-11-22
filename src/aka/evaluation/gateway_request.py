@@ -4,7 +4,6 @@ import re
 from pathlib import Path
 from typing import Any, Iterable
 from .metadata import distributed_evaluation_world_size as _distributed_evaluation_world_size
-from aka.task.problem.inputs import validate_performance_baseline
 from .measurement_policy import DEFAULT_BENCH_ITERS, runner_overrides
 FP4_MAX_REL_L2 = 0.2
 DEFAULT_DEPENDENCY_POLICY = "freeze_installed"
@@ -105,7 +104,6 @@ def prepare_request(
     *,
     reference_dir: Path,
     reference_content=None,
-    runtime_version: str = "",
     requirements: Iterable[str] = (),
     profiler: str | None = None,
     profile_level: str = "sol",
@@ -115,6 +113,7 @@ def prepare_request(
     candidate_source: str | None = None,
     candidate_solution: dict | None = None,
     measurement_environment=None,
+    measurement_defaults=None,
 ) -> dict[str, Any]:
     """Build the public run/profile request without importing the agate package."""
     content = reference_content or {}
@@ -145,7 +144,8 @@ def prepare_request(
         shapes = {shape_id: shapes[shape_id] for shape_id in requested_shape_ids}
     try:
         multi_seed = int(_option_value(command, "--multi-seed", 0))
-        bench_iters = int(_option_value(command, "--timed-runs", DEFAULT_BENCH_ITERS))
+        bench_iters = int(_option_value(command, "--timed-runs",
+            (measurement_defaults or {}).get("bench_iters", DEFAULT_BENCH_ITERS)))
         atol = float(_option_value(command, "--atol", 1e-2))
         rtol = float(_option_value(command, "--rtol", 0.05))
     except (TypeError, ValueError) as exc:
@@ -212,29 +212,24 @@ def prepare_request(
         else None,
         reference.get("operator"),
     )
-    if runtime_version:
-        request["atrex_bench_version"] = runtime_version
     if requirements:
         request["requirements"] = list(requirements)
     if kind == "run" and correctness_max_rel_l2 is not None:
         request["options"]["correctness_max_rel_l2"] = correctness_max_rel_l2
     if kind == "run":
-        # Ordinary measurements need correctness and latency. Kernel attribution
-        # is a separate profiler pass and belongs to the explicit Profile route.
+        # Include per-Shape kernel events alongside correctness and latency.
         policy_environment = dict(_parse_env_items(env_items))
         policy_environment.update(measurement_environment or {})
-        request["runner_overrides"] = {"skip_kernel_attribution": True,
-                                       **runner_overrides(command, policy_environment)}
+        request["runner_overrides"] = {"skip_kernel_attribution": False,
+                                       **runner_overrides(command, policy_environment,
+                                           {key: value for key, value in (measurement_defaults or {}).items()
+                                            if key in {"warmup_iters", "candidate_timeout_s", "perf_timeout_s"}})}
         version = str(_option_value(command, "--version", "v0"))
         request["mode"] = (
             "correctness_only"
             if multi_seed > 0 and version not in {"v0", "v1"}
             else "full"
         )
-        if request["mode"] != "correctness_only":
-            validate_performance_baseline(
-                shapes, reference.get("metadata"), hardware
-            )
     else:
         if profiler:
             request["profiler"] = profiler
@@ -246,4 +241,7 @@ def prepare_request(
             request["kernel_regex"] = kernel_regex
         if top_kernels is not None:
             request["top_kernels"] = top_kernels
+    if kind == "run":
+        from .measurement_policy import agate_managed_clocks
+        request = agate_managed_clocks(request)
     return request

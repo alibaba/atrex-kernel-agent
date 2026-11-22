@@ -1,7 +1,7 @@
 """Coding-agent sessions, independent production review and Workflow result projection."""
 
 from __future__ import annotations
-from aka.workflow.legacy.review_rules.review import _validate_production_review, _validate_review_item
+from aka.acceptance.review import _validate_production_review, _validate_review_item
 
 import hashlib
 import json
@@ -18,7 +18,6 @@ from .constants import (
     DEPENDENCY_REVIEW_SCHEMA_VERSION,
     SANDBOX_FULL_WORKFLOW_PROMPT,
     SANDBOX_SAFETY_BOUNDARY_PROMPT,
-    TEST_RESULT_PREFIX,
 )
 from aka.execution.recovery import (
     raise_if_environment_blocked,
@@ -144,28 +143,39 @@ _PRODUCTION_REVIEW_CHECK_CATEGORIES = {
 }
 
 
-def _production_review_candidate_paths(workspace: Path, *, workspace_provider) -> list[Path]:
-    """Read the complete owner-validated source set shown to the reviewer."""
-    source = workspace_provider.read_source(workspace)
-    names = [name for name, content in source.files.items() if content is not None]
-    if set(names) == {"kernel.py"}:
-        manifest = workspace_provider.read_working(workspace, ("solution.json",)).files["solution.json"]
-        if manifest is not None:
-            names.append("solution.json")
-    return [workspace / name for name in sorted(names)]
+def _production_review_candidate_paths(workspace: Path) -> list[Path]:
+    """Return the complete, bounded source set shown to the production reviewer."""
+    from aka.task.source.formats import policy_at, collect
+    policy = policy_at(workspace)
+    if policy is not None:
+        return [workspace / name for name in sorted(collect(workspace, policy))]
+    paths = [
+        workspace / "kernel.py",
+        workspace / "solution.json",
+    ]
+    return [path for path in paths if path.is_file()]
 
 
 def _production_review_digest(
     workspace: Path,
     framework: str,
     require_gluon: bool,
-    *, workspace_provider,
+    specify_dsl: bool = True,
+    review_profile: str = "",
 ) -> str:
     digest = hashlib.sha256()
     digest.update(f"production-review-v{DEPENDENCY_REVIEW_SCHEMA_VERSION}\0".encode())
     digest.update(framework.encode("utf-8", errors="replace"))
-    digest.update(b"\0gluon-required\0" if require_gluon else b"\0selected-framework\0")
-    for path in _production_review_candidate_paths(workspace, workspace_provider=workspace_provider):
+    digest.update(b"\0")
+    digest.update(review_profile.encode("utf-8", errors="replace"))
+    digest.update(
+        b"\0open-dsl\0"
+        if not specify_dsl
+        else b"\0gluon-required\0"
+        if require_gluon
+        else b"\0selected-framework\0"
+    )
+    for path in _production_review_candidate_paths(workspace):
         relative = path.relative_to(workspace).as_posix()
         contents = path.read_bytes()
         digest.update(relative.encode("utf-8"))
@@ -211,63 +221,10 @@ def sandbox_boundary_directive(hardware: str, profile: str = "", url: str = "", 
 
 def _test_result_from_stdout(stdout: str) -> dict:
     """Read the structured result emitted by the active sandbox harness."""
+    from aka.evaluation.result_json import parse_evaluation_result_line
+
     for line in reversed(stdout.splitlines()):
-        if line.startswith(TEST_RESULT_PREFIX):
-            result = json.loads(line[len(TEST_RESULT_PREFIX) :])
-            if isinstance(result, dict):
-                return result
-    raise RuntimeError("sandbox test output has no structured RESULT_JSON line")
-
-
-def _record_local_test_result(workspace: Path, version: str, result: dict, *, generate_memory: bool = False) -> Path:
-    """Persist evaluator facts; publish an Agent memory summary only on opt-in."""
-    from aka.workflow.light.orchestration.version_records import save_version_record, version_record_path
-    if not re.fullmatch(r"v[0-9]+", version):
-        raise ValueError("Invalid canonical version")
-    number = int(version[1:])
-    path = version_record_path(workspace, number, prefer_summary=generate_memory)
-    try:
-        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
-    except (OSError, json.JSONDecodeError):
-        data = {}
-    data.setdefault("version", version)
-    data.setdefault("masked", False)
-    data["timestamp"] = datetime.now(timezone.utc).isoformat()
-    perf = data.setdefault("performance", {})
-    perf["latency_us"] = result.get("latency_us_geomean", 0.0)
-    perf["latency_us_geomean"] = result.get("latency_us_geomean", 0.0)
-    perf["latency_us_arith_mean"] = result.get("latency_us_arith_mean", 0.0)
-    by_shape = result.get("latency_us_by_shape", {})
-    by_shape = by_shape if isinstance(by_shape, dict) else {}
-    perf["latency_us_by_shape"] = by_shape
-    perf["measurement_scope"] = "real_evaluator_shapes"
-    perf["shape_ids_are_opaque"] = (workspace / "agent_problem.json").is_file()
-    perf["measurement_status"] = (
-        "complete" if result.get("all_pass") and by_shape else "incomplete"
-    )
-    perf["measured_shape_count"] = len(by_shape)
-    performance_objective = result.get("performance_objective")
-    perf["performance_objective"] = performance_objective
-    perf["performance_score"] = result.get(
-        "performance_score", result.get("speedup_vs_ref_geomean")
-    )
-    perf["speedup_vs_ref_mean"] = result.get("speedup_vs_ref_mean")
-    perf["speedup_vs_ref_geomean"] = (
-        None
-        if performance_objective == "shape_speedup_arithmetic_mean"
-        else speedup_vs_reference(
-            workspace,
-            result.get("latency_us_geomean"),
-            result.get("speedup_vs_ref_geomean"),
-        )
-    )
-    all_pass = bool(result.get("all_pass"))
-    corr = data.setdefault("correctness", {})
-    corr["status"] = "PASS" if all_pass else "FAIL"
-    corr["max_abs_err"] = result.get("max_abs_err", 0.0)
-    corr["max_rel_err"] = result.get("max_rel_err", 0.0)
-    gate = data.setdefault("quality_gate", {})
-    gate["result"] = "PASS" if all_pass else "FAIL"
-    failures = result.get("failures") or []
-    gate["failure_reason"] = None if all_pass else "; ".join(map(str, failures))[:2000]
-    return save_version_record(workspace, number, data, generate_memory=generate_memory)
+        result = parse_evaluation_result_line(line)
+        if result is not None:
+            return result
+    raise RuntimeError("sandbox test output has no structured Evaluate result")

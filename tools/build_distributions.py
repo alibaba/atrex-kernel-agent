@@ -19,10 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 OWNERS = {
     'atrex-aka-framework': ('aka/__init__.py', 'aka/__main__.py', 'aka/cli.py', 'aka/workflow/__init__.py', 'aka/workflow/budgets.py', 'aka/core', 'aka/contracts', 'aka/bootstrap', 'aka/execution', 'aka/agent', 'aka/task', 'aka/resources', 'aka/evaluation', 'aka/experiment', 'aka/acceptance'),
-    'atrex-aka-legacy': ('aka/workflow/legacy',),
     'atrex-aka-light': ('aka/workflow/light',),
     'atrex-aka-dashboard': ('aka/dashboard',),
-    'atrex-aka-observation-long-horizon': ('aka/observation/long_horizon',),
 }
 
 
@@ -33,12 +31,11 @@ def owned(distribution: str) -> tuple[Path, ...]:
         path = ROOT / 'src' / relative
         files.extend([path] if path.is_file() else
                      sorted(p for p in path.rglob('*') if p.is_file() and p.suffix in suffixes))
-    if distribution in {'atrex-aka-legacy', 'atrex-aka-light'}:
+    if distribution == 'atrex-aka-light':
         # Runtime content belongs to its installed module. Include binary and
         # extensionless attachments as well as prompts and Skills; never stage
         # checkout-level tools, resources or generated caches.
-        package = 'legacy' if distribution == 'atrex-aka-legacy' else 'light'
-        roots = (ROOT / 'src' / 'aka' / 'workflow' / package,)
+        roots = (ROOT / 'src' / 'aka' / 'workflow' / 'light',)
         files = sorted(p for root in roots for p in root.rglob('*')
             if p.is_file() and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
             and p.suffix not in {'.pyc', '.pyo'})
@@ -48,7 +45,20 @@ def owned(distribution: str) -> tuple[Path, ...]:
             files.extend(p for p in runtime.rglob('*') if p.is_file()
                 and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
                 and p.suffix not in {'.pyc', '.pyo'})
+    if distribution == 'atrex-aka-dashboard':
+        files.extend(p for p in (ROOT / 'observability').rglob('*') if p.is_file()
+            and not {'.git', '__pycache__', '.pytest_cache'}.intersection(p.parts)
+            and p.suffix in {'.py', '.html'})
     return tuple(dict.fromkeys(files))
+
+
+def package_path(source: Path) -> Path:
+    """Map a declared owner file to its installed package-relative location."""
+    if source.is_relative_to(ROOT / 'src'):
+        return source.relative_to(ROOT / 'src')
+    if source.is_relative_to(ROOT / 'observability'):
+        return source.relative_to(ROOT)
+    raise ValueError(f'Not a package source: {source}')
 
 
 def build_wiki_resources(output: Path) -> None:
@@ -84,7 +94,7 @@ def build(distribution: str, output: Path) -> None:
         for legal in ('LICENSE', 'NOTICE'):
             shutil.copy2(ROOT / legal, stage / legal)
         for source in owned(distribution):
-            target = stage / 'src' / source.relative_to(ROOT / 'src')
+            target = stage / 'src' / package_path(source)
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source, target)
         # The default `build` operation deliberately builds a wheel from the sdist.

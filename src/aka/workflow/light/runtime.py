@@ -28,6 +28,8 @@ class ManagedRuntimeFactory:
         self.workflow, self.campaign = workflow, campaign
         self.wiki = workflow.options.wiki
         self.research_records = workflow.options.research_records
+        self.pause_agent_during_requests = workflow.agent.capabilities.pause_agent_during_requests
+        self.tool_modules = workflow.options.tool_modules
         self.measurement_repetitions = workflow.evaluation_defaults.measurement_repetitions
 
     def open(self, configuration, *, workspace_provider):
@@ -43,7 +45,11 @@ class ManagedRuntimeFactory:
         executor = SandboxExecutor(w.executor, ExecutionContext(environment, configuration.hardware,
             configuration.timeout))
         selected = replace(w.evaluation_defaults, timeout=configuration.timeout,
-            repeats=c.verify_repeats, per_run_timeout=c.verify_run_timeout,
+            repeats=c.verify_repeats, per_run_timeout=c.request.runtime.evaluation_step_timeout,
+            evaluation_step_timeout=c.request.runtime.evaluation_step_timeout,
+            warmup_iters=c.request.runtime.warmup_iters,
+            bench_iters=c.request.runtime.bench_iters,
+            shape_batch_size=c.request.runtime.shape_batch_size,
             hardware=configuration.hardware, environment=environment,
             native=bool(evaluation_input.runtime_root),
             private_reference_dir=evaluation_input.private_reference_dir,
@@ -51,10 +57,14 @@ class ManagedRuntimeFactory:
         evaluator = w.evaluator_factory.create(selected, candidate_workspace=workspace_provider,
             evaluation_input=evaluation_input)
         command = w.evaluator_factory.create_command(selected, evaluation_input=evaluation_input)
-        services = RuntimeServices(w.agent, executor, w.experiment_factory, evaluator, command,
+        from .support.paths import supervisor_measurement_root
+        experiments = w.experiment_factory.for_campaign(supervisor_measurement_root(c.workspace))
+        services = RuntimeServices(w.agent, executor, experiments, evaluator, command,
             evaluation_input, selected, c._module_resources, workspace_provider,
-            JournalFactory(research_records=self.research_records), w.problem.snapshot(c.problem).identity)
-        configured = replace(configuration, measurement_repetitions=self.measurement_repetitions,
+            JournalFactory(tool_modules=w.options.tool_modules), w.problem.snapshot(c.problem).identity)
+        configured = replace(configuration, agate_tools=c.request.runtime.agate_tools,
+            pause_agent_during_requests=self.pause_agent_during_requests,
+            measurement_repetitions=self.measurement_repetitions,
             wiki_enabled=self.wiki, wiki_options=WikiConfig(**(w.options.wiki_options or {})),
             request_timeout=w.options.request_timeout if w.options.request_timeout is not None
                 else configuration.request_timeout, queue_timeout=w.options.queue_timeout)

@@ -72,15 +72,7 @@ def _workspace_slug(value: str) -> str:
 
 
 def framework_workspace_suffix(
-    framework: str, platform: str, optimization_mode: str = "leaderboard"
+    framework: str, platform: str, optimization_mode: str = "fast"
 ) -> str:
-    """Flat suffix for one framework/hardware/policy campaign.
-
-    Leaderboard keeps its historical path for resume compatibility. Production
-    uses a distinct path so its immutable policy and Git history can coexist
-    with a prior leaderboard campaign under the same workspace root.
-    """
-    suffix = f"{_workspace_slug(framework)}_{_workspace_slug(platform)}"
-    if optimization_mode == "production":
-        suffix += "_production"
-    return suffix
+    """Flat suffix for one framework/hardware/submission-policy Campaign."""
+    return f"{_workspace_slug(framework)}_{_workspace_slug(platform)}_{_workspace_slug(optimization_mode)}"

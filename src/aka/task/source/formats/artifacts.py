@@ -9,11 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from functools import cached_property
 import hashlib
-import json
 import subprocess
 
 from . import storage
-from .common import Layout, ExecutionSource, archive_bytes, SELECTION
+from .common import Layout, ExecutionSource, archive_bytes
 from .registry import for_policy, resolve, select
 
 
@@ -53,9 +52,7 @@ class Artifact:
 
     @property
     def materialized_files(self) -> dict[str, bytes]:
-        system = for_policy(self.contract)
-        return {**self.files, **system.metadata(self.contract),
-                SELECTION: (json.dumps({'name':system.name}, sort_keys=True)+'\n').encode()}
+        return self.files
 
 
     @property
@@ -136,7 +133,7 @@ def from_revision(workspace: Path, revision: str) -> Artifact:
 def review_paths(workspace: Path) -> list[Path]:
     artifact = read(workspace)
     names = set(artifact.files)
-    names.update(n for n in (storage.POLICY, SELECTION, *artifact.layout.auxiliary_metadata)
+    names.update(n for n in artifact.layout.auxiliary_metadata
                  if (workspace / n).is_file())
     return [workspace / n for n in sorted(names)]
 
@@ -149,28 +146,29 @@ def commit_paths(workspace: Path, *, normalize: bool = False) -> list[str]:
     names = set(artifact.files)
     if previous:
         names.update(previous.files)
-    names.update(n for n in (storage.POLICY, SELECTION, *artifact.layout.auxiliary_metadata)
-                 if (workspace / n).is_file())
     return sorted(names)
 
 
 def pinned_paths(workspace: Path) -> tuple[str, ...]:
     policy = storage.policy_at(workspace, committed=True)
     names = (storage.POLICY, *policy['immutable_files']) if policy and not layout(policy).replaceable_baseline else ()
-    return (*names, SELECTION) if (workspace / SELECTION).is_file() else names
+    return tuple(name for name in names if name != storage.POLICY)
 
 
 
 def freeze_for_execution(authority: Path, workspace: Path, sealed: bytes | None) -> bytes | None:
+    from .private_state import read as read_private_state
+
+    binding = read_private_state(authority)
     policy = storage.policy_at(authority, committed=True)
     discovered = Artifact(sealed).contract if sealed is not None else storage.policy_at(workspace)
-    if policy is None and not (authority / SELECTION).is_file() and layout(discovered).replaceable_baseline:
+    if policy is None and binding is None and layout(discovered).replaceable_baseline:
         policy = discovered
     if sealed is not None:
         if Artifact(sealed).contract != policy:
             raise ValueError('Sealed candidate has a different source contract')
         return sealed
-    if (authority / SELECTION).is_file() and discovered != policy:
+    if binding is not None and discovered != policy:
         raise ValueError('Candidate file system differs from the selected task file system')
     if policy is not None:
         return storage.snapshot(workspace, policy=policy)
@@ -180,9 +178,7 @@ def freeze_for_execution(authority: Path, workspace: Path, sealed: bytes | None)
 
 
 def stage_frozen(workspace: Path, source: bytes) -> None:
-    (workspace / storage.POLICY).unlink(missing_ok=True)
     storage.install(workspace, source, replace=False)
-    storage.install(workspace, source, bind=True)
 
 
 def declared_paths(workspace: Path) -> set[str]:
@@ -197,8 +193,7 @@ def evidence_paths(workspace: Path) -> set[str]:
         names = system.evidence_paths(workspace, policy)
     except (OSError, ValueError):
         # Retain format selectors and malformed declarations for terminal diagnosis.
-        names = {'solution.json', storage.POLICY, 'kernel.py'}
-    names.add(SELECTION)
+        names = {'solution.json', 'kernel.py'}
     return {name for name in names if (workspace / name).is_file()}
 
 
@@ -228,19 +223,13 @@ def restore_capture(workspace: Path, captured: Path) -> list[str]:
     return names
 
 
-def seed_baseline_metadata(workspace: Path, framework: str, name: str, *, native_eval: bool) -> None:
-    system, _ = resolve(workspace)
-    system.seed_metadata(workspace, framework, name, native_eval=native_eval)
-
-
 def measurement_paths(workspace: Path, baseline_path: str | None) -> tuple[set[str], dict[str, str]]:
     policy = storage.policy_at(workspace)
     description = layout(policy)
-    paths, snapshots = {SELECTION}, {}
+    paths, snapshots = set(), {}
     if description.archived:
         artifact = read(workspace)
         paths.update(artifact.files)
-        paths.add(storage.POLICY)
         snapshots['candidate'] = artifact.digest
     else:
         paths.add(description.python_entrypoint)
@@ -251,7 +240,6 @@ def measurement_paths(workspace: Path, baseline_path: str | None) -> tuple[set[s
             if not description.archived or other.contract != policy:
                 raise ValueError('ABBA baseline must carry the same task-owned source contract')
             paths.update(baseline_path + '/' + name for name in other.files)
-            paths.add(baseline_path + '/' + storage.POLICY)
             snapshots['baseline'] = other.digest
         else:
             if description.archived:
@@ -260,14 +248,52 @@ def measurement_paths(workspace: Path, baseline_path: str | None) -> tuple[set[s
     return paths, snapshots
 
 
+def measurement_contracts(
+    workspace: Path, baseline_path: str | None
+) -> dict[str, dict | None]:
+    """Return private contracts needed to reconstruct uploaded source trees."""
+    contracts: dict[str, dict | None] = {}
+    artifact = read(workspace)
+    if artifact.layout.archived:
+        contracts["candidate"] = artifact.contract
+    if baseline_path:
+        baseline = workspace / baseline_path
+        if baseline.is_dir():
+            other = read(baseline)
+            if other.layout.archived:
+                contracts["baseline"] = other.contract
+    return contracts
+
+
 def measurement_artifacts(request: dict, inputs: dict[str, bytes]) -> dict[str, Artifact]:
     snapshots = request['options'].get('source_snapshots', {})
-    artifacts = ({'candidate': Artifact(storage.from_inputs(inputs))}
-                 if select('single_file').layout.python_entrypoint in inputs or snapshots.get('candidate') else {})
+    contracts = request['options'].get('source_contracts', {})
+    artifacts = {}
+    if (
+        select('single_file').layout.python_entrypoint in inputs
+        or snapshots.get('candidate')
+    ):
+        candidate = (
+            storage.from_inputs(inputs, policy=contracts['candidate'])
+            if 'candidate' in contracts
+            else storage.from_inputs(inputs)
+        )
+        artifacts['candidate'] = Artifact(candidate)
     baseline = request['options']['baseline_path']
     if baseline:
-        source = (storage.from_inputs(inputs, prefix=baseline + '/')
-                  if baseline + '/' + storage.POLICY in inputs or 'baseline' in snapshots else inputs[baseline])
+        source = (
+            (
+                storage.from_inputs(
+                    inputs,
+                    prefix=baseline + '/',
+                    policy=contracts['baseline'],
+                )
+                if 'baseline' in contracts
+                else storage.from_inputs(inputs, prefix=baseline + '/')
+            )
+            if 'baseline' in snapshots
+            else inputs[baseline]
+        )
         artifacts['baseline'] = Artifact(source)
     return artifacts
 

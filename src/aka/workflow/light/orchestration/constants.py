@@ -6,54 +6,46 @@ Repository paths, policy defaults, and workspace state filenames used by campaig
 from __future__ import annotations
 
 from pathlib import Path
-from aka.resources.bundles import resource_path
 from aka.evaluation.resources import profile_driver_script
-from aka.evaluation.resources import native_harness_script
-from aka.workflow.legacy.review_rules.review import DEPENDENCY_REVIEW_SCHEMA_VERSION
+from aka.evaluation.private_harness import (
+    NATIVE_EVALUATOR_HARNESS as ATREX_BENCH_HARNESS,
+    SOL_EVALUATOR_HARNESS as SOL_HARNESS,
+)
+from aka.acceptance.review import (
+    DEPENDENCY_REVIEW_SCHEMA_VERSION as DEPENDENCY_REVIEW_SCHEMA_VERSION,
+)
 from aka.contracts.evaluation import (
     DEFAULT_ABBA_REPEATS,
-    DEFAULT_ABBA_RUN_TIMEOUT,
+    DEFAULT_EVALUATION_STEP_TIMEOUT,
     derived_evaluation_timeout,
 )
 from aka.resources.bundles import resource_path as resource
 
-from aka.agent import SUPPORTED_RUNTIME_IDS
+import aka.agent as _agent_runtime
 
-REPO_ROOT = resource_path("")
-PROMPTS_DIR = resource_path("prompts/research-episodes")
-WORKSPACE_INIT = REPO_ROOT / "reference" / "workspace_init.sh"
-SOL_SEED = REPO_ROOT / "reference" / "sol_seed.py"
-ATREX_BENCH_HARNESS = native_harness_script()
-SOL_HARNESS = resource("reference/test_kernel.py")
+REPO_ROOT = resource("")
+PROMPTS_DIR = resource("prompts/research-episodes")
+WORKSPACE_INIT = resource("reference/workspace_init.sh")
+SOL_SEED = resource("reference/sol_seed.py")
 PROFILE_DRIVER = profile_driver_script()
+SANDBOX_TOOL = REPO_ROOT / "evaluation" / "gateway.py"
 SANDBOX_SAFETY_BOUNDARY_PROMPT = PROMPTS_DIR / "sandbox_safety_boundary.md"
 SANDBOX_FULL_WORKFLOW_PROMPT = PROMPTS_DIR / "sandbox_full_workflow.md"
-CONVERT_PERF_TOL = (
-    0.05  # triton->gluon is a direct translation: gluon must be within +5% of triton
-)
-DEFAULT_CONVERT_AFTER = (
-    3  # mandatory Triton->Gluon escalation after three consecutive stalls
-)
 SUPPLEMENTAL_REPAIR_PREFIX = "Supplemental numerical probes"
 SUPPLEMENTAL_PENDING_PREFIX = "Supplemental validation is incomplete"
-DEFAULT_HANDOFF_RESUMES = 2
+DEFAULT_OUTPUT_LIMIT_RECOVERY_RETRIES = 5
 DEFAULT_VERIFY_REPEATS = DEFAULT_ABBA_REPEATS
-DEFAULT_VERIFY_RUN_TIMEOUT = DEFAULT_ABBA_RUN_TIMEOUT
-FRAMEWORK_BASELINE_FILE = "framework_baseline.json"
-FRAMEWORK_BASELINE_VERSION = (
-    1  # the framework baseline always occupies v1, retries overwrite it
-)
-from aka.contracts.workflow import DEFAULT_FRAMEWORK_BASELINE_TIMEOUT
-FRAMEWORK_BASELINE_TIMEOUT_S = DEFAULT_FRAMEWORK_BASELINE_TIMEOUT
-FRAMEWORK_BASELINE_MODES = ("auto", "always", "never")
-FRAMEWORK_BASELINE_CATEGORY = "framework_baseline"
-DEPENDENCY_REVIEW_TIMEOUT_S = 600
-DEPENDENCY_REVIEW_PROMPT = PROMPTS_DIR / "dependency_review.md"
-AGENT_PROBLEM_GENERATION_PROMPT = PROMPTS_DIR / "generalize_agent_problem.md"
+# Upstream v0.4 still names this Campaign field ``verify_run_timeout``.
+# Keep the structural field while binding it to Light's one Runtime-owned
+# per-Shape evaluation budget.
+DEFAULT_VERIFY_RUN_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
+DEPENDENCY_REVIEW_PROMPT = resource("prompts/research-episodes/dependency_review.md")
+RESEARCH_CLAIM_REVIEW_PROMPT = resource("prompts/research-episodes/research_claim_review.md")
+AGENT_PROBLEM_GENERATION_PROMPT = resource("prompts/research-episodes/generalize_agent_problem.md")
 DEFAULT_PROBLEM_GENERATION_TIMEOUT_S = 1_800
 ATREX_PRIVATE_REFERENCE_ENV = "ATREX_PRIVATE_REFERENCE_DIR"
 IMMUTABLE_BASELINE_PATHS = (
-    "test_kernel.py",
+    "WORKSPACE.md",
     "config.json",
     "reference.py",
     "input.py",
@@ -64,14 +56,8 @@ IMMUTABLE_BASELINE_PATHS = (
     "workload.jsonl",
     "definition.json",
     "valid.py",
-    # The profiling entry lives outside kernel.py so no candidate rewrite can silently
-    # remove the ability to profile; it is ground truth like the evaluator harness.
-    "profile_driver.py",
-    "memory/v0.json",
-    ".atrex_versions/v0.json",
 )
-TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
-AGENT_CLI_CHOICES = SUPPORTED_RUNTIME_IDS
+AGENT_CLI_CHOICES = _agent_runtime.SUPPORTED_RUNTIME_IDS
 NVIDIA_FRAMEWORKS = ("Triton", "CuteDSL", "Cuda", "TileLang")
 AMD_FRAMEWORKS = ("Triton", "FlyDSL", "TileLang")
 # CuteDSL is omitted: that path has never been validated on PPU silicon.

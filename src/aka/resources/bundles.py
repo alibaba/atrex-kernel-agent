@@ -18,24 +18,13 @@ def resource_path(relative: str = "") -> Path:
 
 
 _SKILLS = {
-    "gen-plan": "Generate a reviewed implementation plan from a concrete draft.",
-    "gpu-kernel-baseline": "Implement and validate the initial GPU kernel baseline.",
-    "gpu-kernel-episode-loop": "Run the profile, research, implementation and verification episode loop.",
     "gpu-measurement": "Request measurements through the selected Evaluation and Experiment.",
-    "runtime-records": "Inspect retained evidence and submit the selected Workflow's Episode report.",
+    "runtime-records": "Read research evidence and maintain Direction/Experiment revisions.",
     "kernel-wiki": "Query selected GPU kernel knowledge and reference material.",
     "ppu-acu-joint-profile": "Inspect PPU and ACU profiling evidence.",
     "autonomous-gpu-kernel-timeline": "Inspect an explicit GPU kernel timeline.",
-    "runtime-report": "Produce an Episode report from retained research evidence.",
 }
 _BUNDLES = {
-    "kernel-development": (
-        ("gen-plan", "gpu-kernel-baseline", "gpu-kernel-episode-loop"),
-        (("workflow-baseline-agent", "agents/gpu-kernel-baseline.md", ".claude/agents/gpu-kernel-baseline.md", "agent"),
-         ("workflow-instructions", "reference/kernel-development/CLAUDE.md", None, "runtime"),
-         ("workflow-iteration-schema", "reference/kernel-development/v_iteration.schema.json", "reference/v_iteration.schema.json", "agent"),
-         ("workflow-workspace-reference", "reference/kernel-development/README.md", "reference/README.md", "agent")),
-    ),
     "measurement-session": (
         ("gpu-measurement",),
         (("measurement-session-client", "tools/sandbox.py", "tools/sandbox.py", "agent"),
@@ -50,7 +39,6 @@ _BUNDLES = {
     ),
     "kernel-wiki": (("kernel-wiki",), ()),
     "profiling-analysis": (("ppu-acu-joint-profile", "autonomous-gpu-kernel-timeline"), ()),
-    "episode-report": (("runtime-report",), ()),
 }
 
 

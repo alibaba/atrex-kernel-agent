@@ -12,16 +12,9 @@ not additional problem-input formats.
 | Native Atrex-Bench | `shapes.json` exists and the operator is inside a canonical Atrex-Bench checkout | `reference.py`, `input.py`, `shapes.json` | The owning checkout's `scripts/run_eval.py` and `src/atrex_bench/` |
 | SOL-ExecBench | Both `definition.json` and `workload.jsonl` exist | `definition.json`, `workload.jsonl`, `reference.py` | The SOL harness and the workload records |
 
-Light does not accept an arbitrary `reference.py` directory, a custom evaluator
-script, or a setup command as a deterministic problem. The Legacy Workflow can load
-some of those arrangements, but Light rejects them with:
-
-```text
-light Workflow deterministic V0 requires native Atrex-Bench or SOL; use legacy for custom setup
-```
-
-Use `--profile workflow` for an intentional Legacy run, or convert the problem to one
-of the two layouts below.
+Light accepts the two input contracts above. Convert arbitrary scripts or custom setup
+commands into one of these contracts before launch. Input source preparation does not
+execute a V0 benchmark; measurements are requested by the Agent.
 
 A concrete minimum Native input is available under
 [`examples/native-atrex-bench-vector-add/`](../examples/native-atrex-bench-vector-add/README.md).
@@ -118,14 +111,15 @@ submitted as a single-GPU problem, even if other metadata mentions multiple GPUs
 
 ### Exposed and hidden evaluator Shapes
 
-Current main exposes evaluator Shapes by default in both Leaderboard and Production.
+Current main exposes evaluator Shapes by default in Fast, Performance and Ultra.
 In that mode the Agent can see `reference.py`, `input.py`, `shapes.json`, and any
 present `metadata.json`, `roofline.json`, and `valid.py`.
 
 `--no-expose-evaluator-shapes` requests the hidden-shape flow. It is supported only
-for a Native Atrex-Bench operator in Production mode. The Agent then sees
+for a Native Atrex-Bench operator in Performance or Ultra mode. The Agent then sees
 `reference.py`, `input.py`, and `agent_problem.json`, while exact evaluator Shapes and
-detailed evaluator metadata stay private.
+detailed evaluator metadata stay private. If Light cannot construct that projection, it
+rejects the launch explicitly; it never degrades the request to an exposed workspace.
 
 `agent_problem.json` may be supplied by the benchmark author or generated before
 setup. A supplied contract must use schema `atrex.agent_problem.v1` and contain:
@@ -160,10 +154,10 @@ path. `reference.py` remains mandatory. SOL owns input generation, per-workload
 correctness, and tolerance behavior through its definition and workload records; it
 does not use Native `shapes.json` as its task contract.
 
-Current Light SOL/SSH campaigns require the `single_file` candidate layout, and Light
-does not provide the Native Atrex-Bench ABBA fallback for that path. Use the Legacy
-Workflow when the campaign requires a verification path that the selected Light/SOL
-transport does not implement.
+Current Light SOL campaigns require the `single_file` candidate layout and do not have a
+Native Atrex-Bench ABBA fallback. Explicit SSH is different: it supports Native Atrex-Bench
+source trees, CUDA manifests, Evaluate, ABBA and typed diagnostics through the isolated SSH
+executor.
 
 ## Initial V0 versus candidate source layout
 
@@ -177,7 +171,7 @@ After problem ingestion, one candidate file system remains fixed for the Campaig
 | Candidate file system | What the Agent edits | Constraints |
 |---|---|---|
 | `source_tree` (default for Native) | Editable `kernel.py` and optional sources under `impl/` | Requires Native Atrex-Bench Eval; `kernel.py` may contain the full implementation |
-| `single_file` | One editable Python `kernel.py` | Cannot be selected with `--framework Cuda`; required for current Light SOL/SSH |
+| `single_file` | One editable Python `kernel.py` | Cannot be selected with `--framework Cuda`; required for current Light SOL |
 | `cuda_manifest` | Native CUDA sources, headers, and `solution.json` | Requires `--framework Cuda`; Agate supplies the Python binding/launcher |
 
 An advanced Native task may seed a larger source tree explicitly through a candidate
@@ -200,7 +194,7 @@ Before launch, verify all of the following:
   agree on the calling and correctness contract;
 - the requested Agate hardware can run the operator, including its GPU count;
 - the selected framework and candidate file system are compatible;
-- hidden-shape Production has a valid `agent_problem.json` or permits AKA to generate
+- hidden-shape Performance/Ultra has a valid `agent_problem.json` or permits AKA to generate
   one before setup;
 - the Campaign uses a fresh workspace when the problem bytes, mode, visibility, or
   candidate layout intentionally change.

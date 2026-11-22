@@ -1,7 +1,7 @@
 """Original evaluation preparation and interpretation implementations."""
 
-from .evaluator import LegacyEvaluator, EvaluationConfiguration
+from .evaluator import Evaluator, EvaluationConfiguration
 
-__all__ = ["LegacyEvaluator", "EvaluationConfiguration", "LegacyEvaluatorFactory"]
+__all__ = ["Evaluator", "EvaluationConfiguration", "EvaluatorFactory"]
 
-from .plugin import LegacyEvaluatorFactory
+from .plugin import EvaluatorFactory

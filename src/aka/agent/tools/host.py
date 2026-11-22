@@ -1,6 +1,6 @@
 """Scoped local transport lifetime, independent of operation contents and results."""
 from contextlib import contextmanager, nullcontext
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 import math
 import os
@@ -56,6 +56,10 @@ def _validate_access(access):
 class ToolSession:
     environment: Mapping[str, str] = field(repr=False)
     filesystem_access: FilesystemAccess
+    _cancel: Callable[[], object] = field(repr=False)
+
+    def cancel(self) -> None:
+        self._cancel()
 
 
 @dataclass
@@ -235,7 +239,17 @@ class ToolHost:
             operations = tuple(registration.operations.items())
             for cancel, _ in operations:
                 cancel.set()
-            for connection in tuple(registration.connections):
+            control = registration.control
+            connections = tuple(registration.connections)
+        # The Agent owner holds the actual process controller. Revoking only
+        # transport leaves a live Agent retrying tools it can no longer use.
+        # Do not hold the host lock while stopping its process tree: invocation
+        # cleanup also needs this lock to release the controller and operations.
+        try:
+            if control is not None:
+                control.kill()
+        finally:
+            for connection in connections:
                 try:
                     connection.shutdown(socket.SHUT_RDWR)
                 except OSError:
@@ -275,7 +289,8 @@ class ToolHost:
             yield ToolSession(MappingProxyType({ENDPOINT_ENV: str(self.endpoint), TOKEN_ENV: token,
                 "AKA_AGENT_TOOL_CLIENT_PATH": str(client_root.parent)}),
                 FilesystemAccess((FilesystemMount(self.directory, self.directory, False, "Agent tool transport"),
-                    *(FilesystemMount(path, path, False, "Agent tool client") for path in client_files))))
+                    *(FilesystemMount(path, path, False, "Agent tool client") for path in client_files))),
+                lambda: self.revoke(token))
         finally:
             pending = self.revoke(token)
             if timer is not None:

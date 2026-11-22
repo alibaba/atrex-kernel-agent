@@ -67,7 +67,9 @@ def noise_reason(v, outcome_matters=True):
     if RERUN_RE.search(v["version"]):
         return "remeasurement"
     long_horizon_status = v.get("long_horizon_status")
-    if long_horizon_status in {"interrupted", "blocked", "invalid_handoff"}:
+    if long_horizon_status in {
+        "interrupted", "blocked", "episode_budget_exhausted", "invalid_handoff"
+    }:
         return "infrastructure"
     authoritative = (
         v.get("measurement_source") == "authoritative_verification"

@@ -26,6 +26,21 @@ def task_selection(name, *, framework, source_tree=False):
     return system
 
 def resolve(workspace, *, revision=None):
+    # The workspace root is supervisor-owned.  Normalize it before the secure
+    # component-by-component reader walks the candidate paths: on macOS /var is
+    # itself a symlink to /private/var, and treating that trusted root alias as
+    # an untrusted candidate component makes every temporary workspace fail
+    # before the selected provider can be read.
+    workspace = Path(workspace).resolve()
+    from .private_state import read as read_private_state
+
+    private = read_private_state(workspace)
+    if private is not None:
+        name, contract = private
+        system = select(name)
+        system.validate_policy(contract)
+        return system, contract
+
     def get(name):
         if revision is not None:
             p=subprocess.run(['git','show',f'{revision}:{name}'],cwd=workspace,capture_output=True)

@@ -26,17 +26,19 @@ answers the question.
 ## Autonomous loop
 
 1. State one falsifiable timing question and begin with the fewest useful sites.
-2. Save the current clean `kernel.py` content, then create an instrumented working snapshot in the
-   same episode worktree. This snapshot is not a handoff candidate and must not enter promotion or
-   stall accounting.
+2. Save the current clean Kernel source tree, then create an instrumented working snapshot in the
+   same persistent workspace. Keep instrumentation out of final `submit-kernel` candidates.
 3. Run representative correctness through Gateway Evaluate and capture through `--kind dev`.
-   Keep probes and outputs under `scratch/`. Cite the saved Gateway Record in the Experiment.
+   Keep probes and outputs under `scratch/`. When the Experiment module is enabled, cite the saved
+   Gateway Record in the Experiment. Otherwise use the projected `records/<id>.json` as diagnostic
+   evidence; `submit-kernel` uses saved full-Evaluate evidence for the exact commit. Do not
+   invent an Experiment.
    The private evaluator log is not available in a managed Agent draft: do not fabricate it or
    label your own log as an authoritative `--correctness-evidence` receipt. Without such a
    Supervisor-provided receipt, omit that option and retain the timeline as diagnostic evidence,
    not `decision_grade`. Use `scripts/timeline.py` to validate and export the returned
    evidence. If the remote command reads backend files, pass
-   `--input skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `tools/sandbox.py`; sync only
+   `--input .agents/skills/autonomous-gpu-kernel-timeline/backends/<backend>` to `tools/sandbox.py`; sync only
    the attempt-specific directory.
 4. Read the summary and Perfetto trace. Remove, move, or refine probes and repeat when the evidence
    is insufficient, semantically misplaced, or too intrusive. Name every reported interval as
@@ -66,8 +68,8 @@ record required for final evidence.
 ## Hard boundaries
 
 - Never modify evaluators, ground truth, or other protected paths.
-- Never hand off or promote an instrumented snapshot. Only a probe-free kernel may become the
-  candidate submitted through `episode-report`; the Supervisor owns its Git commit.
+- Never submit an instrumented snapshot. Only a probe-free Kernel may be accepted through
+  `submit-kernel`; the Agent owns engineering commits and Runtime reviews that exact commit.
 - Do not combine events from different launches into one apparent execution.
 - Construct exactly one recorder per selected owner per launch and reuse it for that owner's events;
   duplicate ownership is a capture failure, not a sampling policy.

@@ -15,14 +15,17 @@ from .problem import EvaluationInput
 from .experiment_identity import ExperimentRef
 from .measurement import MeasurementIdentity, MeasurementPoint, MeasurementAssessment, MeasurementDiagnostic
 
-if TYPE_CHECKING:
-    from .experiment import RetainedEpisodeReceipt
 
 
-EVALUATION_EPISODE_INTERPRETER = ServiceKey(
-    "evaluation_episode_interpreter", "EvaluationEpisodeInterpreter",
-    module="aka.contracts.evaluation",
-)
+# These are execution-policy defaults shared by the workflow configuration and
+# Light owns one default per-Shape step budget. Candidate construction,
+# correctness, performance and one A/B run remain aligned unless the caller
+# explicitly supplies an override.
+DEFAULT_EVALUATION_STEP_TIMEOUT = 60
+DEFAULT_CANDIDATE_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
+DEFAULT_PERFORMANCE_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
+DEFAULT_ABBA_RUN_TIMEOUT = DEFAULT_EVALUATION_STEP_TIMEOUT
+
 
 
 @dataclass(frozen=True)
@@ -48,13 +51,6 @@ class EpisodeMeasurementFacts:
         object.__setattr__(self, "expected_case_ids", tuple(self.expected_case_ids))
 
 
-class EvaluationEpisodeInterpreter(Protocol):
-    def interpret_episode_receipts(
-        self, receipts: Iterable[RetainedEpisodeReceipt], *,
-        expected_case_ids: tuple[str, ...],
-    ) -> tuple[EpisodeMeasurementFacts, ...]:
-        """Interpret retained method content without running or approving reuse."""
-        ...
 
 
 @dataclass(frozen=True)
@@ -148,10 +144,9 @@ class NumericalProbeResult:
 # Allocation and comparison budgets. Evaluation explicitly prepares inner timing
 # limits for both built-in script and typed requests.
 DEFAULT_EVALUATION_TIMEOUT = 600
-DEFAULT_CANDIDATE_TIMEOUT = 600
-DEFAULT_PERFORMANCE_TIMEOUT = 300
-DEFAULT_ABBA_RUN_TIMEOUT = 300
 DEFAULT_ABBA_REPEATS = 2
+DEFAULT_SHAPE_BATCH_SIZE = 10
+MAX_TYPED_GATEWAY_JOB_TIMEOUT = 10_800
 ABBA_SCHEDULING_OVERHEAD = 30
 DEFAULT_EVALUATION_PREPARATION_OVERHEAD = 120
 
@@ -159,19 +154,20 @@ DEFAULT_EVALUATION_PREPARATION_OVERHEAD = 120
 def derived_evaluation_timeout(
     *,
     repeats: int = DEFAULT_ABBA_REPEATS,
-    per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT,
-    candidate_timeout: int = DEFAULT_CANDIDATE_TIMEOUT,
-    performance_timeout: int = DEFAULT_PERFORMANCE_TIMEOUT,
-    preparation_overhead: int = DEFAULT_EVALUATION_PREPARATION_OVERHEAD,
+    step_timeout: int | None = None,
+    per_run_timeout: int | None = None,
+    candidate_timeout: int | None = None,
+    performance_timeout: int | None = None,
+    preparation_overhead: int = 0,
 ) -> int:
-    """Include preparation allowance in new default allocations.
-
-    Preserve Light's former 120-second outer allowance without tying the Job
-    limit to client waiting. The backend owns queue deadlines; explicit and
-    retained allocations are not recomputed by this default factory.
-    """
+    """Return one allocation large enough for either Eval or A/B/B/A."""
+    step = DEFAULT_EVALUATION_STEP_TIMEOUT if step_timeout is None else step_timeout
+    per_run_timeout = step if per_run_timeout is None else per_run_timeout
+    candidate_timeout = step if candidate_timeout is None else candidate_timeout
+    performance_timeout = step if performance_timeout is None else performance_timeout
     values = {
         "repeats": repeats,
+        "step_timeout": step,
         "per_run_timeout": per_run_timeout,
         "candidate_timeout": candidate_timeout,
         "performance_timeout": performance_timeout,
@@ -457,7 +453,7 @@ class EvaluationConfiguration:
     timeout: int = derived_evaluation_timeout()
     repeats: int = DEFAULT_ABBA_REPEATS
     per_run_timeout: int = DEFAULT_ABBA_RUN_TIMEOUT
-    shape_batch_size: int = 4
+    shape_batch_size: int = DEFAULT_SHAPE_BATCH_SIZE
     max_parallelism: int = 4
     private_reference_dir: Path | None = None
     native: bool = False
@@ -467,8 +463,19 @@ class EvaluationConfiguration:
     execution_capabilities: BackendCapabilities | None = None
     comparison_method: Literal["legacy-abba", "native-abba"] = "legacy-abba"
     measurement_repetitions: int = 1
+    warmup_iters: int = 10
+    bench_iters: int = 20
+    evaluation_step_timeout: int | None = None
 
     def __post_init__(self):
+        if type(self.warmup_iters) is not int or self.warmup_iters < 0:
+            raise ValueError("warmup_iters must be a non-negative integer")
+        if type(self.bench_iters) is not int or self.bench_iters <= 0:
+            raise ValueError("bench_iters must be a positive integer")
+        if self.evaluation_step_timeout is not None and (
+            type(self.evaluation_step_timeout) is not int or self.evaluation_step_timeout <= 0
+        ):
+            raise ValueError("evaluation_step_timeout must be a positive integer")
         if self.comparison_method not in {"legacy-abba", "native-abba"}:
             raise ValueError("unsupported comparison method")
         if type(self.measurement_repetitions) is not int or self.measurement_repetitions not in {1, 3}:
@@ -476,6 +483,15 @@ class EvaluationConfiguration:
         object.__setattr__(self, "environment", MappingProxyType(dict(self.environment)))
         if self.execution_capabilities is not None and not isinstance(self.execution_capabilities, BackendCapabilities):
             raise TypeError("evaluation preparation requires bound BackendCapabilities")
+
+    @property
+    def measurement_defaults(self) -> dict:
+        """Defaults for request preparation; explicit command options take precedence."""
+        values = {"warmup_iters": self.warmup_iters, "bench_iters": self.bench_iters}
+        if self.evaluation_step_timeout is not None:
+            values.update(candidate_timeout_s=self.evaluation_step_timeout,
+                          perf_timeout_s=self.evaluation_step_timeout)
+        return values
 
 
 class EvaluatorFactory(Protocol):

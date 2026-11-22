@@ -8,6 +8,9 @@ Ordinary GPU jobs use the main CLI workflow. See [capacity-control.md](capacity-
 `agate dev` is a privileged raw shell, disabled by default. Its AK must be in `auth.dev_allowed_aks`.
 The deployment must establish network/execution isolation for target clusters.
 An unset `supported_kinds` allows every kind, including dev. Prefer `check`, `eval`, `profile`, `disassemble` or `env` whenever they cover the task.
+This section documents the standalone native `agate dev` subcommand, not AKA Evaluate syntax.
+`--intent` and `--note` are Dev-only metadata; do not copy them to `agate eval` or any
+`tools/sandbox.py --kind evaluate|profile|check|disassemble|command|env` request.
 
 ```bash
 agate dev 'python run.py' --gpu H20 --file run.py=./run.py --intent custom_harness

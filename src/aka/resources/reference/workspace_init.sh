@@ -46,7 +46,7 @@ echo "  Kernel:     $KERNEL_DEMO"
 echo "=========================================="
 
 # Step 1: Create workspace directory structure
-mkdir -p "$WORKSPACE"/{memory,scratch}
+mkdir -p "$WORKSPACE/scratch"
 
 # Step 2: Initialize git
 cd "$WORKSPACE"
@@ -56,18 +56,17 @@ if [[ ! -d .git ]]; then
     git config user.name "GPU Kernel Optimizer"
 fi
 
-# Step 3: Copy kernel demo as kernel.py
+# Step 3: Initialize the unified editable source tree
 cp "$KERNEL_DEMO" "$WORKSPACE/kernel.py"
 
 # Step 4: Create .gitignore
 cat > "$WORKSPACE/.gitignore" << 'EOF'
-__pycache__/
-*.pyc
-*.ncu-rep
-profiles/*/att/*.att
-profiles/*/att/*.out
-profiles/*/att/*.pftrace
-profiles/*/att/*.otf2
+# Agent Git tracks only the Kernel source tree.
+/*
+!/.gitignore
+!/kernel.py
+!/impl/
+!/impl/**
 EOF
 
 # Step 5: Deploy the orchestrator's Agent behavior constraints.
@@ -80,5 +79,5 @@ cp "$SCRIPT_DIR/CLAUDE.md" "$WORKSPACE/CLAUDE.md"
 echo ""
 echo "Workspace initialized at: $WORKSPACE"
 echo ""
-echo "Supervisor workspace ready: kernel.py, CLAUDE.md, memory/, scratch/."
-echo "The Supervisor will install public contracts and measure V0."
+echo "Supervisor staging ready: kernel.py + impl/, CLAUDE.md, scratch/."
+echo "kernel.py is the evaluator entry point; optional host/CUDA helpers belong under impl/."

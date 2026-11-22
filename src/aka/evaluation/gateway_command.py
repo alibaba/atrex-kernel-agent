@@ -17,10 +17,12 @@ from .command_inputs import (validate_command, workload_environment,
 
 class GatewayCommandEvaluator:
     def __init__(self, *, measurement_reader=None, execution_capabilities=None,
-                 evaluation_input=None, shape_batch_size=4, measurement_repetitions=1):
+                 evaluation_input=None, shape_batch_size=4, measurement_repetitions=1,
+                 measurement_defaults=None):
         self.measurement_reader = measurement_reader
         self.execution_capabilities = execution_capabilities
         self.evaluation_input = evaluation_input
+        self.measurement_defaults = dict(measurement_defaults or {})
         if type(shape_batch_size) is not int or shape_batch_size < 1:
             raise ValueError("shape batch size must be positive")
         self.shape_batch_size = shape_batch_size
@@ -61,10 +63,11 @@ class GatewayCommandEvaluator:
                 content = harness.source.read_bytes() if harness.source is not None else harness.text.encode()
                 method_inputs[harness.path] = hashlib.sha256(content).hexdigest()
         explicit_subset = any(token == "--shape-id" or token.startswith("--shape-id=") for token in command.command)
+        from .shapes import request_shape_ids
         full_scope = (kind == "run" and bool(expected_shapes) and context.get("task_matches", False)
                       and not explicit_subset and not command.input_files
                       and request.get("mode") in {"full", "correctness_only"}
-                      and set(request.get("reference", {}).get("shapes", {})) == set(expected_shapes))
+                      and set(request_shape_ids(request)) == set(expected_shapes))
         if request.get("candidate") is not None:
             from .source_archives import request_sources
             context["source_parameters"], context["candidate_artifact"] = request_sources(request, command.source_archives)
@@ -327,7 +330,8 @@ class GatewayCommandEvaluator:
         try:
             request = prepare_request(command.workspace, command.hardware, command.timeout, [f"{key}={value}" for key, value in explicit_environment.items()],
                 list(command.command), kind, reference_dir=reference, reference_content=reference_content, requirements=requirements,
-                runtime_version=environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", "").strip(), measurement_environment=environment,
+                measurement_environment=environment,
+                measurement_defaults=self.measurement_defaults,
                 profiler=options.profiler if options is not None else None, profile_level=profile_level,
                 counters=options.counters if options is not None else (),
                 kernel_regex=options.kernel_regex if options is not None else None, top_kernels=options.top_kernels if options is not None else None)
@@ -455,6 +459,12 @@ class GatewayCommandEvaluator:
         context = prepared.context
         command = context["command"]
         measurement = context["measurement"]
+        from .response_policy import upstream_error
+        # HTTP/job errors are not missing measurement evidence. Select the
+        # failed batch itself so a later successful batch cannot hide it.
+        failed = next((result for result in results if upstream_error(result) is not None), None)
+        if failed is not None:
+            return CommandEvaluation(failed)
         if context["kind"] == "profile" and measurement is None:
             from .gateway_measurement import prepare_profile_output
             result = results[0]
@@ -498,11 +508,8 @@ class GatewayCommandEvaluator:
             if context["repetitions"] > 1:
                 from .evaluator import result_from_stdout
                 from .aggregation import aggregate
-                from .transport_results import _with_workspace_performance_score
                 payload = aggregate([result_from_stdout(prepare_dev_output(command.workspace, item.stdout,
                     evaluator=context["evaluator"], private=context["private"], baseline=context.get("baseline"))) for item in results], "evaluate")
-                payload.pop("performance_objective", None)
-                payload = _with_workspace_performance_score(command.workspace, payload, baseline=context.get("baseline"))
                 stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
                 result = replace(results[-1], transport_returncode=0 if all(item.returncode == 0 for item in results) else 1,
                     exit_code=None)
@@ -524,10 +531,24 @@ class GatewayCommandEvaluator:
                 and result.facts.disposition == "terminal" and result.transport_status in {"succeeded", "failed"})
             if settled and context["kind"] == "run":
                 from .native_abba import complete_evaluation
-                from .device_failures import embedded_device_failure
+                from .shapes import request_shape_ids
                 request = measurement.request_for(len(jobs) % context["batch_count"])
-                settled = (not embedded_device_failure(job) and complete_evaluation(job["result"], list(request["reference"]["shapes"]),
-                    correctness_only=request.get("mode") == "correctness_only"))
+                # Native batches keep the full reference and select their own
+                # Shapes. Full-request coverage is checked when batches merge.
+                shapes = request_shape_ids(request)
+                correctness_only = request.get("mode") == "correctness_only"
+                settled = complete_evaluation(job["result"], shapes, correctness_only=correctness_only)
+                if not settled and not job["result"].get("error"):
+                    incomplete = [sid for sid in shapes if not complete_evaluation(
+                        job["result"], [sid], correctness_only=correctness_only)]
+                    payload = {"all_pass": None, "incomplete_shape_ids": incomplete,
+                        "evaluation_failure": {
+                            "category": "incomplete", "code": "evaluation-evidence-incomplete",
+                            "message": "Agate Evaluate returned missing or incomplete evidence for requested Shape IDs: "
+                                + ", ".join(incomplete) + ". No complete candidate verdict is available."}}
+                    return self._command_evaluation(replace(result,
+                        transport_returncode=2, exit_code=None,
+                        stdout=TEST_RESULT_PREFIX + json.dumps(payload) + "\n"), context, results)
             if not settled:
                 result = replace(result, transport_returncode=result.returncode or 2)
                 if context["private"]:
@@ -541,13 +562,9 @@ class GatewayCommandEvaluator:
             from .aggregation import aggregate
             failed = next((sample for sample in samples if sample.get("all_pass") is not True), None)
             payload = failed if failed is not None else aggregate(samples, "evaluate")
-            if len(samples) > 1 and failed is None:
-                from .transport_results import _metadata_speedup_mean
-                score, failures = _metadata_speedup_mean(measurement.request["reference"].get("metadata"),
-                    measurement.shape_ids, payload["latency_us_by_shape"], command.hardware)
-                payload.update(performance_score=score, speedup_vs_ref_mean=score)
-                if failures:
-                    payload.update(all_pass=False, failures=failures)
+            if failed is not None:
+                from .feedback import merge_feedback
+                payload = {**payload, "correctness_by_shape": merge_feedback(samples)["correctness_by_shape"]}
             stdout = TEST_RESULT_PREFIX + json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
             stdout = with_measurement_conditions(stdout, gateway_warmup_iters=measurement.request.get("runner_overrides", {}).get("warmup_iters", "default"))
             code = 0 if payload["all_pass"] else 1
@@ -613,7 +630,6 @@ class GatewayCommandEvaluator:
             payload.get("latency_us_geomean"), None, None,
             error=error,
             failure=failure,
-            candidate_performance_score=payload.get("performance_score"),
             candidate_latency_us_by_shape=shape_latency_facts(payload.get("latency_us_by_shape")))
         content = json.dumps(payload).encode()
         retained = ()

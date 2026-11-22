@@ -242,6 +242,59 @@ def lock_path(workspace: Path) -> Path:
     return workspace / STATE_DIR / LOCK_NAME
 
 
+def validate_snapshot(
+    value: object, *, source: str = "composition lock"
+) -> Mapping[str, Any]:
+    """Validate one in-memory composition identity snapshot.
+
+    Light embeds this same Core-owned identity in its Campaign manifest.  Keep
+    validation here so the standalone lock file and an embedded lock cannot
+    silently acquire different schemas.
+    """
+    version = value.get("lock_version") if isinstance(value, dict) else None
+    if version != LOCK_VERSION:
+        raise CompositionError(source, f"unsupported composition lock version: {version}")
+    expected_fields = {
+        "lock_version",
+        "profile",
+        "variables_digest",
+        "core_version",
+        "core_digest",
+        "tokens",
+        "entries",
+    }
+    if set(value) != expected_fields:
+        raise CompositionError(
+            source,
+            "composition lock fields must be " + ", ".join(sorted(expected_fields)),
+        )
+    if any(
+        not isinstance(value.get(field), str) or not value[field]
+        for field in (
+            "profile",
+            "variables_digest",
+            "core_version",
+            "core_digest",
+        )
+    ):
+        raise CompositionError(
+            source,
+            "profile, variables_digest, core_version and core_digest must be non-empty text",
+        )
+    if not isinstance(value.get("tokens"), list):
+        raise CompositionError(source, "composition lock tokens must be a list")
+    entries = value.get("entries")
+    if not isinstance(entries, list) or any(
+        not isinstance(item, dict) or not isinstance(item.get("id"), str)
+        for item in entries
+    ):
+        raise CompositionError(
+            source,
+            "composition lock entries must be objects with string ids",
+        )
+    return value
+
+
 def read(workspace: Path) -> Mapping[str, Any] | None:
     path = lock_path(workspace)
     if not path.exists():
@@ -250,16 +303,7 @@ def read(workspace: Path) -> Mapping[str, Any] | None:
         value = json.loads(path.read_text())
     except (OSError, ValueError) as exc:
         raise CompositionError(str(path), f"unreadable composition lock: {exc}") from exc
-    version = value.get("lock_version") if isinstance(value, dict) else None
-    if version != LOCK_VERSION:
-        raise CompositionError(str(path), f"unsupported composition lock version: {version}")
-    entries = value.get("entries")
-    if not isinstance(entries, list) or any(
-        not isinstance(item, dict) or not isinstance(item.get("id"), str)
-        for item in entries
-    ):
-        raise CompositionError(str(path), "composition lock entries must be objects with string ids")
-    return value
+    return validate_snapshot(value, source=str(path))
 
 
 @dataclass(frozen=True)
@@ -289,7 +333,13 @@ def _difference_records(
             ))
             kind = "added" if entry_id not in old else "removed" if entry_id not in new else "changed"
             records.append(_Difference(entry_id, fields, kind))
-    for field in ("core_version", "core_digest", "tokens", "variables_digest"):
+    for field in (
+        "profile",
+        "core_version",
+        "core_digest",
+        "tokens",
+        "variables_digest",
+    ):
         if stored.get(field) != current.get(field):
             records.append(_Difference(None, (field,), "global"))
     return tuple(records)
@@ -297,6 +347,43 @@ def _difference_records(
 
 def differences(stored: Mapping[str, Any], current: Mapping[str, Any]) -> tuple[str, ...]:
     return tuple(record.render() for record in _difference_records(stored, current))
+
+
+def reconcile_snapshots(
+    stored: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    source: str = "composition lock",
+) -> tuple[str, ...]:
+    """Compare two validated locks with the normal resume-policy semantics."""
+    validate_snapshot(stored, source=source)
+    validate_snapshot(current, source=source)
+    records = _difference_records(stored, current)
+    old = {entry["id"]: entry for entry in stored.get("entries", [])}
+    new = {entry["id"]: entry for entry in current.get("entries", [])}
+    sensitive = []
+    for record in records:
+        if record.kind != "changed":
+            sensitive.append(record)
+            continue
+        before, after = old[record.entry_id], new[record.entry_id]
+        if (
+            before.get("resume_policy", "strict") == "strict"
+            or after.get("resume_policy", "strict") == "strict"
+        ):
+            sensitive.append(record)
+            continue
+        allowed = set(before.get("observational_fields", ()))
+        allowed &= set(after.get("observational_fields", ()))
+        if not set(record.fields) <= allowed:
+            sensitive.append(record)
+    if sensitive:
+        raise CompositionError(
+            source,
+            "resume identity mismatch: "
+            + "; ".join(record.render() for record in sensitive),
+        )
+    return tuple(record.render() for record in records)
 
 
 def reconcile(workspace: Path, current: Mapping[str, Any], *, mode: str) -> tuple[str, ...]:
@@ -325,34 +412,10 @@ def reconcile(workspace: Path, current: Mapping[str, Any], *, mode: str) -> tupl
         raise ValueError("lock mode must be create or resume")
     if stored is None:
         raise CompositionError(str(path), "resume requires an existing version 2 lock")
-    records = _difference_records(stored, current)
-    old = {entry["id"]: entry for entry in stored.get("entries", [])}
-    new = {entry["id"]: entry for entry in current.get("entries", [])}
-    sensitive = []
-    for record in records:
-        if record.kind != "changed":
-            sensitive.append(record)
-            continue
-        before, after = old[record.entry_id], new[record.entry_id]
-        if (
-            before.get("resume_policy", "strict") == "strict"
-            or after.get("resume_policy", "strict") == "strict"
-        ):
-            sensitive.append(record)
-            continue
-        allowed = set(before.get("observational_fields", ()))
-        allowed &= set(after.get("observational_fields", ()))
-        if not set(record.fields) <= allowed:
-            sensitive.append(record)
-    if sensitive:
-        raise CompositionError(
-            str(path),
-            "resume identity mismatch: " + "; ".join(record.render() for record in sensitive),
-        )
-    return tuple(record.render() for record in records)
+    return reconcile_snapshots(stored, current, source=str(path))
 
 
 __all__ = [
     "LOCK_NAME", "LOCK_VERSION", "differences", "lock_path", "package_dir",
-    "read", "reconcile", "snapshot",
+    "read", "reconcile", "reconcile_snapshots", "snapshot", "validate_snapshot",
 ]

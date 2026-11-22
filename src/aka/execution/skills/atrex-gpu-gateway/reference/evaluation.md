@@ -89,9 +89,9 @@ ABBA `baseline_input` resolves relative to the same directory and is inlined; ex
 Other runner parameters are validated by worker-side atrex-bench; misspellings produce `unsupported runner config key`.
 The gateway controls `output`/`checkpoint_dir` and ignores values for them in the config file.
 
-The server's current default atrex eval/profile wheel is `0.1.0.post20260917160311`; request/cluster pins take precedence.
-Use `--atrex-bench-version VERSION` for an explicit version. Without a request pin, an image wheel is reused only if it exactly matches the cluster/default pin.
-Inspect `request_digest.atrex_bench_runtime` in `agate get JOB_ID --spec --json` for version source, image version and job-level installation.
+Do not assume a fixed server-default atrex-bench version. Request and cluster pins may change independently.
+Use `--atrex-bench-version VERSION` only where the Agate operation supports an explicit version. Without a request pin, an image wheel is reused only if it exactly matches the cluster/default pin.
+Inspect `request_digest.atrex_bench_runtime` in `agate get JOB_ID --spec --json` for the authoritative version source, image version and job-level installation.
 Do not describe the default as resolving the newest index version on every job.
 
 ## Placement and measurement confidence

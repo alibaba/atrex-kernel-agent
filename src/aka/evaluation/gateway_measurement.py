@@ -1,34 +1,40 @@
 """Measurement policy for the retained typed/dev CLI adapter.
 
 Execution supplies raw typed receipts in planned batch order. This adapter owns
-shape slicing, scoring and privacy, and never submits jobs or writes records.
+shape slicing, latency aggregation and privacy, and never submits jobs or writes records.
 The legacy CLI input inference remains a separate compatibility boundary.
 """
 from pathlib import Path
 from typing import Any
 
 from .transport_results import (
-    _request_shape_ids, _shape_batches, _shape_batch_request, _shape_batch_reference,
-    _optimizer_result_from_eval, _merge_optimizer_results, _with_workspace_performance_score, _hydrate_result_lines,
+    _shape_batch_reference,
+    _optimizer_result_from_eval, _merge_optimizer_results, _hydrate_result_lines,
     _public_numerical_result_line, _hydrate_abba_result_lines,
     TEST_RESULT_PREFIX, ABBA_RESULT_PREFIX, NUMERICAL_RESULT_PREFIX,
 )
+from .shapes import request_shape_ids, batch_shape_ids, shape_batch_request
 
 
 class GatewayMeasurement:
     def __init__(self, request, *, workspace, hardware, private, batch_size, profiling=False, baseline=None):
+        if not profiling:
+            from .measurement_policy import agate_managed_clocks
+            request = agate_managed_clocks(request)
         self.baseline = baseline
         self.request = request
         self.workspace = workspace
         self.hardware = hardware
         self.private = private
-        self.shape_ids = _request_shape_ids(request)
-        self.batches = ([self.shape_ids] if profiling or request.get("options", {}).get("shape_shards") is not None
-                        else _shape_batches(self.shape_ids, batch_size))
+        self.profiling = profiling
+        self.shape_ids = request_shape_ids(request)
+        self.batches = ([self.shape_ids] if profiling
+                        else batch_shape_ids(self.shape_ids, batch_size))
 
     def request_for(self, index):
-        return (_shape_batch_request(self.request, self.batches[index])
-                if len(self.batches) > 1 else self.request)
+        if self.profiling:
+            return self.request
+        return shape_batch_request(self.request, self.batches[index])
 
     def reference_content(self, index):
         return _shape_batch_reference(self.request_for(index)["reference"])
@@ -39,7 +45,8 @@ class GatewayMeasurement:
         metadata = self.request["reference"].get("metadata")
         performance = self.request.get("mode") != "correctness_only"
         results = [_optimizer_result_from_eval(job["result"], shapes, metadata,
-            require_performance=performance, hardware=self.hardware)
+            require_performance=performance, hardware=self.hardware,
+            finalize_performance=len(self.batches) == 1)
             for job, shapes in zip(jobs, self.batches)]
         from .feedback import evaluation_feedback, merge_feedback
         results = [{**result, **evaluation_feedback(job["result"], shapes)}
@@ -81,7 +88,6 @@ def _mask_generalized_result(
     workspace: Path, result: dict[str, Any], *, private: bool, baseline=None
 ) -> dict[str, Any]:
     """Hide exact inputs and failures but retain real latency keyed by opaque shape id."""
-    result = _with_workspace_performance_score(workspace, result, baseline=baseline)
     if not private:
         return result
     masked = dict(result)

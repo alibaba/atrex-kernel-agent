@@ -1,23 +1,28 @@
 ---
-name: KernelWiki
+name: kernel-wiki
 description: Query GPU optimization knowledge and hardware facts through the session's Supervisor Runtime.
 ---
 
 # GPU Wiki
 
-In every natural-language Wiki request, state the true target product separately from
-the authoritative runtime architecture; never infer either from a scheduler label or
-masked device name. If the true product is unavailable, say so rather than substitute
-another GPU. Ask for that product's hardware specification and relevant architecture/ISA
-facts alongside the operator, DSL and bottleneck. Distinguish measurements from hypotheses.
-Do not reduce the question to arbitrary keywords.
+Use the actual architecture returned by `python3 tools/sandbox.py --kind env`
+for Wiki queries. Describe the operator, DSL, bottleneck and relevant architecture/ISA
+question; distinguish measurements from hypotheses. Include a public product name
+only when it is known and a product-specific specification is needed. Do not infer
+product identity from a deployment name.
+
+For example, when Env reports `sm_120`:
 
 ```bash
-python3 tools/sandbox.py --kind wiki-query "Target B200, runtime sm_100. Triton normalization is measured DRAM-bound; which fusion strategies apply? Include B200 hardware specifications and relevant architecture/ISA facts." --brief
+python3 tools/sandbox.py --kind wiki-query "Runtime architecture sm_120. Triton normalization is measured DRAM-bound; which fusion strategies and architecture/ISA facts apply?" --brief
 python3 tools/sandbox.py --kind wiki-query --file scratch/wiki-question.txt
 python3 tools/sandbox.py --kind wiki-search --arch sm_120 --dsl triton --coverage
-python3 tools/sandbox.py --kind wiki-hardware --product sm120
+python3 tools/sandbox.py --kind wiki-hardware --capability sm_120 --list features
 ```
+
+`wiki-hardware` with no arguments lists products. A bare product name is accepted,
+as are a leading `--` separator and a single quoted option string; prefer the explicit
+arguments shown above. `--help` returns each tool's supported options.
 
 Use the `tools/sandbox.py --kind wiki-*` commands above from an Agent workspace.
 The Supervisor owns stores, the Wiki-only model, timeouts, concurrency and query
@@ -36,9 +41,10 @@ blocker. A Wiki failure is not a GPU environment failure.
 Check coverage before restrictive type filters. Read the returned source, scope,
 payload and notes. A zero-match fallback sample is labelled, not advice for your
 question. A missing hardware spec is not permission to substitute another GPU.
-When research recording is enabled, record `query_id` and canonical `wiki_id` in the existing
-Experiment Journal when knowledge materially affects an experiment; retrieval alone is not adoption.
+When the Experiment module is enabled, record `query_id` and canonical `wiki_id` in the existing
+Experiment when knowledge materially affects it; retrieval alone is not adoption. When that module
+is disabled, use the query normally but do not invent an Experiment or attribution mutation.
 Use `applied`, `partially_applied`, `reference_only` or `rejected` for `disposition`;
 `used`, `material_use` and `considered` are invalid. See the complete attribution JSON example in
-`skills/runtime-records/references/journal.md`. Correct rejected attribution fields and resubmit
+`.agents/skills/runtime-records/references/journal.md`. Correct rejected attribution fields and resubmit
 with the existing Gateway Record IDs; do not repeat GPU work.

@@ -3,12 +3,16 @@
 from __future__ import annotations
 import json
 import math
+from .objectives import latency_only_result
 from pathlib import Path
 from typing import Any
-from aka.contracts.evaluation import VerificationResult, VerificationRun
+from aka.contracts.evaluation import (
+    DEFAULT_SHAPE_BATCH_SIZE,
+    VerificationResult,
+    VerificationRun,
+)
 
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
-DEFAULT_SHAPE_BATCH_SIZE = 4
 DEFAULT_SHAPE_BATCH_WORKERS = 4
 
 
@@ -88,6 +92,7 @@ def _merge_batch_results(
         str(shape_id): float(latency)
         for result in results
         for shape_id, latency in (result.get("latency_us_by_shape") or {}).items()
+        if type(latency) in (int, float) and math.isfinite(latency) and latency > 0
     }
     missing_shape_ids = [
         shape_id for shape_id in shape_ids if shape_id not in latency_by_shape
@@ -97,27 +102,7 @@ def _merge_batch_results(
         for shape_id in shape_ids
         if shape_id in latency_by_shape
     ]
-    weighted_scores: list[tuple[float, int]] = []
-    for result in results:
-        raw_score = result.get(
-            "performance_score", result.get("speedup_vs_ref_geomean")
-        )
-        by_shape = result.get("latency_us_by_shape")
-        if (
-            isinstance(raw_score, (int, float))
-            and not isinstance(raw_score, bool)
-            and raw_score > 0.0
-            and math.isfinite(float(raw_score))
-            and isinstance(by_shape, dict)
-        ):
-            weighted_scores.append((float(raw_score), len(by_shape)))
-    measured_score_shapes = sum(count for _score, count in weighted_scores)
-    performance_score = (
-        sum(score * count for score, count in weighted_scores) / measured_score_shapes
-        if measured_score_shapes == len(shape_ids) and measured_score_shapes > 0
-        else None
-    )
-    merged = dict(results[-1])
+    merged = latency_only_result(results[-1])
     failures = [
         str(failure) for result in results for failure in (result.get("failures") or [])
     ]
@@ -128,7 +113,7 @@ def _merge_batch_results(
     merged.update(
         {
             "all_pass": not missing_shape_ids
-            and performance_score is not None
+            and _geomean(latencies) is not None
             and all(result.get("all_pass") for result in results),
             "failures": failures,
             "latency_us_geomean": None if missing_shape_ids else _geomean(latencies),
@@ -136,9 +121,6 @@ def _merge_batch_results(
                 None if missing_shape_ids else sum(latencies) / len(latencies) if latencies else 0.0
             ),
             "latency_us_by_shape": latency_by_shape,
-            "speedup_vs_ref_mean": performance_score,
-            "speedup_vs_ref_geomean": None,
-            "performance_score": performance_score,
             "max_abs_err": max(
                 float(result.get("max_abs_err") or 0.0) for result in results
             ),
@@ -225,20 +207,6 @@ def _result_latency(result: object) -> float | None:
     return float(value)
 
 
-def _result_performance_score(result: object) -> float | None:
-    if not isinstance(result, dict) or not result.get("all_pass"):
-        return None
-    value = result.get("performance_score", result.get("speedup_vs_ref_geomean"))
-    if (
-        not isinstance(value, (int, float))
-        or isinstance(value, bool)
-        or value <= 0
-        or not math.isfinite(float(value))
-    ):
-        return None
-    return float(value)
-
-
 def interpret_verification_payload(
     payload: object,
     *,
@@ -299,35 +267,11 @@ def interpret_verification_payload(
         if run.revision == "incumbent" and run.exit_code == 0
         if (value := _result_latency(run.result)) is not None
     ]
-    candidate_score_values = [
-        value
-        for run in runs
-        if run.revision == "candidate" and run.exit_code == 0
-        if (value := _result_performance_score(run.result)) is not None
-    ]
-    incumbent_score_values = [
-        value
-        for run in runs
-        if run.revision == "incumbent" and run.exit_code == 0
-        if (value := _result_performance_score(run.result)) is not None
-    ]
     candidate_latency = _geomean(candidate_latency_values)
     incumbent_latency = _geomean(incumbent_latency_values)
-    candidate_score = (
-        sum(candidate_score_values) / len(candidate_score_values)
-        if candidate_score_values
-        else None
-    )
-    incumbent_score = (
-        sum(incumbent_score_values) / len(incumbent_score_values)
-        if incumbent_score_values
-        else None
-    )
     if (
         len(candidate_latency_values) != repeats
         or len(incumbent_latency_values) != repeats
-        or len(candidate_score_values) != repeats
-        or len(incumbent_score_values) != repeats
     ):
         return VerificationResult(
             "FAIL",
@@ -337,15 +281,13 @@ def interpret_verification_payload(
             runs=runs,
             error=(
                 "not every authoritative ABBA run passed with a valid "
-                "performance score"
+                "latency"
             ),
             artifact=artifact,
-            candidate_performance_score=candidate_score,
-            incumbent_performance_score=incumbent_score,
         )
     improvement = (
-        ((candidate_score / incumbent_score) - 1.0) * 100.0
-        if candidate_score and incumbent_score
+        ((incumbent_latency / candidate_latency) - 1.0) * 100.0
+        if candidate_latency and incumbent_latency
         else None
     )
     return VerificationResult(
@@ -355,6 +297,4 @@ def interpret_verification_payload(
         improvement,
         runs=runs,
         artifact=artifact,
-        candidate_performance_score=candidate_score,
-        incumbent_performance_score=incumbent_score,
     )

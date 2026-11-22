@@ -124,7 +124,8 @@ def _load(path, stage, policy):
             retained) from error
 
 
-def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None, policy=None):
+def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None, policy=None,
+                         state_root: Path | None = None):
     """Use the bounded default schedule only when Execution proves safe admission.
 
     An empty schedule dispatches once without a retry ledger; Experiment owns
@@ -143,7 +144,9 @@ def retry_infrastructure(workspace: Path, stage: str, operation, *, cancel=None,
             raise CancelledError("validation batch cancelled")
         return operation()
     key = hashlib.sha256(stage.encode()).hexdigest()[:24]
-    path = Path(workspace) / ".atrex_long_horizon" / "infrastructure" / f"{key}.json"
+    directory = (Path(state_root) if state_root is not None else
+                 Path(workspace) / ".atrex_long_horizon" / "infrastructure")
+    path = directory / f"{key}.json"
     ensure_private_directory(path.parent)
     with path.with_suffix(".lock").open("a+") as lock:
         try:

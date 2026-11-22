@@ -1,30 +1,7 @@
 ## Execution boundary
 
-- Target remote hardware: **{{HARDWARE}}**{{ENDPOINT}}. All GPU execution goes through
-  `python3 tools/sandbox.py`. Do not bypass the scoped Runtime or obtain Agate credentials.
-  Local static inspection is allowed; local GPU/JIT imports, evaluators, timers, and profilers are not.
-- Typed operations such as `--kind run` and `--kind profile` select their inputs automatically and
-  take no command after `--`. For custom Dev commands, use `--kind dev --input <path> ... -- <command>`;
-  declare every extra local file/directory with repeatable `--input`. Uploads are allowlist-only.
-  A trivial Dev probe does not establish evaluator health, and diagnostics/custom-input checks do
-  not replace official correctness/performance evidence. The current phase may further restrict GPU use.
-- Git is Supervisor-only: do not run Git commands or access `.git`. Keep evaluator/public-contract
-  inputs (`definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`,
-  `agent_problem.json`, `metadata.json`, `roofline.json`), `CLAUDE.md`, `README.md`, and canonical
-  `memory/v*.json` unchanged. Never search outside the workspace for private cases or source operators,
-  recreate private evaluator drivers, or delete/move existing tracked files and historical evidence
-  to shrink uploads. Do not upload `memory/` as worker state. The Supervisor records measurements,
-  optionally generates memory summaries, commits source, and manages acceptance.
-- Use preinstalled dependencies only. Do not install packages or build third-party libraries locally
-  or remotely (pip, uv, conda, setup.py, ninja, cmake, or package managers). GPU packages may JIT on
-  import or first use, including `flashinfer`, `flash_attn`/`flash-attn`, `xformers`, and `vllm`.
-  Static source inspection is allowed; run imports/probes only through permitted remote GPU operations.
-  This execution boundary is separate from production candidate review: remote availability does not
-  authorize using a prebuilt operator as the candidate's computation. Production reviews judge actual
-  use, not package names; compiler/header/ABI/launch plumbing for self-authored kernels is not banned
-  merely because it comes from one of these packages.
-  As in Legacy, the process guard terminates a session on a confirmed local dependency-policy violation.
-  If required tooling is unavailable, choose supported tooling or report a blocker.
-- Shared Gateway infrastructure is Supervisor-owned. Do not start, stop, signal, reconfigure, or
-  replace its services, screen/SSH sessions, state, database, logs, or jobs. Report infrastructure
-  failure; do not repair the service yourself.
+- Target remote hardware: **{{HARDWARE}}**{{ENDPOINT}}. Official GPU evaluation goes through `python3 tools/sandbox.py`. Do not bypass the scoped Runtime or obtain Agate credentials. Local development and import/API inspection are allowed within the configured workspace permissions. The local environment may lack the target GPU or toolchain; use the enabled Runtime operations for target-GPU compilation, execution, profiling, and measurement.
+- Run `python3 tools/sandbox.py --help` to discover enabled operations. Typed Evaluate selects managed evaluator inputs automatically. Use an enabled Command for custom remote probes, compilation or profiling, for example `--kind command -- python3 -m scratch.probe`; module form keeps the candidate root importable. Command uploads the engineering workspace and safe tools, then synchronizes `scratch/` back. Git internals, Skills, control state and bulk root `records/` are excluded. Remote jobs are fresh and stateless; only returned artifacts persist. Custom probes do not replace official correctness/performance evidence.
+- The trajectory Git repository is Agent-managed engineering history. `WORKSPACE.md` declares the selected SourceProvider layout and editable candidate paths. Commit that complete candidate before every Kernel-bound Runtime request and keep the worktree clean; the full HEAD commit is `kernel_commit_id`. Do not rewrite/delete imported peer refs or access Git objects outside this workspace. Keep evaluator/public-contract inputs (`definition.json`, `reference.py`, `workload.jsonl`, `input.py`, `shapes.json`, `agent_problem.json`, `metadata.json`, `roofline.json`), `CLAUDE.md`, and `README.md` unchanged. Edit `solution.json` only when the selected SourceProvider explicitly declares it as candidate metadata. Never search outside the workspace for private cases or source operators, recreate private evaluator drivers, or delete historical measurement evidence to shrink uploads. Manage candidate files and Git history yourself. Initial source is not automatically evaluated; requested measurements appear under `records/`. Raw evaluator inputs and physical Job details remain Supervisor-private. Measurements and commit reviews are audit facts, not an automatic acceptance or promotion decision.
+- Development may use, install, or build dependencies and alternate implementations as references, probes, microbenchmarks, or temporary prototypes, subject to the writable sandbox, authenticated Runtime, network, and shared-service boundaries. Keep temporary environments and generated artifacts under writable development paths such as `scratch/`, and never mutate Supervisor-owned files, system paths, or shared Gateway state. Dependency and compute provenance are final-candidate rules: Fast permits declared reproducible compute libraries, while Performance and Ultra require self-authored core compute. Review judges actual final use, not package names; compiler/header/ABI/launch plumbing is not core computation. When enabled, Bubblewrap enforces the configured read-only paths. Native mode has no OS isolation, and `host` proc mode cannot prevent signals to other same-UID processes. Agent Git is not subject to a tracked-file deletion guard.
+- Shared Gateway infrastructure is Supervisor-owned. Do not start, stop, signal, reconfigure, or replace its services, screen/SSH sessions, state, database, logs, or jobs. Report infrastructure failure; do not repair the service yourself.

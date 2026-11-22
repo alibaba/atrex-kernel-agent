@@ -33,10 +33,15 @@ class ExecutionCause:
     message: str = ""
     details: Mapping = field(default_factory=dict)
     causes: tuple[ExecutionCause, ...] = ()
+    # Classification above is for retry/diagnosis only. Public responses use
+    # the original backend value, including unfamiliar fields and value types.
+    raw_error: object = field(default=None, repr=False)
+    http_status: int | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "details", _freeze(self.details))
         object.__setattr__(self, "causes", tuple(self.causes))
+        object.__setattr__(self, "raw_error", _freeze(self.raw_error))
 
 
 @dataclass(frozen=True)

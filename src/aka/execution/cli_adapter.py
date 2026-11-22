@@ -6,7 +6,7 @@ import sys
 
 from aka.contracts.execution import CommandSpec, ExecutionContext, OutputOptions, UnsupportedExecution
 from .gateway import sandbox as transport
-from .legacy.runtime import ExecutionHooks, SandboxRequest, transport_arguments
+from .remote.runtime import ExecutionHooks, SandboxRequest, transport_arguments
 from .selection import execution_environment, execution_scope, read_execution_patches, selected_execution
 from .command_syntax import command_parts
 

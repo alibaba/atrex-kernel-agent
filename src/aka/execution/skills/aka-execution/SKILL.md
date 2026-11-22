@@ -12,8 +12,8 @@ supported backend options, request format, defaults, and error behavior.
 
 Read the run's Execution tool description, schema, selected backend, and workspace
 information. Use its bound executor and configuration. For standalone
-`aka execution`, inspect `aka execution --help` and supply a prepared workspace. The current legacy implementation is described in
-[Legacy requests](references/legacy-request.md).
+`aka execution`, inspect `aka execution --help` and supply a prepared workspace. The shared remote implementation is described in
+[Remote requests](references/remote-request.md).
 
 Continue existing runs with their recorded selection and execution path.
 Deterministic host callers retain their existing adapters; loading this Skill
@@ -31,7 +31,7 @@ Execution tool, hand requests to it rather than constructing another executor.
   Gateway profile / URL chooses an endpoint; neither is the Execution plugin.
 - **SSH:** Read the selected SSH Execution guidance. Current target, runtime
   initialization, health, and single-GPU constraints are in
-  [Legacy requests](references/legacy-request.md).
+  [Remote requests](references/remote-request.md).
 - **Local HTTP Gateway:** Use Gateway requests with the selected local endpoint.
   Confirm the service is running and accepts the requested hardware alias.
   The current implementation has no separate direct Local executor.
@@ -49,7 +49,7 @@ boundaries intact and use existing credential resolution outside saved requests.
 
 Follow the original input allowlist, private evaluation protection, and
 synchronization rules. Host environment and worker environment keep their
-existing meanings. The legacy wrapper's `--sync` names output synchronization
+existing meanings. The remote wrapper's `--sync` names output synchronization
 paths; it is not an input manifest.
 
 Commands in the Agate Skill describe backend operations. Arguments after
@@ -68,5 +68,5 @@ Distinguish worker execution, observation, and HTTP timeouts. Keep the original
 job identity when submission or observation is uncertain; use the existing
 execution path to confirm it instead of submitting duplicate work. Existing host
 and backend implementations retain their retry and recovery responsibilities.
-Report cancellation acceptance separately from confirmed termination. Legacy
+Report cancellation acceptance separately from confirmed termination. Remote
 host cleanup adds no new remote termination or cross-version recovery guarantee.

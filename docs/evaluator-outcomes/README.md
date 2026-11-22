@@ -70,76 +70,22 @@ Additional consumer-owned local regressions: 54 passed, one skipped because the 
 
 An explicit inline check also verified that a completed native ABBA timeout after its one allowed retry remains a cache hit. The first local invocation of that check used macOS's symlinked temporary path and was refused by the existing private-directory guard; rerunning with the resolved directory passed. No production code change was needed.
 
-## Reproduce the recovery curve
+## Inspect current execution evidence
 
-In an editable checkout with the AKA packages installed, run the following command. It loads only the baseline Gateway module from Git and executes both variants against the same synthetic transport; no GPU jobs or external requests are submitted.
+The curve above belongs to the historical revision linked at the start of this page.
+Its removed private imports are not an executable recipe for current Light. For current
+measurements, use the supported observability entry points from the repository root:
 
 ```bash
-python - <<'PY'
-import contextlib, io, json, os, subprocess, tempfile, types
-from pathlib import Path
-from unittest.mock import patch
-from aka.light.evaluation import gateway
-from aka.light.experiment.store import JOB_ROOT_ENV, MeasurementStore
-from aka.light.evaluation.public_result import PREFIXES, canonical_result
-from aka.light.evaluation.native_abba import _terminal_abba_timeout_error
-
-source = subprocess.check_output(["git", "show", "0df128c:src/aka/light/evaluation/gateway.py"], text=True)
-before = types.ModuleType("baseline_gateway")
-before.__file__, before.__package__ = gateway.__file__, gateway.__package__
-exec(compile(source, gateway.__file__, "exec"), before.__dict__)
-
-def adapt(job):
-    if job["status"] == "succeeded" and job["result"]["exit_code"] != 0:
-        return dict(job, outcome="unavailable", error={"error_class": "infra", "reason": "worker_unavailable"})
-    return job
-
-def retry(job):
-    return "infra" if (job.get("error") or {}).get("reason") == "worker_unavailable" else None
-
-rows = []
-for failures in [0, 1, 2, 3]:
-    for label, module in [("before", before), ("after", gateway)]:
-        successes, counts = [], []
-        for repetition in range(5):
-            submitted = []
-            def api(url, method, path, body, seconds):
-                assert method == "POST"
-                submitted.append(body["idempotency_key"])
-                bad = len(submitted) <= failures
-                return {"job_id": f"dv-replay-{repetition}-{len(submitted)}", "status": "succeeded",
-                        "result": {"exit_code": int(bad), "stdout": "unavailable" if bad else "receipt"}}
-            with tempfile.TemporaryDirectory() as tmp, patch.dict(os.environ, {JOB_ROOT_ENV: str(Path(tmp).resolve())}), patch.object(module, "_gateway_json", side_effect=api), patch("time.sleep"), contextlib.redirect_stderr(io.StringIO()):
-                args = dict(url="https://gateway.test", kind="dev", payload={"command": "worker"},
-                            timeout=60, queue_wait_grace=0, max_infra_retries=2)
-                if label == "after":
-                    args.update(result_adapter=adapt, retry_classifier=retry)
-                first = module.run_direct_job(**args)
-                second = module.run_direct_job(**args)
-                assert first.stdout == second.stdout
-                expected = min(failures + 1, 3) if label == "after" else 1
-                assert len(submitted) == expected
-                job = json.loads(first.stdout)
-                ok = job["result"]["exit_code"] == 0
-                if label == "after" and not ok:
-                    assert job["outcome"] == "unavailable"
-                successes.append(ok)
-                counts.append(len(submitted))
-        rows.append(dict(failures=failures, variant=label, successes=sum(successes),
-                         repetitions=5, percent=sum(successes)*20, submissions=counts))
-
-error = _terminal_abba_timeout_error([[{"message": "timeout"}], [{"message": "timeout"}]])
-request = {"operation": "same_allocation_abba", "options": {}}
-response = {"exit_code": 1, "stdout": PREFIXES["same_allocation_abba"] + json.dumps({"correct": False, "error": error}), "stderr": ""}
-record = dict(operation="same_allocation_abba", cacheable=True, task_digest="fixture", request=request, response=response)
-with tempfile.TemporaryDirectory() as tmp:
-    store = MeasurementStore(Path(tmp).resolve())
-    with patch.object(store, "read", return_value=record):
-        assert store._cached("fixture", "fixture") == record
-assert canonical_result(response, request)["status"] == "completed"
-print(json.dumps({"rows": rows, "terminal_abba_timeout_cache": "PASS"}, indent=2))
-PY
+python observability/light_runtime_calls.py --help
+python observability/light_agate_calls.py --help
+python observability/export_light_gateway_record.py --help
 ```
+
+Select a Campaign and Gateway Record to export the raw Agate requests/responses and the
+Agent receipt. See the [observability guide](../session-observability.md) for exact options and
+[measurement recovery](../measurement-records.md) for current retry/cache semantics.
+Historical test counts and curves do not qualify a new checkout.
 
 ## Complete evaluator failure feedback
 
@@ -154,11 +100,11 @@ Validation for this bug fix used Python 3.14 on macOS, without GPU execution: 16
 
 ## Diagnostic size and cache contract
 
-There is no assumed upstream guarantee that captured stdout/stderr fit a measurement record. AKA bounds the projected response in `public_result.bound_diagnostic_response` to **8 MiB of ASCII-escaped JSON**, before deriving `agent_result`. This counts JSON escaping of Unicode and embedded structured markers, not just raw UTF-8 stream length. Normal responses pass through unchanged. An oversized response retains valid result markers, verdicts, case execution status, scores, and non-diagnostic numeric evidence. It shortens diagnostic strings and, when needed, diagnostic/failure lists, with `diagnostic_truncation` reporting the original response bytes, limit, omitted text characters and omitted diagnostic entries. Unstructured stdout receives a shared text budget, including when a kernel prints many short lines. Numerical and ABBA markers use the same boundary.
+Complete redacted diagnostics are retained in the Gateway Record. `aka.evaluation.tool_results.bound_diagnostic_response` does not trim by serialized length: compiler tails often contain the actionable error. The terminal receipt contains a compact error summary, actionable diagnostics, Record ID/path, and bounded stdout/stderr previews with explicit locations for the complete fields. Env returns its complete capability response.
 
-Diagnostic truncation is distinct from the existing transport `truncated` flag: shortening repair text does not invalidate a completed negative verdict or make it pass. Upstream incomplete execution/transport evidence still fails canonical validation. Original executor output and Gateway job checkpoints remain private; truncation is explicit, not a claim that the Agent received every byte. Operators can inspect that retained evidence when omitted detail is needed.
+A receipt preview is distinct from incomplete execution/transport evidence. Preview shortening never changes the verdict or cache eligibility. Original executor output and Gateway Job checkpoints remain private and auditable.
 
-`MeasurementTask.finish` checks the **entire serialized record plus its trailing newline against 32 MiB**, including request, identity, response and the derived Agent payload, before writing it. If non-diagnostic structure or the envelope still exceeds the hard bound, publication stops while the reservation remains resumable; no unreadable `record.json` or `validation_pending` marker is published. Original job IDs and evidence survive recovery. These limits bound the public response and record, not total private job-artifact retention.
+`MeasurementTask.finish` checks the **entire serialized record plus its trailing newline against 32 MiB**, including request, identity, response and the derived Agent payload, before writing it. If non-diagnostic structure or the envelope still exceeds the hard bound, publication stops while the reservation remains resumable; no unreadable `record.json` or `validation_pending` marker is published. Original job IDs and evidence survive recovery. The record size limit bounds durable record serialization, not terminal previews or total private job-artifact retention; an oversized record fails explicitly rather than silently losing diagnostics.
 
 A stage-level failure reason appears once at stage scope, rather than once per allowed shape. A generic stage failure is omitted when more specific diagnostics already exist; distinct producer reasons remain visible. Malformed `input_artifact` fields cannot abort extraction, and malformed/empty rank results fall back to direct shape cases.
 

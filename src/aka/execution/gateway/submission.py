@@ -61,50 +61,35 @@ def submit_prepared(args, workspace, grace, prepared):
     from .source_archives import read_archives, validate_archives, run_archived, SourceArchiveError
     archives = read_archives(prepared)
     validate_archives(prepared, archives, args.kind)
-    executable = transport._find_agate()
+    from .sdk import route
+    url = route(args.url, args.gateway_profile)
     try:
         if archives:
-            process = run_archived(args, workspace, grace, request, archives, transport=transport)
-        elif args.url and executable is None:
-            process = transport._run_direct_job(url=args.url, kind={"run":"eval", "check":"compile"}.get(kind, kind),
-                payload=request, timeout=args.timeout, queue_wait_grace=grace)
-        elif executable is None:
-            raise FileNotFoundError("agate not found and no explicit --url was provided")
+            process = run_archived(args, workspace, grace, request, archives, transport=transport, url=url)
         else:
-            with tempfile.TemporaryDirectory(prefix="aka-submission-") as temp:
-                directory = Path(temp)
-                reference = directory / "reference"
-                reference.mkdir()
-                for name, content in prepared.get("reference_files", {}).items():
-                    if Path(name).name != name:
-                        raise ValueError("invalid prepared reference filename")
-                    (reference / name).write_text(content, encoding="utf-8")
-                (directory / "kernel.py").write_text(request["candidate"], encoding="utf-8")
-                requirements = request.get("requirements", [])
-                requirement_path = directory / "requirements.txt"
-                requirement_path.write_text("\n".join(requirements) + "\n", encoding="utf-8")
-                initial = directory / "init_kwargs.json" if "init_kwargs" in request else None
-                if initial is not None:
-                    initial.write_text(json.dumps(request["init_kwargs"]), encoding="utf-8")
-                argv = transport._typed_agate_command(executable, args, directory, kind, request, grace,
-                    reference, requirements_file=requirement_path, init_kwargs_file=initial)
-                process = transport._run_agate_with_cancel_retry(agate=argv, executable=executable,
-                    url=args.url, gateway_profile=args.gateway_profile,
-                    command_timeout=transport._gateway_job_timeout(args.timeout, grace),
-                    wait_budget=client_wait_timeout(args.timeout, grace))
+            process = transport._run_sdk_job(url=url,
+                kind={"run":"eval", "check":"compile"}.get(kind, kind),
+                payload=request, timeout=args.timeout, queue_wait_grace=grace)
     except SourceArchiveError as error:
-        emit_diagnostic({"failure_class": "infrastructure", "reason": error.code,
+        permanent = error.code in {"upload-invalid-url", "upload-rejected"}
+        emit_diagnostic({"failure_class": "request" if permanent else "infrastructure", "reason": error.code,
                          **({"http_status": error.status} if error.status is not None else {})})
-        print(transport.INFRASTRUCTURE_MARKER, file=sys.stderr)
-        return transport.ENVIRONMENT_TEMPFAIL
+        return 2 if permanent else transport.ENVIRONMENT_TEMPFAIL
     except transport.GatewayHTTPError as error:
         from .diagnostics import report_typed_limitation
         report_typed_limitation(f"http {error.status}")
         # No second route is submitted here. The owning experiment receives admission facts.
         emit_diagnostic({"failure_class": "infrastructure" if error.status in {429,502,503,504} else "request",
                          "http_status": error.status, "reason": "gateway-http-rejection"})
+        # Keep the SDK's structured validation body in the captured execution
+        # output, not only its HTTP status or private attempt diagnostics.
+        try:
+            detail = json.loads(error.detail)
+        except (TypeError, ValueError):
+            detail = error.detail
+        payload = detail.get("error", detail) if isinstance(detail, dict) else detail
+        print(json.dumps({"status": "failed", "http_status": error.status, "error": payload}))
         if error.status in {429,502,503,504}:
-            print(transport.INFRASTRUCTURE_MARKER, file=sys.stderr)
             return transport.ENVIRONMENT_TEMPFAIL
         print(f"HTTP {error.status}", file=sys.stderr)
         return 2

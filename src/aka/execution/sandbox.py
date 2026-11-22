@@ -52,7 +52,7 @@ def sandbox_command(
 ) -> subprocess.CompletedProcess[str]:
     """Run one command through the installed Execution CLI and capture its user-visible output."""
     from aka.execution import selection as execution
-    from aka.execution.legacy import runtime
+    from aka.execution.remote import runtime
     environment = os.environ.copy()
     environment.pop("ATREX_PRIVATE_REFERENCE_DIR", None)
     if private_reference_dir is not None:

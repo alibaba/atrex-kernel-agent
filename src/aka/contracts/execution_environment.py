@@ -74,10 +74,13 @@ class EnvironmentSnapshot:
     source: str = "unknown"
     probed_at: str | None = None
     diagnostics: tuple[str, ...] = ()
+    # Preserve provider fields omitted from normalized routing facts (e.g. NCU counters).
+    raw: Mapping = field(default_factory=dict)
 
     def __post_init__(self):
         object.__setattr__(self, "declarations", _freeze(self.declarations))
         object.__setattr__(self, "observed", _freeze(self.observed))
+        object.__setattr__(self, "raw", _freeze(self.raw))
         object.__setattr__(self, "diagnostics", tuple(self.diagnostics))
 
     def as_dict(self):

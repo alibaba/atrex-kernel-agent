@@ -48,21 +48,21 @@ the exact host-visible layout; the Python/Torch equivalents are in `adapter.py`.
 pointer through the candidate's existing launch path, synchronize after the target launch, and save
 the bytes below the episode profile directory. Run `scripts/timeline.py decode` with the raw file,
 manifest, event dictionary, clean source, instrumented source, workload identity, and optional
-measurement artifact. For a multi-file kernel/wrapper change, point each source argument at a small
-snapshot directory containing every changed source; directory hashes include relative names and file
-contents and reject symlinks. The current sandbox evaluator binds correctness only to `kernel.py`, so
-a multi-file snapshot remains diagnostic evidence; `decision_grade` requires a single-file source
-snapshot until the evaluator records a canonical source-set digest.
+measurement artifact. Point each source argument at a small snapshot directory containing the fixed
+adapter and every implementation source; directory hashes include relative names and file contents
+and reject symlinks. The sandbox evaluator binds correctness to the canonical complete Kernel source
+tree, so `decision_grade` evidence must identify the same source-set digest as the measured candidate.
 
-An exploration receipt may use `--correctness passed` as an explicit agent report. A final
-`decision_grade` receipt additionally requires `--correctness-evidence` pointing to the
-sandbox-owned `.atrex_long_horizon/evaluations.jsonl` produced by the immutable evaluator for the
-instrumented `kernel.py`.
+An exploration receipt may use `--correctness passed` as an explicit Agent report. In managed Light,
+the Supervisor's evaluator authority remains in immutable Gateway Records rather than an Agent-workspace log. Produce diagnostic evidence unless the
+Runtime explicitly returns a hash-bound correctness receipt that the tool accepts through
+`--correctness-evidence`. Final Kernel acceptance still uses the ordinary immutable evaluator after
+all probes are removed.
 
 Campaign workspaces expose `skills/` as a local symlink that is not uploaded implicitly. Add
 `--input skills/autonomous-gpu-kernel-timeline/backends/cuda_backend` to a sandbox command that reads
 the header or adapter at runtime. This deliberately selects the sandbox's custom dev-compatible
-transport while preserving evaluator inputs; it does not authorize changing `profile_driver.py`.
+transport while preserving evaluator inputs.
 
 Use the tool's structural verdict as a fact check. Interpret the resulting phases yourself.
 `backends/cuda_backend/test_backend.cu` is the compact runnable example for allocation, launch,

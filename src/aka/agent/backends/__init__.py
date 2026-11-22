@@ -16,7 +16,7 @@ from .base import (
 )
 from .claude import ClaudeAdapter
 from .qoder import QoderAdapter
-from .pi import PiAdapter
+from .pi import PiAdapter, pi_event_usage
 from .codex import CodexAdapter
 from .dsh import DshAdapter
 

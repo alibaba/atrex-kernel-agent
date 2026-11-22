@@ -10,10 +10,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from aka.task.problem.inputs import validate_performance_baseline
 from aka.contracts.workflow_records import measurement_document
+from .objectives import latency_only_result
 
-PERFORMANCE_OBJECTIVE = "shape_speedup_arithmetic_mean"
 TEST_RESULT_PREFIX = "[test_kernel] RESULT_JSON="
 ABBA_RESULT_PREFIX = "__ATREX_LONG_HORIZON_ABBA_RESULT__="
 NUMERICAL_RESULT_PREFIX = "__ATREX_NUMERICAL_RESULT__="
@@ -255,40 +254,6 @@ def _evaluation_failure(payload: dict[str, Any]) -> dict[str, str] | None:
     return None
 
 
-def _metadata_shape_latency_us(
-    metadata: object, shape_id: str, hardware: str = ""
-) -> float | None:
-    """Read one authoritative production latency from Atrex-Bench metadata."""
-    try:
-        return validate_performance_baseline(
-            {shape_id: None}, metadata, hardware
-        )[shape_id]
-    except ValueError:
-        return None
-
-
-def _metadata_speedup_mean(
-    metadata: object,
-    shape_ids: list[str],
-    latency_by_shape: dict[str, float],
-    hardware: str = "",
-) -> tuple[float | None, list[str]]:
-    if any(shape_id not in latency_by_shape for shape_id in shape_ids):
-        return None, []
-    try:
-        baselines = validate_performance_baseline(
-            {shape_id: None for shape_id in shape_ids}, metadata, hardware
-        )
-    except ValueError as exc:
-        return None, [str(exc)]
-    speedups: list[float] = []
-    for shape_id in shape_ids:
-        speedups.append(baselines[shape_id] / latency_by_shape[shape_id])
-    if len(speedups) != len(shape_ids) or not speedups:
-        return None, []
-    return sum(speedups) / len(speedups), []
-
-
 def _optimizer_result_from_eval(
     payload: dict[str, Any],
     shape_ids: list[str],
@@ -296,6 +261,7 @@ def _optimizer_result_from_eval(
     *,
     require_performance: bool = True,
     hardware: str = "",
+    finalize_performance: bool = True,
 ) -> dict[str, Any]:
     """Convert the typed gateway's Atrex-Bench result to optimizer RESULT_JSON."""
     failures: list[str] = []
@@ -365,6 +331,8 @@ def _optimizer_result_from_eval(
 
     latency_by_shape: dict[str, float] = {}
     if require_performance:
+        performance_status = passed.get("performance")
+        performance_status = performance_status if isinstance(performance_status, dict) else {}
         performance = payload.get("performance")
         performance = performance if isinstance(performance, dict) else {}
         performance_shapes = performance.get("shapes")
@@ -372,6 +340,8 @@ def _optimizer_result_from_eval(
             performance_shapes if isinstance(performance_shapes, dict) else {}
         )
         for shape_id in shape_ids:
+            status = performance_status.get(shape_id)
+            status = status if isinstance(status, dict) else {}
             shape_result = performance_shapes.get(shape_id)
             shape_result = shape_result if isinstance(shape_result, dict) else {}
             sample_ms: list[float] = []
@@ -382,10 +352,11 @@ def _optimizer_result_from_eval(
                 value = _finite_number(sample.get("end_to_end_time_ms"))
                 if value is not None and value > 0.0:
                     sample_ms.append(value)
-            if shape_result.get("error") is not None or not sample_ms:
+            if status.get("status") == "failed" or shape_result.get("error") is not None or not sample_ms:
                 failures.append(
                     f"sid={shape_id}: performance "
-                    + str(shape_result.get("error") or "has no valid samples")
+                    + str(shape_result.get("error") or status.get("reason")
+                          or ("failed" if status.get("status") == "failed" else "has no valid samples"))
                 )
                 continue
             latency_by_shape[shape_id] = statistics.median(sample_ms) * 1000.0
@@ -402,22 +373,12 @@ def _optimizer_result_from_eval(
         else 0.0
     )
     arithmetic = sum(latencies) / len(latencies) if complete and latencies else 0.0
-    speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape, hardware)
-        if require_performance
-        else (None, [])
-    )
-    failures.extend(metadata_failures)
     result = {
         "all_pass": not failures,
         "failures": failures,
         "latency_us_geomean": geomean,
         "latency_us_arith_mean": arithmetic,
         "latency_us_by_shape": latency_by_shape,
-        "speedup_vs_ref_mean": speedup_mean,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": speedup_mean,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max_abs,
         "max_rel_err": max_rel,
         "evaluator": "atrex-gpu-gateway/run",
@@ -449,13 +410,14 @@ def _merge_optimizer_results(
         str(shape_id): float(latency)
         for result in results
         for shape_id, latency in (result.get("latency_us_by_shape") or {}).items()
+        if type(latency) in (int, float) and math.isfinite(latency) and latency > 0
     }
     latencies = [
         latency_by_shape[shape_id]
         for shape_id in shape_ids
         if shape_id in latency_by_shape
     ]
-    complete = not require_performance or len(latencies) == len(shape_ids)
+    complete = not require_performance or bool(shape_ids) and len(latencies) == len(shape_ids)
     actionable_diagnostics: list[dict[str, str]] = []
     seen_diagnostics: set[tuple[str, str]] = set()
     for result in results:
@@ -480,21 +442,12 @@ def _merge_optimizer_results(
             if len(actionable_diagnostics) >= 8:
                 break
 
-    speedup_mean, metadata_failures = (
-        _metadata_speedup_mean(metadata, shape_ids, latency_by_shape, hardware)
-        if require_performance
-        else (None, [])
-    )
     failures = [
         str(failure) for result in results for failure in (result.get("failures") or [])
     ]
-    for failure in metadata_failures:
-        if failure not in failures:
-            failures.append(failure)
 
     merged = {
         "all_pass": complete
-        and (not require_performance or speedup_mean is not None)
         and all(result.get("all_pass") for result in results),
         "failures": failures,
         "latency_us_geomean": (
@@ -506,10 +459,6 @@ def _merge_optimizer_results(
             sum(latencies) / len(latencies) if complete and latencies else 0.0
         ),
         "latency_us_by_shape": latency_by_shape,
-        "speedup_vs_ref_mean": speedup_mean,
-        "speedup_vs_ref_geomean": None,
-        "performance_score": speedup_mean,
-        "performance_objective": PERFORMANCE_OBJECTIVE,
         "max_abs_err": max(
             float(result.get("max_abs_err") or 0.0) for result in results
         ),
@@ -534,41 +483,8 @@ def _positive_number(value: object) -> float | None:
     return number if number > 0.0 and math.isfinite(number) else None
 
 
-def _with_workspace_performance_score(
-    workspace: Path, result: dict[str, Any], *, baseline=None
-) -> dict[str, Any]:
-    """Normalize legacy per-shape results to the shared arithmetic-mean score."""
-    if result.get("performance_objective") == PERFORMANCE_OBJECTIVE:
-        return result
-    candidate_by_shape = result.get("latency_us_by_shape")
-    if not isinstance(candidate_by_shape, dict) or not candidate_by_shape:
-        return result
-    performance = measurement_document(baseline.result) if baseline is not None else {}
-    baseline_by_shape = performance.get("latency_us_by_shape")
-    if not isinstance(baseline_by_shape, dict) or set(candidate_by_shape) != set(
-        baseline_by_shape
-    ):
-        return result
-    speedups: list[float] = []
-    for shape_id, raw_candidate in candidate_by_shape.items():
-        candidate = _positive_number(raw_candidate)
-        reference = _positive_number(baseline_by_shape.get(shape_id))
-        if candidate is None or reference is None:
-            return result
-        speedups.append(reference / candidate)
-    if not speedups:
-        return result
-    score = sum(speedups) / len(speedups)
-    hydrated = dict(result)
-    hydrated["speedup_vs_ref_mean"] = score
-    hydrated["speedup_vs_ref_geomean"] = None
-    hydrated["performance_score"] = score
-    hydrated["performance_objective"] = PERFORMANCE_OBJECTIVE
-    return hydrated
-
-
 def _hydrate_result_lines(workspace: Path, stdout: str, *, baseline=None) -> str:
-    """Return ordinary dev evaluator output with the shared score contract."""
+    """Return ordinary evaluator output with latency-only metrics."""
     normalized: list[str] = []
     for line in stdout.splitlines():
         if not line.startswith(TEST_RESULT_PREFIX):
@@ -585,7 +501,7 @@ def _hydrate_result_lines(workspace: Path, stdout: str, *, baseline=None) -> str
         normalized.append(
             TEST_RESULT_PREFIX
             + json.dumps(
-                _with_workspace_performance_score(workspace, result, baseline=baseline),
+                latency_only_result(result),
                 ensure_ascii=False,
                 allow_nan=False,
             )
@@ -682,7 +598,7 @@ def _hydrate_abba_result_lines(workspace: Path, stdout: str, *, baseline=None) -
             if not isinstance(row, dict) or not isinstance(row.get("result"), dict):
                 runs.append(row)
                 continue
-            result = _with_workspace_performance_score(workspace, row["result"], baseline=baseline)
+            result = latency_only_result(row["result"])
             if result is row["result"]:
                 runs.append(row)
                 continue

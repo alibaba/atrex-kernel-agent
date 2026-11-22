@@ -10,6 +10,17 @@ from .gateway_request import _parse_env_items
 PROFILE_ENVIRONMENT_KEYS = frozenset(("PROFILE_ITERS", "PROFILE_WARMUP",
     "PROFILE_WORKLOAD_IDX", "PROFILE_SHAPE_ID", "PROFILE_DEVICE"))
 from aka.execution.configuration import transport_environment_key
+
+
+def host_evaluation_environment(environment):
+    """Select evaluation defaults from a host environment, never forward it wholesale.
+
+    Transport settings stay local to request preparation. Only GPU workload
+    defaults are inherited; explicit Agent --env values are handled separately.
+    """
+    return {key: value for key, value in environment.items()
+            if transport_environment_key(key) or key in PROFILE_ENVIRONMENT_KEYS
+            or key.startswith(("TRITON_", "TORCH_", "NCCL_", "CUDA_LAUNCH_"))}
 _PROTECTED_FILES = frozenset(("kernel.py", "test_kernel.py", "reference.py", "input.py",
     "shapes.json", "metadata.json", "roofline.json", "solution.json", "requirements.txt",
     "agent_problem.json"))

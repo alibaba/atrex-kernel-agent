@@ -1,6 +1,6 @@
 # Agent workspace isolation
 
-The default `light` profile runs a native coding-agent process on macOS/Linux.
+The default `light` profile runs a native coding-agent process with capture on macOS/Linux.
 Select `light-sandbox` for coordinator-side Bubblewrap isolation on Linux.
 This is separate from the remote GPU executor. An explicit Bubblewrap selection fails
 when the host cannot provide it; it does not fall back to native execution.
@@ -10,15 +10,31 @@ when the host cannot provide it; it does not fall back to native execution.
 ```bash
 aka optimize --repo-root "$PWD" --profile light-sandbox \
   --problem /path/to/atrex-bench/operator \
-  --platform '<gpu_arch>' --framework Cuda --agent-cli claude \
+  --platform '<gpu_arch>' --optimization-mode ultra --framework Cuda --agent-cli claude \
   --workspace-base /path/to/new-runs
 ```
 
-The coordinator needs `bwrap` and permission to create the required user/mount/PID
-namespaces. A remote GPU gateway does not satisfy this local requirement.
-On macOS, use native Light or run the coordinator in an appropriately configured Linux VM.
+The coordinator needs the `bwrap` executable and permission to create the required
+user/mount/PID namespaces. A remote GPU gateway does not satisfy this local requirement.
+Native `light` does not require Bubblewrap. On macOS, use native Light or run the complete
+coordinator in a Linux VM. A minimal Lima setup is:
 
-Configure custom isolation through the Agent provider, with a composition patch passed through `--patch`:
+```bash
+# macOS host
+brew install lima
+limactl start --name=aka-light template:default
+limactl shell aka-light
+
+# inside the default Ubuntu guest
+sudo apt-get update
+sudo apt-get install -y bubblewrap git python3 python3-venv
+```
+
+Install AKA, the Agent CLI and its credentials inside the guest, then launch
+`--profile light-sandbox` there. The GPU workload remains remote in Agate; Lima does not need GPU
+passthrough.
+
+Configure custom isolation through the Agent provider, with a composition patch:
 
 ```json
 {
@@ -31,16 +47,38 @@ Configure custom isolation through the Agent provider, with a composition patch 
 }
 ```
 
-A patch replaces the whole Agent configuration. Keep `sandbox: bwrap` to retain
-isolation. The shared Agent does not accept the old `capture` or `read_only_paths`
-configuration keys. Filesystem grants come from the prepared Session request.
+Optional engineering references are selected per optimization launch, independently of the Agent
+composition patch. They work with both Agent boundaries:
+
+```bash
+aka optimize --repo-root /path/to/agent --profile light-sandbox \
+  --problem /path/to/problem --platform L20N --optimization-mode ultra --framework Cuda \
+  --agent-reference-paths /knowledge/nvidia \
+  --agent-reference-paths /knowledge/cuda-guides
+```
+
+The option may be repeated. Use `[NAME=]DIR` to name an entry. Each directory appears at
+`references/<name-or-directory-basename>/` inside the Agent workspace. Basenames must be unique. Bubblewrap
+mounts the directory read-only. Native `light` creates a symbolic link to the original directory;
+because the Agent runs as the coordinator OS user, Light cannot prevent modification of those
+original files. Retain an independent copy or backup before exposing knowledge to a native Agent.
+The Prompt identifies these directories as optional engineering knowledge rather than task
+contract, measurement evidence, or candidate source. References are excluded from Kernel Git,
+candidate snapshots, and remote command uploads, and cannot be selected as GPU request files. The
+final Kernel must not import or depend on them.
+A patch replaces the whole Agent configuration. Preserve the selected sandbox and proc mode.
+Session capture is built into shared execution and has no `capture` patch option.
+The former `--agent-sandbox`, `--bwrap-executable`, and `--agent-read-only-path` optimizer
+flags are not the installed configuration surface. The provider generates its internal
+environment from these options.
 
 | Option | Meaning |
 | --- | --- |
 | `sandbox` | `none` or `bwrap` |
 | `bwrap_executable` | Bubblewrap executable, default `bwrap` |
-| `proc_mode` | `private` procfs, or explicit `projected` compatibility view |
-| `timeout_seconds` | Per-invocation active-time ceiling; admitted authenticated tool waits are excluded; Workflow Episode budget is separate |
+| `proc_mode` | `private` procfs, or the existing complete `host` procfs and PID namespace |
+| `timeout_seconds` | Optional provider active-time ceiling; omitted by default |
+| `pause_agent_during_requests` | Default `false`: Agent stays runnable during Runtime calls; `true` pauses its process tree and excludes request waits from active time |
 
 ## Launch lifecycle
 
@@ -49,9 +87,9 @@ native transcript discovery and Codex ledger observation, constructs the allowed
 view, passes environment values through an anonymous argument FD, and launches the owned
 process tree. Capture observes the same Home throughout Session resume and close.
 
-The managed draft keeps its absolute path. The controller worktree, Git common directory,
-private Journal, evaluator checkout, and Gateway credentials are not mounted into an isolated
-optimization Session. The Agent receives scoped tools through the Agent-owned Unix socket instead.
+The persistent Agent workspace keeps its absolute path and its own Git repository. Campaign-private
+stores, evaluator inputs and Gateway credentials are outside the isolated optimization Session.
+The Agent receives a scoped Runtime capability through the shared Unix-socket ToolHost.
 
 Same-Session resume retains its Home and sandbox selection. A changed Home/config root or
 sandbox mode requires a new Session. Recorded campaign continuations restore their frozen
@@ -62,8 +100,8 @@ provider options; do not reinterpret a running Session by changing environment v
 Bubblewrap starts from an empty root with selected read-only system/runtime files, minimal
 devices, private temporary directories, and its selected proc view. It mounts:
 
-- The managed draft, permitted editable source roots, custom Skills/tools, and scratch.
-- Public contracts, immutable imported sources, reserved clients/Skills, and eligible history read-only.
+- The managed draft, editable `kernel.py + impl/` source tree, custom Skills/tools, and scratch.
+- Public contracts, reserved clients/Skills, and eligible history read-only.
 - A writable Session-specific Provider Home outside the candidate Git tree.
 - Minimal CLI installation files and explicitly validated extra grants.
 
@@ -74,51 +112,89 @@ Model credentials intentionally supplied to the Agent remain usable by it.
 
 Extra grants reject broad host-home roots, private state, symlink traversal, and unsafe
 overlap with workspace/Home boundaries. The Agent shares host networking for model and
-scoped tool access; this configuration supplies no network allowlist or cgroup quota.
+loopback Runtime access; this configuration supplies no network allowlist or cgroup quota.
 Native mode retains the operating-system authority of the launching user.
 
 ## Auxiliary sessions
 
-Supervisor reviewers and preprocessing calls use a temporary allowlist view: declared
-inputs are read-only, and declared outputs are copied back through bounded no-follow reads
-only after successful completion without policy/environment termination.
-Timeouts, interruption, failure, and guard termination do not publish auxiliary outputs.
+Claim Review uses an independent workspace and follows the selected Agent sandbox configuration.
+With `sandbox: bwrap`, supplied evidence is mounted read-only and `review.json` is writable.
+With `sandbox: none`, the Reviewer runs natively in that workspace without a Bubblewrap dependency.
+A separate directory organizes inputs and outputs; it is not an OS access boundary in native mode.
+Final-source reviews and preprocessing also use declared auxiliary workspace roles.
 
-Public problem preprocessing is the explicit trusted exception allowed to read detailed
-inputs when creating the generalized contract. Optimization Sessions do not inherit that
-private input view. Provider-created child agents inherit the optimizer namespace rather
-than obtaining a new reviewer grant.
+The local Wiki worker also follows the selected Agent sandbox. With `sandbox: none`, it runs
+with the launching user's host filesystem authority and no OS filesystem confinement, even if
+Bubblewrap is installed. Its prepared request directory is not an access boundary. Installing
+Bubblewrap alone does not change native execution. With `sandbox: bwrap`, the worker uses scoped
+filesystem grants and the selected proc mode; unavailable isolation fails instead of running natively.
+
+Public problem preprocessing can read detailed inputs to create the generalized contract.
+Optimization Sessions do not inherit that private input view.
 
 ## Scratch and reusable state
 
-Every new managed Light Episode starts with empty scratch, in native and sandbox modes.
-Same-Episode continuations preserve it. Candidate source and custom Skills/tools have
-separate snapshot rules; reusable state can survive an unpromoted kernel.
-Reserved assets are refreshed from trusted sources. See
-[reusable workspace](optional-light-modules.md#reusable-workspace).
+Episodes resume the same workspace, Git repository, scratch files and Session. Runtime refreshes
+managed clients and visibility-filtered evidence in place; it does not reset source, branches,
+uncommitted edits or scratch at an Episode boundary.
 
-## Restricted containers and preflight
+## Restricted containers
 
-Use `proc_mode: projected` only when deliberately selecting the supported restricted-container
-view. It preserves namespace and filesystem isolation while exposing a bounded Session process
-view. It requires a compiler/development headers and ordinary namespace/bind permissions.
+Use `proc_mode: host` as the default for Light inside Aone Sandbox. It preserves Bubblewrap's
+filesystem isolation but shares the outer container's PID namespace and complete `/proc` with
+the Agent. Ordinary Linux and Lima continue to default to `private`.
+The isolated Wiki worker inherits this selected proc mode. Its Python/Claude subprocesses
+receive a usable `/proc`, rather than an empty directory; filesystem grants remain scoped
+to the prepared request and required installations.
 
-The installed, model-free compiler preflight is:
+This is the default and required Bubblewrap mode in the current Aone Sandbox environment: its outer
+container policy rejects Bubblewrap's normal nested procfs mount. Use an Agent composition patch
+that retains the complete `light-sandbox` settings:
 
-```bash
-python3 -c "from aka.agent.execution.proc_view import validate_runtime; validate_runtime()"
+```json
+{
+  "api_version": 1,
+  "patches": [{"id": "agent", "config": {
+    "sandbox": "bwrap",
+    "proc_mode": "host"
+  }}]
+}
 ```
 
-Run it in the Linux environment that will actually launch the Agent. It checks the packaged
-shim and compiler; it does not certify Bubblewrap namespace permission or GPU execution.
-See [projected proc details](optional-light-modules.md#bubblewrap-in-restricted-containers).
+Pass it as `--profile light-sandbox --patch /path/to/patch.json`. No compiler, compatibility shim or `LD_PRELOAD` configuration is required. Because
+the Agent can see every process in the Aone Sandbox, use a dedicated Sandbox and do not treat
+host mode as process isolation.
 
 ## Verification and rollback
 
-[Light verification](optional-light-modules.md#verification-scope) records local process,
-allowlist, auxiliary-publication, and Linux Bubblewrap evidence. These checks do not establish
-all-provider authentication or live GPU qualification.
+Validate the selected boundary on the deployment host: configured read-only paths must reject
+writes, Runtime calls must remain reachable, and cancellation must stop the owned process tree.
+Offline tests alone do not establish Linux Bubblewrap, provider authentication or live GPU qualification.
 
 Stop the campaign before deployment/configuration changes. Preserve the original Home,
 private store, and frozen selection for recovery. Use a new workspace when changing workflows
 or incompatible provider/resource identities.
+
+## Limits of the boundary
+
+`private` creates a PID namespace and private procfs. `host` shares the existing PID namespace
+and complete `/proc`; same-UID processes can be inspected or signalled where the host permits it.
+Host mode is intended for a dedicated, trusted outer container such as Aone Sandbox. Its read-only
+filesystem mounts are not a process-isolation guarantee. Native mode has neither restriction.
+Provider-spawned child agents inherit the parent's namespace and filesystem grants; they do not
+receive a separately narrowed sandbox. A reviewer has separate evidence and native Session state,
+but only Bubblewrap enforces the evidence mounts as read-only. Review outputs are consumed only
+after successful process completion, using bounded no-follow regular-file reads and schema checks.
+GPU-library imports in development are not treated as final-submission violations; the submission
+policy evaluates the implementation that is actually submitted.
+
+Light does not install a host-command or GPU-library import blocker. Reading package
+metadata or importing a library does not terminate the Session. Use Runtime for measurements
+on the selected worker and their recorded evidence. Agent-owned source and Git remain editable.
+Revoking Runtime access still stops its bound Agent invocation; it does not leave an Agent
+running with unusable tools.
+
+In sandbox mode, the Wiki worker receives the selected Wiki resources and configuration, the read-only AKA
+package, and the interpreter/CLI installations and DNS/TLS files needed to run them. Those
+installation mounts can include shared Python dependencies; this is not per-import isolation.
+Native execution does not enforce these filesystem grants in the OS.

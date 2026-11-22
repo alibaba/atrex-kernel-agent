@@ -12,7 +12,7 @@ import uuid
 
 from aka.contracts.agent import AgentAccess, AgentMount, AgentCapabilities
 from .backends import DEFAULT_BACKEND_REGISTRY
-from .execution.home import PREPARED_ENV, prepare_home
+from .execution.home import PREPARED_ENV, SESSION_HOME_ROOT_ENV, SESSION_HOME_ID_ENV, prepare_home
 from .execution.native import NativeExecution
 from .execution.process import (
     descendant_process_groups,
@@ -24,7 +24,7 @@ from .resources import shell_guard_path
 from .environment import HOST_TRANSPORT_PREFIXES as _HOST_TRANSPORT_PREFIXES, EXPLICIT_ROUTING, POLICY_ENVIRONMENT_PREFIX, filter_environment, host_transport
 
 
-DEFAULT_AGENT_TIMEOUT_SECONDS = 8 * 60 * 60
+DEFAULT_AGENT_TIMEOUT_SECONDS = None
 
 _STANDARD_ENVIRONMENT = {
     "PATH", "PYTHONPATH", "HOME", "TERM", "LANG", "LANGUAGE", "TZ",
@@ -78,12 +78,15 @@ class AgentOptions:
     timeout_seconds: float | None = DEFAULT_AGENT_TIMEOUT_SECONDS
     state_directory: Path | None = None
     proc_mode: str = "private"
+    pause_agent_during_requests: bool = False
 
     def __post_init__(self):
         if self.sandbox not in {"none", "bwrap"}:
             raise ValueError("Agent sandbox must be none or bwrap")
-        if self.proc_mode not in {"private", "projected"}:
-            raise ValueError("Agent proc_mode must be private or projected")
+        if self.proc_mode not in {"private", "host"}:
+            raise ValueError("Agent proc_mode must be private or host")
+        if type(self.pause_agent_during_requests) is not bool:
+            raise TypeError("Agent pause_agent_during_requests must be boolean")
         validate_timeout(self.timeout_seconds)
 
 
@@ -148,7 +151,13 @@ class Agent:
 
     @property
     def capabilities(self):
-        return AgentCapabilities(filesystem_isolation=self.options.sandbox == "bwrap", tool_runtime=True)
+        return AgentCapabilities(
+            filesystem_isolation=self.options.sandbox == "bwrap", tool_runtime=True,
+            proc_mode=self.options.proc_mode,
+            pause_agent_during_requests=(
+                self.options.pause_agent_during_requests and self._process_runner is None
+            ),
+        )
 
     @property
     def configuration_identity(self):
@@ -183,6 +192,10 @@ class Agent:
         self._check_open()
         workspace = Path(workspace).absolute()
         values = dict(environment)
+        session_state_root = values.pop(SESSION_HOME_ROOT_ENV, None) or self.options.state_directory
+        home_id = values.pop(SESSION_HOME_ID_ENV, None)
+        if home_id is not None and not session_state_root:
+            raise ValueError("Persistent Agent Home identity requires a private state directory")
         _validate_environment(values)
         values = filter_environment(values, backend, explicit=explicit_environment)
         # Internal markers are created here, never accepted from caller environments.
@@ -246,7 +259,7 @@ class Agent:
                 Path(values.get("HOME") or Path.home()).expanduser().resolve()
             )
             state_root = Path(
-                self.options.state_directory or workspace.parent / ".aka-agent-homes"
+                session_state_root or workspace.parent / ".aka-agent-homes"
             ).absolute()
             validate_access(
                 workspace,
@@ -274,12 +287,14 @@ class Agent:
                     for m in mounts
                 ):
                     mounts.append(AgentMount(guard, guard))
+        if self.options.sandbox == "bwrap" or home_id is not None:
             values, host, home = prepare_home(
                 workspace,
                 session_id,
                 backend,
                 values,
-                state_root=self.options.state_directory,
+                state_root=session_state_root,
+                home_id=home_id,
             )
             names = (
                 "HOME",
@@ -349,10 +364,11 @@ class Agent:
             if context.control is not None:
                 context.control.kill()
             processes = tuple(context.processes)
-            from .tools.protocol import TOKEN_ENV
-            token = context.authority.get(TOKEN_ENV)
-        if token and self._tool_host is not None:
-            self._tool_host.revoke(token)
+        # A native Session owns its invocation, not the enclosing tool grant.
+        # bind_control drains/cancels this invocation's requests on exit. The
+        # grant remains owned by tool_session(), so a fresh recovery Session can
+        # bind it after this invocation has stopped. Explicit grant revocation
+        # still kills the bound process and permanently rejects further use.
         for process in processes:
             signal_process_groups(
                 {process.pid} | descendant_process_groups(process.pid), signal.SIGKILL
@@ -421,7 +437,7 @@ class Agent:
             )
             from .execution.control import SessionControl
             from .tools.protocol import TOKEN_ENV
-            control = SessionControl(suspend=self._process_runner is None)
+            control = SessionControl(suspend=self.capabilities.pause_agent_during_requests)
             with self._lock:
                 if context.cancelled or self._closed:
                     raise RuntimeError("Agent session has been cancelled")

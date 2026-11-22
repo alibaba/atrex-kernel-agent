@@ -12,6 +12,11 @@ from typing import Protocol
 
 DEPENDENCY_GUARD_POLL_SECONDS = 0.25
 AGENT_HEARTBEAT_SECONDS = 60
+OUTPUT_LIMIT_EXIT_STATUS = 91
+OUTPUT_LIMIT_INTERRUPT_MARKER = (
+    "[orchestrator] Claude max_output_tokens observed; "
+    "terminated CLI wrapper for same-session recovery"
+)
 
 
 class ProcessRunner(Protocol):
@@ -111,11 +116,13 @@ def signal_process_groups(process_groups: set[int], sig: signal.Signals) -> None
 
 
 def _monitor(
-    proc, stop, failures, environment, groups, violation=None, unavailable=None
+    proc, stop, failures, environment, groups, violation=None, unavailable=None, groups_lock=None
 ):
     """Observe a local process tree; application policy is supplied by its host."""
     while not stop.wait(DEPENDENCY_GUARD_POLL_SECONDS):
-        groups.update(descendant_process_groups(proc.pid))
+        observed_groups = descendant_process_groups(proc.pid)
+        with groups_lock:
+            groups.update(observed_groups)
         if proc.poll() is not None:
             return
         failure = unavailable(environment) if unavailable is not None else None
@@ -134,18 +141,23 @@ def _monitor(
                     break
         if failure is not None:
             failures.append(failure)
-            signal_process_groups(groups, signal.SIGKILL)
+            with groups_lock:
+                snapshot = groups.copy()
+            signal_process_groups(snapshot, signal.SIGKILL)
             return
 
 
 def dependency_guard(
-    proc, stop, failures, environment, groups, violation=None, unavailable=None
+    proc, stop, failures, environment, groups, violation=None, unavailable=None, groups_lock=None
 ):
+    groups_lock = groups_lock or threading.Lock()
     try:
-        _monitor(proc, stop, failures, environment, groups, violation, unavailable)
+        _monitor(proc, stop, failures, environment, groups, violation, unavailable, groups_lock)
     except Exception as error:
         failures.append((126, f"Agent process monitor failed: {type(error).__name__}"))
-        signal_process_groups(groups, signal.SIGKILL)
+        with groups_lock:
+            snapshot = groups.copy()
+        signal_process_groups(snapshot, signal.SIGKILL)
 
 
 def run_bounded(
@@ -160,17 +172,27 @@ def run_bounded(
     unavailable=None,
     violation=None,
 ) -> tuple[str, str, int, bool]:
-    """Bound active Agent time; admitted host waits suspend the owned tree."""
+    """Bound active Agent time; host waits suspend the tree only when configured."""
     from ..provider import validate_timeout
     from .control import SessionControl
 
     validate_timeout(timeout)
     control = session_control or SessionControl()
     spawn = spawn or spawn_session
+    from ..session_capture import start_session_capture, finish_session_capture
+    capture = start_session_capture(command, cwd, env or {})
     proc = None
+    communicate = None
+    interrupted = False
+    output_limit_detected = False
     guard = None
     guard_stop = threading.Event()
     groups, failures = set(), []
+    groups_lock = threading.Lock()
+
+    def group_snapshot():
+        with groups_lock:
+            return groups.copy()
     timed_out = False
     started = time.monotonic()
     last_heartbeat = started
@@ -183,25 +205,32 @@ def run_bounded(
             environment=env, cwd=str(cwd), stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         )
+        communicate = (lambda timeout=None: capture.communicate(proc, timeout)) if capture else proc.communicate
         groups.add(proc.pid)
         control.attach(proc.pid)
         guard = threading.Thread(target=dependency_guard,
-            args=(proc, guard_stop, failures, env or {}, groups, violation, unavailable),
+            args=(proc, guard_stop, failures, env or {}, groups, violation, unavailable, groups_lock),
             name=f"agent-monitor-{proc.pid}", daemon=True)
         guard.start()
         while True:
             control.poll()
+            if capture is not None and capture.output_limit_detected.is_set():
+                output_limit_detected = True
+                control.kill()
+                signal_process_groups(group_snapshot(), signal.SIGKILL)
+                stdout, stderr = communicate()
+                break
             remaining = control.clock.remaining(timeout)
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(command, timeout)
             try:
-                stdout, stderr = proc.communicate(timeout=min(.1, remaining))
+                stdout, stderr = communicate(timeout=min(.1, remaining))
                 break
             except subprocess.TimeoutExpired as exc:
                 if control.clock.remaining(timeout) <= 0:
                     raise
                 now = time.monotonic()
-                sizes = (len(exc.output or b""), len(exc.stderr or b""))
+                sizes = capture.output_sizes() if capture is not None else (len(exc.output or b""), len(exc.stderr or b""))
                 if sizes != output_sizes:
                     last_output_change, output_sizes = now, sizes
                 if now - last_heartbeat >= AGENT_HEARTBEAT_SECONDS:
@@ -214,13 +243,15 @@ def run_bounded(
     except subprocess.TimeoutExpired:
         timed_out = True
         control.kill()
-        signal_process_groups(groups, signal.SIGKILL)
-        stdout, stderr = proc.communicate()
+        signal_process_groups(group_snapshot(), signal.SIGKILL)
+        stdout, stderr = communicate()
     except BaseException:
+        interrupted = True
         control.kill()
         if proc is not None:
-            signal_process_groups(groups | descendant_process_groups(proc.pid), signal.SIGKILL)
-            proc.communicate()
+            signal_process_groups(group_snapshot() | descendant_process_groups(proc.pid), signal.SIGKILL)
+            if communicate is not None:
+                communicate()
         raise
     finally:
         guard_stop.set()
@@ -228,8 +259,13 @@ def run_bounded(
             guard.join(timeout=1)
         # Kill before closing so a late tool completion can never resume a survivor.
         control.kill()
-        signal_process_groups(groups, signal.SIGKILL)
+        signal_process_groups(group_snapshot(), signal.SIGKILL)
+        finish_session_capture(capture, exit_status=proc.returncode if proc else None,
+                               timed_out=timed_out, interrupted=interrupted)
     returncode = proc.returncode
+    if output_limit_detected:
+        returncode = OUTPUT_LIMIT_EXIT_STATUS
+        stderr = (stderr or "") + "\n" + OUTPUT_LIMIT_INTERRUPT_MARKER + "\n"
     if failures:
         returncode, message = failures[0]
         stderr = (stderr or "") + "\n" + message + "\n"

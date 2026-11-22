@@ -6,7 +6,7 @@
       "name": "aka.execution.plugin",
       "required": true,
       "config": {
-        "profile": "legacy"
+        "profile": "remote"
       }
     },
     {
@@ -18,7 +18,8 @@
           "${aka:repo_root}/plugins/gpu-wiki"
         ],
         "bundles": [
-          "kernel-development"
+          "measurement-session",
+          "research-records"
         ]
       }
     },
@@ -42,18 +43,18 @@
     },
     {
       "id": "agent",
-      "name": "aka.workflow.legacy.agent_plugin",
+      "name": "aka.agent.plugin",
       "required": true
     },
     {
       "id": "evaluation",
       "name": "aka.evaluation.plugin",
-      "required": true
-    },
-    {
-      "id": "canonical-reader",
-      "name": "aka.workflow.legacy.canonical_reader_plugin",
-      "required": true
+      "required": true,
+      "config": {
+        "shape_batch_size": 10,
+        "comparison_method": "native-abba",
+        "measurement_repetitions": 1
+      }
     },
     {
       "id": "experiment",
@@ -62,22 +63,12 @@
     },
     {
       "id": "workflow-observer",
-      "name": "aka.workflow.legacy.observer",
-      "required": true
-    },
-    {
-      "id": "experiment-episode-evidence",
-      "name": "aka.experiment.episode_evidence_plugin",
-      "required": true
-    },
-    {
-      "id": "evaluation-episode-interpreter",
-      "name": "aka.evaluation.episode_evidence_plugin",
+      "name": "aka.workflow.light.observer",
       "required": true
     },
     {
       "id": "workflow",
-      "name": "aka.workflow.legacy.plugin",
+      "name": "aka.workflow.light.plugin",
       "required": true,
       "config": {
         "startup": true

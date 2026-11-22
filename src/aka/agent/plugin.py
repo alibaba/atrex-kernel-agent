@@ -18,13 +18,15 @@ Config = {
         "session_name": {"type": "string"},
         "sandbox": {"type": "string", "enum": ["none", "bwrap"]},
         "bwrap_executable": {"type": "string", "minLength": 1},
-        "proc_mode": {"type": "string", "enum": ["private", "projected"]},
+        "proc_mode": {"type": "string", "enum": ["private", "host"]},
         "timeout_seconds": {"type": "number", "exclusiveMinimum": 0},
+        "pause_agent_during_requests": {"type": "boolean"},
         "state_directory": {"type": "string", "minLength": 1},
     },
     "additionalProperties": False,
 }
-Defaults = {"timeout_seconds": DEFAULT_AGENT_TIMEOUT_SECONDS, "sandbox": "none", "bwrap_executable": "bwrap", "proc_mode": "private", "session_name": ""}
+Defaults = {"sandbox": "none", "bwrap_executable": "bwrap", "proc_mode": "private",
+            "session_name": "", "pause_agent_during_requests": False}
 
 
 def options(config):
@@ -37,6 +39,7 @@ def options(config):
         config.get("timeout_seconds", DEFAULT_AGENT_TIMEOUT_SECONDS),
         Path(config["state_directory"]) if config.get("state_directory") else None,
         config.get("proc_mode", "private"),
+        pause_agent_during_requests=config.get("pause_agent_during_requests", False),
     )
 
 
@@ -46,36 +49,6 @@ def validate_config(config):
         from .execution.bubblewrap import executable
 
         executable(value.bwrap_executable)
-        if value.proc_mode == "projected":
-            from .execution.proc_view import validate_runtime
-            validate_runtime()
-
-
-def selected_guard(ctx):
-    # Resolve lazily after the other module contributions have been mounted.
-    cached = {}
-
-    def get():
-        from aka.contracts.agent_resources import WorkspaceResourceContribution
-        from .resources import selected_runtime_file
-
-        entries = [
-            entry.value
-            for entry in ctx.resolve("workspace_resources")
-            if entry.name == "execution-shell-guard"
-        ]
-        if len(entries) != 1 or not isinstance(
-            entries[0], WorkspaceResourceContribution
-        ):
-            raise ValueError(
-                "Agent requires exactly one selected execution-shell-guard"
-            )
-        contribution = entries[0]
-        if contribution not in cached:
-            cached[contribution] = selected_runtime_file(contribution)
-        return cached[contribution]
-
-    return get
 
 
 def apply(ctx, config):
@@ -83,7 +56,6 @@ def apply(ctx, config):
 
     agent = Agent(
         options(config),
-        shell_guard=selected_guard(ctx),
         session_name=config.get("session_name", ""),
         unavailable=lambda environment: selected_process_policy(ctx, "unavailable", environment),
         violation=lambda argv, environment: selected_process_policy(ctx, "violation", argv, environment),

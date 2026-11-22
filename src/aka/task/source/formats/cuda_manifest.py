@@ -83,7 +83,6 @@ def editable(name):
 
 
 class CudaManifest:
-    def seed_metadata(self, workspace, framework, name, *, native_eval):pass
     def prepare_source(self, request, source_provider, *, options, state_root, native_eval):
         if request.initial.kind == 'sol' or not native_eval:
             raise ValueError('CUDA manifests require native Atrex-Bench Eval')
@@ -118,7 +117,12 @@ class CudaManifest:
         return validate({name:inputs[prefix+name] for name in ('solution.json',*value['source']['files'])})
     def editable(self, policy, name):return editable(name)
     def instructions(self, policy):
-        return '\n## Native CUDA candidate\nEdit the manifest and its declared native sources. Read the atrex-gpu-gateway Skill for file organization, JSON configuration and measurement usage.\n'
+        return (
+            "\n## Native CUDA candidate\n"
+            "Edit `solution.json` and only the native source files it declares. Keep its CUDA "
+            "entry point, local source list and torch-extension build sources consistent. Use the "
+            "installed `gpu-measurement` Skill for measurement.\n"
+        )
     def metadata(self, policy):return {}
     def obsolete(self, workspace, policy):
         value=read(workspace)

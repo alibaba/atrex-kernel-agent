@@ -1,6 +1,6 @@
 """Original experiment execution and measurement coordination."""
-from .runner import LegacyExperiment
+from .runner import Experiment
 from .file_records import FileExperimentRecords
-from .factory import LegacyExperimentFactory
+from .factory import ExperimentFactory
 
-__all__ = ["LegacyExperiment", "FileExperimentRecords", "LegacyExperimentFactory"]
+__all__ = ["Experiment", "FileExperimentRecords", "ExperimentFactory"]

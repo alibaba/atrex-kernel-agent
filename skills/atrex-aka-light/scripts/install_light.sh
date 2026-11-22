@@ -5,7 +5,7 @@ usage() {
   cat <<'EOF'
 Usage: install_light.sh [OPTIONS] AKA_REPO_ROOT
 
-Build and install matching atrex-aka-framework, atrex-aka-legacy, and
+Build and install matching atrex-aka-framework and
 atrex-aka-light wheels from one AKA checkout.
 
 Options:
@@ -73,7 +73,7 @@ if [[ ! -f "$repo_root/tools/build_distributions.py" ]]; then
   echo "install_light.sh: missing tools/build_distributions.py under $repo_root" >&2
   exit 2
 fi
-for package in atrex-aka-framework atrex-aka-legacy atrex-aka-light; do
+for package in atrex-aka-framework atrex-aka-light; do
   if [[ ! -f "$repo_root/packages/$package/pyproject.toml" ]]; then
     echo "install_light.sh: missing package metadata for $package" >&2
     exit 2
@@ -137,7 +137,7 @@ echo "Wheel directory: $wheel_dir"
 
 if ! "$python_bin" "$repo_root/tools/build_distributions.py" \
   --output "$build_dir" \
-  atrex-aka-framework atrex-aka-legacy atrex-aka-light; then
+  atrex-aka-framework atrex-aka-light; then
   if ((offline)); then
     echo "install_light.sh: offline build failed; verify the complete build dependency wheelhouse (see diagnostics above)" >&2
   fi
@@ -145,7 +145,7 @@ if ! "$python_bin" "$repo_root/tools/build_distributions.py" \
 fi
 
 local_wheels=()
-for package in atrex_aka_framework atrex_aka_legacy atrex_aka_light; do
+for package in atrex_aka_framework atrex_aka_light; do
   matches=("$build_dir"/"$package"-*.whl)
   if ((${#matches[@]} != 1)) || [[ ! -f "${matches[0]}" ]]; then
     echo "install_light.sh: expected one newly built wheel for $package" >&2

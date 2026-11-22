@@ -15,15 +15,15 @@ from importlib.resources import files
 def profile_path(value):
     if value in (None, ""):
         value = "light"
-    if value == "workflow":
-        return Path(str(files("aka.workflow.legacy"))) / "profiles/workflow.json"
-    if value in {"observed", "sandbox", "light", "light-sandbox"}:
+    if value in {"workflow", "observed", "sandbox"}:
+        raise ValueError("Retired launch profile; choose light or light-sandbox")
+    if value in {"light", "light-sandbox"}:
         try:
             path = Path(str(files("aka.workflow.light"))) / "profiles" / (value + ".json")
         except ImportError as exc:
             raise ValueError(
                 f"Launch profile {value!r} requires matching atrex-aka-light; "
-                "install it or explicitly select --profile workflow for Legacy") from exc
+                "install the matching Light package") from exc
         if not path.is_file():
             raise ValueError(f"Packaged launch profile is missing: {path}")
         return path
@@ -35,7 +35,7 @@ def main(argv=None):
         description="Run a public Workflow request with an explicitly selected composition.")
     parser.add_argument("--repo-root", required=True, type=Path,
                         help="explicit public tool resource root for the selected profile")
-    parser.add_argument("--profile", help="launch profile (default: light; workflow selects Legacy)")
+    parser.add_argument("--profile", help="launch profile: light or light-sandbox (default: light)")
     parser.add_argument("--patch", type=Path, action="append", default=[])
     register_request_options(parser)
     options = parser.parse_args(argv)

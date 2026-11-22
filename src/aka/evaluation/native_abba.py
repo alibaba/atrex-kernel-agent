@@ -161,8 +161,8 @@ def prepare_comparison(request, configuration, workspace, evaluation_input, cont
     payload = prepare_request(request.workspace, configuration.hardware, configuration.timeout,
         [f"{key}={value}" for key, value in environment.items()], list(command.command), "run",
         reference_dir=reference, reference_content=references, requirements=requirements,
-        runtime_version=configuration.environment.get("ATREX_SANDBOX_ATREX_BENCH_VERSION", ""),
-        candidate_source=candidate[0], candidate_solution=candidate[1], measurement_environment=configuration.environment)
+        candidate_source=candidate[0], candidate_solution=candidate[1], measurement_environment=configuration.environment,
+        measurement_defaults=configuration.measurement_defaults)
     payload["candidate"] = candidate[3]
     payload["abba"] = {"baseline": baseline[3], "repeats": configuration.repeats // 2}
     payload["spec"]["languages"] = _candidate_languages(candidate[1], candidate_sources=(baseline[0], candidate[0]))
@@ -205,8 +205,9 @@ def complete_evaluation(result: dict, shapes: list[str], *, correctness_only=Fal
     if not isinstance(compilation, dict):
         return False
     correctness = passed.get("correctness") or {}
+    performance_status = passed.get("performance") or {}
     performance = (result.get("performance") or {}).get("shapes") or {}
-    if not isinstance(correctness, dict) or not isinstance(performance, dict):
+    if not isinstance(correctness, dict) or not isinstance(performance_status, dict) or not isinstance(performance, dict):
         return False
     for sid in shapes:
         compiled = compilation if "status" in compilation else compilation.get(sid, {})
@@ -226,6 +227,13 @@ def complete_evaluation(result: dict, shapes: list[str], *, correctness_only=Fal
         if correctness_only:
             continue
         timed = performance.get(sid, {})
+        status = performance_status.get(sid, {})
+        # An explicit performance failure is terminal evidence, even when a
+        # timeout leaves no samples. Preserve its error through normal merging.
+        if isinstance(status, dict) and status.get("status") == "failed":
+            continue
+        if isinstance(timed, dict) and timed.get("error"):
+            continue
         if not isinstance(timed, dict) or not isinstance(timed.get("samples"), list):
             return False
         values = [row.get("end_to_end_time_ms") for row in timed["samples"] if isinstance(row, dict)]
@@ -246,10 +254,12 @@ def summarize(raw: dict, shapes: list[str]) -> dict:
     performance = (raw.get("performance") or {}).get("shapes") or {}
     for sid in shapes:
         measured = performance.get(sid) or {}
+        status = (passed.get("performance") or {}).get(sid, {})
+        status = status if isinstance(status, dict) else {}
         values = [sample["end_to_end_time_ms"] for sample in measured.get("samples", [])
                   if isinstance(sample, dict) and type(sample.get("end_to_end_time_ms")) in (int, float)
                   and math.isfinite(sample["end_to_end_time_ms"]) and sample["end_to_end_time_ms"] > 0]
-        if values and not measured.get("error"):
+        if values and not measured.get("error") and status.get("status") != "failed":
             latencies[sid] = statistics.median(values) * 1000
     correct = bool(correct and len(latencies) == len(shapes) and shapes)
     result = {"all_pass": correct, "latency_us_by_shape": latencies,

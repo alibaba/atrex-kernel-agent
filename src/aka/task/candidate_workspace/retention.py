@@ -36,11 +36,9 @@ def import_revision(workspace, source_workspace, revision, *, retention_key):
 
 
 def fork_revision(workspace, revision, destination):
-    """Create a new standalone controller from a committed revision and its context."""
+    """Create a new standalone Agent repository from a committed revision."""
     import os
     import tempfile
-    from .context import (_decode, _retained, _retain, _revision_manifest,
-                          restore_context_projection, _sync_directory)
     source = Path(workspace).resolve(strict=True)
     revision = resolve_revision(source, revision)
     destination = Path(destination)
@@ -48,10 +46,6 @@ def fork_revision(workspace, revision, destination):
         raise ValueError("fork destination must be an absolute path without links or aliases")
     if destination.exists() or destination == source or source in destination.parents:
         raise ValueError("fork destination must be new and outside its source")
-    raw = _revision_manifest(source, revision)
-    context = _decode(raw) if raw is not None else None
-    retained = {row['sha256']: _retained(source, row['sha256'])
-                for row in context['context'].values()} if context is not None else {}
     destination.parent.mkdir(parents=True, exist_ok=True)
     lock = destination.with_name(destination.name + '.aka-fork.lock')
     descriptor = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY | os.O_NOFOLLOW, 0o600)
@@ -65,16 +59,11 @@ def fork_revision(workspace, revision, destination):
             _git(staged, 'remote', 'remove', 'origin')
             _git(staged, 'config', 'user.name', 'GPU Kernel Optimizer')
             _git(staged, 'config', 'user.email', 'gpu-kernel-optimizer@local')
-            if context is not None:
-                for digest, payload in retained.items():
-                    _retain(staged, digest, payload)
-                restore_context_projection(staged, revision)
             if current_revision(staged) != revision:
                 raise RuntimeError('forked Workspace revision identity changed')
             if destination.exists():
                 raise ValueError("fork destination was created during preparation")
             os.rename(staged, destination)
-            _sync_directory(destination.parent)
     finally:
         os.close(descriptor)
         lock.unlink(missing_ok=True)
