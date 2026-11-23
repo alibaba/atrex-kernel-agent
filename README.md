@@ -30,7 +30,7 @@ provides installation and launch guidance. [Observation tools](observability/REA
 report retained execution, performance and session evidence. Both are checkout resources;
 keep a checkout matching the installed module distributions.
 
-![AKA Light architecture showing the Agent-owned Session and Git workspace, Supervisor tool requests, optional ABBA, the shared Measurement Store, and exact-commit review.](assets/aka-light-architecture.svg)
+![AKA architecture showing the Agent-owned Session and Git workspace, Supervisor tool requests, optional ABBA, the shared Measurement Store, and exact-commit review.](assets/aka-architecture.svg)
 
 ## How AKA works
 

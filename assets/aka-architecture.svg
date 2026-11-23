@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1120" height="700" viewBox="0 0 1120 700" role="img" aria-labelledby="title description">
-  <title id="title">Atrex Kernel Agent Light architecture</title>
+  <title id="title">Atrex Kernel Agent architecture</title>
   <desc id="description">Campaign setup freezes evaluator inputs and seeds Agent Git. The Agent controls its workspace and resumes the same Session across Episodes. The Supervisor Runtime serves Wiki lookups, dispatches evaluations, records measurement evidence, and reviews submitted commits. Accepted commits determine the best kernels. Pooled Sessions can share peer refs and evidence.</desc>
   <defs>
     <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
@@ -21,7 +21,7 @@
 
   <rect x="1" y="1" width="1118" height="698" rx="22" fill="#faf8f5" stroke="#dedbd6" stroke-width="2"/>
   <path d="M36 36h7v27h-7z" fill="#d85e28"/>
-  <text x="57" y="63" class="heading">AKA Light architecture</text>
+  <text x="57" y="63" class="heading">AKA architecture</text>
   <text x="1084" y="62" text-anchor="end" class="edge-label">v0.4.1</text>
 
   <rect x="36" y="91" width="215" height="139" rx="14" class="card"/>
