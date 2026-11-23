@@ -2,12 +2,10 @@
 
 AKA can use [DeepSeek Harness (DSH)](https://github.com/deepseek-ai/deepseek-harness)
 as its coding agent. DSH reads the operator, develops the implementation, and
-uses AKA's tools to evaluate and refine it. AKA manages GPU execution,
-correctness checks, performance comparisons, and promotion of the selected
-implementation.
+uses AKA's tools to evaluate and refine it. AKA manages GPU execution, records
+correctness and performance evidence, and reviews exact-commit submissions.
 
-Choose DSH with `--agent-cli dsh`. The adapter is available in the default Light
-workflow and the explicit Legacy workflow.
+Choose DSH for Light with `--agent-cli dsh`.
 
 ## Get ready
 
@@ -34,7 +32,7 @@ export ATREX_DSH_SESSION_SETTINGS='{"provider":"deepseek-official","model":"deep
 
 aka optimize --repo-root /path/to/aka \
   --problem /path/to/operator \
-  --platform '<gpu-target>' --framework Triton \
+  --platform '<gpu-target>' --optimization-mode ultra --framework Triton \
   --agent-cli dsh --workspace-base /path/to/runs
 ```
 
@@ -88,7 +86,7 @@ continuation and checkpoints.
 
 ## What to expect during a run
 
-DSH works through the same evaluation, profiling, knowledge, and report tools
+DSH works through the same evaluation, profiling, knowledge, and submission tools
 used by AKA's other coding agents. The selected AKA profile controls which tools
 are available. Skills come from the managed workspace, and GPU requests stay in
 the foreground while AKA tracks their progress.
@@ -127,7 +125,7 @@ flowchart LR
   A <-->|prompt and JSON events| D[DSH headless]
   D --> C[AKA tool clients]
   C --> R[AKA Tool Runtime]
-  R --> E[Evaluation, Execution, Wiki, Journal]
+  R --> E[Evaluation, Execution, Wiki, Submission review]
 ```
 
 An adapter-owned overlay configures workspace Skills, foreground shell calls,
