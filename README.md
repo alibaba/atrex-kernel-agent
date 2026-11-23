@@ -40,7 +40,7 @@ keep a checkout matching the installed module distributions.
 
 ## News
 
-- [2026-11] **v0.4.1: Persistent Light campaigns and reviewed submissions.** Agents keep their Git history across Episodes, share measured evidence in pooled runs, and submit verified commits. Adds DSH, native OpenSSH GPU evaluation, and read-only campaign inspection. [Release notes](docs/releases/v0.4.1.md).
+- [2026-11] **v0.4.1: More autonomy for coding agents.** Agents keep a persistent session and control their own Git history, choosing what to explore, when to benchmark, and which measured commits to submit for review. [Release notes](docs/releases/v0.4.1.md).
 - [2026-10] **v0.4.0: A lightweight workflow and plugin architecture.** Better kernel performance with **20–30% lower average token consumption**, plus configurable, replaceable providers for agents, workspaces, evaluation, execution, and knowledge. [Release notes](docs/releases/v0.4.0.md).
 - [2026-09] [From leaderboards to real-world workloads: accelerating Qwen3.8-Max's core inference operators](https://mp.weixin.qq.com/s/q1wrpgu3R8S8dEqR-PhQgw) (WeChat): **AKA** delivers lower average latency than expert implementations for all **three key operator families** across **60 real-world shapes**, with up to **1.55× speedup** over production/official baselines.
 
