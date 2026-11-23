@@ -55,7 +55,9 @@ keep a checkout matching the installed module distributions.
 
 ## Quick Start
 
-Agent-visible Agate tools default to `env`, `evaluate` (including ABBA), and `command`.
+Agent-visible Agate tools default to `env`, `evaluate`, and `command`.
+On supported backends, agents can request an ABBA comparison by passing
+`--baseline-commit` to `evaluate`.
 Select them with `--agate-tools env evaluate command profile`, or use `--agate-tools all`
 to also expose `profile`, `dev`, `check`, and `disassemble`. This is a replacement list,
 not an additive flag. Disabled tools are rejected before GPU submission. Wiki,
