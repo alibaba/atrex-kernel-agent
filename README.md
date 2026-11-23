@@ -30,6 +30,8 @@ provides installation and launch guidance. [Observation tools](observability/REA
 report retained execution, performance and session evidence. Both are checkout resources;
 keep a checkout matching the installed module distributions.
 
+![AKA Light architecture showing the Agent-owned Session and Git workspace, Supervisor tool requests, optional ABBA, the shared Measurement Store, and exact-commit review.](assets/aka-light-architecture.svg)
+
 ## How AKA works
 
 1. **Prepare the initial source.** Freeze evaluator inputs and create one canonical Agent Git root. The Agent decides whether to measure the initial implementation.
