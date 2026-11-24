@@ -48,8 +48,6 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
         DIRECTION_CLOSURE_FIELDS,
         EXPERIMENT_FIELDS,
         EXPERIMENT_OPTIONAL_FIELDS,
-        EXPERIMENT_EXPECTATION_FIELDS,
-        EXPERIMENT_EXPECTATION_ASSESSMENTS,
     )
     from aka.workflow.light.host.direction_lifecycle import (
         DIRECTION_ACTIONS,
@@ -101,25 +99,6 @@ def journal_schema(operation, body, *, research_records=False, directions_enable
         usage["anyOf"] = [{"required": ["wiki_id"]}, {"required": ["cite"]}]
         fields = set(EXPERIMENT_FIELDS)
         properties = {key: _text() for key in fields | EXPERIMENT_OPTIONAL_FIELDS}
-        properties["implementation"]["description"] = (
-            "Concrete implementation, probe, or test method and its difference from prior attempts. "
-            "Omission on revision preserves the previous value."
-        )
-        properties["next_step"] = {
-            "anyOf": [_object({"action": _text(), "reason": _text()}, {"action", "reason"}), {"type": "null"}],
-            "description": "Optional next action and rationale. Omit on revision to retain; null clears it. A plan, not an execution or lifecycle gate.",
-        }
-        expectation_properties = {key: _text() for key in EXPERIMENT_EXPECTATION_FIELDS}
-        expectation_properties["assessment"]["enum"] = sorted(EXPERIMENT_EXPECTATION_ASSESSMENTS)
-        properties["expectations"] = {
-            "type": "array",
-            "items": _object(expectation_properties, EXPERIMENT_EXPECTATION_FIELDS),
-            "description": (
-                "Scoped prediction/observation comparisons. Use unresolved when evidence is missing. "
-                "Omission on revision preserves earlier rows; an explicit array replaces the rows "
-                "in the new version. All frozen predictions are automatically imported from gateway_record_ids and retained on revision. Expectations are optional; no prediction index or repeated forecast is required. Unmatched Agent-authored expectations are retrospective. Earlier immutable versions remain archived."
-            ),
-        }
         properties["experiment_id"] = {
             "type": "string",
             "pattern": "^experiment_[0-9a-f]{32}$",

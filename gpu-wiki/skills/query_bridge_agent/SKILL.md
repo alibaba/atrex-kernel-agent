@@ -29,7 +29,6 @@ Return exactly this shape on stdout, without Markdown or prose:
   "component_terms": ["residual add"],
   "measured_symptoms": ["memory-bound"],
   "free_text_terms": ["fusion", "single pass"],
-  "mechanisms": [{"name": "split-KV", "aliases": ["KV splitting", "split decoding"]}],
   "intents": ["technique", "pitfall"],
   "hardware_requests": [
     {"kind": "product", "value": "b200", "field": "peak_compute.bf16.dense", "vs": null}
@@ -60,5 +59,3 @@ Rules:
   ISA instructions, architecture features, or product comparisons. Kinds are
   `product`, `instruction`, and `feature`.
 - Use JSON null and empty lists for missing information. Do not add prose.
-
-Extract up to six mechanisms explicitly requested, with up to six established aliases each. Use an empty list when absent. Aliases are search hypotheses, not proof of equivalence. Do not invoke extra tools or research implementations.

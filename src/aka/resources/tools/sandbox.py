@@ -153,8 +153,6 @@ def main(argv: list[str] | None = None) -> int:
         print("Enabled Runtime tools: " + ", ".join(kinds))
         print("Use --kind OPERATION --help for enabled tool options. "
               "Research and submit-kernel use --request-file; read the runtime-records Skill for JSON fields.")
-        print("Evaluate/Command optionally accept --predictions JSON before --: "
-              "a JSON array of {scope, prediction}, frozen before new execution.")
         return 0
     # Only recognize the full client-side dispatcher; the Supervisor validates
     # every argument using parsers with allow_abbrev=False.
@@ -173,34 +171,7 @@ def main(argv: list[str] | None = None) -> int:
         if kind in WIKI_KINDS:
             count = 2 if value == "--kind" else 1
             return proxy_wiki(WIKI_KINDS[kind], args[:index] + args[index + count:])
-    predictions = None
-    predictions_supplied = False
-    clean = []
-    index = 0
-    while index < len(args):
-        word = args[index]
-        if word == "--":
-            clean.extend(args[index:])
-            break
-        if word == "--predictions" or word.startswith("--predictions="):
-            if predictions_supplied:
-                raise ValueError("Specify --predictions only once")
-            predictions_supplied = True
-            if word == "--predictions":
-                index += 1
-                if index == len(args):
-                    raise ValueError("--predictions requires a JSON array")
-                raw_predictions = args[index]
-            else:
-                raw_predictions = word.split("=", 1)[1]
-            predictions = json.loads(raw_predictions)
-        else:
-            clean.append(word)
-        index += 1
-    payload = {"argv": clean}
-    if predictions_supplied:
-        payload["predictions"] = predictions
-    return proxy_command("/v1/gateway/execute", payload)
+    return proxy_command("/v1/gateway/execute", {"argv": args})
 
 
 if __name__ == "__main__":

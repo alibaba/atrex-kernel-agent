@@ -817,7 +817,7 @@ class ResearchStore:
                 key: item.get(key)
                 for key in (
                     "experiment_id", "direction_id", "name", "owner_lineage", "access",
-                    "implementation", "expectations", "interpretation", "next_step",
+                    "interpretation",
                 )
                 if item.get(key) is not None
             }

@@ -502,7 +502,6 @@ class MeasurementStore:
                 kernels,
                 marker,
                 request_id=request_id,
-                resumed=resumable,
             )
         finally:
             try:
@@ -556,12 +555,10 @@ class MeasurementTask:
         marker,
         *,
         request_id="",
-        resumed=False,
     ):
         self.store, self.key, self.record_id = store, key, record_id
         self.directory, self.request, self.kernels, self.marker = directory, request, kernels, marker
         self.request_id = request_id
-        self.resumed = resumed
 
     def finish(self, response: dict, *, cacheable: bool, pending: bool = False) -> dict:
         from aka.evaluation.tool_results import seal_response

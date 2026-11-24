@@ -94,11 +94,7 @@ _SHARED_GATEWAY_RECORD_REASONS = frozenset({
     "global_winner_full_evaluate",
 })
 EXPERIMENT_FIELDS = {"name", "intent", "interpretation"}
-EXPERIMENT_OPTIONAL_FIELDS = {
-    "experiment_id", "gateway_record_ids", "references", "implementation", "expectations", "next_step",
-}
-EXPERIMENT_EXPECTATION_FIELDS = {"scope", "prediction", "observation", "assessment"}
-EXPERIMENT_EXPECTATION_ASSESSMENTS = frozenset({"met", "missed", "unresolved"})
+EXPERIMENT_OPTIONAL_FIELDS = {"experiment_id", "gateway_record_ids", "references"}
 LEGACY_EXPERIMENT_FIELDS = {
     "name", "hypothesis", "change", "analysis",
 }
@@ -1041,7 +1037,7 @@ def _catalog_claim_version(
             continue
         if claim_type == "directions" and canonical_review_quality(
             claim[1].get("claim_review_quality", claim[1].get("review_quality"))
-        ) == "review_not_requested" and claim[1].get("review_skipped") is not True:
+        ) == "review_not_requested":
             continue
         version += 1
     return version
@@ -1068,7 +1064,7 @@ def _catalog_versions_by_sequence(
         key = (claim_type, claim_id)
         if claim_type == "directions" and canonical_review_quality(
             value.get("claim_review_quality", value.get("review_quality"))
-        ) == "review_not_requested" and value.get("review_skipped") is not True:
+        ) == "review_not_requested":
             result[sequence] = 0
             continue
         reviewed_counts[key] = reviewed_counts.get(key, 0) + 1
@@ -1331,61 +1327,6 @@ def _catalog_version_entries(
     return versions
 
 
-
-def _direction_attempt_views(versions) -> dict[str, bytes]:
-    """Derive histories exclusively from the supplied visibility snapshot.
-
-    One row per expectation, one latest visible version per Experiment. Review
-    eligibility and Direction supporting IDs do not filter investigative history.
-    """
-    latest = {}
-    for (kind, identity, version), entry in sorted(versions.items()):
-        latest[(kind, identity)] = (version, entry[1])
-
-    def cell(value):
-        if value is None or value == "":
-            return "Not recorded"
-        value = str(value).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-        return " ".join(value.split()).replace("|", "&#124;").replace("`", "&#96;")
-
-    views = {}
-    for (kind, identity), (_, direction) in sorted(latest.items()):
-        if kind != "directions":
-            continue
-        lines = [f"# Attempts: {cell(direction.get('name', identity))}", "",
-                 "Latest visible version of every linked Experiment, including failed and unresolved attempts. "
-                 "Historical versions remain in the Experiment directories. Predictions may be retrospective; "
-                 "this view does not establish when they were recorded or infer that an idea is ruled out.", "",
-                 "| Attempt | Method / difference | Scope and prediction | Observation | Assessment | Prediction origin | Explicitly unresolved | Interpretation | Next action | Reason |",
-                 "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
-        count = 0
-        for (experiment_kind, experiment_id), (version, experiment) in sorted(latest.items()):
-            if experiment_kind != "experiments" or experiment.get("direction_id") != identity:
-                continue
-            count += 1
-            link = f"../../experiments/{experiment_id}/v{version}/experiment.json"
-            attempt = f"[{cell(experiment_id)} v{version}]({link}): {cell(experiment.get('name'))}"
-            expectations = experiment.get("expectations") or [{}]
-            for expectation in expectations:
-                assessment = expectation.get("assessment")
-                prediction = expectation.get("prediction")
-                scope = expectation.get("scope")
-                unresolved = prediction if assessment == "unresolved" else (
-                    "Not recorded" if not expectation else "Not marked unresolved")
-                row = [attempt, cell(experiment.get("implementation")),
-                       cell(f"{scope}: {prediction}" if scope and prediction else prediction),
-                       cell(expectation.get("observation")), cell(assessment),
-                       cell(expectation.get("prediction_origin", "retrospective")), cell(unresolved),
-                       cell(experiment.get("interpretation")),
-                       cell((experiment.get("next_step") or {}).get("action")),
-                       cell((experiment.get("next_step") or {}).get("reason"))]
-                lines.append("| " + " | ".join(row) + " |")
-        if not count:
-            lines.extend(["", "No linked Experiments are visible yet."])
-        views[f"research-library/directions/{identity}/attempts.md"] = ("\n".join(lines) + "\n").encode()
-    return views
-
-
 def _publish_research_library_tree(
     root: Path,
     versions: Mapping[
@@ -1440,9 +1381,6 @@ def _publish_research_library_tree(
                     reference_manifest.relative_to("research-library").as_posix()
                 )
     if not canonical:
-        for relative_path, data in _direction_attempt_views(versions).items():
-            publish_if_changed(root, relative_path, data)
-            expected_files.add(Path(relative_path).relative_to("research-library").as_posix())
         _prune_managed_projection(
             root / "research-library",
             expected_files,
@@ -2674,10 +2612,6 @@ def _progress_markdown(
                     f"{rank_text}status `{status}`; {proposer_text}{owner}{access_text}"
                     f"scope `{text(item.get('change_scope'), empty='incremental')}`."
                 )
-                if item.get("direction_id"):
-                    lines.append(
-                        f"   - [Attempt history](research-library/directions/{item['direction_id']}/attempts.md)"
-                    )
                 for label, field in (
                     ("Objective", "objective"),
                     ("Applicability", "applicability"),
@@ -3100,9 +3034,7 @@ def update_direction(
         error.private_review = _private_claim_review(review)
         raise error
     review_projection = _review_projection(review)
-    if (action in {"complete", "abandon"}
-            and review_projection.get("claim_review_quality") != "supported"
-            and review_projection.get("review_skipped") is not True):
+    if action in {"complete", "abandon"} and review_projection.get("claim_review_quality") != "supported":
         # Check this terminal decision's review, not an older supported revision.
         rejected_review = dict(review or {})
         quality = review_projection.get("claim_review_quality", "review_unavailable")
@@ -3189,7 +3121,6 @@ def _read_private_gateway_evidence(
     )
     return {
         "gateway_record_id": record_id,
-        "frozen_predictions": deepcopy(response.get("agent_result", {}).get("frozen_predictions")),
         "gateway_kind": "run" if record["operation"] == "evaluate" else record["operation"],
         **identity,
         "incumbent_kernel_id": incumbent.get("kernel_id"),
@@ -3328,73 +3259,6 @@ def _closure_support(
             allow_empty=True,
         )
     return selected
-
-
-def _experiment_next_step(raw: object) -> dict[str, str] | None:
-    if raw is None:
-        return None
-    if not isinstance(raw, dict) or set(raw) != {"action", "reason"}:
-        raise field_error("next_step", "Use {action, reason}, or null to clear the next step")
-    return {key: _text(raw[key], f"Experiment next_step.{key}") for key in ("action", "reason")}
-
-
-def _experiment_expectations(raw: object) -> list[dict[str, Any]]:
-    """Validate Agent-authored comparisons; measured facts remain in cited Records."""
-    if not isinstance(raw, list):
-        raise field_error("expectations", "Experiment expectations must be an array")
-    result = []
-    for index, item in enumerate(raw):
-        label = f"expectations[{index}]"
-        if not isinstance(item, dict):
-            raise field_error(label, "Each expectation must be an object")
-        missing = EXPERIMENT_EXPECTATION_FIELDS - item.keys()
-        extra = item.keys() - EXPERIMENT_EXPECTATION_FIELDS
-        if missing or extra:
-            raise field_error(label, f"Expected scope, prediction, observation, assessment; "
-                              f"missing={sorted(missing)}, unexpected={sorted(extra)}")
-        row = {key: _text(item[key], f"Experiment {label}.{key}")
-               for key in sorted(EXPERIMENT_EXPECTATION_FIELDS)}
-        if row["assessment"] not in EXPERIMENT_EXPECTATION_ASSESSMENTS:
-            raise field_error(f"{label}.assessment", "Use met, missed, or unresolved")
-        result.append(row)
-    return result
-
-
-def _bind_experiment_predictions(experiment, existing, campaign_root, measurement_root):
-    """Import all cited forecasts; references are resolved by Runtime, not the Agent."""
-    supplied = deepcopy(experiment.get("expectations", []))
-    forecasts = {}
-    # Preserve previously cited forecasts even if a revision changes its citations.
-    for row in (existing or {}).get("expectations", []):
-        if row.get("prediction_origin") == "before_execution":
-            key = (row["gateway_record_id"], row["scope"], row["prediction"])
-            forecasts[key] = deepcopy(row)
-    for record_id in experiment["gateway_record_ids"]:
-        evidence = _read_private_gateway_evidence(campaign_root, record_id, measurement_root=measurement_root)
-        frozen = evidence.get("frozen_predictions") or {}
-        for prediction in frozen.get("predictions", []):
-            key = (record_id, prediction["scope"], prediction["prediction"])
-            forecasts.setdefault(key, {**prediction, "gateway_record_id": record_id,
-                "prediction_origin": "before_execution", "prediction_recorded_at": frozen["recorded_at"],
-                "observation": "Not recorded", "assessment": "unresolved"})
-    matched = set()
-    for key, forecast in forecasts.items():
-        candidates = [(i, row) for i, row in enumerate(supplied)
-                      if row["scope"] == forecast["scope"] and row["prediction"] == forecast["prediction"]
-                      and row.get("gateway_record_id", key[0]) == key[0]]
-        # Never guess correspondence when the same wording belongs to multiple Records.
-        same_wording = sum(k[1:] == key[1:] for k in forecasts)
-        if len(candidates) == 1 and (same_wording == 1 or candidates[0][1].get("gateway_record_id") == key[0]):
-            i, row = candidates[0]
-            forecast.update(observation=row["observation"], assessment=row["assessment"])
-            matched.add(i)
-    retrospective = []
-    for i, row in enumerate(supplied):
-        if i not in matched and row.get("prediction_origin") != "before_execution":
-            row["prediction_origin"] = "retrospective"
-            retrospective.append(row)
-    if supplied or forecasts or "expectations" in experiment:
-        experiment["expectations"] = [*forecasts.values(), *retrospective]
 
 
 def record_experiment(
@@ -3566,16 +3430,6 @@ def record_experiment(
         "gateway_record_ids": record_ids,
         "interpretation": interpretation,
     }
-    for key in ("implementation", "expectations", "next_step"):
-        if key in value:
-            experiment[key] = (
-                _text(value[key], "Experiment implementation") if key == "implementation"
-                else _experiment_next_step(value[key]) if key == "next_step"
-                else _experiment_expectations(value[key])
-            )
-        elif existing is not None and key in existing:
-            experiment[key] = deepcopy(existing[key])
-    _bind_experiment_predictions(experiment, existing, campaign_root, measurement_root)
     if direction_id is not None:
         experiment["direction_id"] = direction_id
     if existing is not None and not any(
@@ -3655,7 +3509,7 @@ def record_experiment(
             error.private_review = _private_claim_review(review)
             raise error
         if (
-            (review.get("claim_review_quality") == "supported" or review.get("review_skipped") is True)
+            review.get("claim_review_quality") == "supported"
             and direction_status == "in_progress"
         ):
             review = dict(review)
@@ -4910,12 +4764,18 @@ class SupervisorJournalService:
     ) -> dict[str, object]:
         """Review one validated claim before it becomes canonical research state."""
         if not self.claim_review_enabled:
+            message = (
+                "Claim Review skipped because workflow.claim_review=false. "
+                "This record is treated as supported by configuration; no independent review was performed."
+            )
             return {
                 "archive_status": "archived",
-                "claim_review_quality": "review_not_requested",
-                "evidence_eligible": False,
+                "claim_review_quality": "supported",
+                "evidence_eligible": True,
                 "review_skipped": True,
-                "runtime_action": "Recorded. Claim Review was skipped because workflow.claim_review=false; no independent review was performed.",
+                "primary_issue": message,
+                "scope_safe_interpretation": message,
+                "runtime_action": message,
             }
         if self.claim_reviewer is None:
             return {}
