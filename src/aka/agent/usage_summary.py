@@ -65,8 +65,8 @@ def select_session_usage(value: Mapping) -> dict:
     """Use the same response accounting while running and after completion.
 
     Provider result settlements are audit evidence, not a replacement for the
-    accumulated main responses. Older captures retain those responses in
-    by_agent, so readers can select them without mutating archived receipts.
+    accumulated main responses. Prefer by_agent.main in older captures when
+    available; otherwise preserve their stored total and its accounting basis.
     """
     total = usage(value.get("total"))
     basis = value.get("accounting_basis")
@@ -75,9 +75,9 @@ def select_session_usage(value: Mapping) -> dict:
         "main_response_usage", "conversation_text_estimate",
     }:
         by_agent = value.get("by_agent")
-        total = usage(by_agent.get("main") if isinstance(by_agent, Mapping) else None)
-        if total["total_tokens"] is not None:
-            total = total | {"measurement": "partial"}
-        basis = "main_response_usage"
-        reason = "claude_response_accounting_selected"
+        main = usage(by_agent.get("main") if isinstance(by_agent, Mapping) else None)
+        if any(main[key] is not None for key in TOKEN_KEYS):
+            total = main | {"measurement": "partial"}
+            basis = "main_response_usage"
+            reason = "claude_response_accounting_selected"
     return {"usage": total, "accounting_basis": basis, "fallback_reason": reason}

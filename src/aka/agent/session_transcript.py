@@ -182,11 +182,11 @@ def _content_blocks(event: dict[str, Any]) -> Counter[str] | None:
 
 
 def _compact_claude_records(
-    stream: list[dict[str, Any]],
-    native: list[dict[str, Any]],
+    stream: Iterable[dict[str, Any]],
+    native: Iterable[dict[str, Any]],
     prompt: str,
     *,
-    factory=list,
+    factory,
 ):
     """Use native content once, falling back to stdout when coverage is uncertain.
 
@@ -294,83 +294,7 @@ def _compact_claude_records(
             rows.append(row)
         rows.extend(extras[index])
     from itertools import chain
-    return list(chain(rows, other, terminal)) if factory is list else chain(rows, other, terminal)
-
-
-def render_conversation(
-    *,
-    backend: str,
-    session_id: str,
-    prompt: str,
-    stdout: str,
-    raw_provider_files: Iterable[tuple[str, bytes]],
-    state: str,
-    exit_status: int | None,
-    timed_out: bool | None,
-    raw_provider_capture_complete: bool,
-    error_type: str | None = None,
-    system_prompt: str = "",
-    stderr: str = "",
-    started_at: str | None = None,
-    context: dict[str, Any] | None = None,
-    capture_errors: list[str] | None = None,
-) -> str:
-    """Render a reading view; original Provider streams remain separate audit files."""
-    records = initial_records(
-        backend=backend,
-        session_id=session_id,
-        prompt=prompt,
-        system_prompt=system_prompt,
-    )
-    if started_at is not None:
-        records[0]["started_at"] = started_at
-    if context is not None:
-        records[0]["context"] = context
-    initial_count = len(records)
-    sequence = initial_count
-    for line in stdout.splitlines():
-        if not record_provider_line(line):
-            continue
-        records.append(
-            provider_line_record(
-                sequence,
-                path="provider/stdout.stream-json",
-                line=line,
-            )
-        )
-        sequence += 1
-    native: list[dict[str, Any]] = []
-    for path, payload in raw_provider_files:
-        projected, sequence = provider_bytes_records(
-            sequence,
-            path=path,
-            payload=payload,
-        )
-        native.extend(projected)
-    if backend == "claude":
-        records = records[:initial_count] + _compact_claude_records(
-            records[initial_count:],
-            native,
-            prompt,
-        )
-    else:
-        records.extend(native)
-    for line in stderr.splitlines():
-        records.append(provider_line_record(0, path="provider/stderr.log", line=line))
-    for index, record in enumerate(records):
-        record["sequence"] = index
-    sequence = len(records)
-    terminal = terminal_record(
-        sequence,
-        state=state,
-        exit_status=exit_status,
-        timed_out=timed_out,
-        raw_provider_capture_complete=raw_provider_capture_complete,
-        error_type=error_type,
-    )
-    terminal.update(capture_errors=list(capture_errors or []))
-    records.append(terminal)
-    return encode_records(records)
+    return chain(rows, other, terminal)
 
 
 class _DiskRecords:

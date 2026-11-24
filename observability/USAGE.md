@@ -984,3 +984,5 @@ python3 "$AKA_REPO/observability/light_dashboard.py" /tmp/dashboard.json --port 
 ### Claude Token 统计口径
 
 主 Agent 和独立 Review 均使用去重后的逐响应 usage 累计，运行中和结束后保持同一口径；`result.usage` 仅保存在 `terminal` 供审计，不覆盖累计值。输入、输出、缓存读写分别统计；reasoning 是单独展示的子项，不额外重复加入总量。缺少响应计数时明确标记不完整或不可用；对话文本估计仍标记为 estimated。历史不可变 checkpoint 不会自动重算。
+
+对于缺少可用 `by_agent.main` 计数的旧回执，读取时保留归档的 `total` 及原始 `accounting_basis`，不会将 Provider 总数标成响应累计。这一兼容回退不改变新 Capture 的统计口径，也不改写已存回执。

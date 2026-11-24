@@ -356,7 +356,7 @@ class SessionCapture:
         self._pipe_bytes = {"stdout": 0, "stderr": 0}
         self._raw_pipe_bytes = {"stdout": 0, "stderr": 0}
         self.errors: list[str] = []
-        self._output_error: OSError | None = None
+        self._output_error: OSError | ValueError | None = None
         self._budget = CaptureBudget(limits or CaptureLimits(), self._capture_error)
         # History scanning is bounded independently. Old bytes/records never
         # consume the invocation's diagnostic retention allowance.
@@ -596,7 +596,7 @@ class SessionCapture:
                 with self._lock:
                     try:
                         self._chunks[name].append(line)
-                    except OSError as error:
+                    except (OSError, ValueError) as error:
                         # A failed spool must not close the pipe on a live Agent.
                         # Drain to EOF, then report loss explicitly instead of
                         # returning an apparently complete functional stream.
@@ -690,6 +690,24 @@ class SessionCapture:
             if self._output_error is not None:
                 raise OSError("Agent output spool failed; complete output is unavailable") from self._output_error
             return self._chunks["stdout"].text(), self._chunks["stderr"].text()
+
+    def partial_output(self) -> tuple[str, str]:
+        """Best-effort output for cleanup after a primary timeout or exception."""
+        import io
+
+        streams = []
+        with self._lock:
+            for name in ("stdout", "stderr"):
+                output = io.StringIO()
+                try:
+                    for chunk in self._chunks[name]:
+                        output.write(chunk)
+                except (OSError, ValueError, struct.error) as error:
+                    self._capture_error(f"{name}_partial_output", error)
+                streams.append(output.getvalue())
+        return streams[0], streams[1] + (
+            "\n[orchestrator] Agent output spool failed; output is incomplete.\n"
+        )
 
     def finish(
         self, *, exit_status: int | None = None, timed_out: bool = False, interrupted: bool = False
