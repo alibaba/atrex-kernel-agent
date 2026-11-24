@@ -193,6 +193,16 @@ def run_bounded(
     def group_snapshot():
         with groups_lock:
             return groups.copy()
+    def drain_after_failure():
+        try:
+            return communicate()
+        except OSError:
+            if capture is None:
+                raise
+            # Output loss must not replace a timeout or the original exception.
+            # communicate has drained both pipes before reporting spool failure.
+            return capture.partial_output()
+
     timed_out = False
     started = time.monotonic()
     last_heartbeat = started
@@ -244,14 +254,14 @@ def run_bounded(
         timed_out = True
         control.kill()
         signal_process_groups(group_snapshot(), signal.SIGKILL)
-        stdout, stderr = communicate()
+        stdout, stderr = drain_after_failure()
     except BaseException:
         interrupted = True
         control.kill()
         if proc is not None:
             signal_process_groups(group_snapshot() | descendant_process_groups(proc.pid), signal.SIGKILL)
             if communicate is not None:
-                communicate()
+                drain_after_failure()
         raise
     finally:
         guard_stop.set()

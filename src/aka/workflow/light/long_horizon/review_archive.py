@@ -13,6 +13,7 @@ from pathlib import Path
 
 from aka.agent.execution.home import open_private_directory
 from aka.agent.session_tail import read_regular_bytes
+from aka.agent.usage_summary import select_session_usage
 from aka.experiment.measurement_store import private_write, private_write_bytes
 
 MAX_REVIEW_FILE_BYTES = 64 * 1024 * 1024
@@ -217,7 +218,7 @@ def bound_review_usage_rows(
                 "session_id": token.get("session_id", result.get("session_id")),
                 "exit_status": token.get("exit_status"),
                 "timed_out": token.get("timed_out") is True,
-                "usage": token.get("total"),
+                "usage": select_session_usage(token)["usage"],
                 "source": str(token_path),
             }
 
@@ -283,6 +284,6 @@ def bound_review_usage_rows(
                 "timed_out": bool(
                     audit_row.get("timed_out", token.get("timed_out", False))
                 ),
-                "usage": token.get("total"),
+                "usage": select_session_usage(token)["usage"],
                 "source": str(token_path),
             }

@@ -291,18 +291,25 @@ class NativeSession:
             if invocation_environment.get(key) != value:
                 raise ValueError(f"Cannot change {key} inside an open Agent session")
         if resume:
-            if not self.supports_resume or not self._session_id:
+            # A reopened Codex Session has not emitted thread.started yet.
+            # Only an explicit resume may treat the supplied ID as a native
+            # thread ID; a fresh invocation still waits for Codex's real ID.
+            resume_id = self._session_id or (
+                self._requested_session_id if self.runtime_id == "codex" else ""
+            )
+            if not self.supports_resume or not resume_id:
                 raise RuntimeError(
                     "the existing backend has no resumable native session"
                 )
             command = resume_session_command(
                 prompt,
-                self._session_id,
+                resume_id,
                 reasoning_effort,
                 self.runtime_id,
                 runtime=self._runtime,
                 environment=invocation_environment,
             )
+            self._session_id = resume_id
         else:
             command = fresh_session_command(
                 prompt,

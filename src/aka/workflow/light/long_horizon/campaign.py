@@ -16,7 +16,7 @@ from aka.workflow.light.long_horizon.models import SupervisorState
 from aka.workflow.light.long_horizon.session import LongSessionRunner
 from aka.workflow.light.long_horizon.store import CampaignStore
 from aka.workflow.light.long_horizon.telemetry import summarize_episode
-from aka.agent.execution.home import SESSION_HOME_ROOT_ENV
+from aka.agent.execution.home import SESSION_HOME_ROOT_ENV, SESSION_HOME_ID_ENV
 
 from aka.resources.bundles import resource_path
 PROMPTS_DIR = resource_path("prompts/research-episodes")
@@ -494,6 +494,10 @@ class LongHorizonCampaign:
             telemetry_environment[SESSION_HOME_ROOT_ENV] = str(
                 store.root / "agent-session-homes"
             )
+            if agent_cli == "codex":
+                # Codex allocates its thread ID after launch. The trajectory's
+                # native storage must not change when that ID becomes known.
+                telemetry_environment[SESSION_HOME_ID_ENV] = "optimization-session"
             usage_receipt = uuid.uuid4().hex
             with self.base_campaign._supervisor_runtime.session(
                 agent_workspace, telemetry_environment,

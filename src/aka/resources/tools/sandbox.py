@@ -87,7 +87,10 @@ def proxy_command(path: str, payload: dict) -> int:
                      "Shorten the request; no operation was sent.", repairable=True)
         return 2
     try:
-        raw = call_tool(names[path], body, workspace=Path.cwd())
+        # Bind to the installed client, normalizing ../tools invocations without
+        # following the client file into a shared resource installation.
+        workspace = Path(os.path.abspath(__file__)).parent.parent
+        raw = call_tool(names[path], body, workspace=workspace)
     except ToolSessionError as error:
         if error.payload is None:
             client_error(error.code, "The tool session or operation outcome could not be confirmed.",

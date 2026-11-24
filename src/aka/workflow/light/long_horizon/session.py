@@ -174,8 +174,8 @@ class LongSessionRunner:
             telemetry_attempt_prefix = native.environment.get(
                 "ATREX_TELEMETRY_ATTEMPT_ID"
             )
-            stdout_parts: list[str] = []
-            stderr_parts: list[str] = []
+            stdout_tail = ""
+            stderr_tail = ""
             total_tokens = 0
             completion_diagnosis = ""
             exit_status = 0
@@ -250,6 +250,9 @@ class LongSessionRunner:
                 if record_session is not None and identity and identity != recorded_session_id:
                     record_session(identity)
                     recorded_session_id = identity
+                # Release the previous invocation before waiting for its successor.
+                turn = None
+                stdout = stderr = ""
                 turn = native.invoke(
                     turn_prompt,
                     resume=resume,
@@ -260,8 +263,8 @@ class LongSessionRunner:
                 next_prompt = None
                 stdout, stderr = turn.stdout, turn.stderr
                 exit_status, turn_timed_out = turn.exit_status, turn.timed_out
-                stdout_parts.append(stdout)
-                stderr_parts.append(stderr)
+                stdout_tail = (stdout_tail + ("\n" if attempt > 1 else "") + stdout[-4000:])[-4000:]
+                stderr_tail = (stderr_tail + ("\n" if attempt > 1 else "") + stderr[-4000:])[-4000:]
                 active_session_id = turn.session_id or active_session_id
                 if (record_session is not None and turn.session_id
                         and turn.session_id != recorded_session_id):
@@ -560,16 +563,14 @@ class LongSessionRunner:
                         continue
                     break
 
-            stdout_all = "\n".join(stdout_parts)
-            stderr_all = "\n".join(stderr_parts)
             return SessionResult(
                 exit_status=exit_status,
                 timed_out=timed_out,
                 tokens=total_tokens,
                 session_id=active_session_id or session_id,
                 resume_count=resume_count,
-                stdout_tail=stdout_all[-4000:],
-                stderr_tail=stderr_all[-4000:],
+                stdout_tail=stdout_tail,
+                stderr_tail=stderr_tail,
                 completion_diagnosis=completion_diagnosis,
                 invocations=tuple(invocations),
                 output_limit_recoveries=output_limit_recoveries,

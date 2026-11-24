@@ -1,7 +1,7 @@
 """Provider counters with a clearly labelled conversation-text fallback.
 
-Claude totals follow result.usage; modelUsage and child diagnostics have a
-different scope and must not replace or augment that total.
+Claude totals use unique main-response counters throughout the invocation.
+Provider settlements and child counters are retained separately for audit.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from aka.agent.model import (
     subtract_token_usage,
     sum_token_usages,
 )
-from aka.agent.usage_summary import claude_usage_fallback_reason
 
 COMPONENTS = (
     "input_tokens", "output_tokens", "cache_read_tokens", "cache_write_tokens",
@@ -40,7 +39,7 @@ def _text_tokens(text: str) -> int:
     if not text:
         return 0
     cjk = 0
-    other = bytearray()
+    other = 0
     for character in text:
         code = ord(character)
         if (
@@ -50,8 +49,8 @@ def _text_tokens(text: str) -> int:
         ):
             cjk += 1
         else:
-            other.extend(character.encode("utf-8"))
-    return cjk + ((len(other) + 3) // 4 if other else 0)
+            other += len(character.encode("utf-8"))
+    return cjk + ((other + 3) // 4 if other else 0)
 
 
 def _content_text(value: object) -> str:
@@ -144,6 +143,40 @@ def _event_content(event: dict[str, Any]) -> tuple[str | None, object]:
     return None, None
 
 
+class _TextEstimate:
+    """Counters equivalent to estimating a newline-joined list of texts."""
+    def __init__(self):
+        self.characters = self.cjk = self.other_bytes = self.count = 0
+
+    def append(self, text):
+        if self.count:
+            self.characters += 1
+            self.other_bytes += 1
+        self.count += 1
+        self.characters += len(text)
+        for char in text:
+            code = ord(char)
+            if 0x3400 <= code <= 0x4DBF or 0x4E00 <= code <= 0x9FFF or 0xF900 <= code <= 0xFAFF:
+                self.cjk += 1
+            else:
+                self.other_bytes += len(char.encode("utf-8"))
+
+    def __bool__(self):
+        return bool(self.count)
+
+    def combine(self, other):
+        result = _TextEstimate()
+        separator = int(bool(self) and bool(other))
+        result.characters = self.characters + other.characters + separator
+        result.other_bytes = self.other_bytes + other.other_bytes + separator
+        result.cjk = self.cjk + other.cjk
+        result.count = self.count + other.count
+        return result
+
+    def tokens(self):
+        return self.cjk + (self.other_bytes + 3) // 4
+
+
 def estimate_usage_from_conversation(conversation: str) -> tuple[TokenUsage, dict[str, object]]:
     """Estimate a finalized invocation when every provider counter is absent.
 
@@ -152,15 +185,15 @@ def estimate_usage_from_conversation(conversation: str) -> tuple[TokenUsage, dic
     messages and tool payloads, never JSON envelope metadata. Replayed context,
     hidden system prompts and provider cache behavior cannot be reconstructed.
     """
-    runtime_inputs: list[str] = []
-    stream_inputs: list[str] = []
-    stream_outputs: list[str] = []
-    stream_reasoning: list[str] = []
-    native_inputs: list[str] = []
-    native_outputs: list[str] = []
-    native_reasoning: list[str] = []
+    runtime_inputs = _TextEstimate()
+    stream_inputs = _TextEstimate()
+    stream_outputs = _TextEstimate()
+    stream_reasoning = _TextEstimate()
+    native_inputs = _TextEstimate()
+    native_outputs = _TextEstimate()
+    native_reasoning = _TextEstimate()
 
-    for line in conversation.splitlines():
+    for line in conversation.splitlines() if isinstance(conversation, str) else conversation:
         try:
             record = json.loads(line)
         except (TypeError, ValueError):
@@ -200,12 +233,12 @@ def estimate_usage_from_conversation(conversation: str) -> tuple[TokenUsage, dic
     provider_inputs = stream_inputs if prefer_stream else native_inputs
     provider_outputs = stream_outputs if prefer_stream else native_outputs
     provider_reasoning = stream_reasoning if prefer_stream else native_reasoning
-    input_text = "\n".join([*runtime_inputs, *provider_inputs])
-    output_text = "\n".join(provider_outputs)
-    reasoning_text = "\n".join(provider_reasoning)
-    input_tokens = _text_tokens(input_text)
-    output_tokens = _text_tokens(output_text)
-    reasoning_tokens = _text_tokens(reasoning_text)
+    input_text = runtime_inputs.combine(provider_inputs)
+    output_text = provider_outputs
+    reasoning_text = provider_reasoning
+    input_tokens = input_text.tokens()
+    output_tokens = output_text.tokens()
+    reasoning_tokens = reasoning_text.tokens()
     total_tokens = input_tokens + output_tokens
     usage = TokenUsage(
         input_tokens=input_tokens,
@@ -218,9 +251,9 @@ def estimate_usage_from_conversation(conversation: str) -> tuple[TokenUsage, dic
     )
     return usage, {
         "method": "conversation_text_cjk_plus_utf8_bytes_v1",
-        "input_characters": len(input_text),
-        "output_characters": len(output_text),
-        "reasoning_characters": len(reasoning_text),
+        "input_characters": input_text.characters,
+        "output_characters": output_text.characters,
+        "reasoning_characters": reasoning_text.characters,
         "limitations": [
             "hidden provider system prompts are unavailable",
             "replayed context and cache billing cannot be reconstructed",
@@ -592,25 +625,14 @@ class UsageAccumulator:
             total, exact, warnings = pi_total, pi_exact, pi_warnings
             basis = "pi_settled_stream" if exact else "pi_source_counter_bounds"
         elif self.backend == "claude":
-            # result.usage is the chosen accounting contract, not modelUsage
-            # (which also includes internal queries such as session titles).
-            # Keep child/native counters as diagnostics without adding them.
-            total = self.terminal
-            basis = "provider_result_usage"
-            exact = finished and not self.missing and total.measurement == "exact"
-            fallback_reason = claude_usage_fallback_reason(
-                total.total_tokens, main.total_tokens, finished=finished,
-            )
-            if fallback_reason:
-                total = main
-                exact = False
-                basis = "main_response_fallback"
-                warnings.append(fallback_reason)
-            if not _same(main, self.terminal):
-                # Response attribution and provider billing are different
-                # observations. Do not inflate or downgrade result.usage just
-                # to make provisional/missing per-response counters add up.
-                warnings.append("claude_response_usage_incomplete_or_unreconciled")
+            # A terminal result can cover only the final provider turn. Never
+            # replace the invocation's accumulated responses when it arrives.
+            total = main
+            basis = "main_response_usage"
+            if main.total_tokens is None:
+                warnings.append("claude_main_response_usage_unavailable")
+            if self.terminal.total_tokens is not None and not _same(main, self.terminal):
+                warnings.append("claude_terminal_usage_differs_from_responses")
         elif self.backend == "codex" and self.codex_totals:
             # Native counters are cumulative per rollout; subtract the start snapshot.
             # Root's stdout total may be session-cumulative or turn-only. Do not add it again.
@@ -670,7 +692,7 @@ class UsageAccumulator:
                 if self.backend == "dsh"
                 else "pi_stream; native-only evidence conservatively merged without shared response IDs"
                 if self.backend == "pi"
-                else "native child counters are diagnostic only; not added to result.usage"
+                else "native child counters are diagnostic only; not added to main responses"
                 if self.backend == "claude"
                 else "native_transcripts_and_stream; unexported calls cannot be counted"
             ),

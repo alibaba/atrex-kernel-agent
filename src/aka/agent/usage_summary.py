@@ -61,38 +61,23 @@ def summarize_usage(rows: list[dict], *, missing_expected: bool = False) -> dict
     }
 
 
-def claude_usage_fallback_reason(
-    provider_total: int | None, main_total: int | None, *, finished: bool
-) -> str | None:
-    """Explain why main responses replace a Claude provider settlement."""
-    if provider_total == 0 and main_total is not None and main_total > 0:
-        return "claude_zero_result_conflicts_with_responses"
-    if not finished:
-        return "claude_live_response_usage"
-    if provider_total is None:
-        return "claude_result_usage_unavailable"
-    return None
-
-
 def select_session_usage(value: Mapping) -> dict:
-    """Select counters and their accounting provenance together.
+    """Use the same response accounting while running and after completion.
 
-    Positive provider settlements retain their billing scope. Child counters
-    are not added to the main Agent, and a conflicting zero is only a partial
-    response-based observation, never an exact provider receipt.
+    Provider result settlements are audit evidence, not a replacement for the
+    accumulated main responses. Prefer by_agent.main in older captures when
+    available; otherwise preserve their stored total and its accounting basis.
     """
     total = usage(value.get("total"))
     basis = value.get("accounting_basis")
     reason = None
-    if value.get("backend") == "claude":
+    if value.get("backend") == "claude" and basis not in {
+        "main_response_usage", "conversation_text_estimate",
+    }:
         by_agent = value.get("by_agent")
         main = usage(by_agent.get("main") if isinstance(by_agent, Mapping) else None)
-        if main["total_tokens"] is not None:
-            reason = claude_usage_fallback_reason(
-                total["total_tokens"], main["total_tokens"],
-                finished=value.get("state") != "running",
-            )
-            if reason:
-                total = main | {"measurement": "partial"}
-                basis = "main_response_fallback"
+        if any(main[key] is not None for key in TOKEN_KEYS):
+            total = main | {"measurement": "partial"}
+            basis = "main_response_usage"
+            reason = "claude_response_accounting_selected"
     return {"usage": total, "accounting_basis": basis, "fallback_reason": reason}
