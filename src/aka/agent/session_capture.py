@@ -11,6 +11,8 @@ import json
 import os
 import subprocess
 import threading
+import tempfile
+import struct
 import time
 import uuid
 from contextvars import ContextVar
@@ -26,7 +28,6 @@ from aka.agent.session_transcript import (
     initial_records,
     provider_line_record,
     record_provider_line,
-    render_conversation,
 )
 from aka.agent.session_usage import (
     UsageAccumulator,
@@ -159,7 +160,7 @@ def captured_observation(stdout: str, events, capabilities) -> CapturedObservati
         return None
     # Legacy phases still depend on stream order. Native-only responses have no
     # reliable position among those markers; do not fabricate a phase. Claude's
-    # total follows result.usage and excludes separately observed child counters.
+    # total accumulates main responses and excludes separately observed child counters.
     # Full per-response counters remain in token-usage.json for every backend.
     if report["backend"] == "claude":
         from aka.agent.adapter import ClaudeAdapter
@@ -251,8 +252,7 @@ def finish_session_capture(capture, **status) -> None:
                 capture._sync_stdout_usage()
                 report = capture._usage.report(finished=False)
                 report.update(capture_errors=list(capture.errors))
-                stdout = "".join(capture._chunks["stdout"])
-                _LAST_CAPTURE.set((hashlib.sha256(stdout.encode()).hexdigest(), report))
+                _LAST_CAPTURE.set((capture._chunks["stdout"].digest.hexdigest(), report))
         except Exception:
             # Accounting can fail too; retain the original CLI outcome and
             # leave the existing stream/ledger parser available as a fallback.
@@ -260,7 +260,61 @@ def finish_session_capture(capture, **status) -> None:
         finally:
             with capture._lock:
                 capture.finished = True
+                for spool in (*capture._chunks.values(), *capture._retained_chunks.values()):
+                    spool.close()
         print(f"[orchestrator] session capture failed at {capture.root}: {error}", flush=True)
+
+
+class _OutputSpool:
+    """Append-only UTF-8 stream on disk; cursors never retain consumed text."""
+
+    def __init__(self, directory):
+        self.file = tempfile.TemporaryFile(mode="w+b", dir=directory)
+        self.digest = hashlib.sha256()
+        self.cursor = 0
+
+    def append(self, text):
+        data = text.encode("utf-8")
+        self.file.seek(0, os.SEEK_END)
+        self.file.write(struct.pack("!Q", len(data)))
+        self.file.write(data)
+        self.digest.update(data)
+
+    def unread(self):
+        self.file.seek(self.cursor)
+        while header := self.file.read(8):
+            data = self.file.read(struct.unpack("!Q", header)[0])
+            self.cursor = self.file.tell()
+            yield data.decode("utf-8")
+
+    def __iter__(self):
+        self.file.seek(0)
+        while header := self.file.read(8):
+            yield self.file.read(struct.unpack("!Q", header)[0]).decode("utf-8")
+
+    def lines(self):
+        # Pipe reads may split oversized records. Reconstruct lines without
+        # keeping an entire invocation resident.
+        pending = ""
+        for chunk in self:
+            lines = (pending + chunk).splitlines(keepends=True)
+            pending = ""
+            if lines and not lines[-1].endswith(("\n", "\r")):
+                pending = lines.pop()
+            yield from lines
+        if pending:
+            yield pending
+
+    def text(self):
+        # Compatibility boundary: process runners still return complete strings.
+        import io
+        output = io.StringIO()
+        for chunk in self:
+            output.write(chunk)
+        return output.getvalue()
+
+    def close(self):
+        self.file.close()
 
 
 class SessionCapture:
@@ -297,12 +351,12 @@ class SessionCapture:
         self._monitor: threading.Thread | None = None
         # Functional output has the same full-stream contract as Popen.communicate.
         # Neither diagnostic limits nor native/history reads may truncate it.
-        self._chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
-        self._retained_chunks: dict[str, list[str]] = {"stdout": [], "stderr": []}
+        self._chunks = {name: _OutputSpool(self.root) for name in ("stdout", "stderr")}
+        self._retained_chunks = {name: _OutputSpool(self.root) for name in ("stdout", "stderr")}
         self._pipe_bytes = {"stdout": 0, "stderr": 0}
         self._raw_pipe_bytes = {"stdout": 0, "stderr": 0}
-        self._stdout_cursor = 0
         self.errors: list[str] = []
+        self._output_error: OSError | None = None
         self._budget = CaptureBudget(limits or CaptureLimits(), self._capture_error)
         # History scanning is bounded independently. Old bytes/records never
         # consume the invocation's diagnostic retention allowance.
@@ -336,7 +390,7 @@ class SessionCapture:
                 self._tail(name, path, size)
             except (OSError, ValueError) as error:
                 self._capture_error("native_capture_setup", error)
-        self.native: dict[str, bytearray] = {}
+        self.native: dict[str, Path] = {}
         self._sequence = 0
         self.finished = False
         initial = initial_records(backend=backend, session_id=self.session_id, prompt=self.prompt)
@@ -426,9 +480,7 @@ class SessionCapture:
             self._capture_error("usage_capture", error)
 
     def _sync_stdout_usage(self) -> None:
-        while self._stdout_cursor < len(self._chunks["stdout"]):
-            text = self._chunks["stdout"][self._stdout_cursor]
-            self._stdout_cursor += 1
+        for text in self._chunks["stdout"].unread():
             self._feed_usage("provider/stdout.stream-json", text)
             if self.backend == "dsh":
                 from aka.agent.dsh import session_id_from_stream
@@ -470,11 +522,11 @@ class SessionCapture:
                         text = addition.decode("utf-8", errors="replace")
                         self._feed_usage(name, text)
                         self._history_seeds[name][1].feed(name, text, previous=True)
-                        self.native.setdefault(name, bytearray()).extend(addition)
                         destination = self.root / name
                         destination.parent.mkdir(parents=True, exist_ok=True)
                         with destination.open("ab") as output:
                             output.write(addition)
+                        self.native[name] = destination
                         if record_provider_line(text):
                             self._append(name, text)
                     self._checkpoint_history(name, tail)
@@ -542,7 +594,14 @@ class SessionCapture:
                 # Preserve even oversized-line fragments and output received
                 # after a capture failure; joining reconstructs the original stream.
                 with self._lock:
-                    self._chunks[name].append(line)
+                    try:
+                        self._chunks[name].append(line)
+                    except OSError as error:
+                        # A failed spool must not close the pipe on a live Agent.
+                        # Drain to EOF, then report loss explicitly instead of
+                        # returning an apparently complete functional stream.
+                        self._output_error = error
+                        self._capture_error(f"{name}_output_spool", error)
                     self._raw_pipe_bytes[name] += len(line.encode("utf-8", errors="replace"))
                 if drain_only:
                     continue
@@ -627,7 +686,10 @@ class SessionCapture:
             reader.join(timeout=remaining)
             if reader.is_alive():
                 raise subprocess.TimeoutExpired(process.args, timeout)
-        return "".join(self._chunks["stdout"]), "".join(self._chunks["stderr"])
+        with self._lock:
+            if self._output_error is not None:
+                raise OSError("Agent output spool failed; complete output is unavailable") from self._output_error
+            return self._chunks["stdout"].text(), self._chunks["stderr"].text()
 
     def finish(
         self, *, exit_status: int | None = None, timed_out: bool = False, interrupted: bool = False
@@ -639,7 +701,7 @@ class SessionCapture:
             self._monitor.join(timeout=5)
         with self._lock:
             self.sync_native(final=True)
-            stdout = "".join(self._chunks["stdout"])
+            stdout_digest = self._chunks["stdout"].digest.hexdigest()
             # sync_native already folded the functional stream and its identity.
             # Re-parsing it here would replay failed records without that guard.
             state = (
@@ -662,29 +724,29 @@ class SessionCapture:
                         if path.endswith(f"/{self.session_id}.jsonl")
                         else "provider/claude-subagents/" + path.split(".claude/projects/", 1)[1]
                     )
-                files.append((display, bytes(value)))
-            conversation = render_conversation(
+                files.append((display, value))
+            from aka.agent.session_transcript import write_conversation
+            write_conversation(
+                destination=self.root / "conversation.jsonl",
                 backend=self.backend,
                 session_id=self.session_id,
                 prompt=self.prompt,
-                stdout="".join(self._retained_chunks["stdout"]),
+                stdout=self._retained_chunks["stdout"].lines(),
                 raw_provider_files=files,
                 state=state,
                 exit_status=exit_status,
                 timed_out=timed_out,
                 raw_provider_capture_complete=bool(self.native) and not self.errors,
-                stderr="".join(self._retained_chunks["stderr"]),
+                stderr=self._retained_chunks["stderr"].lines(),
                 started_at=self.started_at,
                 context=self.context,
                 capture_errors=list(self.errors),
             )
-            _atomic(self.root / "conversation.jsonl", conversation)
             report = self._write_usage(True)
             total = report.get("total") if isinstance(report, dict) else None
             if not isinstance(total, dict) or total.get("total_tokens") is None:
-                estimated, estimate_detail = estimate_usage_from_conversation(
-                    conversation
-                )
+                with (self.root / "conversation.jsonl").open(encoding="utf-8") as conversation:
+                    estimated, estimate_detail = estimate_usage_from_conversation(conversation)
                 if estimated.total_tokens is not None:
                     report["total"] = asdict(estimated)
                     report["accounting_basis"] = "conversation_text_estimate"
@@ -703,5 +765,7 @@ class SessionCapture:
                 self.root / "token-usage.json",
                 json.dumps(report, ensure_ascii=False, indent=2) + "\n",
             )
-            _LAST_CAPTURE.set((hashlib.sha256(stdout.encode()).hexdigest(), report))
+            _LAST_CAPTURE.set((stdout_digest, report))
             self.finished = True
+            for spool in (*self._chunks.values(), *self._retained_chunks.values()):
+                spool.close()

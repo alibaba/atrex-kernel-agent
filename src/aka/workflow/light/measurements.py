@@ -351,7 +351,7 @@ class SharedMeasurements(RecordedMeasurements):
             return self._response(experiment, record)
 
     def execute(self, request, *, request_id=None, reuse_completed=False,
-                identity, kernels, deadline=None, check_wait=None):
+                identity, kernels, deadline=None, check_wait=None, predictions=None):
         """Archive every typed execution once in the Campaign Measurement Store.
 
         The public Experiment owns preparation, attempts, receipts and recovery.
@@ -369,6 +369,9 @@ class SharedMeasurements(RecordedMeasurements):
         try:
             with self.store.reserve(identity, kernels, deadline=deadline, request_id=request_id or "",
                                     check_wait=check_wait, reusable=deduplicate) as task:
+                from aka.workflow.light.predictions import freeze_predictions, validate_predictions
+                frozen = freeze_predictions(self.store, task.record_id,
+                    [] if task.resumed else validate_predictions(predictions or []))
                 try:
                     response = self._execute(request, request_id=task.record_id,
                         reuse_completed=deduplicate)
@@ -391,6 +394,11 @@ class SharedMeasurements(RecordedMeasurements):
                         response["agent_result"] = canonical_result(response, identity)
                 agent = response.get("agent_result", {})
                 agent.pop("identity", None)
+                if frozen["predictions"]:
+                    agent["frozen_predictions"] = frozen
+                if predictions and frozen["predictions"] != predictions:
+                    agent["prediction_registration"] = (
+                        "Recovered execution retains its original predictions; this call's predictions were not registered.")
                 agent["gateway_record_id"] = task.record_id
                 agent["record_path"] = f"records/{task.record_id}.json"
                 if "candidate" in kernels:
@@ -407,4 +415,8 @@ class SharedMeasurements(RecordedMeasurements):
             response["agent_result"] = canonical_result(response, identity)
             if cacheable_evaluation(response, identity):
                 response["agent_result"]["reused_gateway_record_id"] = duplicate.record_id
+            if predictions:
+                response["agent_result"]["prediction_registration"] = (
+                    "Existing execution reused; this call's predictions were not registered. "
+                    "Only frozen_predictions, if present, belong to the original execution.")
             return {**response, "reused": True}

@@ -970,3 +970,7 @@ to 5000 milliseconds. For remote Campaigns, run `--capture` remotely and downloa
 The local viewer preserves liveness at `captured_at` without rechecking local PIDs or locks.
 There are no launch, retry, cancellation, or submission controls. See the
 [Dashboard documentation](../docs/optimization-dashboard.md) for options and HTTP behavior.
+
+### Claude token accounting
+
+Main-Agent and independent-review usage accumulates deduplicated response counters throughout the invocation, including after completion. `result.usage` is retained as `terminal` audit evidence and never replaces the accumulated total. Input, output and cache counters remain separate; reasoning is a separately reported subset, not added twice. Missing response counters remain partial or unavailable; conversation-text estimates remain labelled estimated. Existing immutable checkpoints are not automatically rebuilt.

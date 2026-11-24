@@ -168,7 +168,8 @@ class WikiService:
                 provider["settings_revision"] = [info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns]
             except OSError as error:
                 raise RuntimeStateError("Wiki provider settings are unavailable.", code="wiki_configuration_invalid") from error
-        key = digest({"schema": 1, "scope": scope, "tool": tool, "argv": normalized,
+        source_query = tool == "query_nl" and bool(getattr(owner.config, "wiki_reference_paths", ()))
+        key = digest({"schema": 2, "scope": scope, "tool": tool, "argv": normalized,
                       "policy": asdict(policy), "provider": provider, "revision": self.revision})
         record = {"request_id": request_id, "query_key": key, "tool": tool,
                   "cache_hit": False, "status": "waiting", "queue_latency_ms": 0,
@@ -177,7 +178,7 @@ class WikiService:
             with self._reservation(key, min(deadline, started + policy.queue_timeout), live):
                 record["queue_latency_ms"] = round((time.monotonic() - started) * 1000, 3)
                 try:
-                    cached = None if help_requested else json.loads(read_regular_bytes(
+                    cached = None if help_requested or source_query else json.loads(read_regular_bytes(
                         self.root / "results" / (key + ".json"), limit=2 * 1024 * 1024))
                 except FileNotFoundError:
                     cached = None
@@ -223,7 +224,8 @@ class WikiService:
                 for name in ("ATREX_ENVIRONMENT_RESTART_HANDOFF_ID", "ATREX_ENVIRONMENT_RESTART_LOCK_FD"):
                     environment.pop(name, None)
                 request = {"tools": str(Path(command[1]).parent), "tool": tool,
-                           "argv": command[2:], "config": asdict(policy)}
+                           "argv": command[2:], "config": asdict(policy),
+                           "reference_paths": dict(getattr(owner.config, "wiki_reference_paths", ()))}
                 publish(staged, "wiki-request.json", json.dumps(request).encode())
                 from aka.workflow.light.host.projection import (
                     credential_values,

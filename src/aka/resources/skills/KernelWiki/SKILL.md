@@ -26,8 +26,7 @@ arguments shown above. `--help` returns each tool's supported options.
 
 Use the `tools/sandbox.py --kind wiki-*` commands above from an Agent workspace.
 The Supervisor owns stores, the Wiki-only model, timeouts, concurrency and query
-telemetry; never override their host paths or provider configuration. Repeating an
-identical query in this Episode reuses the same completed response and `query_id`.
+telemetry; never override their host paths or provider configuration.
 
 For `repairable: true` with `error.code: "request_not_started"`, wait at least
 `retry_after_seconds` before retrying the unchanged query with backoff. The query
@@ -48,3 +47,12 @@ Use `applied`, `partially_applied`, `reference_only` or `rejected` for `disposit
 `used`, `material_use` and `considered` are invalid. See the complete attribution JSON example in
 `.agents/skills/runtime-records/references/journal.md`. Correct rejected attribution fields and resubmit
 with the existing Gateway Record IDs; do not repeat GPU work.
+
+## Find related source implementations
+
+Use `wiki-query` to find related implementations. Describe the mechanism and missing fact,
+for example: `python3 tools/sandbox.py --kind wiki-query "Find split-KV implementations and how partial outputs are reduced on sm_120"`.
+Read `source_matches`: each hit includes a file path, line numbers, matched terms and a code
+snippet. Open relevant returned files for full context and check applicability. These hits are
+source references, not validated Wiki facts; they have no `wiki_id`, so do not invent one for
+attribution. A partial or empty search does not prove that a mechanism is absent.

@@ -47,6 +47,20 @@ def install_reference_knowledge(workspace: Path, references) -> None:
 
     if not references:
         return
+    # Keep the old path as an alias; the Wiki-facing mount is the discoverable entry.
+    wiki = workspace.resolve(strict=True) / "gpu-wiki"
+    with open_private_directory(wiki):
+        pass
+    with open_private_directory(wiki / "references") as directory:
+        for name, configured in references:
+            source = Path(configured).resolve(strict=True)
+            if not source.is_dir() or Path(name).name != name or name in {".", ".."}:
+                raise ValueError("Invalid reference knowledge directory")
+            try:
+                os.symlink(str(source), name, dir_fd=directory, target_is_directory=True)
+            except FileExistsError:
+                if os.readlink(name, dir_fd=directory) != str(source):
+                    raise ValueError(f"Reference knowledge link changed: gpu-wiki/references/{name}")
     with open_private_directory(workspace.resolve(strict=True) / "references") as directory:
         for name, configured in references:
             source = Path(configured).resolve(strict=True)
@@ -66,11 +80,12 @@ def reference_knowledge_access(workspace: Path, references):
     mounts = []
     for name, configured in references:
         source = Path(configured).resolve(strict=True)
-        link = workspace / "references" / name
-        if not source.is_dir() or not link.is_symlink() or link.resolve(strict=True) != source:
-            raise ValueError(f"Reference knowledge link changed: references/{name}")
+        for base in (workspace / "references", workspace / "gpu-wiki" / "references"):
+            link = base / name
+            if not source.is_dir() or not link.is_symlink() or link.resolve(strict=True) != source:
+                raise ValueError(f"Reference knowledge link changed: {base.name}/{name}")
         mounts.append(FilesystemMount(source, source, origin=f"Reference knowledge:{name}"))
-    return FilesystemAccess(tuple(mounts), read_only_paths=(workspace / "references",) if references else ())
+    return FilesystemAccess(tuple(mounts), read_only_paths=(workspace / "references", workspace / "gpu-wiki") if references else ())
 
 
 def agent_runtime_directive(agent_cli: str, *, is_ppu: bool = False, wiki: bool = True) -> str:

@@ -185,7 +185,9 @@ def _compact_claude_records(
     stream: list[dict[str, Any]],
     native: list[dict[str, Any]],
     prompt: str,
-) -> list[dict[str, Any]]:
+    *,
+    factory=list,
+):
     """Use native content once, falling back to stdout when coverage is uncertain.
 
     Native content blocks are never collapsed by message ID. Only the duplicate
@@ -193,8 +195,8 @@ def _compact_claude_records(
     """
     main_path = "provider/claude-session.raw-jsonl"
     housekeeping = {"queue-operation", "last-prompt", "ai-title", "file-history-snapshot"}
-    main: list[dict[str, Any]] = []
-    other: list[dict[str, Any]] = []
+    main = factory()
+    other = factory()
     for row in native:
         path = str(row.get("path", ""))
         event = row.get("event")
@@ -239,8 +241,8 @@ def _compact_claude_records(
 
     # Place stdout-only diagnostics near the last matched native event, keeping
     # unmatched content on partial/crashed sessions instead of assuming a full ledger.
-    extras: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    terminal: list[dict[str, Any]] = []
+    extras = defaultdict(factory)
+    terminal = factory()
     matched_users: set[int] = set()
     terminal_fingerprints: set[str] = set()
     anchor = -1
@@ -279,7 +281,8 @@ def _compact_claude_records(
             extras[anchor].append(row)
         else:
             anchor = max(anchor, match)
-    rows = list(extras[-1])
+    rows = factory()
+    rows.extend(extras[-1])
     for index, row in enumerate(main):
         event = row.get("event")
         duplicate_terminal = (
@@ -290,7 +293,8 @@ def _compact_claude_records(
         if index != initial_prompt_index and not duplicate_terminal:
             rows.append(row)
         rows.extend(extras[index])
-    return [*rows, *other, *terminal]
+    from itertools import chain
+    return list(chain(rows, other, terminal)) if factory is list else chain(rows, other, terminal)
 
 
 def render_conversation(
@@ -367,3 +371,88 @@ def render_conversation(
     terminal.update(capture_errors=list(capture_errors or []))
     records.append(terminal)
     return encode_records(records)
+
+
+class _DiskRecords:
+    """A sequence of JSON records backed by a shared temporary SQLite database."""
+
+    def __init__(self, db, bucket):
+        self.db, self.bucket, self.size = db, bucket, 0
+
+    def append(self, value):
+        self.db.execute("INSERT INTO records VALUES (?, ?, ?)",
+                        (self.bucket, self.size, json.dumps(value, ensure_ascii=False)))
+        self.size += 1
+
+    def extend(self, rows):
+        for row in rows:
+            self.append(row)
+
+    def __iter__(self):
+        for (text,) in self.db.execute(
+            "SELECT value FROM records WHERE bucket=? ORDER BY ordinal", (self.bucket,)
+        ):
+            yield json.loads(text)
+
+
+def write_conversation(*, destination, backend, session_id, prompt, stdout,
+                       raw_provider_files, state, exit_status, timed_out,
+                       raw_provider_capture_complete, stderr=(), started_at=None,
+                       context=None, capture_errors=None):
+    """Finalize the reading projection without retaining transcript bodies in RAM.
+
+    Keep the existing Claude matching/order rules. Only compact fingerprints
+    and message identities stay resident; event bodies and extras live on disk.
+    """
+    import sqlite3
+    import tempfile
+    from pathlib import Path
+    from itertools import count, chain
+
+    destination = Path(destination)
+    temporary = destination.with_name(destination.name + ".tmp")
+    with tempfile.TemporaryDirectory(prefix="aka-transcript-", dir=destination.parent) as directory:
+        db = sqlite3.connect(str(Path(directory) / "records.sqlite"))
+        try:
+            db.execute("PRAGMA journal_mode=OFF")
+            db.execute("PRAGMA cache_size=-2048")
+            db.execute("CREATE TABLE records (bucket INTEGER, ordinal INTEGER, value TEXT, PRIMARY KEY(bucket,ordinal))")
+            buckets = count()
+            def factory():
+                return _DiskRecords(db, next(buckets))
+            stream, native = factory(), factory()
+            for line in stdout:
+                if record_provider_line(line):
+                    stream.append(provider_line_record(0, path="provider/stdout.stream-json", line=line.rstrip("\r\n")))
+            for name, path in raw_provider_files:
+                # Match provider_bytes_records' binary fallback, but never read
+                # an ordinary JSONL transcript in one allocation.
+                start = native.size
+                try:
+                    with path.open(encoding="utf-8") as source:
+                        for line in source:
+                            native.append(provider_line_record(0, path=name, line=line.rstrip("\r\n")))
+                except UnicodeDecodeError:
+                    db.execute("DELETE FROM records WHERE bucket=? AND ordinal>=?", (native.bucket, start))
+                    native.size = start
+                    projected, _ = provider_bytes_records(0, path=name, payload=path.read_bytes())
+                    native.extend(projected)
+            initial = initial_records(backend=backend, session_id=session_id, prompt=prompt)
+            if started_at is not None:
+                initial[0]["started_at"] = started_at
+            if context is not None:
+                initial[0]["context"] = context
+            body = (_compact_claude_records(stream, native, prompt, factory=factory)
+                    if backend == "claude" else chain(stream, native))
+            terminal = terminal_record(0, state=state, exit_status=exit_status,
+                timed_out=timed_out, raw_provider_capture_complete=raw_provider_capture_complete)
+            terminal["capture_errors"] = list(capture_errors or [])
+            errors = (provider_line_record(0, path="provider/stderr.log", line=line.rstrip("\r\n")) for line in stderr)
+            with temporary.open("w", encoding="utf-8") as output:
+                for index, row in enumerate(chain(initial, body, errors, [terminal])):
+                    row["sequence"] = index
+                    output.write(encode_records([row]))
+            temporary.replace(destination)
+        finally:
+            db.close()
+            temporary.unlink(missing_ok=True)

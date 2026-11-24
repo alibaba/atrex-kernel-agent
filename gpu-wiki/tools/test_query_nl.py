@@ -354,7 +354,7 @@ class FrontDoorTests(unittest.TestCase):
 
     def test_output_emits_attribution_ids_with_records_and_notes(self):
         answer = self._answer(stub_intent())
-        self.assertEqual(set(answer), {"query_id", "records", "notes"})
+        self.assertEqual(set(answer), {"query_id", "records", "notes", "source_matches", "source_search"})
         self.assertRegex(answer["query_id"], r"^wiki-query-[0-9a-f]{32}$")
 
     def test_records_are_id_keyed_lightweight_and_payload_is_exact(self):
@@ -474,7 +474,7 @@ class LauncherTests(unittest.TestCase):
             )
         self.assertEqual(code, 0, err)
         self.assertEqual(bridge.clis, ["claude"])
-        self.assertEqual(set(json.loads(out)), {"query_id", "records", "notes"})
+        self.assertEqual(set(json.loads(out)), {"query_id", "records", "notes", "source_matches", "source_search"})
         self.assertNotIn("query_bridge_agent/SKILL.md", bridge.prompts[0])
 
     def test_plain_json_result_exposes_bridge_telemetry(self):
@@ -544,7 +544,7 @@ class LauncherTests(unittest.TestCase):
                         "--max-records", "1")
                 self.assertEqual(code, 0, err)
                 answer = json.loads(out)
-                self.assertEqual(set(answer), {"query_id", "records", "notes"})
+                self.assertEqual(set(answer), {"query_id", "records", "notes", "source_matches", "source_search"})
                 metric = json.loads(log.read_text(encoding="utf-8"))
                 self.assertEqual(metric["query_id"], answer["query_id"])
                 self.assertEqual(metric["task_id"], "test-op")

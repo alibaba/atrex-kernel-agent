@@ -52,6 +52,22 @@ class ClaudeAdapter(ClaudeLikeAdapter):
         command.append(prompt)
         return command
 
+    def normalize_stream(self, stdout, *, settled_usage=None):
+        from aka.agent.model import NormalizedAgentEvent, TokenUsage, resequence_agent_events
+        from aka.agent.session_usage import UsageAccumulator
+
+        events, _ = super().normalize_stream(stdout, settled_usage=settled_usage)
+        accumulator = UsageAccumulator(self.id)
+        accumulator.feed("provider/stdout.stream-json", stdout)
+        if settled_usage:
+            for message_id, usage in settled_usage.items():
+                if message_id in accumulator.responses:
+                    accumulator.responses[message_id]["usage"] = usage
+        total = TokenUsage(**accumulator.report(finished=True)["total"])
+        events = [event for event in events if event.kind != "terminal_usage"]
+        events.append(NormalizedAgentEvent(0, "terminal_usage", total))
+        return resequence_agent_events(events), total
+
     def auth_hint(self) -> str:
         return 'run `claude auth status` and `claude --print "test"` to diagnose'
 

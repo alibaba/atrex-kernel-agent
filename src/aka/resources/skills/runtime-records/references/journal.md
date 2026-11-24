@@ -22,9 +22,9 @@ search uses its live visible revision set. Every immutable Record remains stored
 
 Claim Review is disabled by default unless explicitly enabled for the Campaign.
 When disabled, mutations that normally request it return
-`review_skipped: true`, `claim_review_quality: supported`, and `evidence_eligible: true`
-with an explicit explanation. This is configured acceptance, not independent verification;
-recording, revisions and attachment validation still apply.
+`archive_status: archived`, `review_skipped: true`, `claim_review_quality: review_not_requested`,
+and `evidence_eligible: false`. This means recorded without independent review, not supported.
+Recording, revisions, lifecycle operations and sharing remain available; attachment validation still applies.
 
 Claim-bearing mutations return `review` once. Its workflow fields are deliberately distinct:
 
@@ -45,6 +45,11 @@ An unknown mechanism can coexist with a supported observation and next trial; ex
 paths, generalizing beyond measured workloads, or declaring a program exhausted needs stronger support.
 
 ## Propose and select a Direction
+
+Establish or reuse a Direction once the high-level idea is clear. Exploratory probes and a minimal
+implementation may precede proposal or start. Research bookkeeping does not gate implementation,
+measurement, or submission. Update the Direction only when its high-level assessment, remaining
+branches, or actual work state changes.
 
 A Direction is a durable optimization program organized around a bottleneck, workload regime, or
 architecture objective and should normally span multiple candidates and Experiments. A single
@@ -85,7 +90,7 @@ but name the affected metric, bottleneck, or branch in the implementation strate
 is an optional array of non-empty strings, not one string.
 `relationship`, `derived_from_direction_ids`, and
 `derived_from_experiment_ids` may describe `refinement`, `correction`, `combination`, `alternative`,
-`reimplementation`, or `contradiction`. Reuse the existing ID while objective and applicability are unchanged. Propose a
+`reimplementation`, or `contradiction`. Keep the same Direction while the core optimization idea and applicable problem remain unchanged. Its revisions update the current assessment and remaining branches. Create a new Direction when the main optimization principle or target problem changes, not merely when a new implementation is tried. A successful Experiment adds a viable branch; it does not by itself complete the Direction. Propose a
 new idea only after refreshing the catalog and checking likely matches. These fields record
 genealogy only. A derived Direction receives its own lifecycle, plan, owner and queue position; it
 does not inherit parent status, Experiments, Gateway evidence, Kernel source or priority. Materialize
@@ -183,13 +188,35 @@ changes the claim or remaining plan, submit a complete `action=revise` Direction
 
 ## Record an Experiment
 
-Record an Experiment at a decision boundary: when you use measured results to keep or discard a
-candidate, select a parameter or workload strategy, rule out a branch, or switch paths. Record the
-observations and chosen next action before pursuing that action. Combine completed trials that
-inform this same decision; once the decision is made, do not postpone recording for the next probe,
-a complete implementation, full Evaluate, mechanism proof, or Direction closure. Revise the
-Experiment when later evidence updates the same conclusion; use a new Experiment for a different
-question. Not every Command or Evaluate needs an Experiment.
+A Direction answers why a high-level optimization idea is worth exploring. Its Experiments
+record concrete investigations, not just complete implementations. Illustrative example only:
+
+```text
+Direction: reduce output-write inefficiency through coalescing
+  Experiment A: profile the current output stores to localize the suspected bottleneck
+  Experiment B: microbenchmark two store layouts to test their throughput difference
+  Experiment C: implement a coalesced output path and measure end-to-end latency
+  Experiment D: test correctness on boundary shapes and non-contiguous inputs
+```
+
+Repeating B with more samples or repairing its timing script revises B. A materially different
+probe method creates a new Experiment. Fixing a bug within C's same approach or sweeping its tile
+sizes can revise C; replacing its key dataflow creates a new Experiment. D is a separate correctness
+question even if it tests the same commit as C. No minimum number of Experiments is required.
+All four inform the same Direction; a positive microbenchmark does not prove end-to-end speedup,
+and a successful implementation does not automatically complete the Direction. Update the
+Direction's assessment or remaining branches when these findings materially change them.
+
+Record an Experiment when a concrete implementation, probe, or test has enough evidence to
+assess the attempt. Combine its related debugging, parameter trials, and measurements. As you
+conclude an attempt and prepare to switch to a materially different approach, promptly save a
+short record of the method, expectations, observations, remaining uncertainty, and next choice;
+do not defer that record until the next attempt produces results. Recording is not a prerequisite
+for continuing implementation, measurement, or Kernel submission. Do not add verification solely
+to finish the record, wait for mechanism proof, or revise a Direction merely because an Experiment
+was recorded.
+
+An Experiment is one concrete investigative attempt: a candidate implementation, diagnostic probe, microbenchmark, correctness test, profiling experiment, or controlled comparison. It records what was tried and what the observations establish. Keep its identity while the specific question and experimental approach remain unchanged. Use revision for repeat measurements, corrections, explanation, or repairs within that attempt. Create a new Experiment when the experimental question or method, implementation strategy, key dataflow, or combination changes materially, even within the same Direction. Several commits, parameter trials, and diagnostic Records may belong to one attempt; one commit or tool call does not require one Experiment. A complete Kernel or full Evaluate is not required. Preserve earlier attempts rather than replacing them with the latest conclusion. Not every Command or Evaluate needs an Experiment.
 Record observations, their measured scope, and the
 next action; the mechanism may remain unknown. Cite all relevant Records or archived references,
 including regressions that limit the conclusion. Runtime retains each measurement and its source
@@ -209,9 +236,70 @@ identity. A disposable probe that changes no decision need not be recorded:
 python3 tools/sandbox.py --kind record-experiment --request-file scratch/experiment.json
 ```
 
+### Preserve predictions and observed outcomes
+
+Use optional `implementation` to describe the concrete implementation, probe, or test method
+and its difference from prior attempts. Use optional `expectations` for scoped comparisons:
+each row contains non-empty `scope`, `prediction`, `observation`, and `assessment`
+(`met`, `missed`, or `unresolved`). Keep `intent` for the experimental question and
+`interpretation` for remaining hypotheses and the next action.
+Distinguish expectations that were met, missed, or remain unresolved; mixed Shape outcomes stay
+separate. Keep observations separate from causal explanations: an observed regression can be
+established while its cause remains unknown. Label suspected causes as hypotheses, not findings.
+Compilation or infrastructure failure leaves a performance prediction unresolved, not missed.
+Do not run extra mechanism probes merely to fill in an explanation. Revisions retain the original
+prediction and earlier outcome; append updated evidence and assessment rather than rewriting the
+prediction to match the result. Cite the relevant Records or archived notes. For verifiable advance predictions, pass `--predictions '[{"scope":"long sequences","prediction":"Lower latency"}]'` to Evaluate or Command (before the command `--` separator). The optional request field `predictions` is a JSON array of `{"scope":"long sequences","prediction":"Lower latency"}`. Runtime freezes it before new execution and returns `frozen_predictions` with the Gateway Record. Cite the Record in `gateway_record_ids`; Runtime automatically brings in all its frozen predictions. Do not supply an index or repeat the forecast. Missing observations remain `unresolved`; explain the actual outcome in `interpretation`. Optional expectation rows with unambiguous matching scope/prediction may update observations and assessments. Frozen forecasts are retained on revision; Runtime never infers results or matches ambiguous identical forecasts across Records. Reused Evaluate results retain only their original forecasts; this call's new predictions are not registered. Local notes alone cannot establish execution order. Unbound expectations are marked `retrospective`. An exploratory
+test may have no directional prediction. These optional fields require no extra Runtime call and add no Review or lifecycle gate.
+Omitting them on revision retains the previous values. An explicit `expectations` array replaces
+the rows in the new version (`[]` clears only unbound rows); frozen predictions must remain, and earlier immutable versions stay archived.
+Preserve the original predictions when updating observations and assessments. Source identity
+and measured performance remain in Gateway Records; do not duplicate their complete tables.
+
+Illustrative structured request (not measured results from a real run):
+
+```json
+{
+  "name": "Parallel partition with independent input reads",
+  "intent": "Determine where parallel partitioning improves latency",
+  "gateway_record_ids": [
+    "gateway-<actual-record-id>"
+  ],
+  "references": [
+    "scratch/partition-plan-before-eval.md"
+  ],
+  "interpretation": "Retain the parallel partitioning idea; compare an input-reuse variant and workload dispatch. Extra traffic is only a suspected cause. These results do not exclude other implementations.",
+  "implementation": "Partition work while each partition reads its own copy of shared inputs",
+  "expectations": [
+    {
+      "scope": "Long sequences",
+      "prediction": "Lower latency (recorded in the archived pre-measurement plan)",
+      "observation": "Latency improved on the measured long sequences",
+      "assessment": "met"
+    },
+    {
+      "scope": "Medium sequences",
+      "prediction": "Added traffic will not erase the gain (recorded in the same plan)",
+      "observation": "Latency regressed; its cause has not been established",
+      "assessment": "missed"
+    },
+    {
+      "scope": "Short sequences",
+      "prediction": "No latency regression (recorded in the same plan)",
+      "observation": "Latency regressed on the measured short sequences",
+      "assessment": "missed"
+    }
+  ]
+}
+```
+
+Use actual evidence, scopes, and files; do not invent a pre-measurement plan. If only latency was
+measured, do not present an explanation about bandwidth, occupancy, or traffic as proven. Keep
+unknown causes explicit and continue with the next informative implementation or test.
+
 A hardware capability probe also merits an Experiment when its result selects an implementation
 path. For example, after checking an MMA instruction's output and throughput, record the bounded
-observation before starting the Kernel that uses it; no full Evaluate is needed for this probe record:
+observation once the probe supports a decision; starting the Kernel need not wait for recording; no full Evaluate is needed for this probe record:
 
 ```json
 {
@@ -223,7 +311,7 @@ observation before starting the Kernel that uses it; no full Evaluate is needed 
 }
 ```
 
-Use the actual Record ID and observations. A follow-up probe may revise this conclusion;
+Use the actual Record ID and observations. A follow-up probe or repair within this implementation attempt may revise its evidence or conclusion;
 it need not delay recording the decision already made.
 
 <!-- directions:start -->
@@ -349,3 +437,25 @@ while rechecking the complete current candidate. An accepted older revision rema
 later revision fails. Replaying the same commit with unchanged evidence and decision is idempotent.
 Omit `submission_id` only to create a distinct Submission. The Supervisor retains every revision,
 Review conversation and token receipt privately for audit. A normal Session exit ends the Episode.
+
+<!-- experiments:start -->
+Use optional Experiment `next_step` to record the chosen next action separately from the interpretation:
+```json
+"next_step": {
+  "action": "Implement V-split while preserving input reuse",
+  "reason": "The previous trial repeated input reads; partitioning with reuse remains untested"
+}
+```
+`action` says what to do; `reason` explains why this is the next useful attempt. Both are nonempty strings when provided. Omit `next_step` on revision to preserve it; use `null` to clear an obsolete plan. This is an editable plan, not a new tool, mandatory report, Review requirement, or execution gate. A concrete next attempt normally stays under the existing Direction; create another Direction only when the high-level idea changes. The Direction attempt view displays action and reason separately; Runtime does not infer them from `interpretation` or execute them automatically.
+<!-- experiments:end -->
+
+<!-- directions:start -->
+### Where to record the next step
+
+- Another implementation, parameter choice, dataflow variant, or probe under the same high-level idea: keep the current Direction. Once the attempt has useful results, record an Experiment; do not create a Direction for every next action.
+- Additional measurements or a correction to the same attempt: revise its Experiment. A materially different approach is a new Experiment under the same Direction when the high-level idea remains unchanged.
+- A different primary optimization principle or target problem: create a new Direction.
+- A distinct high-level idea worth exploring later: record a proposed Direction (or defer it using the supported lifecycle operation), so it does not survive only in conversation or another record's future-work text. Do not start it merely to document it.
+
+When Experiment recording is enabled, use `next_step.action` and `next_step.reason` for the concrete selected action and rationale. Keep remaining same-idea branches in the Direction's plan or assessment. These are recording guidelines, not prerequisites for implementation or evaluation; do not turn each parameter trial into a separate record.
+<!-- directions:end -->

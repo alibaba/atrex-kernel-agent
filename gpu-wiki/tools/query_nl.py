@@ -33,6 +33,7 @@ from pathlib import Path
 
 import agent_launch
 import hardware_identity
+import source_search
 import operator_scope
 import query_wiki
 import wiki_trace
@@ -65,6 +66,10 @@ INTENT_SCHEMA = {
         "measured_symptoms", "free_text_terms", "intents", "hardware_requests",
     ],
     "properties": {
+        "mechanisms": {"type": "array", "maxItems": 6, "items": {
+            "type": "object", "additionalProperties": False, "required": ["name", "aliases"],
+            "properties": {"name": {"type": "string", "minLength": 1},
+                           "aliases": {"type": "array", "maxItems": 6, "items": {"type": "string", "minLength": 1}}}}},
         "architecture": {"type": ["string", "null"]},
         "vendor": {"type": ["string", "null"]},
         "dsl": {"type": ["string", "null"]},
@@ -108,11 +113,16 @@ Return exactly one JSON object, with no markdown or prose, in this shape:
 "operator_terms":[string],"component_terms":[string],
 "measured_symptoms":[string],
 "free_text_terms":[string],
+"mechanisms":[{{"name":string,"aliases":[string]}}],
 "intents":["technique"|"pitfall"|"documentation"|"diagnosis"|"correctness"],
 "hardware_requests":[{{"kind":"product"|"instruction"|"feature",
 "value":string,"field":string|null,"vs":string|null}}]}}
 
-Include every key exactly once. Do not research, invoke tools,
+Include every key exactly once. Extract at most 6 named optimization mechanisms from the
+request into mechanisms, with at most 6 established semantic aliases each (for example
+split-KV, KV splitting, split decoding). Use [] if no concrete mechanism is requested.
+Aliases are search hypotheses, not proof of equivalence. Do not invent implementations.
+Spelling variations such as hyphens and underscores are handled by the search engine. Do not research, invoke tools,
 inspect a store, invent missing scope values, explain the result, or generate
 query flags. Copy architecture/vendor/DSL/product spellings from the request.
 The architecture slot is only for a GPU architecture or public GPU product
@@ -313,6 +323,7 @@ def validate_intent(doc: object) -> dict:
         "free_text_terms": _strings(doc.get("free_text_terms")),
         "intents": intents,
         "hardware_requests": deduped_hw[:4],
+        "mechanisms": doc.get("mechanisms", []),
     }
 
 
@@ -332,6 +343,18 @@ def strictly_validate_intent(doc: object) -> dict:
     # Legacy bridges predate decomposition-aware retrieval. Missing component
     # terms mean "no explicit decomposition", not an invalid request.
     doc.setdefault("component_terms", [])
+    doc.setdefault("mechanisms", [])
+    mechanisms = doc["mechanisms"]
+    if not isinstance(mechanisms, list) or len(mechanisms) > 6:
+        raise ValueError("mechanisms must be an array of at most 6 entries")
+    for item in mechanisms:
+        if not isinstance(item, dict) or set(item) != {"name", "aliases"}:
+            raise ValueError("mechanisms entries require name and aliases")
+        if not isinstance(item["name"], str) or not item["name"].strip():
+            raise ValueError("mechanism name must be non-empty")
+        if (not isinstance(item["aliases"], list) or len(item["aliases"]) > 6
+                or any(not isinstance(v, str) or not v.strip() for v in item["aliases"])):
+            raise ValueError("mechanism aliases must be at most 6 non-empty strings")
 
     for key in ("architecture", "vendor", "dsl"):
         if doc[key] is not None and not isinstance(doc[key], str):
@@ -1243,7 +1266,10 @@ def main(argv=None) -> int:
             records_by_source[source] = records_by_source.get(source, 0) + 1
             store = str(entry.get("store") or "unknown")
             records_by_store[store] = records_by_store.get(store, 0) + 1
+        source_result = source_search.search(intent, store_root / "references")
+        retrieval_ms = round((time.perf_counter() - retrieval_started) * 1000, 3)
         print(json.dumps({
+            **source_result,
             "query_id": query_id,
             "records": records,
             "notes": notes,

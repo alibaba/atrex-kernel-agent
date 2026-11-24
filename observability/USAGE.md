@@ -980,3 +980,7 @@ python3 "$AKA_REPO/observability/light_dashboard.py" /tmp/dashboard.json --port 
 远端 Campaign 必须在远端执行 `--capture`，下载 JSON 后本地展示；存活状态以
 `captured_at` 为准，不会用本地 PID/锁重新判断。页面没有启动、重试、取消或提交入口。
 参数与 HTTP 说明见 [Dashboard 文档](../docs/optimization-dashboard.md)。
+
+### Claude Token 统计口径
+
+主 Agent 和独立 Review 均使用去重后的逐响应 usage 累计，运行中和结束后保持同一口径；`result.usage` 仅保存在 `terminal` 供审计，不覆盖累计值。输入、输出、缓存读写分别统计；reasoning 是单独展示的子项，不额外重复加入总量。缺少响应计数时明确标记不完整或不可用；对话文本估计仍标记为 estimated。历史不可变 checkpoint 不会自动重算。

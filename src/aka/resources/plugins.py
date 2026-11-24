@@ -43,6 +43,21 @@ class PluginRegistry(AgentSkillsRegistryMixin, Registry):
         self.bind_agent_skills(tuple(skill for skill in agent_skills if skill.name not in self.excluded_skills))
         self.bind_workspace_resources(resources)
 
+    def mounts(self):
+        mounts = super().mounts()
+        # Wiki resources are shared immutable inputs, while references are
+        # Campaign-specific. Keep the container local so adding references
+        # never writes through a link into the shared provider checkout.
+        wiki = mounts.pop("gpu-wiki", None)
+        if wiki is not None:
+            for child in sorted(wiki.iterdir()):
+                if child.name in {".git", "__pycache__", ".pytest_cache"}:
+                    continue
+                if child.name == "references":
+                    raise PluginError("mount_conflict", "Wiki provider reserves references for Campaign inputs")
+                mounts[f"gpu-wiki/{child.name}"] = child
+        return mounts
+
     def instructions(self, phase: str, **values: str) -> str:
         return ("For additional plugin tools and their Skills, use `python -m aka.resources.cli list`. "
                 "Invoke `python -m aka.resources.cli call <plugin.tool> --input <request.json>`.\n\n"

@@ -307,3 +307,25 @@ disposable or clean checkout and review the complete diff.
 For the full record contracts, see
 [`schema/kernel/README.md`](schema/kernel/README.md) and
 [`schema/hardware/README.md`](schema/hardware/README.md).
+
+## Reference source retrieval
+
+`query_nl.py` / Runtime `wiki-query` also searches configured reference source trees.
+The existing Bridge call extracts optional `mechanisms: [{name, aliases}]`; deterministic
+search handles separator/case variations and searches independently of operator and architecture
+filters. No additional model call is made. Generic requests fall back to their text/operator terms.
+
+Light exposes configured `--agent-reference-dir` mounts under
+`gpu-wiki/references/<name>/` in the Agent workspace (the old `references/<name>/` entry remains
+available). The Wiki worker receives the same Supervisor-selected source roots, read-only in
+Bubblewrap; it does not modify the shared Wiki resource snapshot. Standalone queries discover
+subdirectories of `<store-root>/references/`, including symlinked repository mounts.
+
+Results include `source_matches` separately from admitted `records`: file path, start/end/match
+line numbers, matched terms, source SHA256 and a code snippet. Source hits are navigation aids,
+not verified facts and do not get a Wiki record ID. Follow their paths to inspect full context.
+The search currently returns up to 12 hits, up to 9 lines / 6000 characters per snippet, skips
+binary/generated files and text files over 2 MiB, and has a 10-second search budget. It reports
+skipped files, omitted matches and partial searches explicitly; zero hits never proves absence.
+Configured top-level links are followed, while links escaping a repository and directory cycles
+are not. Runtime reruns source-backed queries instead of serving potentially stale source snippets.

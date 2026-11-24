@@ -408,24 +408,10 @@ class Campaign:
     def reference_knowledge_prompt(self) -> str:
         if not self.agent_reference_paths:
             return ""
-        entries = "\n".join(
-            f"- `references/{name}/`" for name, _ in self.agent_reference_paths
-        )
-        access = (
-            "These Supervisor-mounted directories are read-only engineering references. "
-            if self.agent_sandbox == "bwrap"
-            else "These Supervisor-linked directories are optional engineering references. "
-            "The native Agent boundary cannot enforce read-only access: do not modify them, "
-            "and the operator must retain an independent copy of the original knowledge. "
-        )
         return (
-            "## Reference knowledge\n\n"
-            f"{entries}\n\n"
-            f"{access}"
-            "Use them selectively for architecture facts, implementation patterns, and probe design. "
-            "They are not the task contract, measurement evidence, or candidate source. Verify "
-            "applicability on the target hardware through Runtime. Do not execute or import them, "
-            "make the final Kernel depend on them, or copy them blindly."
+            "When Wiki is enabled, use `python3 tools/sandbox.py --kind wiki-query` "
+            "to find relevant mechanisms and implementations. Describe the missing fact, "
+            "then inspect the returned paths, line numbers and snippets for applicability."
         )
 
     def start_runtime(self) -> None:
@@ -448,6 +434,7 @@ class Campaign:
             health_command=self.sandbox_health_command, private_reference_dir=self.private_reference_dir,
             evaluator_reference_dir=self.evaluator_reference_dir,
             atrex_bench_root=Path(self.atrex_bench_root).resolve() if self.atrex_bench_root else None,
+            wiki_reference_paths=self.agent_reference_paths,
             wiki_profile_root=self.workspace / ".gpu_wiki_profile", task_id=self.campaign_name,
             optimization_mode=self.optimization_mode,
             workspace_policy=workspace_policy_block(

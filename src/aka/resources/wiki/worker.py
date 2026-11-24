@@ -56,6 +56,8 @@ def main() -> int:
     config = WikiConfig(**request["config"])
     root = Path(request["tools"])
     sys.path.insert(0, str(root))
+    # Only Supervisor-configured mounts, never Agent-provided search roots.
+    os.environ["ATREX_WIKI_REFERENCE_PATHS"] = json.dumps(request.get("reference_paths", {}))
     tool = importlib.import_module(request["tool"])
     children = []
     progress = {"phase": "starting", "bridge_attempts": 0, "bridge_latency_ms": 0.0,
