@@ -80,7 +80,8 @@ def operation_request(request, kind, *, ssh=False):
     common.add("placement")
     if kind == "profile":
         allowed = common | {"reference", "options", "level", "profiler", "counters", "kernel_regex",
-                            "kernel_name", "top_kernels", "source", "launch_skip", "launch_count"}
+                            "kernel_name", "top_kernels", "source", "launch_skip", "launch_count",
+                            "idempotency_key"}
         value = {key: item for key, item in value.items() if key in allowed}
         value["options"] = {key: item for key, item in value.get("options", {}).items()
                             if key in {"bench_iters", "timeout_s"}}
