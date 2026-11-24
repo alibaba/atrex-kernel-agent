@@ -35,6 +35,7 @@ describe the versions and environments identified in those documents.
 
 ## Release and validation records
 
+- [v0.4.1 release notes](releases/v0.4.1.md)
 - [v0.4.0 release notes](releases/v0.4.0.md)
 - [v0.3.0 release notes](releases/v0.3.0.md)
 - [Evaluator outcomes and diagnostics](evaluator-outcomes/README.md)

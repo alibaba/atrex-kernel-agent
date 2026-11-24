@@ -21,14 +21,13 @@ export ATREX_SANDBOX_SSH_INIT='export PATH=/opt/venv/bin:/opt/rocm/bin:$PATH; ex
 
 aka optimize --repo-root "$PWD" \
   --problem /path/to/atrex-bench/operators/my_operator \
-  --platform MI300X --hardware MI300X --framework Triton \
+  --platform MI300X --hardware MI300X --optimization-mode ultra --framework Triton \
   --workspace-base /path/to/runs --max-iters 20
 ```
 
-The Workflow request parser accepts `--platform` and `--hardware`; SSH transport
-belongs to Execution's environment configuration. The named Light profiles inherit
-the `ATREX_SANDBOX_SSH*` allowlist from the Workflow profile. Use the default
-Legacy Execution provider for SSH; the Gateway provider rejects SSH configuration.
+Use `--platform` and `--hardware` for the Workflow target and configure SSH transport
+through environment variables. The bundled Light profiles allow
+the `ATREX_SANDBOX_SSH*` settings and select the `remote` Execution profile.
 Clear `ATREX_SANDBOX_URL` and `ATREX_SANDBOX_PROFILE` before selecting SSH.
 
 Use an OpenSSH host or `~/.ssh/config` alias. Authentication must work without
@@ -151,9 +150,9 @@ Runtime visibility is explicit and never a fallback after isolation failure.
 | Env | Actual runtime architecture, available frameworks, profiler counters and allocation limits |
 | Dev | Existing allowlisted command upload, timeout handling and output synchronization |
 
-ABBA repeat counts and acceptance thresholds are unchanged. Completed shape
-batches retain their existing checkpoints. Request identity includes the SSH
-endpoint, GPU assignment, runtime configuration and isolation mode, so evidence
+ABBA is available as an explicit comparison. Completed Shape batches retain their
+checkpoints. Request identity includes the SSH endpoint, GPU assignment, runtime
+configuration and isolation mode, so evidence
 from a different allocation configuration cannot be reused. Transport loss or a
 missing result is not a candidate correctness verdict.
 
@@ -191,9 +190,9 @@ closure raise `UnsupportedExecution` before dispatch. Supervisor conversion of a
 authorized Dev input view is subject to the same restriction; use a supported
 typed request or a backend advertising closed-input transport.
 
-SOL does not provide Light's native ABBA contract; use the Legacy workflow for
-SOL verification. Each SSH allocation owns one GPU; distributed evaluator
-contracts and MIG selection require a separate allocation implementation.
+Use a native Atrex-Bench problem for SSH ABBA. Each SSH allocation owns one GPU.
+Distributed evaluator contracts and MIG selection require a separate allocation
+implementation.
 
 The remote launcher requires `flock` with `--exclusive`, `--wait` and
 `--conflict-exit-code` support. Missing or incompatible launch dependencies stop

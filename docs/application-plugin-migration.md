@@ -19,7 +19,7 @@ checkout resources available:
 aka optimize --repo-root "$PWD" --help
 aka optimize --repo-root "$PWD" \
   --problem /path/to/problem --platform '<gpu_arch>' --framework Triton \
-  --agent-cli codex --workspace-base /path/to/runs
+  --optimization-mode ultra --agent-cli codex --workspace-base /path/to/runs
 ```
 
 `--problem` selects the problem. It accepts the current native Atrex-Bench layout
@@ -60,7 +60,7 @@ aka optimize --help
 aka optimize --repo-root /path/to/aka --help
 aka optimize --repo-root /path/to/aka \
   --problem /path/to/problem --platform '<gpu_arch>' --framework Triton \
-  --agent-cli codex --workspace-base /path/to/runs
+  --optimization-mode ultra --agent-cli codex --workspace-base /path/to/runs
 ```
 
 `python -m aka` accepts the same commands and requires installed command metadata.
@@ -76,12 +76,10 @@ it cannot be mixed with new-request fields. Execution composition is selected th
 profiles/patches, not removed optimizer `--execution-profile`/`--execution-patch` flags.
 Only generic `aka run` and direct `aka execution` retain their respective `--` separator.
 
-Core owns the neutral command dispatcher. Bootstrap contributes `run`, and Optimization
-contributes `optimize`, via the `aka.commands` package entry-point group. Help lists
-installed contributions without importing them; unknown or duplicate command names fail
-before loading a command. There is no implicit default command. The Legacy distribution also contributes
-`workflow` and `execution`; `aka --help` lists the installed command set. Source-only use of `python -m aka` requires installed command metadata; there is no
-source-tree fallback script.
+Core owns the neutral command dispatcher. Framework contributes `run` and `execution`.
+Light contributes `optimize` and `workflow`. Both register through the `aka.commands`
+package entry-point group. `aka --help` lists installed commands without importing their
+entry points. Unknown or duplicate command names fail before loading a command.
 
 ## Select a startup implementation
 
@@ -143,12 +141,9 @@ submodules by relative path and commit; uninitialized directories preserve the o
 initialization flow, while initialized checkouts must match the parent gitlink and
 declared commit with a clean working tree.
 
-Custom compositions retaining the legacy plugin are supported when they can be
-reconstructed consistently. The legacy profile selects `startup`, implemented by
-the selected Workflow plugin's startup adapter. Both Legacy and Light already use
-Workflow providers. Bootstrap keeps the neutral Startup protocol.
-Targets own forwarding `Invocation.environment` to children and persisting the selection
-for delayed restarts; they do not retain Core's context or composition owner.
+The bundled launch profiles select the Light Workflow's startup adapter through
+Bootstrap's neutral Startup protocol. Targets forward `Invocation.environment` to
+children and persist the selection for delayed restarts.
 
 ## Programmatic invocation and ownership
 
@@ -263,7 +258,8 @@ resource locks likewise require their original identities; do not rewrite them t
 | `atrex-aka-light` | Light Workflow, orchestration, profiles and runtime assets | 3.10+ |
 | `atrex-aka-dashboard` | `aka.dashboard`, Light observability tools and the read-only viewer | 3.10+ |
 
-The current release is `0.3.0`. Light pins `atrex-aka-framework==0.3.0`;
+The `v0.4.1` repository release uses Python distribution version `0.3.0`.
+Light pins `atrex-aka-framework==0.3.0`.
 Dashboard pins both `atrex-aka-framework==0.3.0` and `atrex-aka-light==0.3.0`.
 Framework also requires `packaging>=23`, and Light requires
 `atrex-gateway-client>=0.14.30,<0.15`.

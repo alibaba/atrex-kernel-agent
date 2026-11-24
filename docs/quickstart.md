@@ -2,14 +2,15 @@
 
 The installed `aka optimize` command starts the default **Light** workflow: managed
 Agent-owned source trees, private Runtime tools, one persistent optimization Session, and auditable segments.
-The primary path is native Atrex-Bench evaluation through Agate. For SOL-ExecBench,
-OpenSSH execution, see [SSH backend](ssh-backend.md).
+The primary path is native Atrex-Bench evaluation through Agate. For native Atrex-Bench
+evaluation on a provisioned GPU host, see the [OpenSSH backend](ssh-backend.md).
 
 ## Prerequisites
 
 - Python 3.10+, `bash`, `git`, and `torch` on the coordinator.
-- An authenticated coding CLI on `PATH`: `claude`, `qodercli`, `codex`, or `pi`.
-- A configured Agate endpoint and GPU worker with the workload's framework and GPU stack.
+- An authenticated coding CLI on `PATH` (`claude`, `qodercli`, `codex`, `pi`, or `dsh`).
+- GPU access through [Agate](#launch-light) or [OpenSSH](ssh-backend.md), with the workload's
+  framework and GPU stack available on the worker.
 - A native Atrex-Bench operator in its owning Bench checkout.
 - For coordinator isolation, `light-sandbox` requires Linux, the `bwrap` executable, and
   permission to create the required namespaces. Native `light` does not require Bubblewrap.
@@ -21,9 +22,8 @@ use their respective worker toolchains. Initialize only the reference-project su
 you select. GPU Wiki is enabled by default, but its corpus is resolved on the first query,
 not by an unconditional startup scan. See [Wiki configuration](optional-light-modules.md#independent-wiki-execution).
 
-Multi-segment persistent Sessions require a backend with native resume support (currently Claude,
-Codex, or DSH). A backend without resume support may run one segment, but Light fails explicitly
-instead of silently starting a new conversation for the next Episode.
+Multi-segment persistent Sessions require a backend with native resume support
+(Claude, Codex, Pi, or DSH). A backend without resume support can run a single segment.
 
 ## Install from a matching checkout
 
@@ -38,10 +38,11 @@ python3 -m pip install --force-reinstall --no-index \
 aka optimize --help
 ```
 
-Keep both distributions and the resource checkout at the same revision. Their current
-package metadata uses `0.2.0`, so installing a changed checkout requires reinstalling its
-wheels even when the version string has not changed. Missing Light is an installation error.
-See [installed startup](application-plugin-migration.md) for package and continuation details.
+Keep both distributions and the resource checkout at the same revision. The `v0.4.1`
+repository release uses Python distribution version `0.3.0`. Rebuild and reinstall the
+wheels when changing the checkout revision, even if the version string is the same.
+See the [v0.4.1 upgrade guide](releases/v0.4.1.md#upgrading-from-v040) for changes to
+launch flags, workspaces, and package installation.
 
 ### macOS: run `light-sandbox` in Lima
 
@@ -174,11 +175,11 @@ workspace, mode, and budgets into this same installed command.
 
 ### Agent backends and frameworks
 
-Use `--agent-cli codex`, `qodercli`, or `pi` to change the coding backend.
+Use `--agent-cli codex`, `qodercli`, `pi`, or `dsh` to change the coding backend.
 Provider settings use `ATREX_CLAUDE_SESSION_SETTINGS`, `ATREX_QODER_SESSION_SETTINGS`,
-`ATREX_CODEX_SESSION_SETTINGS`, or `ATREX_PI_SESSION_SETTINGS`, with
+`ATREX_CODEX_SESSION_SETTINGS`, `ATREX_PI_SESSION_SETTINGS`, or `ATREX_DSH_SESSION_SETTINGS`, with
 `ATREX_SESSION_SETTINGS` as the generic fallback. Keep credentials in the provider's
-supported login/configuration mechanism.
+supported login/configuration mechanism. See the [DSH setup guide](dsh-harness-adapter.md).
 
 The three policies own DSL selection directly:
 

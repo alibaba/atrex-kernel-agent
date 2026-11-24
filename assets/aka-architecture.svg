@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="700" viewBox="0 0 1120 700" role="img" aria-labelledby="title description">
+  <title id="title">Atrex Kernel Agent architecture</title>
+  <desc id="description">Campaign setup freezes evaluator inputs and seeds Agent Git. The Agent controls its workspace and resumes the same Session across Episodes. The Supervisor Runtime serves Wiki lookups, dispatches evaluations, records measurement evidence, and reviews submitted commits. Accepted commits determine the best kernels. Pooled Sessions can share peer refs and evidence.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse">
+      <path d="M0 0 10 5 0 10Z" fill="#475569"/>
+    </marker>
+    <style>
+      text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif; fill: #17232d; }
+      .heading { font-size: 36px; font-weight: 700; }
+      .node-title { font-size: 22px; font-weight: 700; }
+      .session-title { font-size: 27px; font-weight: 700; }
+      .detail { font-size: 18px; fill: #394a56; }
+      .edge-label { font-size: 16px; font-weight: 600; fill: #394a56; }
+      .section-label { font-size: 16px; font-weight: 700; letter-spacing: 2px; fill: #394a56; }
+      .card { fill: #fff; stroke: #c1c9cf; stroke-width: 1.5; }
+      .edge { fill: none; stroke: #475569; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; marker-end: url(#arrow); }
+      .exchange { marker-start: url(#arrow); }
+    </style>
+  </defs>
+
+  <rect x="1" y="1" width="1118" height="698" rx="22" fill="#faf8f5" stroke="#dedbd6" stroke-width="2"/>
+  <path d="M36 36h7v27h-7z" fill="#d85e28"/>
+  <text x="57" y="63" class="heading">AKA architecture</text>
+  <text x="1084" y="62" text-anchor="end" class="edge-label">v0.4.1</text>
+
+  <rect x="36" y="91" width="215" height="139" rx="14" class="card"/>
+  <text x="55" y="132" class="node-title">Campaign setup</text>
+  <text x="55" y="162" class="detail">Freeze evaluator inputs</text>
+  <text x="55" y="188" class="detail">Seed the Agent Git root</text>
+
+  <rect x="300" y="91" width="520" height="139" rx="14" fill="#fff0e6" stroke="#c85324" stroke-width="2"/>
+  <text x="326" y="129" class="session-title">Persistent Agent Session</text>
+  <text x="326" y="157" class="detail">Owns the workspace, branches, and Git history</text>
+  <text x="326" y="182" class="detail">Chooses what to explore, measure, and submit</text>
+  <text x="326" y="207" class="detail">Resumes the same Session across Episodes</text>
+
+  <rect x="869" y="91" width="215" height="139" rx="14" fill="#fff" stroke="#a2afb9" stroke-width="1.5" stroke-dasharray="5 4"/>
+  <text x="888" y="132" class="node-title">Pooled search</text>
+  <text x="888" y="162" class="detail">Optional exchange of</text>
+  <text x="888" y="188" class="detail">peer refs and evidence</text>
+
+  <rect x="36" y="270" width="1048" height="396" rx="16" fill="#edf1f4" stroke="#c1c9cf" stroke-width="1.5"/>
+  <text x="60" y="299" class="section-label">SUPERVISOR</text>
+
+  <path d="M251 160H300" class="edge"/>
+  <path d="M822 160H867" class="edge exchange" stroke-dasharray="4 4"/>
+  <path d="M560 232V296" class="edge exchange"/>
+  <text x="576" y="256" class="edge-label">Tool requests and receipts</text>
+
+  <rect x="371" y="298" width="378" height="69" rx="12" fill="#233340"/>
+  <text x="560" y="327" text-anchor="middle" class="node-title" style="fill:#fff">Private Tool Runtime</text>
+  <text x="560" y="350" text-anchor="middle" class="detail" style="fill:#e1e9ef">Scoped tools · frozen request inputs</text>
+
+  <path d="M751 332H866" class="edge exchange"/>
+  <rect x="868" y="298" width="192" height="69" rx="12" class="card"/>
+  <text x="888" y="327" class="node-title">GPU Wiki</text>
+  <text x="888" y="350" class="detail">Knowledge lookup</text>
+
+  <path d="M460 368V388H273V419" class="edge"/>
+  <text x="289" y="411" class="edge-label">Evaluate · optional ABBA</text>
+  <rect x="59" y="421" width="429" height="73" rx="12" class="card"/>
+  <text x="81" y="451" class="node-title">GPU evaluation</text>
+  <text x="81" y="476" class="detail">Native Atrex-Bench via Agate or OpenSSH</text>
+
+  <path d="M658 368V388H846V419" class="edge"/>
+  <text x="862" y="411" class="edge-label">submit-kernel</text>
+  <rect x="632" y="421" width="429" height="73" rx="12" class="card"/>
+  <text x="654" y="451" class="node-title">Submission review</text>
+  <text x="654" y="476" class="detail">Exact-commit evidence and final-source policy</text>
+
+  <path d="M273 495V529" class="edge"/>
+  <text x="289" y="517" class="edge-label">Job results</text>
+  <rect x="59" y="531" width="429" height="75" rx="12" class="card"/>
+  <text x="81" y="561" class="node-title">Campaign Measurement Store</text>
+  <text x="81" y="586" class="detail">Source snapshots, results, and job attempts</text>
+
+  <path d="M489 567H539V460H630" class="edge"/>
+  <text x="552" y="519" class="edge-label">Saved full</text>
+  <text x="552" y="539" class="edge-label">Evaluate</text>
+
+  <path d="M846 495V529" class="edge"/>
+  <text x="862" y="517" class="edge-label">Accepted</text>
+  <rect x="632" y="531" width="429" height="75" rx="12" fill="#e7f3ec" stroke="#97b6a4" stroke-width="1.5"/>
+  <text x="654" y="561" class="node-title">Accepted kernels</text>
+  <text x="654" y="586" class="detail">Lineage winners, global best, and Pareto views</text>
+
+  <path d="M273 607V623M846 607V623" fill="none" stroke="#8796a3" stroke-width="1.5"/>
+  <rect x="59" y="623" width="1002" height="28" rx="8" fill="#dce5eb"/>
+  <text x="560" y="643" text-anchor="middle" class="edge-label">Read-only inspection · Campaign status, Git commits, and GPU evidence</text>
+</svg>

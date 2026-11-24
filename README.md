@@ -30,6 +30,8 @@ provides installation and launch guidance. [Observation tools](observability/REA
 report retained execution, performance and session evidence. Both are checkout resources;
 keep a checkout matching the installed module distributions.
 
+![AKA architecture showing the Agent-owned Session and Git workspace, Supervisor tool requests, optional ABBA, the shared Measurement Store, and exact-commit review.](assets/aka-architecture.svg)
+
 ## How AKA works
 
 1. **Prepare the initial source.** Freeze evaluator inputs and create one canonical Agent Git root. The Agent decides whether to measure the initial implementation.
@@ -40,6 +42,7 @@ keep a checkout matching the installed module distributions.
 
 ## News
 
+- [2026-11] **v0.4.1: More autonomy for coding agents.** Agents keep a persistent session and control their own Git history, choosing what to explore, when to benchmark, and which measured commits to submit for review. [Release notes](docs/releases/v0.4.1.md).
 - [2026-10] **v0.4.0: A lightweight workflow and plugin architecture.** Better kernel performance with **20–30% lower average token consumption**, plus configurable, replaceable providers for agents, workspaces, evaluation, execution, and knowledge. [Release notes](docs/releases/v0.4.0.md).
 - [2026-09] [From leaderboards to real-world workloads: accelerating Qwen3.8-Max's core inference operators](https://mp.weixin.qq.com/s/q1wrpgu3R8S8dEqR-PhQgw) (WeChat): **AKA** delivers lower average latency than expert implementations for all **three key operator families** across **60 real-world shapes**, with up to **1.55× speedup** over production/official baselines.
 
@@ -54,7 +57,9 @@ keep a checkout matching the installed module distributions.
 
 ## Quick Start
 
-Agent-visible Agate tools default to `env`, `evaluate` (including ABBA), and `command`.
+Agent-visible Agate tools default to `env`, `evaluate`, and `command`.
+On supported backends, agents can request an ABBA comparison by passing
+`--baseline-commit` to `evaluate`.
 Select them with `--agate-tools env evaluate command profile`, or use `--agate-tools all`
 to also expose `profile`, `dev`, `check`, and `disassemble`. This is a replacement list,
 not an additive flag. Disabled tools are rejected before GPU submission. Wiki,
@@ -100,7 +105,7 @@ See the [setup guide](docs/quickstart.md) for prerequisites and problem preparat
 - [Configuration](docs/optional-light-modules.md) — modules, profiles, and optional features.
 - [Source layouts](docs/native-cuda.md) — multi-file candidates and native CUDA.
 - [GPU Wiki](gpu-wiki/README.md) — structured optimization knowledge.
-- [Release notes](docs/releases/v0.4.0.md) — changes and upgrade guidance.
+- [Release notes](docs/releases/v0.4.1.md) — changes and upgrade guidance.
 
 ## Acknowledgements
 
