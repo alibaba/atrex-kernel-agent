@@ -13,13 +13,20 @@ import uuid
 
 from aka.contracts.evaluation import EvaluationRequest
 from aka.contracts.content import WorkspaceFile
-from aka.contracts.execution import CommandSpec
+from aka.contracts.execution import CommandSpec, JobResult
 from aka.contracts.experiment import ExperimentRecordError
 from aka.contracts.workspace import RevisionContent
 
 _PREFIXES = {"run": "[test_kernel] RESULT_JSON=", "same_allocation_abba": "[sandbox] ABBA_JSON=",
              "profile": "[sandbox] PROFILE_JSON=", "check": "[sandbox] CHECK_JSON=",
              "disassemble": "[sandbox] DISASSEMBLE_JSON="}
+
+
+def _execution_observed(result: JobResult | None) -> bool:
+    return (
+        result is not None and result.facts.disposition == "terminal"
+        and (result.exit_code is not None or bool(result.job_references))
+    )
 
 
 class RecordedMeasurements:
@@ -284,6 +291,7 @@ class SharedMeasurements(RecordedMeasurements):
         agent["identity"] = {key: evidence[key] for key in ("gateway_record_id", "kernel_id") if key in evidence}
         for key in ("gateway_record_id", "kernel_id", "baseline_kernel_id"):
             agent.pop(key, None)
+        response["execution_observed"] = any(_execution_observed(attempt.result) for attempt in record.attempts)
         if operation in {"evaluate", "same_allocation_abba"}:
             from aka.evaluation.tool_results import normal_evaluation_execution
             latest = {attempt.task_id: attempt for attempt in record.attempts}
@@ -379,7 +387,6 @@ class SharedMeasurements(RecordedMeasurements):
                         "agent_result": {"operation": identity["operation"], "status": "failed",
                             "result": {"error": {"code": "execution_failed", "type": type(error).__name__,
                                 "message": str(error)}}}}
-                    from aka.contracts.execution import JobResult
                     outcome = getattr(error, "outcome", None)
                     if isinstance(outcome, JobResult):
                         # require_transport() may raise after the public owner
@@ -388,6 +395,7 @@ class SharedMeasurements(RecordedMeasurements):
                         from aka.evaluation.tool_results import with_execution_error, canonical_result
                         response = with_execution_error({"exit_code": outcome.returncode,
                             "stdout": outcome.stdout, "stderr": outcome.stderr}, outcome, operation=identity.get("operation"))
+                        response["execution_observed"] = _execution_observed(outcome)
                         response["agent_result"] = canonical_result(response, identity)
                 agent = response.get("agent_result", {})
                 agent.pop("identity", None)

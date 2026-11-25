@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from aka.workflow.light.orchestration.hardware import hardware_vendor
-from aka.task.source.formats import from_git as source_from_git
+from aka.task.source.formats import from_git as source_from_git, workspace_identity
 
 import aka.workflow.light.long_horizon.main_adapter as main_adapter
 from aka.task.git import git_head, git_text
@@ -22,6 +22,15 @@ from aka.resources.bundles import resource_path
 PROMPTS_DIR = resource_path("prompts/research-episodes")
 PROMPT_PATH = PROMPTS_DIR / "episode.md"
 GOAL_AFTER_EPISODES = 50
+IDLE_EPISODES_BEFORE_PAUSE = 3
+
+
+def _source_identity(workspace: Path) -> str | None:
+    try:
+        return workspace_identity(workspace) or None
+    except (OSError, ValueError):
+        # Pause only when the candidate can be verified unchanged.
+        return None
 
 
 def _session_terminal_status(result: Any) -> str:
@@ -258,6 +267,7 @@ class LongHorizonCampaign:
         output_limit_recoveries: int,
         dependency_policy_recoveries: int,
         violation: str = "",
+        idle: bool = False,
     ) -> None:
         """Close an audit segment without sealing, promoting, or rewriting Git.
 
@@ -275,6 +285,7 @@ class LongHorizonCampaign:
             "mode": self._episode_mode(state, active),
             "status": status,
             "violation": violation or None,
+            "idle": idle,
             "agent_head": candidate_commit or None,
             "session_id": session_id or None,
             "resume_count": max(0, int(resume_count)),
@@ -368,6 +379,7 @@ class LongHorizonCampaign:
         )
         starting_episodes = state.episodes
         reason = "max-episodes"
+        idle_episodes = 0
 
         while True:
             if state.episodes >= self.max_episodes:
@@ -446,6 +458,7 @@ class LongHorizonCampaign:
                 require_gluon=False,
                 session_capture_root=session_capture_root,
             )
+            initial_source = _source_identity(agent_workspace) if not resumed else None
             prompt = self._prompt(
                 episode=episode,
                 segment=segment,
@@ -531,6 +544,12 @@ class LongHorizonCampaign:
             # discard the coding session's usage. Receipt replay is harmless.
             store.record_usage(state, usage_receipt, result.tokens)
             status = _session_terminal_status(result)
+            idle = (
+                status == "completed"
+                and initial_source is not None
+                and not self.base_campaign._supervisor_runtime.episode_has_new_evidence(agent_workspace)
+                and _source_identity(agent_workspace) == initial_source
+            )
             violation = ""
             if result.exit_status != 0 or result.timed_out:
                 violation = f"session failed: exit={result.exit_status} timeout={result.timed_out}"
@@ -552,7 +571,12 @@ class LongHorizonCampaign:
                 dependency_policy_recoveries=(
                     result.dependency_policy_recoveries
                 ),
+                idle=idle,
             )
+            idle_episodes = idle_episodes + 1 if idle else 0
+            if idle_episodes >= IDLE_EPISODES_BEFORE_PAUSE:
+                reason = "paused-no-progress"
+                break
 
         print(
             f"[long-horizon] STOP {reason}; episodes={state.episodes} "
