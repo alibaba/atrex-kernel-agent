@@ -25,10 +25,18 @@ startup behavior remain unchanged.
   the distinct Claude Claim Reviewer backend before loading the problem.
 - `agent/model_preflight.py`: run a real minimal call through the shared Agent
   owner in a temporary Git workspace using the selected sandbox. Setup errors,
-  timeout, nonzero exit and missing assistant reply all reject startup.
+  timeout, nonzero exit and missing assistant reply all reject startup. The
+  probe explicitly enables private session capture and scans its complete
+  `conversation.jsonl` one provider event at a time, before removing the
+  temporary workspace. Reply detection does not depend on the last 2000 stdout
+  characters; trailing Codex events cannot hide an earlier assistant response.
+  User prompt echoes and tool results cannot satisfy the check.
 - `agent/runtime.py`: apply `AKA_AGENT_MODEL` as `--model`. Codex settings-derived
   `-c model=...` pairs are removed first; provider and other config remain intact.
-  Pi's existing model flag is replaced rather than duplicated.
+  Pi's existing model flag is replaced rather than duplicated. Claude/Qoder
+  inline JSON or file-backed session settings are copied in memory and their
+  top-level `model` is replaced; both `--settings` and `--model` then select the
+  same model. Other settings and the original file remain unchanged.
 - `agent/backends/dsh.py`: map the override to `AKA_DSH_MODEL`.
 - `workflow/light/long_horizon/session.py` and `search_driver.py`: carry the
   override into fresh and resumed optimizer Sessions and pooled trajectories.

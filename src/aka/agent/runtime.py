@@ -130,11 +130,22 @@ class CliAgentRuntime:
     def build_command(
         self, prompt: str, session_id: str, reasoning_effort: str, *, environment=None
     ) -> list[str]:
-        command = self._adapter.build_command(
-            prompt, session_id, reasoning_effort, self._session_settings(environment)
-        )
         values = self._environment if environment is None else environment
         model = values.get("AKA_AGENT_MODEL")
+        settings = self._session_settings(environment)
+        if model and settings and self.id in {"claude", "qodercli"}:
+            # Both inline JSON and a settings file may select a model. Override
+            # that field in a private in-memory copy; never modify user files.
+            try:
+                configured = json.loads(settings)
+            except json.JSONDecodeError:
+                configured = json.loads(Path(settings).expanduser().read_text(encoding="utf-8"))
+            if not isinstance(configured, dict):
+                raise ValueError("Agent session settings must be a JSON object")
+            settings = json.dumps({**configured, "model": model})
+        command = self._adapter.build_command(
+            prompt, session_id, reasoning_effort, settings
+        )
         if model and self.id == "codex":
             # Remove only settings-derived model overrides, retaining provider,
             # endpoint, reasoning, and every other config option.
