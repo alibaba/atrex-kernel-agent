@@ -16,6 +16,7 @@ class ClaudeAdapter(ClaudeLikeAdapter):
         "ANTHROPIC_DEFAULT_HAIKU_MODEL",
         "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
         "CLAUDE_CODE_DISABLE_AUTOUPDATER",
+        "CLAUDE_CODE_DISABLE_AUTO_MEMORY",
         "CLAUDE_CONFIG_DIR",
     )
     files = BackendFiles(

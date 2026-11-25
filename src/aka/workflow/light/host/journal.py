@@ -50,6 +50,7 @@ from aka.workflow.light.host.identifiers import (
     GATEWAY_RECORD_ID_RE,
     KERNEL_RECORD_ID_RE,
 )
+from aka.workflow.light.host.trajectory_memory import render_trajectory_memory
 from aka.experiment.measurement_store import (
     MeasurementStore,
     digest as evidence_digest,
@@ -4453,7 +4454,8 @@ class SupervisorJournalService:
         publish_pinned_if_changed(
             self.workspace,
             "PROGRESS.md",
-            _progress_markdown(board, modules=modules),
+            _progress_markdown(board, modules=modules)
+            + render_trajectory_memory(self.workspace, store, visible_record_ids),
         )
         publish_if_changed(
             self.workspace,

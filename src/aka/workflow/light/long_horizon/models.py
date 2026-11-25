@@ -81,7 +81,15 @@ class SupervisorState:
     # island boundaries.
     session_id: str = ""
     session_backend: str = ""
+    memory_generation: int = 0
+    idle_episodes: int = 0
     attempts: list[dict[str, Any]] = field(default_factory=list)
+
+    def refresh_memory(self) -> None:
+        """Start a new native conversation over the same durable trajectory."""
+        self.session_id = ""
+        self.memory_generation += 1
+        self.idle_episodes = 0
 
     @classmethod
     def from_dict(cls, value: object) -> "SupervisorState":

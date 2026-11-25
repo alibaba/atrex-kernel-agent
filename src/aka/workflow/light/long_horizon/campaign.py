@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from aka.workflow.light.orchestration.hardware import hardware_vendor
-from aka.task.source.formats import from_git as source_from_git
+from aka.task.source.formats import from_git as source_from_git, workspace_identity
 
 import aka.workflow.light.long_horizon.main_adapter as main_adapter
 from aka.task.git import git_head, git_text
@@ -22,6 +22,15 @@ from aka.resources.bundles import resource_path
 PROMPTS_DIR = resource_path("prompts/research-episodes")
 PROMPT_PATH = PROMPTS_DIR / "episode.md"
 GOAL_AFTER_EPISODES = 50
+MEMORY_REFRESH_AFTER_IDLE_EPISODES = 3
+
+
+def _source_identity(workspace: Path) -> str | None:
+    try:
+        return workspace_identity(workspace) or None
+    except (OSError, ValueError):
+        # An unreadable draft cannot establish that an Episode was idle.
+        return None
 
 
 def _session_terminal_status(result: Any) -> str:
@@ -258,6 +267,7 @@ class LongHorizonCampaign:
         output_limit_recoveries: int,
         dependency_policy_recoveries: int,
         violation: str = "",
+        idle: bool = False,
     ) -> None:
         """Close an audit segment without sealing, promoting, or rewriting Git.
 
@@ -275,6 +285,8 @@ class LongHorizonCampaign:
             "mode": self._episode_mode(state, active),
             "status": status,
             "violation": violation or None,
+            "idle": idle,
+            "memory_generation": state.memory_generation,
             "agent_head": candidate_commit or None,
             "session_id": session_id or None,
             "resume_count": max(0, int(resume_count)),
@@ -306,6 +318,10 @@ class LongHorizonCampaign:
             state.session_backend = getattr(
                 self.base_campaign, "agent_cli", "claude"
             )
+        state.idle_episodes = state.idle_episodes + 1 if idle else 0
+        refresh_memory = state.idle_episodes >= MEMORY_REFRESH_AFTER_IDLE_EPISODES
+        if refresh_memory:
+            state.refresh_memory()
         store.save_state(state)
         store.clear_active()
         print(
@@ -313,6 +329,12 @@ class LongHorizonCampaign:
             f"tokens={max(0, int(tokens))} agent_head={candidate_commit or '-'}",
             flush=True,
         )
+        if refresh_memory:
+            print(
+                f"[long-horizon] refreshed native memory after episode={episode} "
+                f"generation={state.memory_generation}",
+                flush=True,
+            )
 
     def _recover_session_segment(
         self,
@@ -324,6 +346,10 @@ class LongHorizonCampaign:
         if active is None:
             return None
         episode = int(active.get("episode", 0) or 0)
+        if 0 < episode <= state.episodes:
+            # Settlement was written before the active marker was removed.
+            store.clear_active()
+            return None
         base_commit = str(active.get("starting_commit_id", ""))
         if episode <= 0 or not base_commit or not (self.workspace / ".git").is_dir():
             raise RuntimeError(
@@ -446,6 +472,7 @@ class LongHorizonCampaign:
                 require_gluon=False,
                 session_capture_root=session_capture_root,
             )
+            initial_source = _source_identity(agent_workspace) if not resumed else None
             prompt = self._prompt(
                 episode=episode,
                 segment=segment,
@@ -466,7 +493,7 @@ class LongHorizonCampaign:
                 if resume_supported and state.session_backend == agent_cli
                 else ""
             )
-            if state.episodes > 0 and not continuing_session_id:
+            if state.episodes > 0 and not (continuing_session_id or state.memory_generation):
                 raise RuntimeError(
                     "The prior optimization segment has no resumable provider Session ID"
                 )
@@ -494,7 +521,15 @@ class LongHorizonCampaign:
             telemetry_environment[SESSION_HOME_ROOT_ENV] = str(
                 store.root / "agent-session-homes"
             )
-            if agent_cli == "codex":
+            if state.memory_generation:
+                # The original native transcript and project memory remain in
+                # their own Home, outside the next conversation.
+                telemetry_environment[SESSION_HOME_ID_ENV] = (
+                    f"optimization-session-memory-{state.memory_generation}"
+                )
+                if agent_cli == "claude":
+                    telemetry_environment["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+            elif agent_cli == "codex":
                 # Codex allocates its thread ID after launch. The trajectory's
                 # native storage must not change when that ID becomes known.
                 telemetry_environment[SESSION_HOME_ID_ENV] = "optimization-session"
@@ -531,6 +566,12 @@ class LongHorizonCampaign:
             # discard the coding session's usage. Receipt replay is harmless.
             store.record_usage(state, usage_receipt, result.tokens)
             status = _session_terminal_status(result)
+            idle = (
+                status == "completed"
+                and initial_source is not None
+                and not self.base_campaign._supervisor_runtime.episode_has_new_evidence(agent_workspace)
+                and _source_identity(agent_workspace) == initial_source
+            )
             violation = ""
             if result.exit_status != 0 or result.timed_out:
                 violation = f"session failed: exit={result.exit_status} timeout={result.timed_out}"
@@ -552,6 +593,7 @@ class LongHorizonCampaign:
                 dependency_policy_recoveries=(
                     result.dependency_policy_recoveries
                 ),
+                idle=idle,
             )
 
         print(

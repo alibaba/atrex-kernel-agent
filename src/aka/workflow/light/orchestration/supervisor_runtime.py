@@ -236,6 +236,7 @@ class JournalBinding:
     view: EpisodeWorkspace | None = None
     require_gluon: bool = False
     baseline_kernel_commit_id: str | None = None
+    has_new_evidence: bool = False
 
 
 @dataclass
@@ -618,6 +619,10 @@ class SupervisorRuntime:
         return runtime_tools(self.config.agate_tools,
             research_modules=binding.service.tool_modules if binding else (),
             submissions=binding is not None, wiki=getattr(self.config, "wiki_enabled", False))
+
+    def episode_has_new_evidence(self, workspace: Path) -> bool:
+        with self.lock:
+            return self.journals[workspace.resolve()].has_new_evidence
 
     @contextmanager
     def session(self, workspace: Path, environment: dict[str, str], *, access, deadline=None):
@@ -1098,6 +1103,8 @@ class SupervisorRuntime:
                 service = capability.journal.service
                 service.observe_measurement(agent_result)
                 if not response.get("reused"):
+                    if response.get("execution_observed"):
+                        capability.journal.has_new_evidence = True
                     service.record_passing_full_evaluate_checkpoint(self.measurements.read(record_id))
                 service.publish_research_files(synchronize=False, direction_ids=frozenset(),
                     experiment_ids=frozenset(), record_ids=frozenset({record_id}))
@@ -1153,6 +1160,10 @@ class SupervisorRuntime:
             raise AgentRequestError(str(error), next_action=(
                 "Correct the indicated field or lifecycle state, then retry. Read .agents/skills/runtime-records/references/journal.md. "
                 + evidence_hint)) from error
+        operation = request.get("operation")
+        if (operation == "experiment_record" and value.get("status") == "recorded"
+                or operation == "kernel_submit" and value.get("accepted") is True and not value.get("idempotent")):
+            binding.has_new_evidence = True
         response = {"exit_code": 0, "stdout": json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n", "stderr": ""}
         self.audit_process(capability, "journal", [str(request.get("operation"))],
                            subprocess.CompletedProcess([], 0, response["stdout"], ""))
