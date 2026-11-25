@@ -135,6 +135,16 @@ class CliAgentRuntime:
         )
         values = self._environment if environment is None else environment
         model = values.get("AKA_AGENT_MODEL")
+        if model and self.id == "codex":
+            # Remove only settings-derived model overrides, retaining provider,
+            # endpoint, reasoning, and every other config option.
+            index = 0
+            while index < len(command) - 1:
+                if (command[index] in {"-c", "--config"}
+                        and command[index + 1].partition("=")[0].strip() == "model"):
+                    del command[index:index + 2]
+                else:
+                    index += 1
         if model and self.id != "dsh":
             # Insert before the positional prompt, preserving default auth/config.
             if "--model" in command[:-1]:

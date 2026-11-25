@@ -8,24 +8,35 @@ from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from aka.contracts.agent import AgentRunRequest
-from aka.agent.public_output import _conversation_events
+from aka.agent.public_output import conversation_events
 
 
 def check_model(agent, backend: str, model: str, *, timeout_s: int = 120, reasoning_effort: str = "max") -> None:
     """Require a real assistant reply, not CLI startup or an echoed prompt."""
     marker = "AKA_MODEL_READY_" + uuid4().hex
-    with TemporaryDirectory(prefix="aka-model-check-") as directory:
-        # Codex requires a trusted Git workspace, as in a real Campaign.
-        subprocess.run(["git", "init", "--quiet", directory], check=True, capture_output=True)
-        result = agent.runtime(backend).run(AgentRunRequest(
-            workspace=Path(directory),
-            prompt=f"Reply with exactly {marker}. Do not use tools or read files.",
-            timeout_s=timeout_s,
-            reasoning_effort=reasoning_effort,
-            environment={"AKA_AGENT_MODEL": model},
-        ))
+    try:
+        with TemporaryDirectory(prefix="aka-model-check-") as directory:
+            # Codex requires a trusted Git workspace, as in a real Campaign.
+            subprocess.run(["git", "init", "--quiet", directory], check=True, capture_output=True)
+            result = agent.runtime(backend).run(AgentRunRequest(
+                workspace=Path(directory),
+                prompt=f"Reply with exactly {marker}. Do not use tools or read files.",
+                timeout_s=timeout_s,
+                reasoning_effort=reasoning_effort,
+                environment={"AKA_AGENT_MODEL": model},
+            ))
+    except Exception as error:
+        details = str(error)
+        if isinstance(error, subprocess.CalledProcessError):
+            details = (error.stderr or error.stdout or details)
+            if isinstance(details, bytes):
+                details = details.decode("utf-8", errors="replace")
+        raise RuntimeError(
+            f"Model preflight failed: backend={backend}, model={model}, "
+            f"setup/invocation error ({type(error).__name__}): {details}"
+        ) from error
     replies = [event["content"] for event in
-               _conversation_events(backend, result.stdout_tail, 0)
+               conversation_events(backend, result.stdout_tail, 0)
                if event["kind"] == "message" and event.get("role") not in {"user", "system"}]
     # Claude-compatible backends may expose only their final result payload.
     for line in result.stdout_tail.splitlines():

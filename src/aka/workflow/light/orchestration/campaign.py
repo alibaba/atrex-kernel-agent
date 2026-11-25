@@ -533,13 +533,17 @@ class Campaign:
         )
         # The public Agent owner applies the selected Campaign sandbox to
         # this independent evidence workspace, just as for other Reviews.
-        base_environment = {
-            **boundary_environment,
-            "ANTHROPIC_MODEL": model,
-            "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
-            "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
-            "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
-        }
+        base_environment = dict(boundary_environment)
+        # Explicit overrides use the same AKA_AGENT_MODEL -> --model path as
+        # preflight and optimizer invocations. Preserve legacy reviewer defaults
+        # only when the launch does not specify a model.
+        if self.agent_model is None:
+            base_environment.update({
+                "ANTHROPIC_MODEL": model,
+                "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+                "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+            })
         base_environment.update(reviewer_environment(evidence_root.parent))
         runtime = getattr(self, "_supervisor_runtime", None)
         capture_base = (Path(archive_root) if archive_root is not None

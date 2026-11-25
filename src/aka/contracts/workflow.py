@@ -38,6 +38,8 @@ class WorkflowSettings:
     def __post_init__(self):
         if self.agent_model is not None and (not isinstance(self.agent_model, str) or not self.agent_model.strip()):
             raise ValueError("agent_model must be a non-empty model name")
+        if self.agent_model is not None:
+            object.__setattr__(self, "agent_model", self.agent_model.strip())
         if type(self.specify_dsl) is not bool:
             raise TypeError("specify_dsl must be a boolean")
         if self.optimization_mode not in {
