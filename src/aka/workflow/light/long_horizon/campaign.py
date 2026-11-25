@@ -364,6 +364,7 @@ class LongHorizonCampaign:
         runner = self.session_runner or LongSessionRunner(
             agent=self.base_campaign.agent,
             agent_cli=getattr(self.base_campaign, "agent_cli", "claude"),
+            agent_model=getattr(self.base_campaign, "agent_model", None),
             usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0,
         )
         starting_episodes = state.episodes

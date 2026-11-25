@@ -134,6 +134,13 @@ class CliAgentRuntime:
             prompt, session_id, reasoning_effort, self._session_settings(environment)
         )
         values = self._environment if environment is None else environment
+        model = values.get("AKA_AGENT_MODEL")
+        if model and self.id != "dsh":
+            # Insert before the positional prompt, preserving default auth/config.
+            if "--model" in command[:-1]:
+                command[command.index("--model") + 1] = model
+            else:
+                command[-1:-1] = ["--model", model]
         name = self._session_name or (values.get("ATREX_CLAUDE_SESSION_NAME", "") if self.id == "claude" else "")
         command = self._adapter.name_session(command, name, session_id)
         return self._adapter.prepare_command(command)

@@ -124,6 +124,7 @@ class Campaign:
     sandbox_url: str = ""  # explicit endpoint, e.g. http://127.0.0.1:8000
     sandbox_timeout: int | None = None
     atrex_bench_root: str = ""  # native evaluator checkout owning run_eval.py
+    agent_model: str | None = None
     agent_cli: str = "claude"  # episode backend selected from the Agent registry
     agent_sandbox: str = "none"  # opt-in coordinator isolation, independent of GPU transport
     bwrap_executable: str = "bwrap"
@@ -526,7 +527,7 @@ class Campaign:
             if claim_type is not None
             else "research_claim_review"
         )
-        model = "qwen3.8-max"
+        model = self.agent_model or "qwen3.8-max"
         boundary_environment = self.agent_boundary_environment(
             "research-claim-review"
         )
@@ -1611,7 +1612,7 @@ class Campaign:
             base_campaign=self,
             max_episodes=self.max_iters,
             token_budget=self.token_budget,
-            session_runner=LongSessionRunner(agent=self.agent, agent_cli=self.agent_cli,
+            session_runner=LongSessionRunner(agent=self.agent, agent_cli=self.agent_cli, agent_model=self.agent_model,
                 usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0),
         )
         return self._finish(engine.run())

@@ -57,7 +57,7 @@ class DshAdapter(AgentBackendAdapter):
             effort = ""
         return {
             **environment, "AKA_DSH_PROVIDER": provider,
-            "AKA_DSH_MODEL": settings.get("model", "deepseek-flash"),
+            "AKA_DSH_MODEL": environment.get("AKA_AGENT_MODEL") or settings.get("model", "deepseek-flash"),
             "AKA_DSH_REASONING_EFFORT": effort,
         }
 

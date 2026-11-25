@@ -26,7 +26,9 @@ def register_request_options(parser):
             if type(None) in get_args(annotation):
                 annotation = next(value for value in get_args(annotation) if value is not type(None))
             options = {"dest": field.name, "default": argparse.SUPPRESS}
-            if field.name == "agate_tools":
+            if field.name == "agent_model":
+                options.update(type=str, help="Override the optimization Agent and Reviewer model; reuse existing backend credentials and provider configuration. Omit to use the backend default.")
+            elif field.name == "agate_tools":
                 from aka.contracts.agate_tools import AGATE_TOOLS
                 options.update(nargs="+", choices=(*AGATE_TOOLS, "all"),
                     help="Agent-visible Agate Runtime tools (default: env evaluate command); all enables every kind. Wiki/research/submission tools are independent.")
