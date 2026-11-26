@@ -47,7 +47,10 @@ def _reply_in_archive(path, backend, marker):
         return False
     with path.open(encoding="utf-8") as stream:
         for line in stream:
-            record = json.loads(line)
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                continue
             if (isinstance(record, dict) and record.get("type") == "provider_event"
                     and _has_reply(backend, record.get("event"), marker)):
                 return True
@@ -59,11 +62,13 @@ def check_model(agent, backend: str, model: str, *, timeout_s: int = 120, reason
     marker = "AKA_MODEL_READY_" + uuid4().hex
     try:
         with TemporaryDirectory(prefix="aka-model-check-") as directory:
-            # Codex requires a trusted Git workspace, as in a real Campaign.
-            subprocess.run(["git", "init", "--quiet", directory], check=True, capture_output=True)
+            # Keep capture outside the Git workspace, as in a real Campaign.
+            workspace = Path(directory) / "workspace"
+            workspace.mkdir()
+            subprocess.run(["git", "init", "--quiet", str(workspace)], check=True, capture_output=True)
             capture = Path(directory) / "capture"
             result = agent.runtime(backend).run(AgentRunRequest(
-                workspace=Path(directory),
+                workspace=workspace,
                 prompt=f"Reply with exactly {marker}. Do not use tools or read files.",
                 timeout_s=timeout_s,
                 reasoning_effort=reasoning_effort,

@@ -128,7 +128,7 @@ class CliAgentRuntime:
         return self._adapter.id
 
     def build_command(
-        self, prompt: str, session_id: str, reasoning_effort: str, *, environment=None
+        self, prompt: str, session_id: str, reasoning_effort: str, *, environment=None, workspace=None
     ) -> list[str]:
         values = self._environment if environment is None else environment
         model = values.get("AKA_AGENT_MODEL")
@@ -136,12 +136,25 @@ class CliAgentRuntime:
         if model and settings and self.id in {"claude", "qodercli"}:
             # Both inline JSON and a settings file may select a model. Override
             # that field in a private in-memory copy; never modify user files.
+            variable = (self._adapter.settings_variable
+                        if values.get(self._adapter.settings_variable) else "ATREX_SESSION_SETTINGS")
             try:
                 configured = json.loads(settings)
             except json.JSONDecodeError:
-                configured = json.loads(Path(settings).expanduser().read_text(encoding="utf-8"))
+                settings_path = Path(settings).expanduser()
+                if not settings_path.is_absolute():
+                    if workspace is None:
+                        raise ValueError(f"{variable}: relative settings path requires an Agent workspace")
+                    settings_path = Path(workspace).absolute() / settings_path
+                try:
+                    configured = json.loads(settings_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError) as error:
+                    raise ValueError(
+                        f"{variable}: cannot read settings file as a JSON object "
+                        f"({type(error).__name__})"
+                    ) from error
             if not isinstance(configured, dict):
-                raise ValueError("Agent session settings must be a JSON object")
+                raise ValueError(f"{variable}: Agent session settings must be a JSON object")
             settings = json.dumps({**configured, "model": model})
         command = self._adapter.build_command(
             prompt, session_id, reasoning_effort, settings
@@ -196,7 +209,10 @@ class CliAgentRuntime:
         # launching Codex or Qoder from an episode already owned by the matching backend.
         environment["ATREX_AGENT_CLI"] = self.id
         environment = self._adapter.configure_environment(environment)
-        command = self.build_command(request.prompt, session_id, request.reasoning_effort, environment=environment)
+        command = self.build_command(
+            request.prompt, session_id, request.reasoning_effort,
+            environment=environment, workspace=request.workspace,
+        )
         if request.resume_session:
             if not request.session_id:
                 raise ValueError("resume_session requires an existing session_id")

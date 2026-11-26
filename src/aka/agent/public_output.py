@@ -32,7 +32,7 @@ def record_invocation(
         "errors": list(errors),
         "resume_supported": resume_supported,
     }
-    value["events"].extend(conversation_events(runtime, stdout, len(value["events"])))
+    value["events"].extend(_conversation_events(runtime, stdout, len(value["events"])))
     path = root / (str(uuid.uuid4()) + ".json")
     temporary = path.with_suffix(".tmp-" + str(os.getpid()))
     from aka.core.filesystem import open_private_directory
@@ -112,7 +112,7 @@ def export_observations(workspace, destination):
     return destination
 
 
-def conversation_events(runtime, stdout, sequence):
+def _conversation_events(runtime, stdout, sequence):
     """Normalize Agent-visible conversation content; never export native records."""
     result = []
     for line in stdout.splitlines():

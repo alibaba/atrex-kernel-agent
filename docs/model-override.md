@@ -36,7 +36,11 @@ startup behavior remain unchanged.
   Pi's existing model flag is replaced rather than duplicated. Claude/Qoder
   inline JSON or file-backed session settings are copied in memory and their
   top-level `model` is replaced; both `--settings` and `--model` then select the
-  same model. Other settings and the original file remain unchanged.
+  same model. Other settings and the original file remain unchanged. Relative
+  settings paths resolve from the Agent workspace, not the Supervisor process
+  directory. Unreadable files or non-object JSON produce a diagnostic naming the
+  settings environment variable. Command-only callers must supply a workspace
+  for relative paths.
 - `agent/backends/dsh.py`: map the override to `AKA_DSH_MODEL`.
 - `workflow/light/long_horizon/session.py` and `search_driver.py`: carry the
   override into fresh and resumed optimizer Sessions and pooled trajectories.
