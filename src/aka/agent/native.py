@@ -27,23 +27,28 @@ from aka.contracts.agent import (
 
 
 def fresh_session_command(
-    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None
+    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None,
+    workspace=None
 ):
     if reasoning_effort not in REASONING_EFFORTS:
         raise ValueError(f"unsupported reasoning effort: {reasoning_effort!r}")
     runtime = runtime or build_agent_runtime(agent_cli)
     return runtime._adapter.fresh_command(
-        runtime.build_command(prompt, session_id, reasoning_effort, environment=environment)
+        runtime.build_command(
+            prompt, session_id, reasoning_effort, environment=environment, workspace=workspace
+        )
     )
 
 
 def resume_session_command(
-    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None
+    prompt, session_id, reasoning_effort, agent_cli="claude", *, runtime=None, environment=None,
+    workspace=None
 ):
     runtime = runtime or build_agent_runtime(agent_cli)
     return runtime._adapter.resume_command(
         fresh_session_command(
-            prompt, session_id, reasoning_effort, agent_cli, runtime=runtime, environment=environment
+            prompt, session_id, reasoning_effort, agent_cli, runtime=runtime, environment=environment,
+            workspace=workspace,
         ),
         session_id,
     )
@@ -308,6 +313,7 @@ class NativeSession:
                 self.runtime_id,
                 runtime=self._runtime,
                 environment=invocation_environment,
+                workspace=self.workspace,
             )
             self._session_id = resume_id
         else:
@@ -318,6 +324,7 @@ class NativeSession:
                 self.runtime_id,
                 runtime=self._runtime,
                 environment=invocation_environment,
+                workspace=self.workspace,
             )
         invocation_environment = self._runtime._adapter.prepare_environment(
             invocation_environment, reasoning_effort=reasoning_effort)
