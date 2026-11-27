@@ -7,7 +7,11 @@ description: Discover and use the Campaign-enabled measurement tools through the
 
 Use `python3 tools/sandbox.py`; the Supervisor owns hardware, credentials, evaluator inputs,
 timeouts, retries, and result persistence. Local development and import/API inspection are allowed;
-use Runtime for target-GPU work and official measurements. Do not invoke Agate directly. Initial bring-up uses these same Runtime operations before
+use Runtime for target-GPU work and official measurements. Before submitting a `--kind command`
+GPU job to inspect installed DSL APIs, signatures, source code, or examples, check `env`
+(`observed.sources`) for version-matched source repository URLs and example roots, and read them
+locally when reachable from the workspace host instead of spending GPU jobs on static introspection.
+Do not invoke Agate directly. Initial bring-up uses these same Runtime operations before
 the Supervisor performs independent submission review.
 
 ## Measurement loop

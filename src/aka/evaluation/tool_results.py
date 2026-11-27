@@ -24,6 +24,7 @@ PREFIXES = {
     "env": "[sandbox] ENV_JSON=",
 }
 ERROR_PREFIXES = ("[sandbox] SOURCE_ERROR_JSON=", "[sandbox] GATEWAY_ERROR_JSON=")
+SUGGESTED_API_PREFIX = "[sandbox] SUGGESTED_API_JSON="
 PRIVATE_IDENTITIES = ("gateway_record_id", "kernel_id", "baseline_kernel_id")
 PUBLIC_IDENTITIES = (
     "gateway_record_id",
@@ -199,8 +200,28 @@ def canonical_result(response: dict, request: dict, *, record_id=None, kernels=N
             else result)
     operation = request["operation"]
     if operation in {"dev", "command"}:
-        result = {"stdout": response.get("stdout", ""), "stderr": response.get("stderr", ""),
+        raw_stdout = response.get("stdout", "")
+        stdout_lines = []
+        suggested_api = None
+        for line in raw_stdout.splitlines():
+            if line.startswith(SUGGESTED_API_PREFIX):
+                try:
+                    parsed = json.loads(line[len(SUGGESTED_API_PREFIX):])
+                    if isinstance(parsed, dict) and isinstance(parsed.get("suggested_api"), str):
+                        value = parsed["suggested_api"].strip()
+                        if value:
+                            suggested_api = value
+                            continue
+                except (ValueError, TypeError):
+                    pass
+            stdout_lines.append(line)
+        stdout_text = "\n".join(stdout_lines) + (
+            "\n" if stdout_lines and raw_stdout.endswith("\n") else ""
+        )
+        result = {"stdout": stdout_text, "stderr": response.get("stderr", ""),
                   "exit_code": response.get("exit_code")}
+        if suggested_api:
+            result["suggested_api"] = suggested_api
         for key in ("outcome", "error", "http_status"):
             if key in response:
                 result[key] = deepcopy(response[key])

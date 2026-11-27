@@ -45,6 +45,27 @@ def _agate_configuration(environment=None):
         )
     return value
 
+def _resolve_profile_connection(profile, config):
+    """Resolve built-in or named Agate profiles, preserving environment identity headers."""
+    profile_name = (profile or "").strip()
+    if not profile_name:
+        return None
+    try:
+        from atrex_gateway_client.profiles import resolve_profile
+    except ImportError:
+        if profile_name in PROFILES:
+            return SimpleNamespace(url=PROFILES[profile_name], environment_id="", route_label="")
+        raise GatewayConfigurationError(
+            f"Unknown Agate gateway profile {profile_name!r}; upgrade atrex-gateway-client to use named profiles."
+        )
+    try:
+        return resolve_profile(profile_name, config)
+    except ValueError as error:
+        if profile_name in PROFILES:
+            return SimpleNamespace(url=PROFILES[profile_name], environment_id="", route_label="")
+        raise GatewayConfigurationError(str(error)) from error
+
+
 def _load_sdk_client(
     args,
     environment=None,
@@ -88,14 +109,40 @@ def _load_sdk_client(
 
     environment = os.environ if environment is None else environment
     config = _agate_configuration(environment)
-    url = (
-        authority_url
-        or getattr(args, "url", None)
-        or PROFILES.get(authority_profile or getattr(args, "gateway_profile", None))
-        or environment.get("AGATE_URL")
-        or config.get("url")
-        or PROFILES["prod"]
+    explicit_url = authority_url or getattr(args, "url", None)
+    explicit_profile = authority_profile or getattr(args, "gateway_profile", None)
+    profile_name = (
+        explicit_profile
+        or environment.get("ATREX_SANDBOX_PROFILE")
+        or environment.get("AGATE_PROFILE")
+        or ""
     )
+    environment_id = ""
+    route_label = ""
+    resolved_conn = None
+    if profile_name and (explicit_profile or not explicit_url):
+        resolved_conn = _resolve_profile_connection(profile_name, config)
+    elif profile_name and explicit_url:
+        try:
+            candidate = _resolve_profile_connection(profile_name, config)
+        except GatewayConfigurationError:
+            candidate = None
+        if candidate is not None and explicit_url.rstrip("/") == candidate.url.rstrip("/"):
+            resolved_conn = candidate
+    if resolved_conn is not None and (
+        not explicit_url or explicit_url.rstrip("/") == resolved_conn.url.rstrip("/")
+    ):
+        url = resolved_conn.url
+        environment_id = getattr(resolved_conn, "environment_id", "") or ""
+        route_label = getattr(resolved_conn, "route_label", "") or ""
+    else:
+        url = (
+            explicit_url
+            or PROFILES.get(profile_name)
+            or environment.get("AGATE_URL")
+            or config.get("url")
+            or PROFILES["prod"]
+        )
     parts = urllib.parse.urlsplit(url) if isinstance(url, str) else None
     if (
         parts is None
@@ -137,12 +184,15 @@ def _load_sdk_client(
             # Runtime owns visible durable retries; do not sleep inside the SDK.
             return None
 
-    client = LightAgateClient(
-        url.rstrip("/"),
-        auth=auth,
-        timeout=min(600, max(1, int(getattr(args, "timeout", 600)))),
-        transport_retries=0,
-    )
+    client_kwargs = {
+        "auth": auth,
+        "timeout": min(600, max(1, int(getattr(args, "timeout", 600)))),
+        "transport_retries": 0,
+    }
+    if environment_id or route_label:
+        client_kwargs["environment_id"] = environment_id
+        client_kwargs["route_label"] = route_label
+    client = LightAgateClient(url.rstrip("/"), **client_kwargs)
     return client, url.rstrip("/"), GatewayError, TransportError
 
 def _sdk_error_process(error, *, stage):
@@ -169,7 +219,14 @@ def client(*, endpoint="", profile="", timeout=30, environment=None):
 def route(endpoint="", profile="", environment=None):
     env = os.environ if environment is None else environment
     config = _agate_configuration(env)
-    return endpoint or PROFILES.get(profile) or env.get("AGATE_URL") or config.get("url") or PROFILES["prod"]
+    if endpoint:
+        return endpoint
+    prof = profile or env.get("ATREX_SANDBOX_PROFILE") or env.get("AGATE_PROFILE") or ""
+    if prof:
+        resolved = _resolve_profile_connection(prof, config)
+        if resolved is not None:
+            return resolved.url
+    return env.get("AGATE_URL") or config.get("url") or PROFILES["prod"]
 
 
 def request(endpoint, method, path, payload, timeout, *, environment=None, allow_list=False):

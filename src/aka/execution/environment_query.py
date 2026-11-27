@@ -68,6 +68,7 @@ def _snapshot(backend, endpoint, query, detail, capabilities, errors, operations
         declared = source.get("source") in {"declared", "unknown"}
         for key in ("gpu", "aliases", "vendor", "arch", "gpu_model", "sm_count", "total_memory_mb",
                     "driver_version", "toolchain", "frameworks", "libraries", "profilers",
+                    "sources", "sources_note",
                     "availability", "available", "ready", "image", "worker", "image_digest",
                     "worker_id", "environment_identity", "source", "environments"):
             if key in source:
@@ -148,7 +149,10 @@ class BackendEnvironment:
         from .gateway import sandbox
         errors, detail, capabilities = [], {}, {}
         from .gateway.sdk import route
-        endpoint = route(self.url, self.profile, self.environment)
+        query_env = dict(self.environment)
+        if self.profile:
+            query_env["ATREX_SANDBOX_PROFILE"] = self.profile
+        endpoint = route(self.url, self.profile, query_env)
         encoded = quote(query.hardware, safe="")
         suffix = "?force=true" if query.fresh else ""
         if True:
@@ -158,7 +162,7 @@ class BackendEnvironment:
                     continue
                 try:
                     options = {"allow_list": True} if not query.hardware else {}
-                    value = sandbox._gateway_json(endpoint, "GET", path + suffix, None, 30, environment=self.environment, **options)
+                    value = sandbox._gateway_json(endpoint, "GET", path + suffix, None, 30, environment=query_env, **options)
                     if isinstance(value, list):
                         destination["environments"] = value
                     else:

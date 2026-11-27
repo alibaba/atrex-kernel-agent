@@ -43,6 +43,11 @@ scratch artifacts back. Git internals, control files, Skills and bulk records ar
 Use module form for Python scripts so the workspace root stays importable. Custom code may compile,
 profile or test hypotheses, but does not replace official evaluation. Packages, processes and other
 remote state are not retained between calls.
+Do not use `--kind command` for static API, source, or example introspection (`inspect.signature`,
+`inspect.getsource`, `os.walk` over installed packages or example trees) when `env` reports a
+version-matched repository in `observed.sources` that is reachable from the workspace host; read
+that repository locally instead. If a `command` receipt includes `result.suggested_api`, prefer
+the suggested first-class operation on subsequent steps.
 The receipt includes complete stdout, stderr and the exit code, including failed commands.
 
 ## env
@@ -55,7 +60,11 @@ Observes the remote target, not the local Agent host. Hardware defaults to the C
 `declarations.operations` lists this Campaign's enabled Runtime `--kind` names, matching Help.
 The complete redacted capability result is returned and archived, without becoming correctness
 evidence. Its task_worker_requirements identifies Task dependency pins; match these when selecting
-imports and APIs. Read this tool's help for optional capability queries.
+imports and APIs. When configured by the gateway, `observed.sources` maps installed packages to their version-matched
+source repository `url`, `ref`, and `examples` roots; when reachable from the workspace host,
+inspect those locally (for example via a shallow sparse `git clone`) rather than running GPU
+`command` jobs for static API or example lookup.
+Read this tool's help for optional capability queries.
 
 ## profile
 

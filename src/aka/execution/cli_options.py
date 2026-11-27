@@ -23,9 +23,11 @@ def register_transport_options(parser):
     )
     parser.add_argument(
         "--gateway-profile",
-        choices=("pre", "prod"),
         default=None,
-        help="Gateway endpoint profile (default: ATREX_SANDBOX_PROFILE, then normal agate resolution).",
+        help=(
+            "Gateway endpoint profile, e.g. pre, prod, or a named profile in "
+            "~/.atrex/config.json (default: ATREX_SANDBOX_PROFILE, then normal agate resolution)."
+        ),
     )
     parser.add_argument(
         "--url",
