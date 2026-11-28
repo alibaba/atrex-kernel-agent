@@ -2050,9 +2050,14 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
     elif args.url is not None:
         args.ssh = ""
         args.gateway_profile = None
+        os.environ.pop("ATREX_SANDBOX_PROFILE", None)
     elif args.gateway_profile is not None:
+        args.gateway_profile = args.gateway_profile.strip()
+        if not args.gateway_profile:
+            raise SystemExit("sandbox: --gateway-profile must be non-empty")
         args.ssh = ""
         args.url = ""
+        os.environ["ATREX_SANDBOX_PROFILE"] = args.gateway_profile
     else:
         args.ssh = os.environ.get("ATREX_SANDBOX_SSH", "")
         args.url = os.environ.get("ATREX_SANDBOX_URL", "")
@@ -2545,6 +2550,12 @@ def _main(argv: list[str] | None = None, *, parsed_arguments=None) -> int:
         print(command_stdout)
     if remote_stderr and not hide_evaluator_details:
         sys.stderr.write(remote_stderr)
+    suggested_api = job.get("suggested_api")
+    if isinstance(suggested_api, str) and suggested_api.strip():
+        print(
+            "[sandbox] SUGGESTED_API_JSON="
+            + json.dumps({"suggested_api": suggested_api.strip()}, ensure_ascii=False)
+        )
     remote_rc = result.get("exit_code")
     if isinstance(remote_rc, int):
         return remote_rc
