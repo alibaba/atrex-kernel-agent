@@ -101,7 +101,9 @@ class LongSessionRunner:
         agent: Agent,
         usage_policy: Callable[[NativeInvocation], int],
         agent_cli: str = "claude",
+        agent_model: str | None = None,
     ):
+        self.agent_model = agent_model
         self.agent_cli = agent_cli
         self.agent = agent
         self.usage_policy = usage_policy
@@ -158,6 +160,8 @@ class LongSessionRunner:
             "ATREX_OUTPUT_LIMIT_RECOVERY_RETRIES": str(output_limit_recovery_retries),
             "ATREX_OUTPUT_LIMIT_RECOVERY_SCOPE": session_id,
         }
+        if self.agent_model is not None:
+            session_environment["AKA_AGENT_MODEL"] = self.agent_model
         native = self.agent.open_session(
             self.agent_cli,
             workspace,

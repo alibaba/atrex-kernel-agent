@@ -93,6 +93,16 @@ class WorkflowStartup:
         runtime = launch.request.settings.agent_cli
         if shutil.which(runtime) is None:
             raise ValueError(f"Agent CLI is unavailable: {runtime}")
+        model = launch.request.settings.agent_model
+        if model is not None:
+            from aka.agent.model_preflight import check_model
+            backends = [runtime]
+            if self._workflow.options.claim_review and "claude" not in backends:
+                backends.append("claude")
+            for backend in backends:
+                print(f"[startup] checking model: backend={backend} model={model}", flush=True)
+                check_model(self._workflow.agent, backend, model,
+                            reasoning_effort="max" if backend == runtime else "high")
         from dataclasses import replace
         from aka.execution.configuration import selected_ssh
         from .runtime_preparation import prepare_runtime

@@ -1175,7 +1175,7 @@ class EpisodeSearchDriver:
         if current < episode or campaign_store.active_path.exists():
             child.start_runtime()
             from aka.workflow.light.long_horizon.session import LongSessionRunner
-            runner = LongSessionRunner(agent=child.agent, agent_cli=child.agent_cli,
+            runner = LongSessionRunner(agent=child.agent, agent_cli=child.agent_cli, agent_model=child.agent_model,
                 usage_policy=lambda turn: turn.terminal_usage.total_tokens or 0)
             runner.cancel_event = self.cancel_event
             LongHorizonCampaign(base_campaign=child, max_episodes=episode,

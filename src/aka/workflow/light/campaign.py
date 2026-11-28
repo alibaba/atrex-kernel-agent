@@ -274,6 +274,8 @@ class ManagedCampaign(Campaign):
         from aka.workflow.budgets import remaining_timeout
         timeout = remaining_timeout(timeout)
         environment = dict(extra_environment or {})
+        if self.agent_model is not None:
+            environment["AKA_AGENT_MODEL"] = self.agent_model
         role = environment.pop("ATREX_AGENT_WORKSPACE_ROLE", "optimizer")
         for key in tuple(environment):
             if key.startswith(("ATREX_SANDBOX_", "ATREX_AGENT_")) or key in {"ATREX_BWRAP_EXECUTABLE", "ATREX_PRIVATE_REFERENCE_DIR", "ATREX_AKA_RUNTIME_OWNER"}:

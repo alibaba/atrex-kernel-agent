@@ -97,6 +97,28 @@ from V0 and may perform bring-up, diagnostics and optimization in any order.
 
 See the [setup guide](docs/quickstart.md) for prerequisites and problem preparation.
 
+### Override the Agent and Reviewer model
+
+Add `--agent-model MODEL_NAME` to your launch alongside the usual problem and
+campaign options, for example `--agent-cli codex --agent-model MODEL_NAME`.
+
+The main optimization Agent and all Reviewers use the specified model. AKA reuses the user's
+existing backend login, API key, provider, and endpoint configuration; no
+additional key is required and user configuration files are not modified.
+Omitting this option keeps the backend default. The launch settings retain the
+model across Episode resume, campaign restart, and pooled trajectories.
+Each backend retains its existing authentication and provider configuration. The model must be
+available through the configured provider.
+
+When `--agent-model` is provided, startup first makes a minimal real model call
+through each required backend (including the Claude Claim Reviewer when enabled).
+A timeout, failed call, or missing assistant response rejects startup before
+Campaign preparation or GPU work. The probe has a 120-second timeout and uses
+the same Agent owner, sandbox setting, and existing credentials. It runs in a
+temporary workspace, separate from optimization and Review Sessions.
+
+Design and failure paths: [model override and startup checks](docs/model-override.md).
+
 ## Documentation
 
 - [Documentation index](docs/README.md) — all guides and validation reports.
